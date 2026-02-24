@@ -1,5 +1,6 @@
 using MeshWeaver.AI;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh.Security;
@@ -61,6 +62,7 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(AccessObject), nameof(AccessObject));
         typeRegistry.WithType(typeof(GroupMembership), nameof(GroupMembership));
         typeRegistry.WithType(typeof(MembershipEntry), nameof(MembershipEntry));
+        typeRegistry.WithType(typeof(MeshNodeCardControl), nameof(MeshNodeCardControl));
         return typeRegistry;
     }
 }

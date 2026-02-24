@@ -1,12 +1,8 @@
-using System.Reactive.Linq;
-using System.Reflection;
-using MeshWeaver.Application.Styles;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.DataBinding;
-using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -29,7 +25,7 @@ public static class AccessAssignmentLayoutAreas
             .WithView(MeshNodeLayoutAreas.OverviewArea, Overview)
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
 
-    /// <summary>
+    /// <summary>   
     /// Custom thumbnail — rich card showing user icon + name, role names + icons, × buttons.
     /// Async: queries IMeshQuery for user and role node details.
     /// </summary>
@@ -78,7 +74,7 @@ public static class AccessAssignmentLayoutAreas
         var userImageUrl = MeshNodeThumbnailControl.GetImageUrlForNode(userNode)
             ?? MeshNodeThumbnailControl.GetImageUrlForNode(node);
 
-        var card = Controls.Stack.WithStyle("gap: 6px; padding: 8px; width: 100%;");
+        var card = Controls.Stack.WithStyle("gap: 6px; padding: 8px; width: 100%; cursor: pointer;");
 
         // Top row: user icon + name + × button
         var topRow = Controls.Stack
@@ -104,21 +100,6 @@ public static class AccessAssignmentLayoutAreas
         // User name
         topRow = topRow.WithView(Controls.Html(
             $"<span style=\"font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;\">{EscapeHtml(userName)}</span>"));
-
-        // Delete assignment × button (admin only)
-        if (canDelete)
-        {
-            var capturedPath = hubPath;
-            topRow = topRow.WithView(Controls.Button("\u00d7")
-                .WithAppearance(Appearance.Stealth)
-                .WithStyle("min-width:28px;padding:0 4px;height:28px;font-size:16px;")
-                .WithClickAction(async ctx =>
-                {
-                    var meshCatalog = ctx.Host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                    if (meshCatalog != null)
-                        await meshCatalog.DeleteNodeAsync(capturedPath);
-                }));
-        }
 
         card = card.WithView(topRow);
 
@@ -180,6 +161,19 @@ public static class AccessAssignmentLayoutAreas
             }
 
             card = card.WithView(roleRow);
+        }
+
+        // + Add role button (admin only)
+        if (canDelete)
+        {
+            card = card.WithView(Controls.Button("+")
+                .WithAppearance(Appearance.Stealth)
+                .WithStyle("min-width:28px;padding:0 4px;height:24px;font-size:16px;align-self:flex-start;margin-left:56px;")
+                .WithClickAction(ctx =>
+                {
+                    ShowAddRoleDialog(ctx, hubPath);
+                    return Task.CompletedTask;
+                }));
         }
 
         return card;
@@ -321,21 +315,12 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Properly async remove — reads node from IMeshQuery, modifies roles, saves or deletes.
+    /// Removes a role from the assignment. Reads current node from workspace stream,
+    /// then posts a DataChangeRequest (no IMeshCatalog dependency).
     /// </summary>
     private static async Task RemoveRoleAsync(LayoutAreaHost host, string nodePath, int indexToRemove)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshCatalog == null || meshQuery == null) return;
-
-        MeshNode? node;
-        try
-        {
-            node = await meshQuery.QueryAsync<MeshNode>(
-                $"path:{nodePath} scope:exact").FirstOrDefaultAsync();
-        }
-        catch { return; }
+        var node = await GetCurrentNodeAsync(host, nodePath);
         if (node == null) return;
 
         var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
@@ -347,17 +332,30 @@ public static class AccessAssignmentLayoutAreas
 
         if (roles.Count == 0)
         {
-            // No roles left — delete the entire AccessAssignment node
-            await meshCatalog.DeleteNodeAsync(nodePath);
+            // No roles left — delete entire node
+            host.Hub.Post(
+                new DataChangeRequest { ChangedBy = host.Stream.ClientId }
+                    .WithDeletions(node),
+                o => o.WithTarget(host.Hub.Address));
         }
         else
         {
-            // Save updated assignment
             var updated = node with { Content = assignment with { Roles = roles } };
             host.Hub.Post(
                 new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updated),
                 o => o.WithTarget(host.Hub.Address));
         }
+    }
+
+    /// <summary>
+    /// Reads the current node from the workspace stream (no IMeshCatalog/IMeshQuery dependency).
+    /// </summary>
+    private static async Task<MeshNode?> GetCurrentNodeAsync(LayoutAreaHost host, string path)
+    {
+        var stream = host.Workspace.GetStream<MeshNode>();
+        if (stream == null) return null;
+        var nodes = await stream.Select(n => n ?? []).FirstAsync();
+        return nodes.FirstOrDefault(n => n.Path == path);
     }
 
     /// <summary>

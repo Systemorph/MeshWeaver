@@ -115,6 +115,12 @@ public record MeshSearchControl()
     public object? ItemArea { get; init; }
 
     /// <summary>
+    /// When true, clicking a card does not navigate to /{path}.
+    /// Use this when the card content has interactive elements (buttons, etc.).
+    /// </summary>
+    public object? DisableNavigation { get; init; }
+
+    /// <summary>
     /// Pre-computed grouped search results. When set, the Blazor component
     /// uses these groups directly instead of computing them from lambdas.
     /// This is the serializable output of ProcessResults().
@@ -165,6 +171,9 @@ public record MeshSearchControl()
 
     // Item area (render each item via LayoutAreaView)
     public MeshSearchControl WithItemArea(string area) => this with { ItemArea = area };
+
+    // Disable navigation on card click
+    public MeshSearchControl WithDisableNavigation(bool disable = true) => this with { DisableNavigation = disable };
 
     // Pre-computed groups
     public MeshSearchControl WithPrecomputedGroups(GroupedSearchResult groups) => this with { PrecomputedGroups = groups };

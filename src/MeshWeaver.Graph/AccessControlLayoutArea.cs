@@ -73,7 +73,25 @@ public static class AccessControlLayoutArea
                     }
                 }
 
-                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited);
+                // Pre-fetch user nodes for icons (assignment nodes may lack avatars)
+                var userNodeLookup = new Dictionary<string, MeshNode>();
+                if (meshQuery != null)
+                {
+                    var userPaths = inherited.Select(x => x.Assignment.AccessObject).Distinct();
+                    foreach (var userPath in userPaths)
+                    {
+                        try
+                        {
+                            var userNode = await meshQuery.QueryAsync<MeshNode>(
+                                $"path:{userPath} scope:exact").FirstOrDefaultAsync();
+                            if (userNode != null)
+                                userNodeLookup[userPath] = userNode;
+                        }
+                        catch { }
+                    }
+                }
+
+                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, userNodeLookup);
             });
     }
 
@@ -97,7 +115,8 @@ public static class AccessControlLayoutArea
         MeshNode? node,
         string nodePath,
         bool isAdmin,
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited)
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
+        Dictionary<string, MeshNode> userNodeLookup)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px;");
 
@@ -114,7 +133,7 @@ public static class AccessControlLayoutArea
         }
         else
         {
-            stack = stack.WithView(BuildInheritedSection(inherited));
+            stack = stack.WithView(BuildInheritedSection(inherited, userNodeLookup));
         }
 
         // Section 2: Local Assignments (reactive via MeshSearchControl with Thumbnail areas)
@@ -125,7 +144,8 @@ public static class AccessControlLayoutArea
             .WithShowSearchBox(false)
             .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
             .WithGridBreakpoints(xs: 12, sm: 6, md: 4)
-            .WithReactiveMode(true));
+            .WithReactiveMode(true)
+            .WithDisableNavigation());
 
         // + button if admin
         if (isAdmin)
@@ -144,7 +164,8 @@ public static class AccessControlLayoutArea
     /// Uses the MeshNode from the ancestor query to get user icons.
     /// </summary>
     private static UiControl BuildInheritedSection(
-        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited)
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
+        Dictionary<string, MeshNode> userNodeLookup)
     {
         var merged = inherited
             .GroupBy(x => x.Assignment.AccessObject)
@@ -171,8 +192,11 @@ public static class AccessControlLayoutArea
         var container = Controls.Stack.WithStyle("gap: 6px;");
         foreach (var item in merged)
         {
+            // Prefer user node (has avatar) over assignment node (may lack icon)
+            var userNode = userNodeLookup.GetValueOrDefault(item.Assignment.AccessObject);
+            var displayNode = userNode ?? item.Node;
             container = container.WithView(AccessAssignmentControlBuilder.Build(
-                item.Assignment, node: item.Node, isEditable: false));
+                item.Assignment, node: displayNode, isEditable: false));
         }
         return container;
     }
