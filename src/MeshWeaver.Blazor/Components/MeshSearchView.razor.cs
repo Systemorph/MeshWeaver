@@ -9,7 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.ShortGuid;
+
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -32,9 +32,6 @@ public partial class MeshSearchView : IDisposable
 
     [Inject]
     private IMeshQuery MeshQuery { get; set; } = default!;
-
-    [Inject]
-    private IMeshCatalog MeshCatalog { get; set; } = default!;
 
     [Inject]
     private NavigationManager Navigation { get; set; } = default!;
@@ -547,7 +544,7 @@ public partial class MeshSearchView : IDisposable
     private bool ShowCreateButton =>
         !string.IsNullOrEmpty(BoundCreateHref) || !string.IsNullOrEmpty(BoundCreateNodeType);
 
-    private async Task HandleCreateClick()
+    private void HandleCreateClick()
     {
         // CreateHref takes priority — direct navigation without creating a transient
         var href = BoundCreateHref;
@@ -557,23 +554,11 @@ public partial class MeshSearchView : IDisposable
             return;
         }
 
-        var nodeType = BoundCreateNodeType;
         var ns = BoundCreateNamespace;
-        if (string.IsNullOrEmpty(nodeType) || string.IsNullOrEmpty(ns)) return;
+        if (string.IsNullOrEmpty(ns)) return;
 
-        var id = Guid.NewGuid().AsString();
-        var path = $"{ns}/{id}";
-        var typeName = nodeType.Split('/').LastOrDefault() ?? nodeType;
-
-        var newNode = MeshNode.FromPath(path) with
-        {
-            Name = typeName,
-            NodeType = nodeType,
-            State = MeshNodeState.Transient
-        };
-
-        await MeshCatalog.CreateTransientAsync(newNode);
-        Navigation.NavigateTo($"/{path}/Create");
+        // Navigate to the namespace's Create area — the form handles type selection
+        Navigation.NavigateTo($"/{ns}/Create");
     }
 
     private MeshNodeCardControl GetCardControl(MeshNode node) =>

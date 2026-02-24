@@ -31,7 +31,6 @@ public static class CreateLayoutArea
     public static IObservable<UiControl?> Create(LayoutAreaHost host, RenderingContext _)
     {
         var currentPath = host.Hub.Address.ToString();
-        var nodeTypeService = host.Hub.ServiceProvider.GetService<INodeTypeService>();
 
         // Check current node state once (Take(1)) to decide which view to show.
         // We must NOT react to every nodeStream emission, because BuildCreateEditor
@@ -61,11 +60,7 @@ public static class CreateLayoutArea
             }
 
             // Show unified Create New form
-            if (nodeTypeService != null)
-            {
-                return (UiControl?)await BuildCreateNewFormAsync(host, nodeTypeService, currentPath, CancellationToken.None);
-            }
-            return (UiControl?)Controls.Html("<p style=\"color: var(--warning-color);\">Type service not available.</p>");
+            return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
         });
     }
 
@@ -455,99 +450,92 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
-    /// Builds the unified "Create New" form matching the old modal dialog:
-    /// Namespace (MeshNodePicker), Type (Select with icons), Name, Id, Create/Cancel.
+    /// Builds the unified "Create New" form:
+    /// Namespace (MeshNodePicker), Type (MeshNodePicker with Items), Name, Id, Create/Cancel.
+    /// Synchronous — defaults are resolved from the already-available nodes array.
     /// </summary>
-    private static async Task<UiControl> BuildCreateNewFormAsync(
+    private static UiControl BuildCreateNewForm(
         LayoutAreaHost host,
-        INodeTypeService nodeTypeService,
-        string parentPath,
-        CancellationToken ct)
+        MeshNode[] nodes,
+        string parentPath)
     {
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
         var meshConfiguration = host.Hub.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-
-        // Header: "Create New" (no back button)
         stack = stack.WithView(Controls.H2("Create New").WithStyle("margin: 0 0 24px 0;"));
 
-        // Get the parent node's type for building type picker queries
-        string? currentNodeType = null;
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery != null && !string.IsNullOrEmpty(parentPath))
-        {
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{parentPath}", ct: ct).WithCancellation(ct))
-            {
-                currentNodeType = node.NodeType;
-                break;
-            }
-        }
+        // 1. Resolve defaults from the current node
+        var currentNode = nodes.FirstOrDefault(n => n.Path == parentPath);
 
-        var formId = $"create_form_{parentPath.Replace("/", "_")}_{Guid.NewGuid().AsString()}";
-        var formData = new Dictionary<string, object?>
+        var defaultNamespace = currentNode?.Content is ISatelliteContent sat
+            && !string.IsNullOrEmpty(sat.PrimaryNodePath)
+            ? sat.PrimaryNodePath
+            : parentPath;
+
+        var defaultType = currentNode?.NodeType == MeshNode.NodeTypePath
+            ? parentPath
+            : "Markdown";
+
+        // 2. Build fixed creatable type Items
+        var creatableTypeNodes = meshConfiguration.Nodes.Values
+            .Where(n => n.ExcludeFromContext?.Contains("create") != true)
+            .ToArray();
+
+        if (!creatableTypeNodes.Any(n => n.Path == defaultType))
+            defaultType = "Markdown";
+
+        // 3. Form data
+        var formId = $"create_form_{Guid.NewGuid().AsString()}";
+        host.UpdateData(formId, new Dictionary<string, object?>
         {
-            ["namespace"] = parentPath,
-            ["type"] = "Markdown",
+            ["namespace"] = defaultNamespace,
+            ["type"] = defaultType,
             ["name"] = "",
             ["id"] = ""
-        };
-        host.UpdateData(formId, formData);
+        });
+        var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
-        // 1. Namespace field — MeshNodePicker (searchable node picker like old dialog)
+        // 4. Namespace picker
         stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
         {
-            Label = "Namespace *",
-            Required = true,
-            Placeholder = "Select namespace...",
-            Namespace = parentPath,
-            DataContext = LayoutAreaReference.GetDataPointer(formId)
-        }.WithQueries($"path:{parentPath} scope:selfAndAncestors", $"path:{parentPath} scope:children")
-         .WithMaxResults(15)
+            Label = "Namespace",
+            Placeholder = "Root (leave empty for top-level)...",
+            DataContext = dataContext
+        }.WithQueries("context:create").WithMaxResults(15)
          .WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 2. Type field — MeshNodePicker (types are MeshNodes with nodeType="NodeType")
-        var typeQueries = new List<string>();
-        // Child types under current path
-        typeQueries.Add($"nodeType:NodeType path:{parentPath} scope:children context:create");
-        // Types defined under the parent's node type (if applicable)
-        if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
-            typeQueries.Add($"nodeType:NodeType path:{currentNodeType} scope:children context:create");
-        // Global creatable types — individual path queries
-        foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
-            typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
-
+        // 5. Type picker — Items = fixed creatable types
         stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
         {
             Label = "Type *",
             Required = true,
             Placeholder = "Select a type...",
-            DataContext = LayoutAreaReference.GetDataPointer(formId)
-        }.WithQueries(typeQueries.ToArray())
-         .WithMaxResults(15)
+            DataContext = dataContext
+        }.WithItems(creatableTypeNodes).WithMaxResults(15)
          .WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 3. Name field (required)
+        // 6. Name field (required)
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
         {
             Label = "Name *",
             Placeholder = "Enter a name...",
             Required = true,
             Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(formId)
+            DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 4. Id field (auto-generated from name if left empty)
+        // 7. Id field (auto-generated from name if left empty)
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
         {
             Label = "Id",
             Placeholder = "Auto-generated from name...",
             Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(formId)
+            DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 4px;"));
         stack = stack.WithView(Controls.Body("This will be used as the node's identifier in the path")
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
-        // Button row: Create on left, Cancel on right (matching old dialog footer)
+        // 8. Button row: Create on left, Cancel on right
         var cancelUrl = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -561,17 +549,11 @@ public static class CreateLayoutArea
                 var formValues = await actx.Host.Stream
                     .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
 
-                var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim();
+                var ns = formValues.GetValueOrDefault("namespace")?.ToString()?.Trim() ?? "";
                 var selectedType = formValues.GetValueOrDefault("type")?.ToString()?.Trim();
                 var name = formValues.GetValueOrDefault("name")?.ToString()?.Trim();
                 var id = formValues.GetValueOrDefault("id")?.ToString()?.Trim();
 
-                // Validate
-                if (string.IsNullOrWhiteSpace(ns))
-                {
-                    ShowErrorDialog(actx, "Validation Error", "Namespace is required.");
-                    return;
-                }
                 if (string.IsNullOrWhiteSpace(selectedType))
                 {
                     ShowErrorDialog(actx, "Validation Error", "Type is required.");
@@ -583,18 +565,15 @@ public static class CreateLayoutArea
                     return;
                 }
 
-                // Generate id from name if not provided
                 if (string.IsNullOrWhiteSpace(id))
                     id = GenerateIdFromName(name);
 
-                // Build path: namespace / id
-                var nodePath = $"{ns}/{id}";
+                var nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
 
                 try
                 {
                     var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
-                    // Check if node already exists
                     var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));
                     if (existingNode != null && existingNode.State != MeshNodeState.Transient)
                     {
@@ -603,7 +582,6 @@ public static class CreateLayoutArea
                         return;
                     }
 
-                    // Create transient node via MeshCatalog (matches old dialog)
                     var newNode = MeshNode.FromPath(nodePath) with
                     {
                         Name = name.Trim(),
@@ -616,7 +594,6 @@ public static class CreateLayoutArea
                     await meshCatalog.CreateTransientAsync(newNode, CancellationToken.None);
                     logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
-                    // Navigate to the node's Create area for ContentType editing
                     var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
                     actx.NavigateTo(createUrl);
                 }

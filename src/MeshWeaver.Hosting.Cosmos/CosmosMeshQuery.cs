@@ -18,6 +18,7 @@ public class CosmosMeshQuery : IMeshQueryProvider
 {
     private readonly CosmosStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly MeshConfiguration? _meshConfiguration;
     private readonly QueryParser _parser = new();
     private long _version;
 
@@ -25,10 +26,12 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
     public CosmosMeshQuery(
         CosmosStorageAdapter adapter,
-        IDataChangeNotifier? changeNotifier = null)
+        IDataChangeNotifier? changeNotifier = null,
+        MeshConfiguration? meshConfiguration = null)
     {
         _adapter = adapter;
         _changeNotifier = changeNotifier;
+        _meshConfiguration = meshConfiguration;
     }
 
     /// <inheritdoc />
@@ -67,12 +70,17 @@ public class CosmosMeshQuery : IMeshQueryProvider
         // Build the final parsed query with effective path/scope
         parsedQuery = parsedQuery with { Path = effectivePath, Scope = effectiveScope };
 
+        // Context-based exclusion
+        var context = request.Context ?? parsedQuery.Context;
+
         // When ContextPath is set, buffer results to apply proximity re-ranking
         if (!string.IsNullOrEmpty(request.ContextPath))
         {
             var buffered = new List<(MeshNode Node, double Score)>();
             await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct))
             {
+                if (context != null && IsExcludedByContext(node, context))
+                    continue;
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
             }
@@ -97,6 +105,9 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
         await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct))
         {
+            if (context != null && IsExcludedByContext(node, context))
+                continue;
+
             // Apply skip for paging
             if (skipOrig > 0)
             {
@@ -148,6 +159,19 @@ public class CosmosMeshQuery : IMeshQueryProvider
 
         await foreach (var node in _adapter.QueryNodesAsync(query, ct: ct))
         {
+            // Skip node types excluded from autocomplete
+            if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                continue;
+
+            // Context-based exclusion for autocomplete
+            if (context != null)
+            {
+                if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+                    continue;
+                if (node.ExcludeFromContext?.Contains(context) == true)
+                    continue;
+            }
+
             var name = node.Name ?? node.Id ?? node.Path ?? "";
             double score = 0;
 
@@ -382,6 +406,19 @@ public class CosmosMeshQuery : IMeshQueryProvider
                 Timestamp = DateTimeOffset.UtcNow
             });
         }
+    }
+
+    /// <summary>
+    /// Checks whether a node should be excluded based on context.
+    /// </summary>
+    private bool IsExcludedByContext(MeshNode node, string? context)
+    {
+        if (context == null) return false;
+        if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+            return true;
+        if (node.ExcludeFromContext?.Contains(context) == true)
+            return true;
+        return false;
     }
 
     /// <summary>
