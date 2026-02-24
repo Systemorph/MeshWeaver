@@ -185,14 +185,36 @@
     grid-template-columns: 1fr;
 }
 
-@@media (min-width: 600px) {
+@media (min-width: 600px) {
     .mesh-search-area-grid {
         grid-template-columns: repeat(2, 1fr);
     }
 }
 
-@@media (min-width: 960px) {
+@media (min-width: 960px) {
     .mesh-search-area-grid {
         grid-template-columns: repeat(3, 1fr);
     }
+}
+
+/* Skeleton loading placeholders */
+.mesh-search-skeleton-avatar {
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    border-radius: 8px;
+    background: var(--neutral-fill-secondary-rest, #e0e0e0);
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+.mesh-search-skeleton-line {
+    height: 12px;
+    border-radius: 4px;
+    background: var(--neutral-fill-secondary-rest, #e0e0e0);
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes skeleton-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
 }

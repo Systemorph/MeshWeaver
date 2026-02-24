@@ -1,16 +1,11 @@
-// Suppress ASP0006 - sequence numbers in dynamic RenderFragment loops are unavoidable for list rendering
-#pragma warning disable ASP0006
-
 using System.Text.Json;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Rendering;
-using Microsoft.FluentUI.AspNetCore.Components;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
-using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -32,9 +27,6 @@ public partial class MeshSearchView : IDisposable
     private IDisposable? _reactiveSubscription;
     private HashSet<string> _collapsedGroups = new();
     private string _lastBoundVisibleQuery = "";
-
-    [Inject]
-    private NavigationManager NavigationManager { get; set; } = default!;
 
     [Inject]
     private IMeshQuery MeshQuery { get; set; } = default!;
@@ -81,6 +73,16 @@ public partial class MeshSearchView : IDisposable
     }
     private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
     private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
+    private bool BoundReactiveMode
+    {
+        get
+        {
+            if (ViewModel?.ReactiveMode is bool b) return b;
+            if (ViewModel?.ReactiveMode is JsonElement je)
+                return je.ValueKind == JsonValueKind.True;
+            return false;
+        }
+    }
     private MeshSearchRenderMode BoundRenderMode => ViewModel?.RenderMode is MeshSearchRenderMode mode ? mode : MeshSearchRenderMode.Grouped;
 
     // Config objects
@@ -148,7 +150,14 @@ public partial class MeshSearchView : IDisposable
                 return;
             }
 
-            // Client-side query mode
+            // Reactive mode: subscribe to ObserveQuery for live updates
+            if (BoundReactiveMode)
+            {
+                SubscribeToReactiveUpdates();
+                return;
+            }
+
+            // Client-side query mode (one-shot)
             await LoadResultsAsync();
             StateHasChanged();
         }
@@ -211,6 +220,62 @@ public partial class MeshSearchView : IDisposable
             _isLoading = false;
             StateHasChanged();
         }
+    }
+
+    private void SubscribeToReactiveUpdates()
+    {
+        _reactiveSubscription?.Dispose();
+        var query = BuildFullQuery();
+        var request = MeshQueryRequest.FromQuery(query);
+        _reactiveSubscription = MeshQuery.ObserveQuery<MeshNode>(request)
+            .Subscribe(change =>
+            {
+                InvokeAsync(() =>
+                {
+                    var prevCount = _nodes.Count;
+                    var prevPaths = _nodes.Select(n => n.Path).ToHashSet();
+
+                    if (change.ChangeType == QueryChangeType.Initial ||
+                        change.ChangeType == QueryChangeType.Reset)
+                    {
+                        _nodes = change.Items.ToList();
+                    }
+                    else if (change.ChangeType == QueryChangeType.Added)
+                    {
+                        _nodes.AddRange(change.Items);
+                    }
+                    else if (change.ChangeType == QueryChangeType.Removed)
+                    {
+                        var removedPaths = change.Items.Select(n => n.Path).ToHashSet();
+                        _nodes.RemoveAll(n => removedPaths.Contains(n.Path));
+                    }
+                    else if (change.ChangeType == QueryChangeType.Updated)
+                    {
+                        foreach (var updated in change.Items)
+                        {
+                            var idx = _nodes.FindIndex(n => n.Path == updated.Path);
+                            if (idx >= 0) _nodes[idx] = updated;
+                            else _nodes.Add(updated);
+                        }
+                    }
+
+                    // Exclude base path if configured
+                    if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
+                    {
+                        var basePath = BoundNamespace.Trim('/');
+                        _nodes = _nodes.Where(n => n.Path != basePath).ToList();
+                    }
+
+                    // Skip re-render if node set hasn't changed
+                    var newPaths = _nodes.Select(n => n.Path).ToHashSet();
+                    if (_isLoading || prevCount != _nodes.Count || !prevPaths.SetEquals(newPaths))
+                    {
+                        _computedGroups = ProcessResults(_nodes);
+                        _isLoading = false;
+                        StateHasChanged();
+                    }
+                });
+            });
     }
 
     private GroupedSearchResult ProcessResults(List<MeshNode> nodes)
@@ -393,132 +458,12 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    /// <summary>
-    /// Gets the groups to render, preferring pre-computed over locally computed.
-    /// </summary>
     private IReadOnlyList<SearchResultGroup> GetGroups()
     {
         if (IsPrecomputedMode)
             return BoundPrecomputedGroups!.Groups;
         return _computedGroups?.Groups ?? [];
     }
-
-    /// <summary>
-    /// Renders grouped results using SearchResultGroup.
-    /// </summary>
-    private RenderFragment RenderGroupedResults() => builder =>
-    {
-        var groups = GetGroups();
-        var seq = 0;
-
-        var skipHeaders = groups.Count == 1;
-
-        foreach (var group in groups)
-        {
-            var isCollapsed = _collapsedGroups.Contains(group.GroupKey);
-            var showCollapsible = (BoundSections?.Collapsible ?? true) && !skipHeaders;
-            var showCounts = BoundSections?.ShowCounts ?? true;
-
-            var headerLabel = showCounts ? $"{group.Label} ({group.TotalCount})" : group.Label;
-
-            builder.OpenElement(seq++, "div");
-            builder.AddAttribute(seq++, "class", "mesh-search-section");
-
-            if (!skipHeaders)
-            {
-                if (showCollapsible)
-                {
-                    builder.OpenElement(seq++, "div");
-                    builder.AddAttribute(seq++, "class", "mesh-search-section-header");
-                    var groupKey = group.GroupKey;
-                    builder.AddAttribute(seq++, "onclick", EventCallback.Factory.Create(this, () => ToggleGroup(groupKey)));
-
-                    builder.OpenElement(seq++, "span");
-                    builder.AddAttribute(seq++, "class", isCollapsed ? "mesh-search-collapse-icon" : "mesh-search-collapse-icon expanded");
-                    builder.AddContent(seq++, "\u25b6");
-                    builder.CloseElement();
-
-                    builder.OpenElement(seq++, "span");
-                    builder.AddAttribute(seq++, "class", "mesh-search-section-label");
-                    builder.AddContent(seq++, headerLabel);
-                    builder.CloseElement();
-
-                    builder.CloseElement();
-                }
-                else
-                {
-                    builder.OpenElement(seq++, "h3");
-                    builder.AddAttribute(seq++, "class", "mesh-search-section-title");
-                    builder.AddContent(seq++, headerLabel);
-                    builder.CloseElement();
-                }
-            }
-
-            if (!isCollapsed)
-            {
-                builder.OpenElement(seq++, "div");
-                builder.AddAttribute(seq++, "class", "mesh-search-grid-wrapper");
-
-                if (!string.IsNullOrEmpty(BoundItemArea))
-                {
-                    // Use plain CSS grid for LayoutAreaView items (FluentGrid sizing doesn't work with nested LayoutAreaView)
-                    builder.OpenElement(seq++, "div");
-                    builder.AddAttribute(seq++, "class", "mesh-search-area-grid");
-
-                    foreach (var item in group.Items)
-                    {
-                        if (item is not MeshNode node) continue;
-                        RenderNodeCard(builder, node);
-                    }
-
-                    builder.CloseElement();
-                }
-                else
-                {
-                    builder.OpenComponent<FluentGrid>(seq++);
-                    builder.AddAttribute(seq++, "Spacing", BoundGrid.Spacing);
-                    builder.AddAttribute(seq++, "Justify", Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart);
-                    builder.AddAttribute(seq++, "Style", "width: 100%;");
-                    builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(gridBuilder =>
-                    {
-                        var gridSeq = 0;
-
-                        foreach (var item in group.Items)
-                        {
-                            if (item is not MeshNode node) continue;
-
-                            gridBuilder.OpenComponent<FluentGridItem>(gridSeq++);
-                            gridBuilder.AddAttribute(gridSeq++, "xs", BoundGrid.Xs);
-                            gridBuilder.AddAttribute(gridSeq++, "sm", BoundGrid.Sm);
-                            gridBuilder.AddAttribute(gridSeq++, "md", BoundGrid.Md);
-                            gridBuilder.AddAttribute(gridSeq++, "lg", BoundGrid.Lg);
-                            gridBuilder.AddAttribute(gridSeq++, "Style", "width: 100%;");
-                            gridBuilder.AddAttribute(gridSeq++, "ChildContent", (RenderFragment)(itemBuilder =>
-                            {
-                                RenderNodeCard(itemBuilder, node);
-                            }));
-                            gridBuilder.CloseComponent();
-                        }
-                    }));
-                    builder.CloseComponent();
-                }
-                builder.CloseElement();
-
-                if (group.Items.Count < group.TotalCount)
-                {
-                    builder.OpenElement(seq++, "div");
-                    builder.AddAttribute(seq++, "class", "mesh-search-show-more");
-                    builder.OpenElement(seq++, "span");
-                    builder.AddAttribute(seq++, "style", "color: var(--neutral-foreground-hint);");
-                    builder.AddContent(seq++, $"Showing {group.Items.Count} of {group.TotalCount}");
-                    builder.CloseElement();
-                    builder.CloseElement();
-                }
-            }
-
-            builder.CloseElement();
-        }
-    };
 
     private void ToggleGroup(string groupKey)
     {
@@ -540,130 +485,19 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    private void RenderNodeCard(RenderTreeBuilder builder, MeshNode node)
+    private bool BoundDisableNavigation
     {
-        if (!string.IsNullOrEmpty(BoundItemArea))
+        get
         {
-            RenderLayoutAreaItem(builder, node);
-            return;
+            if (ViewModel?.DisableNavigation is bool b) return b;
+            if (ViewModel?.DisableNavigation is JsonElement je)
+                return je.ValueKind == JsonValueKind.True;
+            return false;
         }
-        var seq = 0;
-        RenderThumbnailCard(builder, node, ref seq);
     }
 
-    private void RenderLayoutAreaItem(RenderTreeBuilder builder, MeshNode node)
-    {
-        var seq = 0;
-        var layoutArea = new LayoutAreaControl(
-            node.Path,
-            new LayoutAreaReference(BoundItemArea!))
-            .WithShowProgress(false);
-
-        builder.OpenComponent<LayoutAreaView>(seq++);
-        builder.AddAttribute(seq++, "ViewModel", layoutArea);
-        builder.AddAttribute(seq++, "Stream", Stream);
-        builder.AddAttribute(seq++, "Area", $"search-{node.Path}-{BoundItemArea}");
-        builder.CloseComponent();
-    }
-
-    private void RenderThumbnailCard(RenderTreeBuilder builder, MeshNode node, ref int seq)
-    {
-        var imageUrl = GetImageUrl(node);
-        var title = node.Name ?? node.Id;
-        var description = node.NodeType ?? "";
-        var initial = !string.IsNullOrEmpty(title) ? title[0].ToString().ToUpper() : "?";
-        var isSelected = !string.IsNullOrEmpty(SelectedPath) && node.Path == SelectedPath;
-        var isPickerMode = OnNodeSelected.HasDelegate;
-
-        var cardClass = isSelected ? "mesh-search-card mesh-search-card-selected" : "mesh-search-card";
-
-        builder.OpenComponent<FluentCard>(seq++);
-        builder.AddAttribute(seq++, "Class", cardClass);
-        builder.AddAttribute(seq++, "Style", "cursor: pointer;");
-        builder.AddAttribute(seq++, "ChildContent", (RenderFragment)(cardBuilder =>
-        {
-            var cardSeq = 0;
-
-            if (isPickerMode)
-            {
-                // Picker mode: clicking selects the node
-                cardBuilder.OpenElement(cardSeq++, "div");
-                var capturedNode = node;
-                cardBuilder.AddAttribute(cardSeq++, "onclick", EventCallback.Factory.Create(this, () => OnNodeSelected.InvokeAsync(capturedNode)));
-                cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px; height: 76px; cursor: pointer; color: inherit;");
-            }
-            else
-            {
-                // Navigation mode: clicking navigates
-                cardBuilder.OpenElement(cardSeq++, "a");
-                cardBuilder.AddAttribute(cardSeq++, "href", $"/{node.Path}");
-                cardBuilder.AddAttribute(cardSeq++, "style", "display: flex; flex-direction: row; align-items: center; gap: 12px; padding: 8px; min-height: 60px; height: 76px; text-decoration: none; color: inherit;");
-            }
-
-            if (!string.IsNullOrEmpty(imageUrl))
-            {
-                cardBuilder.OpenElement(cardSeq++, "img");
-                cardBuilder.AddAttribute(cardSeq++, "src", imageUrl);
-                cardBuilder.AddAttribute(cardSeq++, "alt", title);
-                cardBuilder.AddAttribute(cardSeq++, "style", "width: 48px; height: 48px; min-width: 48px; min-height: 48px; max-width: 48px; max-height: 48px; border-radius: 8px; object-fit: cover; flex-shrink: 0;");
-                cardBuilder.CloseElement();
-            }
-            else
-            {
-                cardBuilder.OpenElement(cardSeq++, "div");
-                cardBuilder.AddAttribute(cardSeq++, "style", "width: 48px; height: 48px; min-width: 48px; min-height: 48px; border-radius: 8px; background: var(--accent-fill-rest, #0078d4); color: var(--foreground-on-accent-rest, white); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; flex-shrink: 0;");
-                cardBuilder.AddContent(cardSeq++, initial);
-                cardBuilder.CloseElement();
-            }
-
-            cardBuilder.OpenElement(cardSeq++, "div");
-            cardBuilder.AddAttribute(cardSeq++, "style", "flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px;");
-
-            cardBuilder.OpenElement(cardSeq++, "div");
-            cardBuilder.AddAttribute(cardSeq++, "style", "font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;");
-            cardBuilder.AddContent(cardSeq++, title);
-            cardBuilder.CloseElement();
-
-            if (!string.IsNullOrEmpty(description))
-            {
-                cardBuilder.OpenElement(cardSeq++, "div");
-                cardBuilder.AddAttribute(cardSeq++, "style", "font-size: 12px; color: var(--neutral-foreground-hint, #666); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4;");
-                cardBuilder.AddContent(cardSeq++, Truncate(description, 100));
-                cardBuilder.CloseElement();
-            }
-
-            cardBuilder.CloseElement();
-            cardBuilder.CloseElement(); // close a or div
-        }));
-        builder.CloseComponent();
-    }
-
-    private void NavigateTo(string path)
-    {
-        NavigationManager.NavigateTo($"/{path}");
-    }
-
-    private string? GetImageUrl(MeshNode node)
-    {
-        if (node.Content is JsonElement json)
-        {
-            if (json.TryGetProperty("avatar", out var avatar) && avatar.ValueKind == JsonValueKind.String)
-                return avatar.GetString();
-            if (json.TryGetProperty("Avatar", out var Avatar) && Avatar.ValueKind == JsonValueKind.String)
-                return Avatar.GetString();
-            if (json.TryGetProperty("logo", out var logo) && logo.ValueKind == JsonValueKind.String)
-                return logo.GetString();
-            if (json.TryGetProperty("Logo", out var Logo) && Logo.ValueKind == JsonValueKind.String)
-                return Logo.GetString();
-        }
-        // Fall back to node.Icon only if it looks like an image URL (not a Fluent icon name)
-        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
-    }
-
-    private string Truncate(string text, int maxLength)
-    {
-        return text.Length > maxLength ? text.Substring(0, maxLength - 3) + "..." : text;
-    }
+    private MeshNodeCardControl GetCardControl(MeshNode node) =>
+        MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, BoundDisableNavigation);
 
     public void Dispose()
     {

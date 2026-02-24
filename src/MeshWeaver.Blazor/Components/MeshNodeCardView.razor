@@ -1,0 +1,74 @@
+@using MeshWeaver.Graph
+@using Microsoft.FluentUI.AspNetCore.Components
+@inherits BlazorView<MeshNodeCardControl, MeshNodeCardView>
+
+@if (DisableNavigation)
+{
+    @CardContent
+}
+else
+{
+    <a href="/@NodePath" style="text-decoration: none; color: inherit; display: block;">
+        @CardContent
+    </a>
+}
+
+@code {
+    private string NodePath { get; set; } = "";
+    private string? Title { get; set; }
+    private string? Description { get; set; }
+    private string? ImageUrl { get; set; }
+    private string? ItemArea { get; set; }
+    private bool DisableNavigation { get; set; }
+
+    private string Initial => !string.IsNullOrEmpty(Title) ? Title[0].ToString().ToUpper() : "?";
+
+    private string TruncatedDescription => Description?.Length > 100
+        ? Description[..97] + "..."
+        : Description ?? "";
+
+    private LayoutAreaControl GetLayoutArea() =>
+        new LayoutAreaControl(NodePath, new LayoutAreaReference(ItemArea!))
+            .WithShowProgress(false);
+
+    private RenderFragment CardContent => __builder =>
+    {
+        if (!string.IsNullOrEmpty(ItemArea))
+        {
+            <LayoutAreaView ViewModel="@GetLayoutArea()" Stream="@Stream" Area="@($"card-{NodePath}-{ItemArea}")" />
+        }
+        else
+        {
+            <FluentCard Class="mesh-node-card" Style="cursor: pointer;">
+                <div class="mesh-node-card-content">
+                    @if (!string.IsNullOrEmpty(ImageUrl))
+                    {
+                        <img src="@ImageUrl" alt="@Title" class="mesh-node-card-image" />
+                    }
+                    else
+                    {
+                        <div class="mesh-node-card-placeholder">@Initial</div>
+                    }
+                    <div class="mesh-node-card-text">
+                        <div class="mesh-node-card-title">@Title</div>
+                        @if (!string.IsNullOrEmpty(Description))
+                        {
+                            <div class="mesh-node-card-description">@TruncatedDescription</div>
+                        }
+                    </div>
+                </div>
+            </FluentCard>
+        }
+    };
+
+    protected override void BindData()
+    {
+        base.BindData();
+        DataBind(ViewModel.NodePath, x => x.NodePath);
+        DataBind(ViewModel.Title, x => x.Title);
+        DataBind(ViewModel.Description, x => x.Description);
+        DataBind(ViewModel.ImageUrl, x => x.ImageUrl);
+        DataBind(ViewModel.ItemArea, x => x.ItemArea);
+        DataBind(ViewModel.DisableNavigation, x => x.DisableNavigation);
+    }
+}
