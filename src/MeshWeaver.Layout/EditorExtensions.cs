@@ -1214,13 +1214,6 @@ public static class EditorExtensions
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: flex-end; gap: 8px;")
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
-                }))
             .WithView(Controls.Button("Add")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(async addCtx =>
@@ -1244,6 +1237,13 @@ public static class EditorExtensions
 
                     // Add the item to the collection
                     AddCollectionItem(addCtx.Host, dataId, propName, elementType, keyPropName, selectedValue);
+                }))
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
                 }));
 
         var dialog = Controls.Dialog(formContent, $"Add {property.Name.Wordify()}")
