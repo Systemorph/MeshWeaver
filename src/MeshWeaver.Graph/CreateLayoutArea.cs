@@ -476,13 +476,16 @@ public static class CreateLayoutArea
             ? parentPath
             : "Markdown";
 
-        // 2. Build fixed creatable type Items
+        // Override from query string (e.g. Create?type=Organization)
+        var typeOverride = host.GetQueryStringParamValue("type");
+        if (!string.IsNullOrEmpty(typeOverride))
+            defaultType = typeOverride;
+
+        // 2. Build fixed creatable type Items (alphabetical)
         var creatableTypeNodes = meshConfiguration.Nodes.Values
             .Where(n => n.ExcludeFromContext?.Contains("create") != true)
+            .OrderBy(n => n.Name ?? n.Path)
             .ToArray();
-
-        if (!creatableTypeNodes.Any(n => n.Path == defaultType))
-            defaultType = "Markdown";
 
         // 3. Form data
         var formId = $"create_form_{Guid.NewGuid().AsString()}";
@@ -504,14 +507,16 @@ public static class CreateLayoutArea
         }.WithQueries("context:create").WithMaxResults(15)
          .WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 5. Type picker — Items = fixed creatable types
+        // 5. Type picker — Items from config + query for persistence-based types
         stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
         {
             Label = "Type *",
             Required = true,
             Placeholder = "Select a type...",
             DataContext = dataContext
-        }.WithItems(creatableTypeNodes).WithMaxResults(15)
+        }.WithItems(creatableTypeNodes)
+         .WithQueries("nodeType:NodeType context:create")
+         .WithMaxResults(15)
          .WithStyle("width: 100%; margin-bottom: 16px;"));
 
         // 6. Name field (required)
@@ -524,7 +529,29 @@ public static class CreateLayoutArea
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 7. Id field (auto-generated from name if left empty)
+        // 7. Id field with auto-generation from Name
+        var lastAutoId = "";
+        var isAutoUpdating = false;
+        host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Subscribe(data =>
+            {
+                if (isAutoUpdating || data == null) return;
+                var name = data.GetValueOrDefault("name")?.ToString() ?? "";
+                var currentId = data.GetValueOrDefault("id")?.ToString() ?? "";
+                if (string.IsNullOrEmpty(name)) return;
+
+                var generatedId = GenerateIdFromName(name);
+                // Auto-update if id is empty or matches the last auto-generated value
+                if (currentId != generatedId && (string.IsNullOrEmpty(currentId) || currentId == lastAutoId))
+                {
+                    lastAutoId = generatedId;
+                    isAutoUpdating = true;
+                    data["id"] = generatedId;
+                    host.UpdateData(formId, data);
+                    isAutoUpdating = false;
+                }
+            });
+
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
         {
             Label = "Id",

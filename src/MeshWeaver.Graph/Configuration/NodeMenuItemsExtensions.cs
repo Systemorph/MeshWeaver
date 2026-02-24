@@ -58,8 +58,12 @@ public static class NodeMenuItemsExtensions
 
         if (perms.HasFlag(Permission.Create))
         {
+            // When on a NodeType definition page, pass the type as query parameter
+            var createHref = node?.NodeType == MeshNode.NodeTypePath
+                ? MeshNodeLayoutAreas.BuildContentUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, $"type={Uri.EscapeDataString(hubPath)}")
+                : null;
             yield return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
-                RequiredPermission: Permission.Create, DisplayOrder: 0);
+                RequiredPermission: Permission.Create, DisplayOrder: 0, Href: createHref);
             yield return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
                 RequiredPermission: Permission.Create, DisplayOrder: 1);
         }

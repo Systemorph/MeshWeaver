@@ -36,6 +36,7 @@ public class AgentChatClient : IAgentChat
     private AgentSession? sharedThread;
     private string? currentModelName;
     private string? persistentThreadId;
+    private IReadOnlyList<string>? currentAttachments;
     private bool isPersistentFactory;
     private bool agentsInitialized;
 
@@ -71,6 +72,14 @@ public class AgentChatClient : IAgentChat
         {
             logger.LogInformation("Set persistent thread ID: {PersistentThreadId}", persistentId);
         }
+    }
+
+    /// <summary>
+    /// Sets attachment paths whose content will be loaded and included in the next message.
+    /// </summary>
+    public void SetAttachments(IReadOnlyList<string>? paths)
+    {
+        currentAttachments = paths is { Count: > 0 } ? paths : null;
     }
 
     private async Task<AgentSession> GetOrCreateThreadAsync(ChatClientAgent agent)
@@ -226,6 +235,48 @@ public class AgentChatClient : IAgentChat
             }
         }
 
+        // Load and add attachment content
+        var attachmentPaths = currentAttachments;
+        if (attachmentPaths is { Count: > 0 })
+        {
+            var meshPlugin = new MeshPlugin(hub, this);
+            var loadTasks = attachmentPaths.Select(async path =>
+            {
+                try
+                {
+                    var content = await meshPlugin.Get($"@{path.TrimStart('@')}");
+                    if (!string.IsNullOrEmpty(content) && !content.StartsWith("Not found") && !content.StartsWith("Error"))
+                    {
+                        // Truncate individual attachments to prevent prompt overflow
+                        if (content.Length > 8000)
+                            content = content[..8000] + "\n... (truncated)";
+                        return (Path: path, Content: content);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Error loading attachment content for: {Path}", path);
+                }
+                return (Path: path, Content: (string?)null);
+            });
+
+            var results = await Task.WhenAll(loadTasks);
+            var loadedAttachments = results.Where(r => r.Content != null).ToList();
+
+            if (loadedAttachments.Count > 0)
+            {
+                messageText.AppendLine("# Attached Content");
+                messageText.AppendLine();
+                foreach (var (path, content) in loadedAttachments)
+                {
+                    messageText.AppendLine($"## Attachment: {path}");
+                    messageText.AppendLine();
+                    messageText.AppendLine(content);
+                    messageText.AppendLine();
+                }
+            }
+        }
+
         // Add user messages
         foreach (var message in messages)
         {
@@ -328,6 +379,7 @@ public class AgentChatClient : IAgentChat
 
         // Build the user message with context and agent instructions
         var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
+        currentAttachments = null; // Clear after use
 
         // Get response from the agent with thread
         var response = await agent.RunAsync(userMessage, thread, cancellationToken: cancellationToken);
@@ -387,6 +439,7 @@ public class AgentChatClient : IAgentChat
 
         // Build the user message with context and agent instructions
         var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
+        currentAttachments = null; // Clear after use
 
         // Get streaming response from the agent with thread
         await foreach (var update in agent.RunStreamingAsync(userMessage, thread, cancellationToken: cancellationToken))

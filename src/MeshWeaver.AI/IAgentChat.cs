@@ -51,6 +51,12 @@ public interface IAgentChat
     /// </summary>
     void SetPersistentThreadId(string? persistentId) { }
 
+    /// <summary>
+    /// Sets attachment paths whose content will be loaded and included in the next message.
+    /// Attachments are cleared after use.
+    /// </summary>
+    void SetAttachments(IReadOnlyList<string>? paths) { }
+
     /// <summary>Displays a layout area in the chat as a visual component.</summary>
     /// <param name="layoutAreaControl">The layout area control</param>
     void DisplayLayoutArea(LayoutAreaControl layoutAreaControl);

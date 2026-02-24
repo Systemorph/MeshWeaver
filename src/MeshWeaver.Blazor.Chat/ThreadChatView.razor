@@ -37,12 +37,10 @@
 
     <!-- Input area with reference chips -->
     <div class="thread-chat-input-area">
-        <!-- Reference chip collection -->
+        <!-- Attachment chip collection -->
         <ReferenceChipCollection
-            ContextPath="@initialContext"
-            ContextDisplayName="@initialContextDisplayName"
-            References="@extractedReferences"
-            OnReferenceRemoved="@OnReferenceRemoved"
+            Attachments="@attachments"
+            OnAttachmentRemoved="@OnAttachmentRemoved"
             OnChipClick="@OnChipClicked" />
 
         @* Monaco editor for markdown input with completion *@
