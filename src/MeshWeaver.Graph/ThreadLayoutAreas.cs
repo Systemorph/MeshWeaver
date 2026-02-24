@@ -31,6 +31,8 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadViews(this MessageHubConfiguration configuration)
         => configuration
+            .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
+            .AddNodeMenuItems(ChatMenuProvider, MessagesMenuProvider, DelegationsMenuProvider)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ChatArea)
                 .WithView(ThreadNodeType.ChatArea, ChatView)
@@ -41,6 +43,48 @@ public static class ThreadLayoutAreas
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
+
+    /// <summary>
+    /// Side panel menu items (New Chat, History, Full Screen).
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> SidePanelMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        await Task.CompletedTask;
+        yield return new("New Chat", "new-chat", DisplayOrder: 0);
+        yield return new("History", "history", DisplayOrder: 10);
+        yield return new("Full Screen", "fullscreen", DisplayOrder: 20);
+    }
+
+    /// <summary>
+    /// Main menu item: Chat (interactive chat view).
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> ChatMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        await Task.CompletedTask;
+        yield return new("Chat", ThreadNodeType.ChatArea, DisplayOrder: 10);
+    }
+
+    /// <summary>
+    /// Main menu item: Messages (read-only message history).
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> MessagesMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        await Task.CompletedTask;
+        yield return new("Messages", ThreadNodeType.ThreadArea, DisplayOrder: 11);
+    }
+
+    /// <summary>
+    /// Main menu item: Delegations (sub-thread history).
+    /// </summary>
+    private static async IAsyncEnumerable<NodeMenuItemDefinition> DelegationsMenuProvider(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        await Task.CompletedTask;
+        yield return new("Delegations", ThreadNodeType.HistoryArea, DisplayOrder: 12);
+    }
 
     /// <summary>
     /// Renders the Chat area with an interactive chat interface.
@@ -232,9 +276,6 @@ public static class ThreadLayoutAreas
 
         // Title
         header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
-
-        // Action menu
-        header = header.WithView(BuildThreadActionMenu(host, node, threadPath));
 
         container = container.WithView(header);
 
@@ -536,36 +577,6 @@ public static class ThreadLayoutAreas
                 ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
                 : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ChatArea}"));
-    }
-
-    /// <summary>
-    /// Builds the action menu for thread nodes.
-    /// </summary>
-    private static UiControl BuildThreadActionMenu(LayoutAreaHost host, MeshNode? node, string threadPath, bool canEdit = true)
-    {
-        var menu = Controls.MenuItem("", FluentIcons.MoreHorizontal(IconSize.Size20))
-            .WithAppearance(Appearance.Stealth)
-            .WithIconOnly();
-
-        // Chat option (interactive chat view)
-        menu = menu.WithView(new NavLinkControl("Chat", FluentIcons.Chat(IconSize.Size16), $"/{threadPath}/{ThreadNodeType.ChatArea}"));
-
-        // Thread option (read-only message history)
-        menu = menu.WithView(new NavLinkControl("Messages", FluentIcons.ChatMultiple(IconSize.Size16), $"/{threadPath}/{ThreadNodeType.ThreadArea}"));
-
-        // History option (show delegations)
-        menu = menu.WithView(new NavLinkControl("Delegations", FluentIcons.History(IconSize.Size16), $"/{threadPath}/{ThreadNodeType.HistoryArea}"));
-
-        // Metadata option
-        menu = menu.WithView(new NavLinkControl("Metadata", FluentIcons.Info(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.MetadataArea}"));
-
-        // Settings option (only when user can edit)
-        if (canEdit)
-        {
-            menu = menu.WithView(new NavLinkControl("Settings", FluentIcons.Settings(IconSize.Size16), $"/{threadPath}/{MeshNodeLayoutAreas.SettingsArea}"));
-        }
-
-        return menu;
     }
 
     /// <summary>

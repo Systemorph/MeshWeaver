@@ -41,7 +41,7 @@ public static class SharedPortalConfiguration
             {
                 opt.DisableImplicitFromServicesParameters = true;
             })
-            .AddChatWindowState();
+            .AddSidePanelState();
 
         services.AddMemoryChatPersistence();
 

@@ -13,7 +13,7 @@ public static class BlazorPortalExtensions
 {
     /// <summary>
     /// Adds portal services including DimensionManager, CacheStorageAccessor, AppVersionService,
-    /// and ChatWindowStateService with persistent state support.
+    /// and SidePanelStateService with persistent state support.
     /// Also registers the "nonfile" route constraint used by ApplicationPage and AreaPage.
     /// Call this on the IServerSideBlazorBuilder returned by AddInteractiveServerComponents().
     /// </summary>
@@ -21,7 +21,7 @@ public static class BlazorPortalExtensions
     {
         builder.Services.AddBlazorPortalCoreServices();
         builder.Services.AddNonfileRouteConstraint();
-        builder.AddChatWindowState();
+        builder.AddSidePanelState();
         return builder;
     }
 

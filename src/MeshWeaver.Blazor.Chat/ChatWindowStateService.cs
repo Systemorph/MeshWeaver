@@ -3,16 +3,16 @@ using Microsoft.AspNetCore.Components;
 namespace MeshWeaver.Blazor.Chat;
 
 /// <summary>
-/// Service to manage and persist chat window state across circuit reconnections.
+/// Service to manage and persist side panel state across circuit reconnections.
 /// Uses .NET 10's [PersistentState] attribute for automatic state persistence.
 /// </summary>
-public class ChatWindowStateService
+public class SidePanelStateService
 {
     /// <summary>
-    /// The persisted chat window state. This will survive circuit disconnections.
+    /// The persisted side panel state. This will survive circuit disconnections.
     /// </summary>
     [PersistentState]
-    public ChatWindowState State { get; set; } = new();
+    public SidePanelState State { get; set; } = new();
 
     /// <summary>
     /// Event raised when the state changes (visibility or position only, not size).
@@ -20,10 +20,10 @@ public class ChatWindowStateService
     public event Action? OnStateChanged;
 
     public bool IsVisible => State.IsVisible;
-    public ChatPosition Position => State.Position;
+    public SidePanelPosition Position => State.Position;
     public int? Width => State.Width;
     public int? Height => State.Height;
-    public string? CurrentThreadPath => State.CurrentThreadPath;
+    public string? ContentPath => State.ContentPath;
 
     public void SetVisible(bool visible)
     {
@@ -34,7 +34,7 @@ public class ChatWindowStateService
         }
     }
 
-    public void SetPosition(ChatPosition position)
+    public void SetPosition(SidePanelPosition position)
     {
         if (State.Position != position)
         {
@@ -63,23 +63,23 @@ public class ChatWindowStateService
     }
 
     /// <summary>
-    /// Sets the current thread path being viewed/edited.
+    /// Sets the current content path being viewed/edited.
     /// </summary>
-    public void SetCurrentThread(string? threadPath)
+    public void SetContentPath(string? contentPath)
     {
-        if (State.CurrentThreadPath != threadPath)
+        if (State.ContentPath != contentPath)
         {
-            State = State with { CurrentThreadPath = threadPath };
-            // Don't notify for thread changes - this is internal state
+            State = State with { ContentPath = contentPath };
+            // Don't notify for content changes - this is internal state
         }
     }
 
     /// <summary>
-    /// Opens the side panel and sets the active thread.
+    /// Opens the side panel and sets the active content path.
     /// </summary>
-    public void OpenSidePanelWithThread(string threadPath)
+    public void OpenWithContent(string contentPath)
     {
-        State = State with { IsVisible = true, CurrentThreadPath = threadPath };
+        State = State with { IsVisible = true, ContentPath = contentPath };
         NotifyStateChanged();
     }
 

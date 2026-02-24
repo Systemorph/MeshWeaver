@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -66,14 +67,14 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Read the $Menu control from the layout stream
         var menuControl = await stream.GetControlStream(MenuControl.MenuArea)
-            .Timeout(10.Seconds())
+            .Timeout(3.Seconds())
             .FirstAsync(x => x != null);
 
         var menu = menuControl.Should().BeOfType<MenuControl>().Which;
         return menu.Items;
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task Menu_NoRoles_ShowsOnlyUnrestrictedItems()
     {
         // With RLS enabled but no roles seeded, user has Permission.None.
@@ -81,10 +82,12 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            pingCts.Token);
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
@@ -97,7 +100,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             "no roles assigned — only unrestricted items should appear; Settings requires Read");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task Menu_ReadOnlyUser_ShowsOnlyUnrestrictedItems()
     {
         // Viewer role: Read only → no Create, Update, or Delete
@@ -108,10 +111,12 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            pingCts.Token);
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
@@ -124,7 +129,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             "Viewer has only Read — no Create, Update, or Delete items");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task Menu_Editor_ShowsCreateItems()
     {
         // Editor role: Read|Create|Update|Comment → has Create but not Delete
@@ -136,10 +141,12 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            pingCts.Token);
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
@@ -153,7 +160,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             "Editor has Read|Create|Update|Comment — Create/Import plus always-visible items");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task Menu_Admin_ShowsAllItems()
     {
         // Admin role: All permissions
@@ -164,10 +171,12 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            pingCts.Token);
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
@@ -181,7 +190,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             ["Create", "Import", "Threads", "Settings", "Delete"]);
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task Menu_ItemsAreSortedByDisplayOrder()
     {
         // Seed Admin so we get all items for sorting verification
@@ -192,10 +201,12 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            pingCts.Token);
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
@@ -203,7 +214,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             "menu items should be sorted by DisplayOrder");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task Menu_ImportAreaIsImportMeshNodes()
     {
         // Seed Editor to get Import item (requires Create permission)
@@ -214,10 +225,12 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(nodeAddress),
-            TestContext.Current.CancellationToken);
+            pingCts.Token);
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
@@ -227,7 +240,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             "Import should navigate to ImportMeshNodes area, not $Import");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task StaticRoles_AppearInNodeTypeRoleQuery()
     {
         // Static built-in roles should appear when querying with nodeType:Role
@@ -247,7 +260,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             ["Admin", "Editor", "Viewer", "Commenter"]);
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 5000)]
     public async Task StaticRoles_NotIncludedInGenericChildrenQuery()
     {
         // Static roles should NOT appear in unfiltered children queries

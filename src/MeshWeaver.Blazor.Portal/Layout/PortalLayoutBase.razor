@@ -2,7 +2,7 @@
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
 
-<div class="layout @(IsAIChatVisible ? $"chat-visible chat-position-{ChatPositionValue.ToString().ToLower()}" : "")"
+<div class="layout @(IsAIChatVisible ? $"chat-visible chat-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
     style="@(IsNavMenuOpen ? "overflow: hidden;" : string.Empty)">
     <div class="meshweaver-icon">
         <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
@@ -89,7 +89,7 @@
 
     @* Main content area with splitter at top level (in grid-area: main).
        @Body goes in first pane with body-content class. Chat is in second pane. *@
-    <FluentMultiSplitter Orientation="@(ChatPositionValue == ChatPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
+    <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
                          Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
                          Class="body-splitter">
         <FluentMultiSplitterPane Size="@MainPaneSizeWithChat" Min="200px">
@@ -100,9 +100,9 @@
             </div>
         </FluentMultiSplitterPane>
         <FluentMultiSplitterPane Size="@ChatPaneSizeWithVisibility" Min="@(IsAIChatVisible ? "250px" : "0")" Max="60%" Resizable="@IsAIChatVisible" Collapsible="true" Collapsed="@(!IsAIChatVisible)">
-            @* Chat panel - persists across navigation, independent from @Body *@
+            @* Side panel - persists across navigation, independent from @Body *@
             <div class="ai-chat-content" style="@(IsAIChatVisible ? "" : "display: none;")">
-                <ChatSidePanel @key="@("chat-singleton")" @ref="chatPanel" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
+                <ThreadSidePanelContent @key="@("chat-singleton")" OnCloseRequested="ToggleAIChatVisibility" />
             </div>
         </FluentMultiSplitterPane>
     </FluentMultiSplitter>

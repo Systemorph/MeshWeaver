@@ -16,7 +16,6 @@ public partial class MainLayout : IDisposable
     private const string MessageBarSection = "MessagesTop";
 
     private bool isNavMenuOpen;
-    private ChatSidePanel? chatPanel;
     private IJSObjectReference? jsModule;
 
     protected override void OnInitialized()
@@ -62,7 +61,7 @@ public partial class MainLayout : IDisposable
         await dialog.Result;
     }
     public bool IsAIChatVisible { get; private set; }
-    private ChatPosition chatPosition = ChatPosition.Right;
+    private SidePanelPosition sidePanelPosition = SidePanelPosition.Right;
 
     public void ToggleAIChatVisibility()
     {
@@ -78,12 +77,6 @@ public partial class MainLayout : IDisposable
 
         // Call the JavaScript function to handle the resize operation
         await jsModule.InvokeVoidAsync("startResize");
-    }
-
-    private void HandleChatPositionChanged(ChatPosition newPosition)
-    {
-        chatPosition = newPosition;
-        StateHasChanged();
     }
 
     public void Dispose()

@@ -1,6 +1,6 @@
 namespace MeshWeaver.Blazor.Chat;
 
-public enum ChatPosition
+public enum SidePanelPosition
 {
     Right,
     Left,
