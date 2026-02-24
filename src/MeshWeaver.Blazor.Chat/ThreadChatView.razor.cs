@@ -22,7 +22,7 @@ namespace MeshWeaver.Blazor.Chat;
 public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatView>
 {
     [Inject] private INavigationService NavigationService { get; set; } = null!;
-    [Inject] private ChatWindowStateService ChatWindowState { get; set; } = null!;
+    [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
 
     private bool _isDisposed;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
@@ -508,7 +508,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 {
                     threadPath = task.Result.Path;
                     chat?.SetThreadId(threadPath);
-                    ChatWindowState.SetCurrentThread(threadPath);
+                    SidePanelState.SetContentPath(threadPath);
                     Logger.LogDebug("[ThreadChat:{InstanceId}] Created thread: {Path}", _instanceId, threadPath);
 
                     // Save existing messages as child nodes

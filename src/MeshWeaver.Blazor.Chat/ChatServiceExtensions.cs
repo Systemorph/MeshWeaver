@@ -9,15 +9,16 @@ namespace MeshWeaver.Blazor.Chat;
 public static class ChatServiceExtensions
 {
     /// <summary>
-    /// Adds the chat window state service with persistent state support.
+    /// Adds the side panel state service with persistent state support,
+    /// and registers the side panel menu provider.
     /// Call this after AddInteractiveServerComponents().
     /// </summary>
     /// <param name="builder">The server-side Blazor builder.</param>
     /// <returns>The builder for chaining.</returns>
-    public static IServerSideBlazorBuilder AddChatWindowState(this IServerSideBlazorBuilder builder)
+    public static IServerSideBlazorBuilder AddSidePanelState(this IServerSideBlazorBuilder builder)
     {
-        builder.Services.AddScoped<ChatWindowStateService>();
-        builder.RegisterPersistentService<ChatWindowStateService>(RenderMode.InteractiveServer);
+        builder.Services.AddScoped<SidePanelStateService>();
+        builder.RegisterPersistentService<SidePanelStateService>(RenderMode.InteractiveServer);
         return builder;
     }
 }

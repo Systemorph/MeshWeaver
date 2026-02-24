@@ -3,7 +3,7 @@
 @using MeshWeaver.Blazor.Chat
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
-<div class="layout @(IsAIChatVisible ? $"chat-visible chat-position-{chatPosition.ToString().ToLower()}" : "")"
+<div class="layout @(IsAIChatVisible ? $"chat-visible chat-position-{sidePanelPosition.ToString().ToLower()}" : "")"
     style="@(isNavMenuOpen ? "overflow: hidden;" : string.Empty)">
     <div class="meshweaver-icon">
         <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
@@ -80,18 +80,18 @@
 
     @if (IsAIChatVisible)
     {
-        <div class="ai-chat-overlay ai-chat-@(chatPosition.ToString().ToLower())">
-            @if (chatPosition != ChatPosition.Bottom)
+        <div class="ai-chat-overlay ai-chat-@(sidePanelPosition.ToString().ToLower())">
+            @if (sidePanelPosition != SidePanelPosition.Bottom)
             {
                 <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
             }
             <div class="ai-chat-container">
-                @if (chatPosition == ChatPosition.Bottom)
+                @if (sidePanelPosition == SidePanelPosition.Bottom)
                 {
                     <div class="ai-chat-resizer" @onmousedown="@(_ => StartResize())"></div>
                 }
                 <div class="ai-chat-content">
-                    <ChatSidePanel @ref="chatPanel" OnCloseRequested="ToggleAIChatVisibility" OnPositionChanged="HandleChatPositionChanged" />
+                    <ThreadSidePanelContent OnCloseRequested="ToggleAIChatVisibility" />
                 </div>
             </div>
         </div>
