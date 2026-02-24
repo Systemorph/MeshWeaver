@@ -21,8 +21,7 @@ public class PostgreSqlFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _container = new PostgreSqlBuilder()
-            .WithImage("pgvector/pgvector:pg17")
+        _container = new PostgreSqlBuilder("pgvector/pgvector:pg17")
             .WithDatabase("meshweaver_test")
             .WithUsername("postgres")
             .WithPassword("postgres")

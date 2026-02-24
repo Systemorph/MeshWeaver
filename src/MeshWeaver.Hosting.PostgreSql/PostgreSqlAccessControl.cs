@@ -79,4 +79,78 @@ public class PostgreSqlAccessControl
 
         return permissions;
     }
+
+    /// <summary>
+    /// Grants or denies a permission for a subject at a node path.
+    /// Stores in the access_control table and rebuilds the denormalized permissions.
+    /// </summary>
+    public async Task GrantAsync(string nodePath, string subject, string permission, bool isAllow, CancellationToken ct = default)
+    {
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            INSERT INTO access_control (node_path, subject, permission, is_allow)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (node_path, subject, permission) DO UPDATE SET is_allow = $4
+            """);
+        cmd.Parameters.AddWithValue(nodePath);
+        cmd.Parameters.AddWithValue(subject);
+        cmd.Parameters.AddWithValue(permission);
+        cmd.Parameters.AddWithValue(isAllow);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await RebuildDenormalizedTableAsync(ct);
+    }
+
+    /// <summary>
+    /// Revokes a permission for a subject at a node path.
+    /// </summary>
+    public async Task RevokeAsync(string nodePath, string subject, string permission, CancellationToken ct = default)
+    {
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            DELETE FROM access_control
+            WHERE node_path = $1 AND subject = $2 AND permission = $3
+            """);
+        cmd.Parameters.AddWithValue(nodePath);
+        cmd.Parameters.AddWithValue(subject);
+        cmd.Parameters.AddWithValue(permission);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await RebuildDenormalizedTableAsync(ct);
+    }
+
+    /// <summary>
+    /// Adds a member to a group.
+    /// </summary>
+    public async Task AddGroupMemberAsync(string groupName, string memberId, CancellationToken ct = default)
+    {
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            INSERT INTO group_members (group_name, member_id)
+            VALUES ($1, $2)
+            ON CONFLICT DO NOTHING
+            """);
+        cmd.Parameters.AddWithValue(groupName);
+        cmd.Parameters.AddWithValue(memberId);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await RebuildDenormalizedTableAsync(ct);
+    }
+
+    /// <summary>
+    /// Removes a member from a group.
+    /// </summary>
+    public async Task RemoveGroupMemberAsync(string groupName, string memberId, CancellationToken ct = default)
+    {
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            DELETE FROM group_members
+            WHERE group_name = $1 AND member_id = $2
+            """);
+        cmd.Parameters.AddWithValue(groupName);
+        cmd.Parameters.AddWithValue(memberId);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await RebuildDenormalizedTableAsync(ct);
+    }
 }
