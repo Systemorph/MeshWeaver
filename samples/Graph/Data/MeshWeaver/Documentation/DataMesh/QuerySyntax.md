@@ -110,6 +110,21 @@ Specifies the data source:
 source:activity    # Query activity records
 ```
 
+### context
+Filters results by visibility context. Nodes (or their NodeType definitions) can declare contexts from which they should be excluded via the `ExcludeFromContext` property. This enables different views of the same data:
+```
+context:search         # Exclude nodes hidden from search
+context:create         # Exclude nodes hidden from create menus
+```
+
+Combine with other qualifiers:
+```
+nodeType:NodeType context:create          # NodeTypes visible in create menus
+namespace:ACME scope:descendants context:search  # Searchable nodes under ACME
+```
+
+Nodes are **inclusive by default** — a node without `ExcludeFromContext` is visible in all contexts. A node with `ExcludeFromContext: ["search"]` is excluded only from `context:search` queries but visible everywhere else.
+
 ### select
 Projects results to include only the specified properties. Returns lightweight dictionaries instead of full nodes:
 ```
