@@ -29,8 +29,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     // Thread state
     private string? threadPath;
-    private string? initialContext;
-    private string? initialContextDisplayName;
+    private string? initialContext; // Backing field for agent initialization
     private string? lastContextUrl; // Track URL for context change detection
     private bool isLoadingThread;
     private bool isGeneratingResponse;
@@ -43,8 +42,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private MonacoEditorView? monacoEditor;
     private string? MessageText;
 
-    // Reference extraction
-    private IReadOnlyList<string> extractedReferences = Array.Empty<string>();
+    // Unified attachments (context + @references)
+    private readonly List<AttachmentInfo> attachments = new();
     private const string placeholderText = "Type a message... Use @ to reference nodes";
 
     // Agent/model selection
@@ -67,9 +66,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             var path = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
             if (!string.IsNullOrEmpty(path) && path != "chat")
             {
+                // Resolve satellite content to its primary node path
+                path = await ResolvePrimaryContextPathAsync(path);
                 initialContext = path;
-                initialContextDisplayName = await ResolveContextDisplayNameAsync(path);
+                var displayName = await ResolveContextDisplayNameAsync(path);
+                attachments.Add(new AttachmentInfo(path, displayName, IsContext: true));
             }
+        }
+        else
+        {
+            // initialContext was set via data binding; add as context attachment
+            var displayName = await ResolveContextDisplayNameAsync(initialContext);
+            attachments.Add(new AttachmentInfo(initialContext, displayName, IsContext: true));
         }
 
         try
@@ -127,12 +135,35 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
+    /// <summary>
+    /// Resolves a path to its primary context path, handling ISatelliteContent.
+    /// If the node at the path is a satellite, returns its PrimaryNodePath instead.
+    /// </summary>
+    private async Task<string> ResolvePrimaryContextPathAsync(string path)
+    {
+        try
+        {
+            var meshCatalog = Hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+                return path;
+
+            var node = await meshCatalog.GetNodeAsync(new Address(path));
+            if (node?.Content is ISatelliteContent satellite && !string.IsNullOrEmpty(satellite.PrimaryNodePath))
+                return satellite.PrimaryNodePath;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error resolving primary context path for: {Path}", path);
+        }
+
+        return path;
+    }
+
     protected override void BindData()
     {
         base.BindData();
         DataBind(ViewModel.ThreadPath, x => x.threadPath);
         DataBind(ViewModel.InitialContext, x => x.initialContext);
-        DataBind(ViewModel.InitialContextDisplayName, x => x.initialContextDisplayName);
     }
 
     private async Task InitializeAgentAndModelSelectionsAsync()
@@ -286,7 +317,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 var conversation = new ChatConversation
                 {
                     Id = threadPath,
-                    Title = node?.Name ?? initialContextDisplayName ?? "Thread",
+                    Title = node?.Name ?? attachments.FirstOrDefault(a => a.IsContext)?.DisplayName ?? "Thread",
                     CreatedAt = DateTime.UtcNow,
                     LastModifiedAt = DateTime.UtcNow,
                     Messages = messages.ToList()
@@ -403,7 +434,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Checks if the navigation context has changed since the last message and updates the context if needed.
+    /// Checks if the navigation context has changed since the last message and updates the context attachment if needed.
     /// </summary>
     private async Task CheckAndUpdateContextAsync()
     {
@@ -417,6 +448,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // Only update if we have a meaningful path (not root or chat)
             if (!string.IsNullOrEmpty(newPath) && newPath != "chat")
             {
+                // Resolve satellite content to its primary node path
+                newPath = await ResolvePrimaryContextPathAsync(newPath);
+
                 // Only update if path is actually different from current context
                 if (newPath != initialContext)
                 {
@@ -424,7 +458,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         _instanceId, initialContext, newPath);
 
                     initialContext = newPath;
-                    initialContextDisplayName = await ResolveContextDisplayNameAsync(newPath);
+                    var displayName = await ResolveContextDisplayNameAsync(newPath);
+
+                    // Replace or add context attachment
+                    attachments.RemoveAll(a => a.IsContext);
+                    attachments.Insert(0, new AttachmentInfo(newPath, displayName, IsContext: true));
                     StateHasChanged();
                 }
             }
@@ -506,24 +544,50 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private void UpdateExtractedReferences()
     {
-        extractedReferences = MarkdownReferenceExtractor.GetUniquePaths(MessageText);
+        var currentRefs = MarkdownReferenceExtractor.GetUniquePaths(MessageText);
+
+        // Remove stale reference attachments (not in current refs, and not context)
+        attachments.RemoveAll(a => !a.IsContext && !currentRefs.Contains(a.Path, StringComparer.OrdinalIgnoreCase));
+
+        // Add new reference attachments (dedup by path against existing)
+        var existingPaths = attachments.Select(a => a.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var refPath in currentRefs)
+        {
+            if (!existingPaths.Contains(refPath))
+            {
+                attachments.Add(new AttachmentInfo(refPath, DisplayName: null, IsContext: false));
+            }
+        }
+
         StateHasChanged();
     }
 
-    private async Task OnReferenceRemoved(string reference)
+    private async Task OnAttachmentRemoved(string path)
     {
-        if (string.IsNullOrEmpty(MessageText))
+        var attachment = attachments.FirstOrDefault(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (attachment == null)
             return;
 
-        var updatedMarkdown = MarkdownReferenceExtractor.RemoveReferenceByPath(MessageText, reference);
-        MessageText = updatedMarkdown;
+        attachments.Remove(attachment);
 
-        if (monacoEditor != null)
+        if (attachment.IsContext)
         {
-            await monacoEditor.SetValueAsync(updatedMarkdown);
+            // Clear context backing field so it's not sent to the agent
+            initialContext = null;
+        }
+        else if (!string.IsNullOrEmpty(MessageText))
+        {
+            // Remove @reference from message text
+            var updatedMarkdown = MarkdownReferenceExtractor.RemoveReferenceByPath(MessageText, path);
+            MessageText = updatedMarkdown;
+
+            if (monacoEditor != null)
+            {
+                await monacoEditor.SetValueAsync(updatedMarkdown);
+            }
         }
 
-        UpdateExtractedReferences();
+        StateHasChanged();
     }
 
     private void OnChipClicked(string path)
@@ -614,6 +678,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
+            // Pass current attachments to the chat client
+            chat.SetAttachments(attachments.Select(a => a.Path).ToList());
+
             var lastRole = "Assistant";
             var responseText = new TextContent(string.Empty);
             currentResponseMessage = new ChatMessage(new ChatRole(lastRole), [responseText]);
@@ -761,9 +828,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 Hub,
                 _ => [AI.Application.ApplicationAddress.Agents]);
 
+            var contextPath = attachments.FirstOrDefault(a => a.IsContext)?.Path ?? initialContext;
             var agentContext = new AgentContext
             {
-                Address = initialContext != null ? new MeshWeaver.Messaging.Address(initialContext) : null
+                Address = contextPath != null ? new MeshWeaver.Messaging.Address(contextPath) : null
             };
 
             var response = await client.GetCompletionsAsync(query, agentContext);

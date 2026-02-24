@@ -32,7 +32,7 @@ public partial class ChatSidePanel : ComponentBase
     private ThreadChatControl GetThreadChatControl()
     {
         var context = NavigationService.Context;
-        var contextPath = context?.Namespace;
+        var contextPath = context?.PrimaryPath;
         var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
 
         return new ThreadChatControl()

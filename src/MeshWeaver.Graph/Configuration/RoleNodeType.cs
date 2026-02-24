@@ -36,7 +36,7 @@ public static class RoleNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Role",
-        Icon = "Shield",
+        Icon = "/static/NodeTypeIcons/shield.svg",
         AssemblyLocation = typeof(RoleNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
