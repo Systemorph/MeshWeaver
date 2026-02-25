@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA/VeHwZNxVqky-y6Mw293wIg",
+  "path": "ACME/Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA/VeHwZNxVqky-y6Mw293wIg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:38:23.837211+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "VeHwZNxVqky-y6Mw293wIg",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "I\u0027ve displayed the OrderSummary layout (Top 5 orders by value) which joins orders with customer details and ranks them by revenue. Use the year toolbar in the view to change the year or tell me if you want this filtered by region, customer, or employee.",
+    "timestamp": "2026-02-17T14:38:23.836486Z",
+    "type": "AgentResponse"
+  }
+}

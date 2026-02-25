@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/KD_RER4g5kusQB1XlH-hTA/gHFrGt1TRkiLK7u0wRUxdw",
+  "path": "ACME/Northwind/Analytics/Threads/KD_RER4g5kusQB1XlH-hTA/gHFrGt1TRkiLK7u0wRUxdw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T15:38:35.405135+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "gHFrGt1TRkiLK7u0wRUxdw",
+    "role": "user",
+    "text": "Show me what types of products Ma Maison supplies",
+    "timestamp": "2026-02-17T15:38:35.403789Z",
+    "type": "ExecutedInput"
+  }
+}

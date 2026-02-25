@@ -1,0 +1,23 @@
+{
+  "id": "QUICK",
+  "namespace": "Northwind",
+  "name": "QUICK-Stop",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "QUICK-Stop - Cunewalde, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "QUICK",
+    "companyName": "QUICK-Stop",
+    "contactName": "Horst Kloss",
+    "contactTitle": "Accounting Manager",
+    "city": "Cunewalde",
+    "region": "",
+    "postalCode": "01307",
+    "country": "Germany",
+    "phone": "0372-035188",
+    "fax": ""
+  }
+}

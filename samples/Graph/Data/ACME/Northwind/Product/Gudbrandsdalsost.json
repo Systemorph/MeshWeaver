@@ -1,0 +1,23 @@
+{
+  "id": "Gudbrandsdalsost",
+  "namespace": "Northwind",
+  "name": "Gudbrandsdalsost",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Gudbrandsdalsost - 10 kg pkg.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 69,
+    "productName": "Gudbrandsdalsost",
+    "supplierId": 15,
+    "categoryId": 4,
+    "quantityPerUnit": "10 kg pkg.",
+    "unitPrice": 36.0,
+    "unitsInStock": 26,
+    "unitsOnOrder": 0,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}

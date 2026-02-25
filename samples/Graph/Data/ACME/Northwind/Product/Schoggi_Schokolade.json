@@ -1,0 +1,23 @@
+{
+  "id": "Schoggi_Schokolade",
+  "namespace": "Northwind",
+  "name": "Schoggi Schokolade",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Schoggi Schokolade - 100 - 100 g pieces",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 27,
+    "productName": "Schoggi Schokolade",
+    "supplierId": 11,
+    "categoryId": 3,
+    "quantityPerUnit": "100 - 100 g pieces",
+    "unitPrice": 43.9,
+    "unitsInStock": 49,
+    "unitsOnOrder": 0,
+    "reorderLevel": 30,
+    "discontinued": false
+  }
+}

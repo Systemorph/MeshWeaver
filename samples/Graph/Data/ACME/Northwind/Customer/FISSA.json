@@ -1,0 +1,23 @@
+{
+  "id": "FISSA",
+  "namespace": "Northwind",
+  "name": "FISSA Fabrica Inter. Salchichas S.A.",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "FISSA Fabrica Inter. Salchichas S.A. - Madrid, Spain",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "FISSA",
+    "companyName": "FISSA Fabrica Inter. Salchichas S.A.",
+    "contactName": "Diego Roel",
+    "contactTitle": "Accounting Manager",
+    "city": "Madrid",
+    "region": "",
+    "postalCode": "28034",
+    "country": "Spain",
+    "phone": "(91) 555 94 44",
+    "fax": "(91) 555 55 93"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "Paul",
+  "namespace": "ACME",
+  "name": "Paul Martinez",
+  "nodeType": "User",
+  "description": "Risk Manager at ACME",
+  "iconName": "Person",
+  "isPersistent": true,
+  "content": {
+    "id": "Paul",
+    "name": "Paul Martinez",
+    "email": "paul.martinez@acme.example.com",
+    "bio": "Risk manager specializing in financial risk assessment and mitigation.",
+    "role": "Risk Manager"
+  }
+}

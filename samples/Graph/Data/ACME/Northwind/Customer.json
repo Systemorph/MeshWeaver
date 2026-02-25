@@ -1,0 +1,19 @@
+{
+  "id": "Customer",
+  "namespace": "ACME/Northwind",
+  "name": "Customer",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Customer master data with contact information and location",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Customer",
+    "namespace": "ACME/Northwind",
+    "displayName": "Customer",
+    "iconName": "Users",
+    "description": "Customer master data with contact information and location",
+    "configuration": "config => config.WithContentType<CustomerContent>().AddData(data => data.AddHubSource(new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).Append(\"AnalyticsCatalog\").ToArray()), source => source.WithType<Order>().WithType<OrderDetails>().WithType<Product>().WithType<NorthwindDataCube>())).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddCustomerNodeViews())"
+  }
+}

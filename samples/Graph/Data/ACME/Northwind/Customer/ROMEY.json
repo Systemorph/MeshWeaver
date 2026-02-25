@@ -1,0 +1,23 @@
+{
+  "id": "ROMEY",
+  "namespace": "Northwind",
+  "name": "Romero y tomillo",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Romero y tomillo - Madrid, Spain",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "ROMEY",
+    "companyName": "Romero y tomillo",
+    "contactName": "Alejandra Camino",
+    "contactTitle": "Accounting Manager",
+    "city": "Madrid",
+    "region": "",
+    "postalCode": "28001",
+    "country": "Spain",
+    "phone": "(91) 745 6200",
+    "fax": "(91) 745 6210"
+  }
+}

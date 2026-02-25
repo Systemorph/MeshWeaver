@@ -1,0 +1,23 @@
+{
+  "id": "Mozzarella_di_Giovanni",
+  "namespace": "Northwind",
+  "name": "Mozzarella di Giovanni",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Mozzarella di Giovanni - 24 - 200 g pkgs.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 72,
+    "productName": "Mozzarella di Giovanni",
+    "supplierId": 14,
+    "categoryId": 4,
+    "quantityPerUnit": "24 - 200 g pkgs.",
+    "unitPrice": 34.8,
+    "unitsInStock": 14,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

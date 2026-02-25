@@ -1,0 +1,23 @@
+{
+  "id": "Gula_Malacca",
+  "namespace": "Northwind",
+  "name": "Gula Malacca",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Gula Malacca - 20 - 2 kg bags",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 44,
+    "productName": "Gula Malacca",
+    "supplierId": 20,
+    "categoryId": 2,
+    "quantityPerUnit": "20 - 2 kg bags",
+    "unitPrice": 19.45,
+    "unitsInStock": 27,
+    "unitsOnOrder": 0,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}

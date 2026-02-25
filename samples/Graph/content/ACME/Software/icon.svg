@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="codeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#991B1B"/>
+      <stop offset="100%" stop-color="#EF4444"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
+  <!-- Left angle bracket < -->
+  <path d="M24 22 L10 32 L24 42" fill="none" stroke="url(#codeGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Right angle bracket > -->
+  <path d="M40 22 L54 32 L40 42" fill="none" stroke="url(#codeGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Forward slash / -->
+  <line x1="36" y1="18" x2="28" y2="46" stroke="#DC2626" stroke-width="4" stroke-linecap="round"/>
+</svg>

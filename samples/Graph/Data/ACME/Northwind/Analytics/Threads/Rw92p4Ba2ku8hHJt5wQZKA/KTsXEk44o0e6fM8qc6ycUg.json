@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA/KTsXEk44o0e6fM8qc6ycUg",
+  "path": "ACME/Northwind/Analytics/Threads/Rw92p4Ba2ku8hHJt5wQZKA/KTsXEk44o0e6fM8qc6ycUg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:42:15.812359+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "KTsXEk44o0e6fM8qc6ycUg",
+    "role": "user",
+    "text": "The OrderDetailsReport only shows customer Save-a-lot Markets and not customer QUICK-Stop",
+    "timestamp": "2026-02-17T14:42:15.811826Z",
+    "type": "ExecutedInput"
+  }
+}

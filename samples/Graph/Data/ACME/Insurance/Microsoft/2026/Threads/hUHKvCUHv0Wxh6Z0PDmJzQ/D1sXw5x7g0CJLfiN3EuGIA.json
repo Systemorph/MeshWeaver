@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Microsoft/2026/Threads/hUHKvCUHv0Wxh6Z0PDmJzQ/D1sXw5x7g0CJLfiN3EuGIA",
+  "path": "ACME/Insurance/Microsoft/2026/Threads/hUHKvCUHv0Wxh6Z0PDmJzQ/D1sXw5x7g0CJLfiN3EuGIA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T12:29:50.415868+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "D1sXw5x7g0CJLfiN3EuGIA",
+    "role": "assistant",
+    "text": "An error occurred: Failed to start Copilot client. Ensure the Copilot CLI is installed and available in PATH. See: https://docs.github.com/en/copilot/managing-copilot/configure-personal-settings/installing-the-github-copilot-in-the-cli",
+    "timestamp": "2026-02-10T12:29:50.415687Z",
+    "type": "AgentResponse"
+  }
+}

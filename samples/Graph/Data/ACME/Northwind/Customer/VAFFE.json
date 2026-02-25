@@ -1,0 +1,23 @@
+{
+  "id": "VAFFE",
+  "namespace": "Northwind",
+  "name": "Vaffeljernet",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Vaffeljernet - \u00c5rhus, Denmark",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "VAFFE",
+    "companyName": "Vaffeljernet",
+    "contactName": "Palle Ibsen",
+    "contactTitle": "Sales Manager",
+    "city": "\u00c5rhus",
+    "region": "",
+    "postalCode": "8200",
+    "country": "Denmark",
+    "phone": "86 21 32 43",
+    "fax": "86 22 33 44"
+  }
+}
