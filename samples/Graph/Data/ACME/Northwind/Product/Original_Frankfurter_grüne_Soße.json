@@ -1,0 +1,23 @@
+{
+  "id": "Original_Frankfurter_gr\u00fcne_So\u00dfe",
+  "namespace": "Northwind",
+  "name": "Original Frankfurter gr\u00fcne So\u00dfe",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Original Frankfurter gr\u00fcne So\u00dfe - 12 boxes",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 77,
+    "productName": "Original Frankfurter gr\u00fcne So\u00dfe",
+    "supplierId": 12,
+    "categoryId": 2,
+    "quantityPerUnit": "12 boxes",
+    "unitPrice": 13.0,
+    "unitsInStock": 32,
+    "unitsOnOrder": 0,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}

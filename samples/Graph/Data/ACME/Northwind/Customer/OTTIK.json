@@ -1,0 +1,23 @@
+{
+  "id": "OTTIK",
+  "namespace": "Northwind",
+  "name": "Ottilies K\u00e4seladen",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Ottilies K\u00e4seladen - K\u00f6ln, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "OTTIK",
+    "companyName": "Ottilies K\u00e4seladen",
+    "contactName": "Henriette Pfalzheim",
+    "contactTitle": "Owner",
+    "city": "K\u00f6ln",
+    "region": "",
+    "postalCode": "50739",
+    "country": "Germany",
+    "phone": "0221-0644327",
+    "fax": "0221-0765721"
+  }
+}

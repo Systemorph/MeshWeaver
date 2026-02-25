@@ -1,0 +1,19 @@
+{
+  "id": "CalculateRiskScore",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Calculate risk score",
+  "nodeType": "ACME/Software/Project/Todo",
+  "category": "Tasks",
+  "description": "Compute overall underwriting risk score",
+  "icon": "/static/storage/content/ACME/Software/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Calculate risk score",
+    "description": "Calculate comprehensive risk score using underwriting model. Factor in: industry hazard class, loss history, safety programs, financial strength, and geographic exposure.",
+    "category": "Research",
+    "priority": "High",
+    "dueDateOffsetDays": -4,
+    "status": "Pending"
+  }
+}

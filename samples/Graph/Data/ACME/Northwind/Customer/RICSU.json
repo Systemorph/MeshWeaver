@@ -1,0 +1,23 @@
+{
+  "id": "RICSU",
+  "namespace": "Northwind",
+  "name": "Richter Supermarkt",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Richter Supermarkt - Gen\u00e8ve, Switzerland",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "RICSU",
+    "companyName": "Richter Supermarkt",
+    "contactName": "Michael Holz",
+    "contactTitle": "Sales Manager",
+    "city": "Gen\u00e8ve",
+    "region": "",
+    "postalCode": "1203",
+    "country": "Switzerland",
+    "phone": "0897-034214",
+    "fax": ""
+  }
+}

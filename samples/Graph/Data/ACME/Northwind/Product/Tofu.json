@@ -1,0 +1,23 @@
+{
+  "id": "Tofu",
+  "namespace": "Northwind",
+  "name": "Tofu",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Tofu - 40 - 100 g pkgs.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 14,
+    "productName": "Tofu",
+    "supplierId": 6,
+    "categoryId": 7,
+    "quantityPerUnit": "40 - 100 g pkgs.",
+    "unitPrice": 23.25,
+    "unitsInStock": 35,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/U1QRZXx92kOL-Bq-MbHvbw/QKw1GMWLU0CORKYrp4R2cw",
+  "path": "ACME/Insurance/U1QRZXx92kOL-Bq-MbHvbw/QKw1GMWLU0CORKYrp4R2cw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T10:34:42.754394+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "QKw1GMWLU0CORKYrp4R2cw",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "Do you mean the mesh page/node you currently have open in the UI? I don\u0027t have that page context yet \u2014 please tell me the page title or path (or paste a short excerpt). I can then locate the underlying .md file (or show the node) for you.\n\nIf you prefer, I can also list top-level pages so you can pick one \u2014 which would you like?",
+    "timestamp": "2026-02-20T10:34:42.75425Z",
+    "type": "AgentResponse"
+  }
+}

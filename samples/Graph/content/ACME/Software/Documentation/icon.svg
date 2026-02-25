@@ -1,0 +1,30 @@
+<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="docToolGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#991B1B"/>
+      <stop offset="100%" stop-color="#EF4444"/>
+    </linearGradient>
+  </defs>
+  <!-- Book background -->
+  <rect width="48" height="48" rx="8" fill="url(#docToolGrad)"/>
+  <!-- Open book -->
+  <rect x="8" y="12" width="32" height="28" rx="2" fill="white"/>
+  <!-- Book spine -->
+  <line x1="24" y1="12" x2="24" y2="40" stroke="#991B1B" stroke-width="1" opacity="0.3"/>
+  <!-- Left page lines -->
+  <rect x="11" y="17" width="10" height="2" rx="0.5" fill="#DC2626" opacity="0.4"/>
+  <rect x="11" y="21" width="8" height="2" rx="0.5" fill="#DC2626" opacity="0.3"/>
+  <rect x="11" y="25" width="10" height="2" rx="0.5" fill="#DC2626" opacity="0.2"/>
+  <!-- Right page lines -->
+  <rect x="27" y="17" width="10" height="2" rx="0.5" fill="#DC2626" opacity="0.4"/>
+  <rect x="27" y="21" width="8" height="2" rx="0.5" fill="#DC2626" opacity="0.3"/>
+  <rect x="27" y="25" width="10" height="2" rx="0.5" fill="#DC2626" opacity="0.2"/>
+  <!-- Saw silhouette accent (bottom right corner) -->
+  <g transform="translate(32,30)" opacity="0.6">
+    <rect x="0" y="4" width="12" height="3" rx="1" fill="#991B1B"/>
+    <!-- Saw teeth -->
+    <path d="M0,4 L2,1.5 L4,4 L6,1.5 L8,4 L10,1.5 L12,4" fill="none" stroke="#991B1B" stroke-width="1" stroke-linejoin="round"/>
+    <!-- Handle -->
+    <rect x="-2" y="3" width="4" height="5" rx="1" fill="#991B1B"/>
+  </g>
+</svg>

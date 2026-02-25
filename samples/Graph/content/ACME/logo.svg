@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="acmeCorpGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1F2937"/>
+      <stop offset="100%" stop-color="#6B7280"/>
+    </linearGradient>
+  </defs>
+  <!-- Background with rounded corners -->
+  <rect width="128" height="128" rx="16" fill="#F9FAFB"/>
+  <!-- Abstract geometric mark - three stacked chevrons representing divisions -->
+  <g transform="translate(64, 46)">
+    <!-- Top chevron (grey - Insurance) -->
+    <path d="M-24,-26 L0,-14 L24,-26" fill="none" stroke="#6B7280" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Middle chevron (blue - Northwind) -->
+    <path d="M-24,-12 L0,0 L24,-12" fill="none" stroke="#2563EB" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Bottom chevron (red - Software) -->
+    <path d="M-24,2 L0,14 L24,2" fill="none" stroke="#DC2626" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- Company name -->
+  <text x="64" y="96" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="url(#acmeCorpGrad)" text-anchor="middle" letter-spacing="6">ACME</text>
+  <!-- Tagline -->
+  <text x="64" y="112" font-family="Arial, sans-serif" font-size="9" fill="#6B7280" text-anchor="middle" letter-spacing="3">CORPORATION</text>
+</svg>

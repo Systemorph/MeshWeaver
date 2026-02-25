@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4B5563"/>
+      <stop offset="100%" stop-color="#9CA3AF"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="64" height="64" rx="8" fill="#F3F4F6"/>
+  <!-- Shield shape -->
+  <path d="M32 8 L52 18 V34 C52 46 42 54 32 58 C22 54 12 46 12 34 V18 Z" fill="url(#shieldGrad)"/>
+  <!-- Shield inner highlight -->
+  <path d="M32 12 L48 20 V34 C48 44 40 50 32 54 C24 50 16 44 16 34 V20 Z" fill="#F3F4F6" opacity="0.15"/>
+  <!-- Umbrella handle (vertical line) -->
+  <line x1="32" y1="26" x2="32" y2="46" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Umbrella canopy (dome) -->
+  <path d="M20 30 Q20 20 32 20 Q44 20 44 30" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Umbrella scallops -->
+  <path d="M20 30 Q24 26 28 30 Q30 26 32 30 Q34 26 36 30 Q40 26 44 30" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <!-- Umbrella handle hook -->
+  <path d="M32 46 Q32 49 35 49" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

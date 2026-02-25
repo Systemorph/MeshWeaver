@@ -1,0 +1,23 @@
+{
+  "id": "Sasquatch_Ale",
+  "namespace": "Northwind",
+  "name": "Sasquatch Ale",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Sasquatch Ale - 24 - 12 oz bottles",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 34,
+    "productName": "Sasquatch Ale",
+    "supplierId": 16,
+    "categoryId": 1,
+    "quantityPerUnit": "24 - 12 oz bottles",
+    "unitPrice": 14.0,
+    "unitsInStock": 111,
+    "unitsOnOrder": 0,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "WHITC",
+  "namespace": "Northwind",
+  "name": "White Clover Markets",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "White Clover Markets - Seattle, USA",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "WHITC",
+    "companyName": "White Clover Markets",
+    "contactName": "Karl Jablonski",
+    "contactTitle": "Owner",
+    "city": "Seattle",
+    "region": "WA",
+    "postalCode": "98128",
+    "country": "USA",
+    "phone": "(206) 555-4112",
+    "fax": "(206) 555-4115"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/lv3BtrCY6UqNfnEOZkiSJw/1d-cmXOeCE2fYgwoB8m9RQ",
+  "path": "ACME/Insurance/lv3BtrCY6UqNfnEOZkiSJw/1d-cmXOeCE2fYgwoB8m9RQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T09:21:31.581468+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "1d-cmXOeCE2fYgwoB8m9RQ",
+    "role": "user",
+    "text": "Before we proceed, can you run the pricing for Tesla and Nestle?",
+    "timestamp": "2026-02-20T09:21:31.580844Z",
+    "type": "ExecutedInput"
+  }
+}

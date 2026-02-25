@@ -1,0 +1,21 @@
+{
+  "id": "Heli_S\u00fc\u00dfwaren_GmbH__Co._KG",
+  "namespace": "Northwind",
+  "name": "Heli S\u00fc\u00dfwaren GmbH & Co. KG",
+  "nodeType": "ACME/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Heli S\u00fc\u00dfwaren GmbH & Co. KG - Berlin, Germany",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 11,
+    "companyName": "Heli S\u00fc\u00dfwaren GmbH & Co. KG",
+    "contactName": "Petra Winkler",
+    "contactTitle": "Sales Manager",
+    "city": "Berlin",
+    "region": "",
+    "country": "Germany",
+    "phone": "(010) 9984510"
+  }
+}

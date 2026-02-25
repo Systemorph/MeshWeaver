@@ -1,0 +1,20 @@
+{
+  "id": "EmailCampaign",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Create email nurture sequence",
+  "nodeType": "ACME/Software/Project/Todo",
+  "category": "Tasks",
+  "description": "Build automated email campaigns for lead nurturing",
+  "icon": "/static/storage/content/ACME/Software/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Create email nurture sequence",
+    "description": "Design 6-email nurture sequence for demo requests. Include welcome email, product highlights, case study, pricing info, and trial offer.",
+    "category": "Marketing",
+    "priority": "High",
+    "assignee": "Alice",
+    "dueDateOffsetDays": 20,
+    "status": "Pending"
+  }
+}

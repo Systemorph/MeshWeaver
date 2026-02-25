@@ -524,18 +524,7 @@ public static class MeshNodeLayoutAreas
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var backHref = BuildContentUrl(hubPath, OverviewArea);
 
-        return Controls.Stack
-            .WithView(Controls.Button("Back")
-                .WithAppearance(Appearance.Lightweight)
-                .WithIconStart(FluentIcons.ArrowLeft())
-                .WithNavigateToHref(backHref))
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
-                .WithPlaceholder("Search threads...")
-                .WithRenderMode(MeshSearchRenderMode.Flat)
-                .WithMaxColumns(3));
     }
 
     /// <summary>

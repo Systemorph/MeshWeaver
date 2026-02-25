@@ -1,0 +1,23 @@
+{
+  "id": "MORGK",
+  "namespace": "Northwind",
+  "name": "Morgenstern Gesundkost",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Morgenstern Gesundkost - Leipzig, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "MORGK",
+    "companyName": "Morgenstern Gesundkost",
+    "contactName": "Alexander Feuer",
+    "contactTitle": "Marketing Assistant",
+    "city": "Leipzig",
+    "region": "",
+    "postalCode": "04179",
+    "country": "Germany",
+    "phone": "0342-023176",
+    "fax": ""
+  }
+}

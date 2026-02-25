@@ -1,0 +1,21 @@
+{
+  "id": "New_Orleans_Cajun_Delights",
+  "namespace": "Northwind",
+  "name": "New Orleans Cajun Delights",
+  "nodeType": "ACME/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "New Orleans Cajun Delights - New Orleans, USA",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 2,
+    "companyName": "New Orleans Cajun Delights",
+    "contactName": "Shelley Burke",
+    "contactTitle": "Order Administrator",
+    "city": "New Orleans",
+    "region": "LA",
+    "country": "USA",
+    "phone": "(100) 555-4822"
+  }
+}

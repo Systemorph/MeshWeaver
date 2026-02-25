@@ -1,0 +1,23 @@
+{
+  "id": "Aniseed_Syrup",
+  "namespace": "Northwind",
+  "name": "Aniseed Syrup",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Aniseed Syrup - 12 - 550 ml bottles",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 3,
+    "productName": "Aniseed Syrup",
+    "supplierId": 1,
+    "categoryId": 2,
+    "quantityPerUnit": "12 - 550 ml bottles",
+    "unitPrice": 10.0,
+    "unitsInStock": 13,
+    "unitsOnOrder": 70,
+    "reorderLevel": 25,
+    "discontinued": false
+  }
+}

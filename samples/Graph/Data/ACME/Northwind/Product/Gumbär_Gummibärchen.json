@@ -1,0 +1,23 @@
+{
+  "id": "Gumb\u00e4r_Gummib\u00e4rchen",
+  "namespace": "Northwind",
+  "name": "Gumb\u00e4r Gummib\u00e4rchen",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Gumb\u00e4r Gummib\u00e4rchen - 100 - 250 g bags",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 26,
+    "productName": "Gumb\u00e4r Gummib\u00e4rchen",
+    "supplierId": 11,
+    "categoryId": 3,
+    "quantityPerUnit": "100 - 250 g bags",
+    "unitPrice": 31.23,
+    "unitsInStock": 15,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

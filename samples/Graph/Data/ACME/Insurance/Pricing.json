@@ -1,0 +1,20 @@
+{
+  "id": "Pricing",
+  "namespace": "ACME/Insurance",
+  "name": "Pricing",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "ACME Insurance pricing with property risks and reinsurance structure",
+  "iconName": "DocumentBulletList",
+  "icon": "/static/storage/content/ACME/Insurance/icons/pricing.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Pricing",
+    "namespace": "ACME/Insurance",
+    "displayName": "Pricing",
+    "iconName": "DocumentBulletList",
+    "description": "ACME Insurance pricing with property risks and reinsurance structure",
+    "configuration": "config => config.WithContentType<Pricing>().AddContentCollection(sp => { var hub = sp.GetRequiredService<IMessageHub>(); var pricingId = hub.Address.Id; var basePath = System.IO.Path.Combine(\"../../samples/Graph/content/ACME/Insurance\", hub.Address.Segments[2], hub.Address.Segments[3], \"Submissions\"); return new ContentCollectionConfig { SourceType = FileSystemStreamProvider.SourceType, Name = $\"Submissions@{pricingId}\", BasePath = basePath, DisplayName = \"Submission Files\" }; }).AddData(data => data.AddSource(source => { var hub = source.Workspace.Hub; var pricingId = hub.Address.Id; var insuredName = hub.Address.Segments[2]; var isMicrosoft = insuredName == \"Microsoft\"; return source.WithType<LineOfBusiness>(t => t.WithInitialData(LineOfBusiness.All)).WithType<Country>(t => t.WithInitialData(Country.All)).WithType<Currency>(t => t.WithInitialData(Currency.All)).WithType<LegalEntity>(t => t.WithInitialData(LegalEntity.All)).WithType<PricingStatus>(t => t.WithInitialData(PricingStatus.All)).WithType<PropertyRisk>(t => isMicrosoft ? t.WithInitialData(async ct => await MicrosoftDataLoader.LoadPropertyRisksAsync(hub, ct)) : t.WithInitialData(Array.Empty<PropertyRisk>())).WithType<ReinsuranceAcceptance>(t => isMicrosoft ? t.WithInitialData(async ct => { var (acceptances, _) = await MicrosoftDataLoader.LoadReinsuranceStructureAsync(hub, pricingId, ct); return acceptances; }) : t.WithInitialData(Array.Empty<ReinsuranceAcceptance>())).WithType<ReinsuranceSection>(t => isMicrosoft ? t.WithInitialData(async ct => { var (_, sections) = await MicrosoftDataLoader.LoadReinsuranceStructureAsync(hub, pricingId, ct); return sections; }) : t.WithInitialData(Array.Empty<ReinsuranceSection>())).WithType<ExcelImportConfiguration>(t => t.WithInitialData(isMicrosoft ? MicrosoftSampleData.ImportConfigs : Array.Empty<ExcelImportConfiguration>())); })).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddPricingViews())"
+  }
+}

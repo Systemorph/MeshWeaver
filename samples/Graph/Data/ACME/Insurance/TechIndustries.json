@@ -1,0 +1,20 @@
+{
+  "id": "TechIndustries",
+  "namespace": "ACME/Insurance",
+  "name": "Tech Industries GmbH",
+  "nodeType": "ACME/Insurance/Insured",
+  "category": "Clients",
+  "description": "German technology manufacturing company - Insurance client",
+  "iconName": "Building",
+  "icon": "/static/storage/content/ACME/Insurance/icons/techindustries.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "TechIndustries",
+    "name": "Tech Industries GmbH",
+    "description": "German technology manufacturing company",
+    "address": "Industriestrasse 42, 80333 Munich, Germany",
+    "industry": "Technology Manufacturing",
+    "location": "Germany"
+  }
+}
