@@ -96,4 +96,11 @@ public record NodeTypeDefinition
     /// If null, defaults to "100%" (no constraint).
     /// </summary>
     public string? PageMaxWidth { get; init; }
+
+    /// <summary>
+    /// Default namespace where instances of this type should be created.
+    /// Empty string means root (top-level). Null means no restriction (user chooses).
+    /// When set, the Create form locks the namespace to this value.
+    /// </summary>
+    public string? DefaultNamespace { get; init; }
 }

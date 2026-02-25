@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -142,11 +143,18 @@ public static class CreateLayoutArea
             var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
             stack = stack.WithView(editor);
 
-            // Buttons: Create on left, Cancel on right
+            // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
                 .WithStyle("margin-top: 24px; justify-content: flex-start;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
@@ -188,13 +196,6 @@ public static class CreateLayoutArea
                                     logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
                                     ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                 });
-                    }))
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(async ctx =>
-                    {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
-                        ctx.NavigateTo(cancelUrl);
                     })));
         }
         else if (node.NodeType == "Markdown")
@@ -209,11 +210,18 @@ public static class CreateLayoutArea
                 .WithAutoSave(host.Hub.Address.ToString(), nodePath);
             stack = stack.WithView(editor);
 
-            // Buttons: Create on left, Cancel on right
+            // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
                 .WithStyle("margin-top: 24px; justify-content: flex-start;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
@@ -241,13 +249,6 @@ public static class CreateLayoutArea
                                     logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
                                     ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                 });
-                    }))
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(async ctx =>
-                    {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
-                        ctx.NavigateTo(cancelUrl);
                     })));
         }
         else
@@ -255,11 +256,18 @@ public static class CreateLayoutArea
             // Fallback: basic properties form for nodes without ContentType
             stack = stack.WithView(BuildBasicPropertiesForm(host, node));
 
-            // Buttons: Create on left, Cancel on right
+            // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
                 .WithStyle("margin-top: 24px; justify-content: flex-start;")
+                .WithView(Controls.Button("Cancel")
+                    .WithAppearance(Appearance.Neutral)
+                    .WithClickAction(async ctx =>
+                    {
+                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        ctx.NavigateTo(cancelUrl);
+                    }))
                 .WithView(Controls.Button("Create")
                     .WithAppearance(Appearance.Accent)
                     .WithIconStart(FluentIcons.Add())
@@ -287,13 +295,6 @@ public static class CreateLayoutArea
                                     logger?.LogError(ex, "Error getting metadata from data stream for {NodePath}", nodePath);
                                     ShowErrorDialog(ctx, "Creation Failed", ex.Message);
                                 });
-                    }))
-                .WithView(Controls.Button("Cancel")
-                    .WithAppearance(Appearance.Neutral)
-                    .WithClickAction(async ctx =>
-                    {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
-                        ctx.NavigateTo(cancelUrl);
                     })));
         }
 
@@ -481,6 +482,24 @@ public static class CreateLayoutArea
         if (!string.IsNullOrEmpty(typeOverride))
             defaultType = typeOverride;
 
+        // Parse restriction query params (e.g. ?types=X,Y&namespaces=A,B)
+        var typesParam = host.GetQueryStringParamValue("types");
+        var namespacesParam = host.GetQueryStringParamValue("namespaces");
+        var restrictedTypes = !string.IsNullOrEmpty(typesParam)
+            ? typesParam.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : null;
+        var restrictedNamespaces = !string.IsNullOrEmpty(namespacesParam)
+            ? namespacesParam.Split(',', StringSplitOptions.TrimEntries)
+            : null;
+
+        // If types restricted to single entry, use it as default
+        if (restrictedTypes is { Length: 1 })
+            defaultType = restrictedTypes[0];
+
+        // If namespaces restricted to single entry, use it as default
+        if (restrictedNamespaces is { Length: 1 })
+            defaultNamespace = restrictedNamespaces[0];
+
         // 2. Build fixed creatable type Items (alphabetical)
         var creatableTypeNodes = meshConfiguration.Nodes.Values
             .Where(n => n.ExcludeFromContext?.Contains("create") != true)
@@ -498,26 +517,88 @@ public static class CreateLayoutArea
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
-        // 4. Namespace picker
-        stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
+        // 4. Namespace picker (or readonly label if restricted to single value)
+        if (restrictedNamespaces is { Length: 1 })
         {
-            Label = "Namespace",
-            Placeholder = "Root (leave empty for top-level)...",
-            DataContext = dataContext
-        }.WithQueries("context:create").WithMaxResults(15)
-         .WithStyle("width: 100%; margin-bottom: 16px;"));
+            // Single namespace restriction — show readonly info
+            var nsLabel = string.IsNullOrEmpty(restrictedNamespaces[0]) ? "Root (top-level)" : restrictedNamespaces[0];
+            stack = stack.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-bottom: 16px;")
+                .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                .WithView(Controls.Body(nsLabel).WithStyle("color: var(--neutral-foreground-rest);")));
+        }
+        else if (restrictedNamespaces is { Length: > 1 })
+        {
+            // Multiple namespace restriction — filtered picker with synthetic root node
+            var nsItems = restrictedNamespaces.Select(ns =>
+                string.IsNullOrEmpty(ns)
+                    ? new MeshNode("") { Name = "Root (top-level)", NodeType = "Namespace" }
+                    : new MeshNode(ns) { Name = ns, NodeType = "Namespace" }
+            ).ToArray();
+            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
+            {
+                Label = "Namespace",
+                Placeholder = "Select namespace...",
+                DataContext = dataContext
+            }.WithItems(nsItems)
+             .WithMaxResults(15)
+             .WithStyle("width: 100%; margin-bottom: 16px;"));
+        }
+        else
+        {
+            // No restriction — full picker
+            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
+            {
+                Label = "Namespace",
+                Placeholder = "Root (leave empty for top-level)...",
+                DataContext = dataContext
+            }.WithQueries("context:create").WithMaxResults(15)
+             .WithStyle("width: 100%; margin-bottom: 16px;"));
+        }
 
-        // 5. Type picker — Items from config + query for persistence-based types
-        stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
+        // 5. Type picker (or readonly label if restricted to single value)
+        if (restrictedTypes is { Length: 1 })
         {
-            Label = "Type *",
-            Required = true,
-            Placeholder = "Select a type...",
-            DataContext = dataContext
-        }.WithItems(creatableTypeNodes)
-         .WithQueries("nodeType:NodeType context:create")
-         .WithMaxResults(15)
-         .WithStyle("width: 100%; margin-bottom: 16px;"));
+            // Single type restriction — show readonly info
+            var typeNode = creatableTypeNodes.FirstOrDefault(n => n.Path == restrictedTypes[0]);
+            var typeLabel = typeNode?.Name ?? restrictedTypes[0];
+            stack = stack.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-bottom: 16px;")
+                .WithView(Controls.Body("Type").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                .WithView(Controls.Body(typeLabel).WithStyle("color: var(--neutral-foreground-rest);")));
+        }
+        else if (restrictedTypes is { Length: > 1 })
+        {
+            // Multiple type restriction — filtered picker
+            var filteredTypeNodes = creatableTypeNodes
+                .Where(n => restrictedTypes.Contains(n.Path))
+                .ToArray();
+            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
+            {
+                Label = "Type *",
+                Required = true,
+                Placeholder = "Select a type...",
+                DataContext = dataContext
+            }.WithItems(filteredTypeNodes)
+             .WithMaxResults(15)
+             .WithStyle("width: 100%; margin-bottom: 16px;"));
+        }
+        else
+        {
+            // No restriction — full picker with Items and query
+            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("type"))
+            {
+                Label = "Type *",
+                Required = true,
+                Placeholder = "Select a type...",
+                DataContext = dataContext
+            }.WithItems(creatableTypeNodes)
+             .WithQueries("nodeType:NodeType context:create")
+             .WithMaxResults(15)
+             .WithStyle("width: 100%; margin-bottom: 16px;"));
+        }
 
         // 6. Name field (required)
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
@@ -562,12 +643,16 @@ public static class CreateLayoutArea
         stack = stack.WithView(Controls.Body("This will be used as the node's identifier in the path")
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
-        // 8. Button row: Create on left, Cancel on right
+        // 8. Button row: Cancel on left, Create on right
         var cancelUrl = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("margin-top: 24px; justify-content: flex-start;");
+
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref(cancelUrl));
 
         buttonRow = buttonRow.WithView(Controls.Button("Create")
             .WithAppearance(Appearance.Accent)
@@ -632,10 +717,6 @@ public static class CreateLayoutArea
                     ShowErrorDialog(actx, "Creation Failed", errorMsg);
                 }
             }));
-
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(cancelUrl));
 
         stack = stack.WithView(buttonRow);
         return stack;

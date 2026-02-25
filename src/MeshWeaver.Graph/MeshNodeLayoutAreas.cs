@@ -461,6 +461,14 @@ public static class MeshNodeLayoutAreas
                 var hiddenQuery = string.IsNullOrEmpty(nodeTypeNamespace)
                     ? $"nodeType:{nodeTypePath} scope:subtree"
                     : $"namespace:{nodeTypeNamespace} nodeType:{nodeTypePath} scope:subtree";
+
+                // Build create href with type restriction and optional namespace from DefaultNamespace
+                var nodeTypeDefinition = node.Content as NodeTypeDefinition;
+                var createNs = nodeTypeDefinition?.DefaultNamespace ?? hubPath;
+                var createHref = $"/{createNs}/{CreateNodeArea}?types={Uri.EscapeDataString(nodeTypePath)}";
+                if (nodeTypeDefinition?.DefaultNamespace != null)
+                    createHref += $"&namespaces={Uri.EscapeDataString(nodeTypeDefinition.DefaultNamespace)}";
+
                 return (UiControl?)Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
                     .WithVisibleQuery(searchTerm ?? "")
@@ -468,8 +476,7 @@ public static class MeshNodeLayoutAreas
                     .WithPlaceholder("Search... (use @ for references)")
                     .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                     .WithMaxColumns(3)
-                    .WithCreateNodeType(nodeTypePath)
-                    .WithCreateNamespace(hubPath);
+                    .WithCreateHref(createHref);
             }
 
             // Instance node catalog - excludes NodeType nodes

@@ -268,6 +268,13 @@ public static class AccessControlLayoutArea
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
             .WithView(Controls.Button("Create")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(async saveCtx =>
@@ -351,13 +358,6 @@ public static class AccessControlLayoutArea
                                 o => o.WithTarget(saveCtx.Hub.Address));
                         }
                     }
-                }))
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
                 }));
 
         var dialog = Controls.Dialog(formContent, "Add Assignment")

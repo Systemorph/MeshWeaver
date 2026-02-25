@@ -108,6 +108,11 @@
 </div>
 
 <FluentDialogFooter>
+    <FluentButton Appearance="Appearance.Neutral"
+                  Disabled="@isCreating"
+                  OnClick="@CancelAsync">
+        Cancel
+    </FluentButton>
     <FluentButton Appearance="Appearance.Accent"
                   Disabled="@isCreating"
                   OnClick="@OnCreateClickedAsync">
@@ -120,11 +125,6 @@
         {
             <span>Create</span>
         }
-    </FluentButton>
-    <FluentButton Appearance="Appearance.Neutral"
-                  Disabled="@isCreating"
-                  OnClick="@CancelAsync">
-        Cancel
     </FluentButton>
 </FluentDialogFooter>
 
@@ -245,13 +245,7 @@
         nameError = null;
         errorMessage = null;
 
-        // Validate
-        if (string.IsNullOrWhiteSpace(SelectedNamespacePath))
-        {
-            namespaceError = "Namespace is required";
-            return;
-        }
-
+        // Validate (namespace can be empty = root)
         if (selectedType == null)
         {
             typeError = "Type is required";
