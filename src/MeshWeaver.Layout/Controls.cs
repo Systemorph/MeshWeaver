@@ -151,7 +151,7 @@ public static class Controls
 
     public static SpacerControl Spacer => new();
 
-    public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
+    public static MarkdownControl Markdown(object data) => new(data);
 
     public static DataGridControl DataGrid(object elements)
     => new(elements);

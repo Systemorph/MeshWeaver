@@ -31,7 +31,8 @@ public static class AccessAssignmentNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Access Assignment",
-        Icon = "Shield",
+        Icon = "/static/NodeTypeIcons/shield.svg",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(AccessAssignmentNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddAccessAssignmentViews()

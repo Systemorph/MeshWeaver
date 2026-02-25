@@ -89,7 +89,7 @@ public static class MeshQueryExtensions
 
     #endregion
 
-    #region IMeshQueryCore extensions - with JsonSerializerOptions
+    #region IMeshQueryProvider extensions - with JsonSerializerOptions
 
     /// <summary>
     /// Query for objects of a specific type with type-safe results.
@@ -103,7 +103,7 @@ public static class MeshQueryExtensions
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static async IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQueryCore meshQuery,
+        this IMeshQueryProvider meshQuery,
         MeshQueryRequest request,
         JsonSerializerOptions options,
         ITypeRegistry? typeRegistry = null,
@@ -133,7 +133,7 @@ public static class MeshQueryExtensions
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQueryCore meshQuery,
+        this IMeshQueryProvider meshQuery,
         string query,
         JsonSerializerOptions options,
         ITypeRegistry? typeRegistry = null,
@@ -156,7 +156,7 @@ public static class MeshQueryExtensions
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQueryCore meshQuery,
+        this IMeshQueryProvider meshQuery,
         string query,
         JsonSerializerOptions options,
         int skip,

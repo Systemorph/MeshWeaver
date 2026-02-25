@@ -164,8 +164,9 @@ public static class MeshNodePropertyEditor
         {
             editCtrl = CreateDimensionSelect(host, jsonPointer, dimAttr, isRequired, isReadonly, dataId);
         }
-        // Check for MeshNodeAttribute
-        else if (prop.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr)
+        // Check for MeshNodeAttribute (scalar string properties only, not collections)
+        else if (prop.GetCustomAttribute<MeshNodeAttribute>() is { } meshNodeAttr
+                 && propType == typeof(string))
         {
             editCtrl = new MeshNodePickerControl(jsonPointer)
             {
@@ -389,8 +390,8 @@ public static class MeshNodePropertyEditor
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("align-items: center; gap: 8px; width: 100%;")
             .WithView(editControl)
-            .WithView(saveButton)
-            .WithView(cancelButton);
+            .WithView(cancelButton)
+            .WithView(saveButton);
     }
 
     private static IReadOnlyCollection<Option> ConvertOptions(object options)

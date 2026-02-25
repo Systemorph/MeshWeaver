@@ -1,6 +1,9 @@
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -16,11 +19,14 @@ public static class AgentNodeType
     public const string NodeType = "Agent";
 
     /// <summary>
-    /// Registers the built-in "Agent" MeshNode on the mesh builder.
+    /// Registers the built-in "Agent" MeshNode on the mesh builder
+    /// and a static node provider for built-in agents (e.g., ThreadNamer).
     /// </summary>
     public static TBuilder AddAgentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.ConfigureServices(services =>
+            services.AddSingleton<IStaticNodeProvider, BuiltInAgentProvider>());
         return builder;
     }
 

@@ -7,7 +7,7 @@ using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.AI.Layout;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.Chat;
+using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;

@@ -32,6 +32,7 @@ public static class CodeNodeType
     {
         Name = "Code",
         Icon = "/static/NodeTypeIcons/code.svg",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(CodeNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source

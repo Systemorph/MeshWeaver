@@ -28,6 +28,7 @@ public static class ThreadMessageNodeConfiguration
     {
         Name = "Thread Message",
         Icon = "/static/NodeTypeIcons/message.svg",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(ThreadMessageNodeConfiguration).Assembly.Location,
         HubConfiguration = config => config
             .AddThreadMessageViews()

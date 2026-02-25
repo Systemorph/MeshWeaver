@@ -36,7 +36,7 @@ public static class RoleNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Role",
-        Icon = "Shield",
+        Icon = "/static/NodeTypeIcons/shield.svg",
         AssemblyLocation = typeof(RoleNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
@@ -52,7 +52,7 @@ public static class RoleNodeType
     {
         private static readonly MeshNode[] Nodes =
         [
-            new("Admin", "Role") { Name = "Administrator", NodeType = NodeType, Content = Role.Admin },
+            new("Admin", "Role") { Name = "Admin", NodeType = NodeType, Content = Role.Admin },
             new("Editor", "Role") { Name = "Editor", NodeType = NodeType, Content = Role.Editor },
             new("Viewer", "Role") { Name = "Viewer", NodeType = NodeType, Content = Role.Viewer },
             new("Commenter", "Role") { Name = "Commenter", NodeType = NodeType, Content = Role.Commenter },

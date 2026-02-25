@@ -18,6 +18,7 @@ public static class KernelExtensions
                 new MeshNode(AddressExtensions.KernelType)
                 {
                     Name = "Kernel",
+                    ExcludeFromContext = new HashSet<string> { "search", "create" },
                     AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
                     HubConfiguration = ConfigureHub
                 }

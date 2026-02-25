@@ -9,7 +9,7 @@ public partial class QueryParser
     // Reserved qualifier names (case-insensitive)
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "path", "namespace", "scope", "sort", "limit", "source", "select"
+        "path", "namespace", "scope", "sort", "limit", "source", "select", "context"
     };
 
     /// <summary>
@@ -23,7 +23,7 @@ public partial class QueryParser
             return ParsedQuery.Empty;
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -33,7 +33,7 @@ public partial class QueryParser
             filter = ParseOr(filterTokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context);
     }
 
     /// <summary>
@@ -341,7 +341,7 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
@@ -354,6 +354,7 @@ public partial class QueryParser
         int? limit = null;
         var source = QuerySource.Default;
         IReadOnlyList<string>? select = null;
+        string? context = null;
 
         foreach (var token in tokens)
         {
@@ -439,6 +440,12 @@ public partial class QueryParser
                     select = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                     continue;
                 }
+
+                if (field.Equals("context", StringComparison.OrdinalIgnoreCase))
+                {
+                    context = value;
+                    continue;
+                }
             }
 
             filterTokens.Add(token);
@@ -453,7 +460,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context);
     }
 
     /// <summary>

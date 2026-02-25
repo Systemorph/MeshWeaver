@@ -38,6 +38,13 @@ public record MenuControl : UiControl<MenuControl>
     /// <summary>Entity store area name for menu items.</summary>
     public const string MenuArea = "$Menu";
 
+    /// <summary>
+    /// Gets the area name for a given menu context.
+    /// Default (null) context returns "$Menu"; named contexts return "$Menu:{context}".
+    /// </summary>
+    public static string GetMenuArea(string? context = null)
+        => context == null ? MenuArea : $"{MenuArea}:{context}";
+
     /// <summary>Creates an empty MenuControl.</summary>
     public MenuControl() : base(ModuleSetup.ModuleName, ModuleSetup.ApiVersion) { }
 

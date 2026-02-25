@@ -31,7 +31,8 @@ public static class GroupMembershipNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Group Membership",
-        Icon = "PersonAdd",
+        Icon = "/static/NodeTypeIcons/person.svg",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(GroupMembershipNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddGroupMembershipViews()
