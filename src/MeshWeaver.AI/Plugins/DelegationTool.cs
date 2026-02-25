@@ -37,6 +37,13 @@ public record DelegationResult
 }
 
 /// <summary>
+/// Information about an agent available for delegation.
+/// </summary>
+/// <param name="AgentPath">Path or ID of the agent</param>
+/// <param name="Description">When to delegate to this agent</param>
+public record DelegationInfo(string AgentPath, string Description);
+
+/// <summary>
 /// Creates delegation tools for agents that support isolated context per delegation.
 /// Each delegation creates a new thread for the target agent, and the result
 /// is returned to the parent agent as a tool result.
