@@ -79,7 +79,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     public async Task CreateArea_WithTypeParam_ShowsCreateForm()
     {
         var client = GetClient();
-        var parentAddress = new Address("ACME/ProductLaunch");
+        var parentAddress = new Address("Demos/ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub...");
         // Initialize the hub first - this triggers dynamic compilation which can take time
@@ -116,7 +116,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
-        var parentAddress = new Address("ACME/ProductLaunch");
+        var parentAddress = new Address("Demos/ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub...");
         // Initialize the hub first - this triggers dynamic compilation which can take time
@@ -148,7 +148,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     public async Task OverviewArea_WorksForProductLaunch()
     {
         var client = GetClient();
-        var parentAddress = new Address("ACME/ProductLaunch");
+        var parentAddress = new Address("Demos/ACME/ProductLaunch");
 
         Output.WriteLine("Initializing hub...");
         // Initialize the hub first - this triggers dynamic compilation which can take time

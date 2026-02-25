@@ -1,0 +1,21 @@
+{
+  "id": "Mayumis",
+  "namespace": "Northwind",
+  "name": "Mayumi's",
+  "nodeType": "Demos/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Mayumi's - Osaka, Japan",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 6,
+    "companyName": "Mayumi's",
+    "contactName": "Mayumi Ohno",
+    "contactTitle": "Marketing Representative",
+    "city": "Osaka",
+    "region": "",
+    "country": "Japan",
+    "phone": "(06) 431-7877"
+  }
+}

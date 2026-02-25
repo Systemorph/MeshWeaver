@@ -1,0 +1,23 @@
+{
+  "id": "Rogede_sild",
+  "namespace": "Northwind",
+  "name": "Rogede sild",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Rogede sild - 1k pkg.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 45,
+    "productName": "Rogede sild",
+    "supplierId": 21,
+    "categoryId": 8,
+    "quantityPerUnit": "1k pkg.",
+    "unitPrice": 9.5,
+    "unitsInStock": 5,
+    "unitsOnOrder": 70,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}

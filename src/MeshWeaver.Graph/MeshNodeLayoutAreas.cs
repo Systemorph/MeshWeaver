@@ -15,6 +15,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
@@ -459,7 +460,7 @@ public static class MeshNodeLayoutAreas
                 var nodeTypePath = node.Path;
                 var nodeTypeNamespace = node.Namespace ?? "";
                 var hiddenQuery = string.IsNullOrEmpty(nodeTypeNamespace)
-                    ? $"nodeType:{nodeTypePath} scope:subtree"
+                    ? $"path: nodeType:{nodeTypePath} scope:children"
                     : $"namespace:{nodeTypeNamespace} nodeType:{nodeTypePath} scope:subtree";
 
                 // Build create href with type restriction and optional namespace restrictions
@@ -522,12 +523,18 @@ public static class MeshNodeLayoutAreas
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var backHref = BuildContentUrl(hubPath, OverviewArea);
 
-        return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children nodeType:{ThreadNodeType.NodeType}")
-            .WithPlaceholder("Search threads...")
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithMaxColumns(3);
+        return Controls.Stack
+            .WithView(Controls.Button("Back")
+                .WithAppearance(Appearance.Lightweight)
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithNavigateToHref(backHref))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
+                .WithPlaceholder("Search threads...")
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithMaxColumns(3));
     }
 
     /// <summary>
@@ -670,8 +677,32 @@ public static class MeshNodeLayoutAreas
     [Browsable(false)]
     public static UiControl Files(LayoutAreaHost host, RenderingContext _)
     {
-        var collection = host.GetQueryStringParamValue("collection") ?? "content";
-        return new FileBrowserControl(collection);
+        var hubPath = host.Hub.Address.ToString();
+        var backHref = BuildContentUrl(hubPath, OverviewArea);
+
+        var stack = Controls.Stack
+            .WithView(Controls.Button("Back")
+                .WithAppearance(Appearance.Lightweight)
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithNavigateToHref(backHref));
+        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var collections = contentService?.GetAllCollectionConfigs()?.Where(c => c.IsEditable).ToList();
+
+        if (collections is { Count: > 0 })
+        {
+            foreach (var config in collections)
+            {
+                stack = stack.WithView(Controls.H3(config.DisplayName ?? config.Name)
+                    .WithStyle("margin: 16px 0 8px 0;"));
+                stack = stack.WithView(new FileBrowserControl(config.Name));
+            }
+        }
+        else
+        {
+            stack = stack.WithView(new FileBrowserControl("content"));
+        }
+
+        return stack;
     }
 
     #region UCR Special Areas

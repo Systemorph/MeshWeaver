@@ -1,0 +1,48 @@
+{
+  "$type": "MeshNode",
+  "id": "ACME/CustomerOnboarding/Threads/CBFf2HD4P0evhXfvw0zACQ",
+  "path": "Demos/ACME/CustomerOnboarding/Threads/CBFf2HD4P0evhXfvw0zACQ",
+  "name": "Hello, who\u0027s there?",
+  "nodeType": "Thread",
+  "lastModified": "2026-02-03T08:35:14.131017+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "title": "Hello, who\u0027s there?",
+    "createdAt": "2026-02-03T08:35:14.122769Z",
+    "lastActivityAt": "2026-02-03T08:35:14.122782Z",
+    "providerId": "sonnet",
+    "messages": [
+      {
+        "$type": "ThreadMessage",
+        "id": "W70HcuBkOkaXvnz-zr3RYw",
+        "role": "user",
+        "text": "Hello, who\u0027s there?",
+        "timestamp": "2026-02-03T08:35:14.12269Z"
+      },
+      {
+        "$type": "ThreadMessage",
+        "id": "0hz2y5-9rUa_9A92mYWHLA",
+        "role": "Assistant",
+        "text": "An error has occurred during processing: Azure Claude API error: BadRequest - {\u0022error\u0022:{\u0022code\u0022:\u0022BadRequest\u0022,\u0022message\u0022:\u0022API version not supported\u0022}}",
+        "timestamp": "2026-02-03T08:35:14.122707Z"
+      },
+      {
+        "$type": "ThreadMessage",
+        "id": "IPVD2Ev-mkyPiaDWGpseLw",
+        "role": "user",
+        "text": "Hello, who\u0027s this?",
+        "timestamp": "2026-02-03T08:35:14.122709Z"
+      },
+      {
+        "$type": "ThreadMessage",
+        "id": "6mHxP_xhtk66FeJGz_eBsw",
+        "role": "TodoAgent",
+        "authorName": "TodoAgent",
+        "text": "I\u0027m **Navigator**, your primary agent for understanding intent and navigating the mesh. I help you explore the system, find information, and delegate complex tasks to specialized agents when needed.\n\nRight now, you\u0027re viewing the **Apex Manufacturing Onboarding** project - a commercial insurance onboarding process for Apex Manufacturing Inc. that\u0027s currently active with a target date of February 15th, 2026.\n\nHow can I help you today? I can:\n- Show you tasks and project information\n- Help you navigate to different parts of the system\n- Answer questions about the project\n- Delegate to specialized agents (like the Todo Agent for task management, or the Insurance Agent for insurance-specific questions)\n\nWhat would you like to do?",
+        "timestamp": "2026-02-03T08:35:14.12271Z"
+      }
+    ],
+    "displayTitle": "Hello, who\u0027s there?"
+  }
+}

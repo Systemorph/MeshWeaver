@@ -9,6 +9,12 @@ Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/icon.svg
 
 This section covers the practical aspects of setting up, configuring, and operating your MeshWeaver data mesh.
 
+## Featured Article
+
+[What is a Data Mesh](MeshWeaver/Documentation/DataMesh/What is a Data Mesh) - The Mesh Bros explain the basic concepts of a data mesh, showing how not just data but entire layout areas can be shared across the organization.
+
+---
+
 ## Overview
 
 The Data Mesh operational guides provide hands-on documentation for:

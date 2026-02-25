@@ -98,7 +98,7 @@ public class MapToToggleableControlPersistenceTest(ITestOutputHelper output) : M
 
     #endregion
 
-    private const string TestNodePath = "ACME/Test/ToggleableControl";
+    private const string TestNodePath = "Demos/ACME/Test/ToggleableControl";
     private const string ToggleableTestView = nameof(ToggleableTestView);
 
     private UiControl ToggleableTestViewDefinition(LayoutAreaHost host, RenderingContext ctx)

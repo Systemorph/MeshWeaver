@@ -1,0 +1,13 @@
+{
+  "id": "Demos",
+  "name": "Demos",
+  "nodeType": "Section",
+  "description": "Demo applications showcasing MeshWeaver capabilities",
+  "iconName": "Beaker",
+  "isPersistent": true,
+  "content": {
+    "$type": "Section",
+    "name": "Demos",
+    "description": "Demo applications showcasing MeshWeaver capabilities"
+  }
+}

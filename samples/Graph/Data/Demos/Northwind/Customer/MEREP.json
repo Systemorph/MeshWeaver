@@ -1,0 +1,23 @@
+{
+  "id": "MEREP",
+  "namespace": "Northwind",
+  "name": "M\u00e8re Paillarde",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "M\u00e8re Paillarde - Montr\u00e9al, Canada",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "MEREP",
+    "companyName": "M\u00e8re Paillarde",
+    "contactName": "Jean Fresni\u00e8re",
+    "contactTitle": "Marketing Assistant",
+    "city": "Montr\u00e9al",
+    "region": "Qu\u00e9bec",
+    "postalCode": "H1J 1C3",
+    "country": "Canada",
+    "phone": "(514) 555-8054",
+    "fax": "(514) 555-8055"
+  }
+}

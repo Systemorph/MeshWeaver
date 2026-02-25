@@ -1,0 +1,23 @@
+{
+  "id": "Chef_Antons_Gumbo_Mix",
+  "namespace": "Northwind",
+  "name": "Chef Anton's Gumbo Mix",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Chef Anton's Gumbo Mix - 36 boxes",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 5,
+    "productName": "Chef Anton's Gumbo Mix",
+    "supplierId": 2,
+    "categoryId": 2,
+    "quantityPerUnit": "36 boxes",
+    "unitPrice": 21.35,
+    "unitsInStock": 0,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": true
+  }
+}

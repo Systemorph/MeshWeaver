@@ -1,0 +1,23 @@
+{
+  "id": "PRINI",
+  "namespace": "Northwind",
+  "name": "Princesa Isabel Vinhos",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Princesa Isabel Vinhos - Lisboa, Portugal",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "PRINI",
+    "companyName": "Princesa Isabel Vinhos",
+    "contactName": "Isabel de Castro",
+    "contactTitle": "Sales Representative",
+    "city": "Lisboa",
+    "region": "",
+    "postalCode": "1756",
+    "country": "Portugal",
+    "phone": "(1) 356-5634",
+    "fax": ""
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "WILMK",
+  "namespace": "Northwind",
+  "name": "Wilman Kala",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Wilman Kala - Helsinki, Finland",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "WILMK",
+    "companyName": "Wilman Kala",
+    "contactName": "Matti Karttunen",
+    "contactTitle": "Owner/Marketing Assistant",
+    "city": "Helsinki",
+    "region": "",
+    "postalCode": "21240",
+    "country": "Finland",
+    "phone": "90-224 8858",
+    "fax": "90-224 8858"
+  }
+}

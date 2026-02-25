@@ -1,0 +1,21 @@
+{
+  "id": "Leka_Trading",
+  "namespace": "Northwind",
+  "name": "Leka Trading",
+  "nodeType": "Demos/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Leka Trading - Singapore, Singapore",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 20,
+    "companyName": "Leka Trading",
+    "contactName": "Chandra Leka",
+    "contactTitle": "Owner",
+    "city": "Singapore",
+    "region": "",
+    "country": "Singapore",
+    "phone": "555-8787"
+  }
+}

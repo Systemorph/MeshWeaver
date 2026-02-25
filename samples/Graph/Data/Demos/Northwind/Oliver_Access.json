@@ -1,0 +1,16 @@
+{
+  "id": "Oliver_Access",
+  "namespace": "Northwind",
+  "name": "Oliver Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Oliver",
+    "displayName": "Oliver Chen",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

@@ -7,6 +7,15 @@ Description: Comprehensive documentation for MeshWeaver platform architecture, c
 
 Welcome to the MeshWeaver documentation. This section contains comprehensive guides covering the platform architecture, core concepts, and operational procedures.
 
+## Featured Videos
+
+| Article | Description |
+|---------|-------------|
+| [The Beginning](MeshWeaver/Documentation/The Beginning) | Roland and Stefan introduce the Mesh Bros channel, discussing their journey and the future of data management |
+| [What is a Data Mesh](MeshWeaver/Documentation/DataMesh/What is a Data Mesh) | The Mesh Bros explain the basic concepts of a data mesh |
+
+---
+
 ## Documentation Sections
 
 ### Architecture
@@ -69,7 +78,7 @@ Learn MeshWeaver through a task management app:
 - AI agent integration in practice
 - Real-world task management scenarios
 
-[Explore ACME Use Case ](MeshWeaver/Documentation/ACME)
+[Explore ACME Use Case](Demos/ACME/Documentation)
 
 ---
 
@@ -80,7 +89,7 @@ Learn MeshWeaver through an agent-based pricing process:
 - Geographic risk visualization with mapping (PropertyRisks + RiskMap)
 - Document management and Excel import workflows (Submissions + ImportConfigs)
 
-[Explore Cornerstone Insurance Use Case](MeshWeaver/Documentation/Cornerstone)
+[Explore Cornerstone Insurance Use Case](Demos/Cornerstone/Documentation)
 
 ---
 
@@ -92,4 +101,4 @@ Learn MeshWeaver through gourmet food analytics:
 - 53 views organized across 8 analytics categories
 - Natural language queries with the NorthwindAgent
 
-[Explore Northwind Use Case](MeshWeaver/Documentation/Northwind)
+[Explore Northwind Use Case](Demos/Northwind/Documentation)

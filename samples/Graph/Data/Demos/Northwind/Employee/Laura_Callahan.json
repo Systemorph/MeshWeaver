@@ -1,0 +1,24 @@
+{
+  "id": "Laura_Callahan",
+  "namespace": "Northwind",
+  "name": "Laura Callahan",
+  "nodeType": "Demos/Northwind/Employee",
+  "category": "Employees",
+  "description": "Laura Callahan - Inside Sales Coordinator",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 8,
+    "lastName": "Callahan",
+    "firstName": "Laura",
+    "title": "Inside Sales Coordinator",
+    "titleOfCourtesy": "Ms.",
+    "birthDate": "1958-01-09",
+    "hireDate": "1994-03-05",
+    "city": "Seattle",
+    "region": "WA",
+    "country": "USA",
+    "reportsTo": 2
+  }
+}
