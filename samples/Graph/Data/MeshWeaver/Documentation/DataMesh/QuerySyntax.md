@@ -107,7 +107,17 @@ limit:50           # Return at most 50 results
 ### source
 Specifies the data source:
 ```
-source:activity    # Query activity records
+source:activity    # Results ordered by user's last access time
+```
+
+When `source:activity` is specified:
+- Results are ordered by the current user's most recent access time (most recently accessed first)
+- Items the user has not yet accessed appear after activity-tracked items
+- All other filters (`nodeType:`, `namespace:`, text search, etc.) still apply
+- Combine with filters for scoped activity views:
+```
+source:activity nodeType:Thread namespace:ACME scope:descendants  # Recently accessed threads in ACME
+source:activity nodeType:Document limit:10                        # Last 10 accessed documents
 ```
 
 ### context

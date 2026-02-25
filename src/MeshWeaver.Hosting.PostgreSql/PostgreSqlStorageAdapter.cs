@@ -320,9 +320,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         JsonSerializerOptions options,
         string? userId = null,
         string? basePath = null,
+        string? activityUserId = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, userId);
+        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, userId, activityUserId);
 
         // Integrate scope-based path filtering
         var effectivePath = query.Path ?? basePath;

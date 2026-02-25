@@ -78,12 +78,17 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         // Context-based exclusion
         var context = request.Context ?? parsedQuery.Context;
 
+        // Determine activity user ID for source:activity queries
+        var activityUserId = parsedQuery.Source == QuerySource.Activity
+            ? GetEffectiveUserId(request)
+            : null;
+
         // When ContextPath is set, buffer results to apply proximity re-ranking
         if (!string.IsNullOrEmpty(request.ContextPath))
         {
             var buffered = new List<(MeshNode Node, double Score)>();
             var userId = GetEffectiveUserId(request);
-            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, ct: ct))
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, ct: ct))
             {
                 if (context != null && IsExcludedByContext(node, context))
                     continue;
@@ -110,7 +115,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         var countOrig = 0;
 
         var effectiveUserId = GetEffectiveUserId(request);
-        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, ct: ct))
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, ct: ct))
         {
             if (context != null && IsExcludedByContext(node, context))
                 continue;

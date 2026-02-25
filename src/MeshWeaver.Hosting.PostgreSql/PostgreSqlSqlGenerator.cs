@@ -130,18 +130,30 @@ public class PostgreSqlSqlGenerator
     }
 
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
-        ParsedQuery query, string? userId = null)
+        ParsedQuery query, string? userId = null, string? activityUserId = null)
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId);
+
+        var isActivityQuery = query.Source == QuerySource.Activity && !string.IsNullOrEmpty(activityUserId);
 
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
             "n.desired_id FROM mesh_nodes n");
 
+        if (isActivityQuery)
+        {
+            parameters["@actUserId"] = activityUserId!;
+            sql.Append(" LEFT JOIN user_activity ua ON n.path = ua.node_path AND ua.user_id = @actUserId");
+        }
+
         if (!string.IsNullOrEmpty(whereClause))
             sql.Append($" {whereClause}");
 
-        if (query.OrderBy != null)
+        if (isActivityQuery)
+        {
+            sql.Append(" ORDER BY ua.last_accessed DESC NULLS LAST");
+        }
+        else if (query.OrderBy != null)
         {
             var direction = query.OrderBy.Descending ? "DESC" : "ASC";
             sql.Append($" ORDER BY {MapOrderBySelector(query.OrderBy.Property)} {direction}");
