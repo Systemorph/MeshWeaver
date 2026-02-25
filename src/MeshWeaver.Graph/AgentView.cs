@@ -386,6 +386,12 @@ public static class AgentView
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; margin-top: 16px;");
 
+        // Cancel button
+        var detailsHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref(detailsHref));
+
         // Save button
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
@@ -444,15 +450,9 @@ public static class AgentView
                 }
 
                 // Navigate back to details
-                var detailsHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(detailsHref));
+                var overviewHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
+                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
             }));
-
-        // Cancel button
-        var detailsHref = new LayoutAreaReference(DetailsArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(detailsHref));
 
         stack = stack.WithView(buttonRow);
 

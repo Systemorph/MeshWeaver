@@ -441,6 +441,13 @@ public static class AccessAssignmentLayoutAreas
         var actions = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
             .WithView(Controls.Button("Add")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(async addCtx =>
@@ -461,13 +468,6 @@ public static class AccessAssignmentLayoutAreas
 
                     addCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
                     await AddRoleAsync(addCtx.Host, nodePath, selectedRole);
-                }))
-            .WithView(Controls.Button("Cancel")
-                .WithAppearance(Appearance.Neutral)
-                .WithClickAction(cancelCtx =>
-                {
-                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
-                    return Task.CompletedTask;
                 }));
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
