@@ -207,13 +207,18 @@ public static class EditLayoutArea
             .Where(p => !IsTitleProperty(p.Name))
             .ToList();
 
-        // Separate properties into regular vs markdown (SeparateEditView)
+        // Separate properties into regular vs markdown (SeparateEditView) vs collection (MeshNodeCollectionAttribute)
         var regularProps = properties
-            .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView != true)
+            .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView != true
+                        && p.GetCustomAttribute<MeshNodeCollectionAttribute>() == null)
             .ToList();
 
         var markdownProps = properties
             .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView == true)
+            .ToList();
+
+        var collectionProps = properties
+            .Where(p => p.GetCustomAttribute<MeshNodeCollectionAttribute>() != null)
             .ToList();
 
         var stack = Controls.Stack.WithWidth("100%");
@@ -232,8 +237,15 @@ public static class EditLayoutArea
             stack = stack.WithView(propsGrid);
         }
 
-        // Build markdown sections using MapToToggleableControl
+        // Build markdown sections using MapToToggleableControl (full width)
         foreach (var prop in markdownProps)
+        {
+            var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
+            stack = stack.WithView(control);
+        }
+
+        // Build collection sections using MapToToggleableControl (full width)
+        foreach (var prop in collectionProps)
         {
             var control = host.Hub.ServiceProvider.MapToToggleableControl(prop, dataId, canEdit, host, isToggleable);
             stack = stack.WithView(control);

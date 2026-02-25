@@ -147,9 +147,11 @@ Access control uses these shipped node types:
 
 ### GroupMembership
 - **NodeType**: `"GroupMembership"`
-- **Content**: `GroupMembership` record (`Id`)
-- **Path pattern**: `{GroupPath}/{MemberId}`
-- Children of Group nodes
+- **Content**: `GroupMembership` record (`Member`, `DisplayName`, `Groups[]`)
+- **Path pattern**: `{Scope}/{Member}_Membership`
+- Maps one member (User or Group) to one or more groups at a given scope
+- Mirrors the AccessAssignment 1:1 pattern (one node per member per scope)
+- `Groups[]` contains `MembershipEntry` records with a `Group` property
 
 ### Role
 - **NodeType**: `"Role"`

@@ -12,10 +12,10 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL native implementation of IMeshQueryCore.
+/// PostgreSQL native implementation of IMeshQueryProvider.
 /// Translates parsed queries directly into PostgreSQL SQL via PostgreSqlStorageAdapter.
 /// </summary>
-public class PostgreSqlMeshQuery : IMeshQueryCore
+public class PostgreSqlMeshQuery : IMeshQueryProvider
 {
     private readonly PostgreSqlStorageAdapter _adapter;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -75,6 +75,9 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
 
         parsedQuery = parsedQuery with { Path = effectivePath, Scope = effectiveScope };
 
+        // Context-based exclusion
+        var context = request.Context ?? parsedQuery.Context;
+
         // When ContextPath is set, buffer results to apply proximity re-ranking
         if (!string.IsNullOrEmpty(request.ContextPath))
         {
@@ -82,6 +85,8 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
             var userId = GetEffectiveUserId(request);
             await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, ct: ct))
             {
+                if (context != null && IsExcludedByContext(node, context))
+                    continue;
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
             }
@@ -107,6 +112,9 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         var effectiveUserId = GetEffectiveUserId(request);
         await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, ct: ct))
         {
+            if (context != null && IsExcludedByContext(node, context))
+                continue;
+
             if (skipOrig > 0)
             {
                 skipOrig--;
@@ -129,7 +137,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         JsonSerializerOptions options,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, ct);
+        => AutocompleteAsync(basePath, prefix, options, AutocompleteMode.PathFirst, limit, null, null, ct);
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
         string basePath,
@@ -138,6 +146,7 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPrefix = (prefix ?? "").ToLowerInvariant();
@@ -171,6 +180,15 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
             // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
             if (_meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
                 continue;
+
+            // Context-based exclusion for autocomplete
+            if (context != null)
+            {
+                if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+                    continue;
+                if (node.ExcludeFromContext?.Contains(context) == true)
+                    continue;
+            }
 
             var name = node.Name ?? node.Id ?? node.Path ?? "";
             double score = 0;
@@ -402,6 +420,19 @@ public class PostgreSqlMeshQuery : IMeshQueryCore
                 Timestamp = DateTimeOffset.UtcNow
             });
         }
+    }
+
+    /// <summary>
+    /// Checks whether a node should be excluded based on context.
+    /// </summary>
+    private bool IsExcludedByContext(MeshNode node, string? context)
+    {
+        if (context == null) return false;
+        if (_meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+            return true;
+        if (node.ExcludeFromContext?.Contains(context) == true)
+            return true;
+        return false;
     }
 
     private static ParsedQuery StripTypeFilter(ParsedQuery query)

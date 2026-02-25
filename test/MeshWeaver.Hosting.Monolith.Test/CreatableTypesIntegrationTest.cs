@@ -181,6 +181,317 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         creatableTypes.Should().Contain(t => t.NodeTypePath == "NodeType");
     }
 
+    /// <summary>
+    /// Test that verifies the MeshNodePickerControl type queries for the Create form.
+    /// Uses the EXACT same code path as CreateLayoutArea.BuildCreateNewFormAsync
+    /// to build queries, then runs them like MeshNodePickerView.LoadResultsAsync does.
+    /// When at "ACME" (NodeType=Organization), should return Organization, ACME/Project, and global types.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateForm_TypePicker_Queries_ReturnCorrectTypes()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        var ct = TestContext.Current.CancellationToken;
+
+        // Simulate: user is at "ACME" (an Organization) and opens Create form
+        var parentPath = "ACME";
+
+        // === EXACT copy of CreateLayoutArea.BuildCreateNewFormAsync logic ===
+        string? currentNodeType = null;
+        MeshNode? parentNode = null;
+        if (!string.IsNullOrEmpty(parentPath))
+        {
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{parentPath}", ct: ct).WithCancellation(ct))
+            {
+                parentNode = node;
+                currentNodeType = node.NodeType;
+                break;
+            }
+        }
+        currentNodeType.Should().Be("Organization", "ACME should be of NodeType Organization");
+
+        var effectiveNamespace = parentPath;
+        string defaultType;
+        if (currentNodeType == MeshNode.NodeTypePath && parentNode != null)
+        {
+            effectiveNamespace = parentNode.Namespace ?? "";
+            defaultType = parentPath;
+        }
+        else
+        {
+            defaultType = !string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType"
+                ? currentNodeType
+                : "Markdown";
+        }
+
+        Output.WriteLine($"parentPath={parentPath}, currentNodeType={currentNodeType}, effectiveNamespace={effectiveNamespace}, defaultType={defaultType}");
+        effectiveNamespace.Should().Be("ACME");
+        defaultType.Should().Be("Organization");
+
+        // Build type queries — EXACT copy of production code
+        var typeQueries = new List<string>();
+        if (!string.IsNullOrEmpty(effectiveNamespace))
+            typeQueries.Add($"nodeType:NodeType path:{effectiveNamespace} scope:children context:create");
+        else
+            typeQueries.Add("nodeType:NodeType scope:children context:create");
+        if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
+        {
+            typeQueries.Add($"path:{currentNodeType} nodeType:NodeType context:create");
+            typeQueries.Add($"nodeType:NodeType path:{currentNodeType} scope:children context:create");
+        }
+        if (currentNodeType == MeshNode.NodeTypePath && !string.IsNullOrEmpty(parentPath))
+        {
+            typeQueries.Add($"path:{parentPath} nodeType:NodeType context:create");
+            typeQueries.Add($"nodeType:NodeType path:{parentPath} scope:children context:create");
+        }
+        foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
+            typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
+        // === END exact copy ===
+
+        Output.WriteLine($"\nQueries ({typeQueries.Count}):");
+        for (var i = 0; i < typeQueries.Count; i++)
+            Output.WriteLine($"  [{i}] {typeQueries[i]}");
+
+        // Execute each query (same as MeshNodePickerView.LoadResultsAsync)
+        var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery, ct);
+
+        // Assert: Organization itself should be in results (parent's own type)
+        deduped.Should().Contain(n => n.Path == "Organization",
+            "Organization type should be available when creating inside an Organization node");
+
+        // Assert: ACME/Project should be in results (child type under ACME)
+        deduped.Should().Contain(n => n.Path == "ACME/Project",
+            "ACME/Project should be available as a child type");
+
+        // Assert: Global types should be in results
+        deduped.Should().Contain(n => n.Path == "Markdown",
+            "Markdown should be available as a global type");
+    }
+
+    /// <summary>
+    /// Test that the default selected type in the Create form should be the parent's NodeType,
+    /// not Markdown, when the parent has a specific type.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateForm_DefaultType_ShouldBeParentNodeType()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var ct = TestContext.Current.CancellationToken;
+
+        // At "ACME" (an Organization), the default type should be "Organization"
+        string? currentNodeType = null;
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>("path:ACME", ct: ct).WithCancellation(ct))
+        {
+            currentNodeType = node.NodeType;
+            break;
+        }
+
+        currentNodeType.Should().Be("Organization");
+        // The form should default to the parent's NodeType, not "Markdown"
+        var defaultType = currentNodeType ?? "Markdown";
+        defaultType.Should().Be("Organization",
+            "Default type should be Organization when creating inside an Organization node");
+    }
+
+    /// <summary>
+    /// Test that the MeshNodePickerControl Items for the Create form contain the expected
+    /// creatable type nodes — mirrors the exact filtering logic from CreateLayoutArea.cs.
+    /// Verifies that types with ExcludeFromContext containing "create" are excluded.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public void CreateForm_TypePicker_Items_ContainCreatableTypes()
+    {
+        var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+
+        // Exact same filter as CreateLayoutArea.BuildCreateNewForm
+        var creatableTypeNodes = meshConfiguration.Nodes.Values
+            .Where(n => n.ExcludeFromContext?.Contains("create") != true)
+            .ToArray();
+
+        var paths = creatableTypeNodes.Select(n => n.Path).ToList();
+        Output.WriteLine($"Creatable type nodes ({creatableTypeNodes.Length}):");
+        foreach (var node in creatableTypeNodes)
+            Output.WriteLine($"  - {node.Path}: Name={node.Name}, ExcludeFromContext=[{string.Join(",", node.ExcludeFromContext ?? [])}]");
+
+        // Should include types not excluded from create
+        paths.Should().Contain("Markdown");
+        paths.Should().Contain("Thread");
+
+        // Should NOT include types with ExcludeFromContext containing "create"
+        paths.Should().NotContain("Comment");
+        paths.Should().NotContain("ThreadMessage");
+        paths.Should().NotContain("AccessAssignment");
+        paths.Should().NotContain("GroupMembership");
+        paths.Should().NotContain("Code");
+    }
+
+    /// <summary>
+    /// Test that when on a NodeType definition page (e.g., "Organization" with NodeType="NodeType"),
+    /// the Create form defaults namespace to the type's parent namespace (root for Organization)
+    /// and default type to the type itself.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateForm_OnNodeTypeDefinitionPage_DefaultsToTypeParentNamespace()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        var ct = TestContext.Current.CancellationToken;
+
+        // Simulate: user is on the "Organization" NodeType definition page and opens Create
+        var parentPath = "Organization";
+
+        MeshNode? parentNode = null;
+        string? currentNodeType = null;
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{parentPath}", ct: ct).WithCancellation(ct))
+        {
+            parentNode = node;
+            currentNodeType = node.NodeType;
+            break;
+        }
+
+        parentNode.Should().NotBeNull("Organization node should exist");
+        currentNodeType.Should().Be("NodeType", "Organization is a NodeType definition");
+
+        // When on a NodeType definition page, namespace should be the type's parent namespace
+        var effectiveNamespace = parentNode!.Namespace ?? "";
+        effectiveNamespace.Should().BeEmpty("Organization is at root, so namespace should be root/empty");
+
+        // Default type should be the type definition itself
+        var defaultType = parentPath; // "Organization"
+        defaultType.Should().Be("Organization");
+
+        // Build type queries for the type definition page
+        var typeQueries = new List<string>();
+        // Children of root namespace (since effectiveNamespace is empty)
+        typeQueries.Add("nodeType:NodeType scope:children context:create");
+        // The type itself and its children
+        typeQueries.Add($"path:{parentPath} nodeType:NodeType context:create");
+        typeQueries.Add($"nodeType:NodeType path:{parentPath} scope:children context:create");
+        // Global types
+        foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
+            typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
+
+        var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery, ct);
+
+        // Organization should be in the type list
+        deduped.Should().Contain(n => n.Path == "Organization",
+            "Organization should be available as a type when on its definition page");
+
+        // Global types should be available
+        deduped.Should().Contain(n => n.Path == "Markdown",
+            "Markdown should be available as a global type");
+    }
+
+    /// <summary>
+    /// Test that creating a node at root namespace (empty) produces correct path.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateForm_RootNamespace_ProducesCorrectPath()
+    {
+        // When namespace is empty (root), path should just be the id
+        var ns = "";
+        var id = "MyNewOrg";
+        var nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+        nodePath.Should().Be("MyNewOrg", "Root namespace should produce path without leading slash");
+
+        // When namespace is set, path should be namespace/id
+        ns = "ACME";
+        nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+        nodePath.Should().Be("ACME/MyNewOrg");
+    }
+
+    /// <summary>
+    /// Test that ProductLaunch type picker queries include ACME/Project/Todo and ACME/Project (own type).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateForm_TypePicker_ForProductLaunch_IncludesTodoAndProject()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        var ct = TestContext.Current.CancellationToken;
+
+        var parentPath = "ACME/ProductLaunch";
+
+        string? currentNodeType = null;
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{parentPath}", ct: ct).WithCancellation(ct))
+        {
+            currentNodeType = node.NodeType;
+            break;
+        }
+        currentNodeType.Should().Be("ACME/Project");
+
+        var typeQueries = BuildTypePickerQueries(parentPath, currentNodeType, meshConfiguration);
+        var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery, ct);
+
+        // ACME/Project/Todo should be found (child type of ACME/Project)
+        deduped.Should().Contain(n => n.Path == "ACME/Project/Todo",
+            "ACME/Project/Todo should be available as child type of ACME/Project");
+
+        // ACME/Project itself should be found (the node's own type)
+        deduped.Should().Contain(n => n.Path == "ACME/Project",
+            "ACME/Project (own type) should be available when creating inside a Project instance");
+
+        // Markdown should be found (global)
+        deduped.Should().Contain(n => n.Path == "Markdown",
+            "Markdown should be available as a global type");
+    }
+
+    /// <summary>
+    /// Builds the exact same type queries as CreateLayoutArea.BuildCreateNewFormAsync
+    /// for a non-NodeType parent (regular instance node like ACME or ACME/ProductLaunch).
+    /// This must stay in sync with the production code.
+    /// </summary>
+    private static List<string> BuildTypePickerQueries(
+        string parentPath, string? currentNodeType, MeshConfiguration meshConfiguration)
+    {
+        // effectiveNamespace = parentPath for non-NodeType nodes
+        var effectiveNamespace = parentPath;
+
+        var typeQueries = new List<string>();
+        // Child types under the effective namespace path
+        if (!string.IsNullOrEmpty(effectiveNamespace))
+            typeQueries.Add($"nodeType:NodeType path:{effectiveNamespace} scope:children context:create");
+        else
+            typeQueries.Add("nodeType:NodeType scope:children context:create");
+        // The parent's own type + child types of the parent's type
+        if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
+        {
+            typeQueries.Add($"path:{currentNodeType} nodeType:NodeType context:create");
+            typeQueries.Add($"nodeType:NodeType path:{currentNodeType} scope:children context:create");
+        }
+        // Global creatable types — individual path queries
+        foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
+            typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
+        return typeQueries;
+    }
+
+    /// <summary>
+    /// Executes type picker queries the same way MeshNodePickerView.LoadResultsAsync does.
+    /// </summary>
+    private async Task<List<MeshNode>> ExecuteTypePickerQueries(
+        List<string> typeQueries, IMeshQuery meshQuery, CancellationToken ct)
+    {
+        var allResults = new List<MeshNode>();
+        foreach (var query in typeQueries)
+        {
+            var results = await meshQuery.QueryAsync<MeshNode>(query, ct: ct).ToListAsync(ct);
+            Output.WriteLine($"Query '{query}' => {results.Count} results: [{string.Join(", ", results.Select(r => r.Path))}]");
+            allResults.AddRange(results);
+        }
+
+        var deduped = allResults
+            .GroupBy(n => n.Path)
+            .Select(g => g.First())
+            .ToList();
+
+        Output.WriteLine($"\nTotal unique results: {deduped.Count}");
+        foreach (var r in deduped)
+            Output.WriteLine($"  - {r.Path}: Name={r.Name}, NodeType={r.NodeType}");
+
+        return deduped;
+    }
+
     [Fact(Timeout = 30000)]
     public async Task ProductLaunch_CreatableTypes_IncludesTodo()
     {

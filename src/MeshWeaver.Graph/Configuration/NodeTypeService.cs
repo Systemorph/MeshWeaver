@@ -823,7 +823,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return new CreatableTypeInfo(
             NodeTypePath: typePath,
             DisplayName: typePath.Split('/').Last(),
-            Icon: "📦",
+            Icon: "Cube",
             Description: $"Create a {typePath.Split('/').Last()}",
             DisplayOrder: 0
         );
@@ -831,11 +831,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     private static string GetGlobalTypeIcon(string globalType) => globalType switch
     {
-        "Markdown" => "📄",
-        "NodeType" => "🔧",
-        "Agent" => "🤖",
-        "Thread" => "💬",
-        _ => "📦"
+        "Markdown" => "Document",
+        "NodeType" => "Wrench",
+        "Agent" => "Bot",
+        "Thread" => "Chat",
+        _ => "Cube"
     };
 
     private static string GetGlobalTypeDescription(string globalType) => globalType switch

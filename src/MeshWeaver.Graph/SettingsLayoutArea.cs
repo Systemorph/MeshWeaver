@@ -26,6 +26,7 @@ public static class SettingsLayoutArea
     public const string NodeTypesTab = "NodeTypes";
     public const string FilesTab = "Files";
     public const string AccessControlTab = "AccessControl";
+    public const string GroupsTab = "Groups";
     public const string EffectiveAccessTab = "EffectiveAccess";
     public const string AppearanceTab = "Appearance";
 
@@ -140,6 +141,11 @@ public static class SettingsLayoutArea
             new NavLinkControl("Access Control", FluentIcons.Shield(), accessControlHref)
         );
 
+        var groupsHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = GroupsTab }.ToHref(hubAddress);
+        securityGroup = securityGroup.WithView(
+            new NavLinkControl("Groups", FluentIcons.People(), groupsHref)
+        );
+
         var effectiveAccessHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = EffectiveAccessTab }.ToHref(hubAddress);
         securityGroup = securityGroup.WithView(
             new NavLinkControl("Effective Access", FluentIcons.PersonSearch(), effectiveAccessHref)
@@ -172,6 +178,7 @@ public static class SettingsLayoutArea
             NodeTypesTab => BuildNodeTypesTab(host, hubPath, stack),
             FilesTab => BuildFilesTab(host, stack),
             AccessControlTab => BuildAccessControlTab(host, node, hubPath, stack),
+            GroupsTab => BuildGroupsTab(host, node, hubPath, stack),
             EffectiveAccessTab => BuildEffectiveAccessTab(host, hubPath, stack),
             AppearanceTab => BuildAppearanceTab(stack),
             _ => BuildPropertiesTab(host, node, stack),
@@ -279,6 +286,16 @@ public static class SettingsLayoutArea
         stack = stack.WithView(
             (h, ctx) => MeshNodeLayoutAreas.AccessControl(h, ctx)!,
             "AccessControlContent"
+        );
+        return stack;
+    }
+
+    private static UiControl BuildGroupsTab(LayoutAreaHost host, MeshNode? node, string hubPath, StackControl stack)
+    {
+        // Delegate to the existing Groups view
+        stack = stack.WithView(
+            (h, ctx) => MeshNodeLayoutAreas.Groups(h, ctx)!,
+            "GroupsContent"
         );
         return stack;
     }

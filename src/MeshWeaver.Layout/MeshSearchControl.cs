@@ -109,11 +109,40 @@ public record MeshSearchControl()
     public object? ReactiveMode { get; init; }
 
     /// <summary>
+    /// When set, each search result item is rendered via a LayoutAreaView
+    /// pointing to this area name (e.g., "Thumbnail") instead of the default FluentCard.
+    /// </summary>
+    public object? ItemArea { get; init; }
+
+    /// <summary>
+    /// When true, clicking a card does not navigate to /{path}.
+    /// Use this when the card content has interactive elements (buttons, etc.).
+    /// </summary>
+    public object? DisableNavigation { get; init; }
+
+    /// <summary>
     /// Pre-computed grouped search results. When set, the Blazor component
     /// uses these groups directly instead of computing them from lambdas.
     /// This is the serializable output of ProcessResults().
     /// </summary>
     public GroupedSearchResult? PrecomputedGroups { get; init; }
+
+    /// <summary>
+    /// When set, a "+" button is shown. Clicking it creates a new transient node
+    /// of this type and navigates to the Create area.
+    /// </summary>
+    public object? CreateNodeType { get; init; }
+
+    /// <summary>
+    /// Namespace where new nodes are created. If not set, derived from HiddenQuery's namespace: prefix.
+    /// </summary>
+    public object? CreateNamespace { get; init; }
+
+    /// <summary>
+    /// When set, a "+" button is shown that navigates directly to this URL.
+    /// Takes priority over CreateNodeType (no transient node is created).
+    /// </summary>
+    public object? CreateHref { get; init; }
 
     // Basic fluent methods
     public MeshSearchControl WithHiddenQuery(string query) => this with { HiddenQuery = query };
@@ -157,6 +186,17 @@ public record MeshSearchControl()
     // Reactive mode
     public MeshSearchControl WithReactiveMode(bool reactive) => this with { ReactiveMode = reactive };
 
+    // Item area (render each item via LayoutAreaView)
+    public MeshSearchControl WithItemArea(string area) => this with { ItemArea = area };
+
+    // Disable navigation on card click
+    public MeshSearchControl WithDisableNavigation(bool disable = true) => this with { DisableNavigation = disable };
+
     // Pre-computed groups
     public MeshSearchControl WithPrecomputedGroups(GroupedSearchResult groups) => this with { PrecomputedGroups = groups };
+
+    // Create node
+    public MeshSearchControl WithCreateNodeType(string nodeType) => this with { CreateNodeType = nodeType };
+    public MeshSearchControl WithCreateNamespace(string ns) => this with { CreateNamespace = ns };
+    public MeshSearchControl WithCreateHref(string href) => this with { CreateHref = href };
 }

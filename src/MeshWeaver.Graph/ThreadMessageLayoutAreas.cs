@@ -19,16 +19,14 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class ThreadMessageLayoutAreas
 {
-    public const string OverviewArea = "Overview";
-
     /// <summary>
     /// Adds the thread message views to the hub's layout.
     /// </summary>
     public static MessageHubConfiguration AddThreadMessageViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
-                .WithDefaultArea(OverviewArea)
-                .WithView(OverviewArea, Overview)
+                .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
+                .WithView(ThreadMessageNodeType.OverviewArea, Overview)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
     /// <summary>
@@ -121,7 +119,7 @@ public static class ThreadMessageLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/Thread")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
         container = container.WithView(bubble);
@@ -155,7 +153,7 @@ public static class ThreadMessageLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/Thread")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
         container = container.WithView(bubble);

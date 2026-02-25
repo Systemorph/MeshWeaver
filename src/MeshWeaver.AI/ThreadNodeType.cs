@@ -1,7 +1,7 @@
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Constants for Thread node types.
+/// Constants for Thread node types and layout areas.
 /// </summary>
 public static class ThreadNodeType
 {
@@ -9,6 +9,21 @@ public static class ThreadNodeType
     /// The NodeType value used to identify thread nodes.
     /// </summary>
     public const string NodeType = "Thread";
+
+    /// <summary>
+    /// Layout area for thread content and message history.
+    /// </summary>
+    public const string ThreadArea = "Thread";
+
+    /// <summary>
+    /// Layout area for interactive chat conversations.
+    /// </summary>
+    public const string ChatArea = "Chat";
+
+    /// <summary>
+    /// Layout area for delegation sub-thread history.
+    /// </summary>
+    public const string HistoryArea = "History";
 
     /// <summary>
     /// Checks if a MeshNode is a Thread by checking its NodeType.

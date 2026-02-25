@@ -31,6 +31,8 @@ public partial class LayoutAreaView
             && (!AreaStream.Reference.Equals(ViewModel.Reference) ||
                 !AreaStream.Owner.Equals(ViewModel.Address)))
         {
+            Logger.LogDebug("LayoutAreaView disposing stale stream for {Address}/{Reference} (parameters changed)",
+                ViewModel.Address, ViewModel.Reference);
             AreaStream.Dispose();
             AreaStream = null;
         }
@@ -75,11 +77,20 @@ public partial class LayoutAreaView
         if (IsNotPreRender)
         {
             if (AreaStream != null)
+            {
+                Logger.LogDebug("LayoutAreaView disposing stream for {Area} (contentLoaded={ContentLoaded})",
+                    Area, IsContentLoaded);
                 AreaStream.Dispose();
+            }
             if (DialogStream != null)
                 DialogStream.Dispose();
             if (MenuStream != null)
                 MenuStream.Dispose();
+        }
+        else
+        {
+            Logger.LogDebug("LayoutAreaView disposed during prerender for {Area} — stream was never bound",
+                Area);
         }
         AreaStream = null;
         DialogStream = null;
@@ -193,6 +204,8 @@ public partial class LayoutAreaView
             // If we're now rendered and we don't have a stream yet, bind it
             if (AreaStream == null)
             {
+                Logger.LogDebug("LayoutAreaView first interactive render — binding stream for {Area} ({Address}/{Reference})",
+                    Area, Address, ViewModel?.Reference);
                 BindStream();
                 StateHasChanged();
             }

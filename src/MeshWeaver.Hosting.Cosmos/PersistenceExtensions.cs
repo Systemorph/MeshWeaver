@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using MeshWeaver.Domain;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
@@ -74,14 +75,15 @@ public static class PersistenceExtensions
             CosmosStorageAdapterFactory.StorageType);
 
         // Register CosmosMeshQuery so it takes priority over InMemoryMeshQuery (via TryAddSingleton)
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
         {
             var adapter = sp.GetRequiredService<IStorageAdapter>() as CosmosStorageAdapter
                 ?? throw new InvalidOperationException(
                     "CosmosMeshQuery requires CosmosStorageAdapter. " +
                     "Ensure Cosmos storage is configured.");
             var changeNotifier = sp.GetService<IDataChangeNotifier>();
-            return new CosmosMeshQuery(adapter, changeNotifier);
+            var meshConfig = sp.GetService<MeshConfiguration>();
+            return new CosmosMeshQuery(adapter, changeNotifier, meshConfig);
         });
 
         return services;
@@ -123,8 +125,8 @@ public static class PersistenceExtensions
         CosmosStorageAdapter storageAdapter)
     {
         // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton picks it up
-        services.AddSingleton<IMeshQueryCore>(sp =>
-            new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>()));
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new CosmosMeshQuery(storageAdapter, sp.GetService<IDataChangeNotifier>(), sp.GetService<MeshConfiguration>()));
 
         services.AddPersistence(storageAdapter);
 
@@ -204,10 +206,11 @@ public static class PersistenceExtensions
                 sp.GetService<IDataChangeNotifier>()));
 
         // Register CosmosMeshQuery with change notifier for native Cosmos SQL queries
-        services.AddSingleton<IMeshQueryCore>(sp =>
+        services.AddSingleton<IMeshQueryProvider>(sp =>
             new CosmosMeshQuery(
                 storageAdapter,
-                sp.GetService<IDataChangeNotifier>()));
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<MeshConfiguration>()));
 
         // Register the Change Feed Processor
         services.AddSingleton(sp =>

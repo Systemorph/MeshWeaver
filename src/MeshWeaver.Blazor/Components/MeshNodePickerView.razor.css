@@ -52,6 +52,14 @@
     flex-shrink: 0;
 }
 
+/* SVG icons use fill="currentColor" which defaults to black in <img> context.
+   Invert them in dark mode so they appear light on dark backgrounds. */
+@media (prefers-color-scheme: dark) {
+    ::deep .mesh-node-picker-avatar-img[src$=".svg"] {
+        filter: invert(1);
+    }
+}
+
 .mesh-node-picker-info {
     flex: 1;
     min-width: 0;

@@ -144,12 +144,53 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             yield break;
         }
 
-        #pragma warning disable CS0618 // Type or member is obsolete - migration to DelegationTool.CreateUnifiedDelegationTool requires executeAsync implementation
-        var delegationTool = ChatPlugin.CreateUnifiedDelegationTool(
+        var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentConfig,
             hierarchyAgents,
+            executeAsync: async (agentName, task, cancellationToken) =>
+            {
+                // Resolve the target agent by name (strip path prefix if present)
+                var targetId = agentName.Split('/').Last();
+                if (!allAgents.TryGetValue(targetId, out var targetAgent))
+                {
+                    return new DelegationResult
+                    {
+                        AgentName = agentName,
+                        Task = task,
+                        Result = $"Agent '{agentName}' not found",
+                        Success = false
+                    };
+                }
+
+                Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
+                    agentConfig.Id, targetId, task);
+
+                // Create an isolated session for the target agent
+                var session = await targetAgent.CreateSessionAsync();
+
+                // Run the target agent to completion
+                var response = await targetAgent.RunAsync(task, session, cancellationToken: cancellationToken);
+
+                // Extract text from the response messages
+                var resultText = string.Join("\n", response.Messages
+                    .Where(m => m.Role == ChatRole.Assistant)
+                    .SelectMany(m => m.Contents)
+                    .OfType<TextContent>()
+                    .Select(t => t.Text)
+                    .Where(t => !string.IsNullOrEmpty(t)));
+
+                Logger.LogInformation("Delegation to {Target} completed, result length: {Length}",
+                    targetId, resultText.Length);
+
+                return new DelegationResult
+                {
+                    AgentName = targetId,
+                    Task = task,
+                    Result = resultText,
+                    Success = true
+                };
+            },
             Logger);
-        #pragma warning restore CS0618
 
         Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
             agentConfig.Id, hierarchyAgents.Count);
@@ -199,7 +240,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             $$$"""
 
                **Agent Delegation:**
-               You have access to a unified Delegate tool to route requests to specialized agents.
+               You have access to a delegate_to_agent tool to route requests to specialized agents.
                Use this when the request matches another agent's expertise or when you need to escalate.
 
                **Available Agents:**
@@ -207,13 +248,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
                **How to delegate:**
                1. Identify which specialized agent can best handle the user's request
-               2. Call the Delegate tool with the agent name and your message
-               3. The delegated agent will handle the request and respond directly
+               2. Call the delegate_to_agent tool with the agent name and your task description
+               3. The delegated agent will execute the task and return its result to you
+               4. Relay or summarize the result to the user
 
                **Important:**
-               - After calling Delegate, do not provide additional output
                - Choose the most appropriate agent based on their specialization
                - For escalation (when you can't handle something), delegate to an agent higher in the hierarchy
+               - The delegation result will be returned to you as a tool result — use it to formulate your response
 
                """;
 

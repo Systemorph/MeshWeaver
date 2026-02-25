@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -34,6 +35,9 @@ public class AgentChatClient : IAgentChat
     private string? currentAgentName;
     private AgentSession? sharedThread;
     private string? currentModelName;
+    private string? persistentThreadId;
+    private IReadOnlyList<string>? currentAttachments;
+    private bool isPersistentFactory;
     private bool agentsInitialized;
 
     public AgentChatClient(IServiceProvider serviceProvider)
@@ -57,11 +61,40 @@ public class AgentChatClient : IAgentChat
         logger.LogInformation("Switched to thread: {ThreadId}", threadId);
     }
 
+    /// <summary>
+    /// Sets the persistent thread ID for server-side conversation history.
+    /// When set, the agent session will link to this server-managed thread.
+    /// </summary>
+    public void SetPersistentThreadId(string? persistentId)
+    {
+        persistentThreadId = persistentId;
+        if (!string.IsNullOrEmpty(persistentId))
+        {
+            logger.LogInformation("Set persistent thread ID: {PersistentThreadId}", persistentId);
+        }
+    }
+
+    /// <summary>
+    /// Sets attachment paths whose content will be loaded and included in the next message.
+    /// </summary>
+    public void SetAttachments(IReadOnlyList<string>? paths)
+    {
+        currentAttachments = paths is { Count: > 0 } ? paths : null;
+    }
+
     private async Task<AgentSession> GetOrCreateThreadAsync(ChatClientAgent agent)
     {
         // Use shared thread across all agents in this conversation
         if (sharedThread != null)
             return sharedThread;
+
+        // For persistent factories with a persistent thread ID, create a session linked to the server-side thread
+        if (isPersistentFactory && !string.IsNullOrEmpty(persistentThreadId))
+        {
+            sharedThread = await agent.CreateSessionAsync(persistentThreadId);
+            logger.LogInformation("Resumed persistent thread: {PersistentThreadId}", persistentThreadId);
+            return sharedThread;
+        }
 
         // Try to load persisted thread
         var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, "shared");
@@ -72,40 +105,101 @@ public class AgentChatClient : IAgentChat
             return sharedThread;
         }
 
-        sharedThread = await agent.GetNewSessionAsync();
+        if (isPersistentFactory)
+        {
+            // For persistent factories without an existing thread, create a new server-side session
+            sharedThread = await agent.CreateSessionAsync(currentThreadId);
+            persistentThreadId = currentThreadId;
+            logger.LogInformation("Created new persistent thread: {PersistentThreadId}", persistentThreadId);
+        }
+        else
+        {
+            sharedThread = await agent.CreateSessionAsync();
+        }
+
         return sharedThread;
     }
 
-    private async Task SaveThreadAsync(ChatClientAgent _, AgentSession thread, string? threadId = null)
+    private async Task SaveThreadAsync(ChatClientAgent agent, AgentSession thread, string? threadId = null)
     {
         // Save the thread with the specified key or current thread ID
-        var serialized = thread.Serialize(hub.JsonSerializerOptions);
+        var serialized = await agent.SerializeSessionAsync(thread, hub.JsonSerializerOptions);
         var id = threadId ?? currentThreadId;
         await persistenceService.SaveThreadAsync(id, "shared", serialized);
         logger.LogInformation("Saved thread: {ThreadId}", id);
+
+        // For persistent threads, update the Thread MeshNode with the PersistentThreadId
+        if (isPersistentFactory && !string.IsNullOrEmpty(persistentThreadId))
+        {
+            await UpdateThreadPersistentIdAsync(id);
+        }
+    }
+
+    /// <summary>
+    /// Updates the Thread MeshNode with PersistentThreadId and ProviderType if they were newly set.
+    /// </summary>
+    private async Task UpdateThreadPersistentIdAsync(string threadNodePath)
+    {
+        try
+        {
+            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog == null)
+                return;
+
+            var node = await meshCatalog.GetNodeAsync(new Messaging.Address(threadNodePath));
+            if (node?.Content is not Thread threadContent)
+                return;
+
+            // Only update if not already set
+            if (!string.IsNullOrEmpty(threadContent.PersistentThreadId))
+                return;
+
+            var factory = GetFactoryForModel(currentModelName);
+            var updatedContent = threadContent with
+            {
+                PersistentThreadId = persistentThreadId,
+                ProviderType = factory?.Name
+            };
+
+            var updatedNode = node with { Content = updatedContent };
+            var nodeJson = System.Text.Json.JsonSerializer.SerializeToElement(updatedNode, hub.JsonSerializerOptions);
+            hub.Post(new Data.DataChangeRequest { Updates = [nodeJson] }, o => o.WithTarget(new Messaging.Address(threadNodePath)));
+
+            logger.LogInformation("Updated thread {Path} with PersistentThreadId={PersistentThreadId}",
+                threadNodePath, persistentThreadId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to update PersistentThreadId on thread {Path}", threadNodePath);
+        }
     }
 
     private async Task<string> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
     {
         var messageText = new StringBuilder();
 
-        // Add selected agent's instructions as persona identity
-        if (!string.IsNullOrEmpty(agentName))
+        // For persistent agents, skip agent instructions and tool docs — they're stored server-side.
+        // Only send the current context and user message.
+        if (!isPersistentFactory)
         {
-            var agentInfo = loadedAgents.FirstOrDefault(a => a.Name == agentName);
-            var agentInstructions = agentInfo?.AgentConfiguration?.Instructions;
-            if (!string.IsNullOrEmpty(agentInstructions))
+            // Add selected agent's instructions as persona identity
+            if (!string.IsNullOrEmpty(agentName))
             {
-                messageText.AppendLine("# Agent Identity and Instructions");
-                messageText.AppendLine();
-                messageText.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
-                messageText.AppendLine();
-                messageText.AppendLine(agentInstructions);
-                messageText.AppendLine();
+                var agentInfo = loadedAgents.FirstOrDefault(a => a.Name == agentName);
+                var agentInstructions = agentInfo?.AgentConfiguration?.Instructions;
+                if (!string.IsNullOrEmpty(agentInstructions))
+                {
+                    messageText.AppendLine("# Agent Identity and Instructions");
+                    messageText.AppendLine();
+                    messageText.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
+                    messageText.AppendLine();
+                    messageText.AppendLine(agentInstructions);
+                    messageText.AppendLine();
+                }
             }
         }
 
-        // Add context if available
+        // Add context if available (always sent, even for persistent agents)
         if (Context != null)
         {
             var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
@@ -127,14 +221,60 @@ public class AgentChatClient : IAgentChat
             messageText.AppendLine();
         }
 
-        // Add resolved tool documentation
-        var toolDocs = await LoadToolDocumentationAsync();
-        if (!string.IsNullOrEmpty(toolDocs))
+        // For persistent agents, skip tool documentation (already on server-side agent definition)
+        if (!isPersistentFactory)
         {
-            messageText.AppendLine("# Available Tools Documentation");
-            messageText.AppendLine();
-            messageText.AppendLine(toolDocs);
-            messageText.AppendLine();
+            // Add resolved tool documentation
+            var toolDocs = await LoadToolDocumentationAsync();
+            if (!string.IsNullOrEmpty(toolDocs))
+            {
+                messageText.AppendLine("# Available Tools Documentation");
+                messageText.AppendLine();
+                messageText.AppendLine(toolDocs);
+                messageText.AppendLine();
+            }
+        }
+
+        // Load and add attachment content
+        var attachmentPaths = currentAttachments;
+        if (attachmentPaths is { Count: > 0 })
+        {
+            var meshPlugin = new MeshPlugin(hub, this);
+            var loadTasks = attachmentPaths.Select(async path =>
+            {
+                try
+                {
+                    var content = await meshPlugin.Get($"@{path.TrimStart('@')}");
+                    if (!string.IsNullOrEmpty(content) && !content.StartsWith("Not found") && !content.StartsWith("Error"))
+                    {
+                        // Truncate individual attachments to prevent prompt overflow
+                        if (content.Length > 8000)
+                            content = content[..8000] + "\n... (truncated)";
+                        return (Path: path, Content: content);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogDebug(ex, "Error loading attachment content for: {Path}", path);
+                }
+                return (Path: path, Content: (string?)null);
+            });
+
+            var results = await Task.WhenAll(loadTasks);
+            var loadedAttachments = results.Where(r => r.Content != null).ToList();
+
+            if (loadedAttachments.Count > 0)
+            {
+                messageText.AppendLine("# Attached Content");
+                messageText.AppendLine();
+                foreach (var (path, content) in loadedAttachments)
+                {
+                    messageText.AppendLine($"## Attachment: {path}");
+                    messageText.AppendLine();
+                    messageText.AppendLine(content);
+                    messageText.AppendLine();
+                }
+            }
         }
 
         // Add user messages
@@ -239,6 +379,7 @@ public class AgentChatClient : IAgentChat
 
         // Build the user message with context and agent instructions
         var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
+        currentAttachments = null; // Clear after use
 
         // Get response from the agent with thread
         var response = await agent.RunAsync(userMessage, thread, cancellationToken: cancellationToken);
@@ -298,6 +439,7 @@ public class AgentChatClient : IAgentChat
 
         // Build the user message with context and agent instructions
         var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
+        currentAttachments = null; // Clear after use
 
         // Get streaming response from the agent with thread
         await foreach (var update in agent.RunStreamingAsync(userMessage, thread, cancellationToken: cancellationToken))
@@ -320,102 +462,8 @@ public class AgentChatClient : IAgentChat
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
-                        logger.LogInformation("Agent {AgentName} received result from tool",
-                            currentAgentName);
-
-                        // Check if this is a delegation marker
-                        var resultText = functionResult.Result?.ToString() ?? string.Empty;
-                        if (resultText.StartsWith("__HANDOFF__|"))
-                        {
-                            // Parse the delegation marker: __HANDOFF__|{targetAgentName}|{message}
-                            var parts = resultText.Split('|');
-                            if (parts.Length >= 3)
-                            {
-                                var targetAgentName = parts[1];
-                                var delegationMessage = string.Join('|', parts.Skip(2));
-
-                                logger.LogInformation("Delegation detected from {SourceAgent} to {TargetAgent}",
-                                    currentAgentName, targetAgentName);
-
-                                // Yield delegation marker to UI
-                                var delegationContent = new ChatDelegationContent(
-                                    currentAgentName ?? "Assistant",
-                                    targetAgentName,
-                                    delegationMessage);
-
-                                yield return new ChatResponseUpdate(ChatRole.Assistant, [delegationContent])
-                                {
-                                    AuthorName = currentAgentName ?? "Assistant"
-                                };
-
-                                // Invoke the target agent in streaming mode with ISOLATED thread
-                                if (agents.TryGetValue(targetAgentName, out var targetAgent))
-                                {
-                                    // Create a NEW isolated thread for the delegated agent
-                                    // This gives the agent its own context window without parent conversation history
-                                    var isolatedThreadId = $"{currentThreadId}_delegation_{Guid.NewGuid().AsString()}";
-                                    var targetThread = await targetAgent.GetNewSessionAsync();
-                                    logger.LogInformation("Created isolated thread {ThreadId} for delegated agent {AgentName}",
-                                        isolatedThreadId, targetAgentName);
-
-                                    // Build message with context and agent instructions for the target agent
-                                    var targetMessage = await BuildMessageWithContextAsync([new ChatMessage(ChatRole.User, delegationMessage)], targetAgentName);
-
-                                    // Collect the delegated agent's response for potential return to parent
-                                    var delegatedResponseBuilder = new StringBuilder();
-
-                                    // Stream the target agent's response
-                                    await foreach (var targetUpdate in targetAgent.RunStreamingAsync(
-                                        targetMessage, targetThread, cancellationToken: cancellationToken))
-                                    {
-                                        // Yield function calls from the delegated agent
-                                        if (targetUpdate.Contents.Count > 0)
-                                        {
-                                            foreach (var targetContent in targetUpdate.Contents)
-                                            {
-                                                if (targetContent is FunctionCallContent targetFunctionCall)
-                                                {
-                                                    logger.LogInformation("Delegated agent {AgentName} calling tool: {FunctionName}",
-                                                        targetAgentName, targetFunctionCall.Name);
-
-                                                    yield return new ChatResponseUpdate(ChatRole.Assistant, [targetContent])
-                                                    {
-                                                        AuthorName = targetAgentName
-                                                    };
-                                                }
-                                            }
-                                        }
-
-                                        // Yield target agent's text updates with their name
-                                        if (!string.IsNullOrEmpty(targetUpdate.Text))
-                                        {
-                                            delegatedResponseBuilder.Append(targetUpdate.Text);
-                                            yield return new ChatResponseUpdate(ChatRole.Assistant, targetUpdate.Text)
-                                            {
-                                                AuthorName = targetAgentName
-                                            };
-                                        }
-                                    }
-
-                                    // Save the isolated thread for potential future reference
-                                    await SaveThreadAsync(targetAgent, targetThread, isolatedThreadId);
-
-                                    // NOTE: After target agent completes, the original agent's stream will continue
-                                    // and any remaining updates from the original agent will be yielded below
-                                }
-                                else
-                                {
-                                    logger.LogWarning("Target agent {TargetAgent} not found for delegation",
-                                        targetAgentName);
-                                    yield return new ChatResponseUpdate(ChatRole.Assistant,
-                                        $"Error: Agent '{targetAgentName}' not found")
-                                    {
-                                        AuthorName = currentAgentName ?? "Assistant"
-                                    };
-                                }
-                            }
-                        }
-                        // Don't yield function results to the UI
+                        logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
+                            currentAgentName, functionResult.CallId);
                     }
                 }
             }
@@ -650,8 +698,9 @@ public class AgentChatClient : IAgentChat
             throw new ArgumentException($"No factory can serve model: {currentModelName}");
         }
 
-        logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName}",
-            factory.Name, currentModelName ?? "default");
+        isPersistentFactory = factory.IsPersistent;
+        logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
+            factory.Name, currentModelName ?? "default", isPersistentFactory);
 
         var configs = loadedAgents.Select(a => a.AgentConfiguration).ToList();
         var createdAgents = new Dictionary<string, ChatClientAgent>();

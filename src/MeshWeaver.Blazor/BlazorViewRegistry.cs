@@ -2,10 +2,12 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.FileExplorer;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Layout.Client;
@@ -91,6 +93,7 @@ public static class BlazorViewRegistry
             ItemTemplateControl itemTemplate
                 => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
             CollaborativeMarkdownControl collaborativeMarkdown => StandardView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
+            CodeEditorControl codeEditor => StandardView<CodeEditorControl, CodeEditorView>(codeEditor, stream, area),
             MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
             MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
             NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
@@ -99,7 +102,9 @@ public static class BlazorViewRegistry
             RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
             SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
             MeshNodePickerControl picker => StandardView<MeshNodePickerControl, MeshNodePickerView>(picker, stream, area),
+            MeshNodeCollectionControl collection => StandardView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
             MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
+            MeshNodeCardControl card => StandardView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
             AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
             _ => DelegateToDotnetInteractive(instance, stream, area),
         };

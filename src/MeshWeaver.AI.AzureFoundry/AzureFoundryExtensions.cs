@@ -46,4 +46,22 @@ public static class AzureFoundryExtensions
         services.Configure(configure);
         return services.AddSingleton<IChatClientFactory, AzureFoundryChatClientAgentFactory>();
     }
+
+    /// <summary>
+    /// Adds Azure AI Foundry persistent agent services.
+    /// Persistent agents maintain server-side conversation history via persistent threads.
+    /// </summary>
+    public static IServiceCollection AddAzureFoundryPersistent(this IServiceCollection services)
+        => services.AddSingleton<IChatClientFactory, AzureFoundryPersistentAgentFactory>();
+
+    /// <summary>
+    /// Adds Azure AI Foundry persistent agent services with configuration action.
+    /// </summary>
+    public static IServiceCollection AddAzureFoundryPersistent(
+        this IServiceCollection services,
+        Action<AzureFoundryPersistentConfiguration> configure)
+    {
+        services.Configure(configure);
+        return services.AddSingleton<IChatClientFactory, AzureFoundryPersistentAgentFactory>();
+    }
 }

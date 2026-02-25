@@ -26,6 +26,16 @@ public record MeshNodePickerControl(object Data)
     /// </summary>
     public object? MaxResults { get; init; }
 
+    /// <summary>
+    /// Fixed set of items (MeshNode instances) to include in the picker.
+    /// These are merged with query results (deduplicated by Path)
+    /// and the combined set is cached for in-memory filtering.
+    /// Use for small, known sets (e.g., creatable types, roles).
+    /// Typed as object[] due to circular dependency constraints;
+    /// MeshNodePickerView casts to MeshNode[].
+    /// </summary>
+    public object[]? Items { get; init; }
+
     public MeshNodePickerControl WithQueries(params string[] queries)
         => this with { Queries = queries };
 
@@ -34,4 +44,7 @@ public record MeshNodePickerControl(object Data)
 
     public MeshNodePickerControl WithMaxResults(object maxResults)
         => this with { MaxResults = maxResults };
+
+    public MeshNodePickerControl WithItems(params object[] items)
+        => this with { Items = items };
 }

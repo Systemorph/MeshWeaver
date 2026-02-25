@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
@@ -19,6 +20,34 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private string _searchText = "";
     private ElementReference _textFieldElement;
     private List<MeshNode> _results = new();
+    private List<MeshNode>? _cachedResults;
+
+    private MeshNode[]? BoundItems { get; set; }
+    private bool HasItems => BoundItems is { Length: > 0 };
+
+    protected override void BindData()
+    {
+        DataBind(ViewModel.Items, x => x.BoundItems, ConvertItems);
+        base.BindData();
+    }
+
+    private MeshNode[]? ConvertItems(object? value, MeshNode[]? defaultValue)
+    {
+        if (value is object[] arr && arr.Length > 0)
+        {
+            return arr.Select(item => item switch
+            {
+                MeshNode node => node,
+                JsonElement je => je.Deserialize<MeshNode>(Hub.JsonSerializerOptions),
+                _ => null
+            }).Where(n => n != null).ToArray()!;
+        }
+        if (value is JsonElement je2 && je2.ValueKind == JsonValueKind.Array)
+        {
+            return je2.Deserialize<MeshNode[]>(Hub.JsonSerializerOptions);
+        }
+        return defaultValue;
+    }
 
     protected override void OnParametersSet()
     {
@@ -76,42 +105,64 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
 
     private async Task LoadResultsAsync()
     {
+        // When Items are provided and already cached, filter in-memory
+        if (HasItems && _cachedResults != null)
+        {
+            _results = FilterCached(_searchText.Trim());
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
         _isLoading = true;
         await InvokeAsync(StateHasChanged);
 
         try
         {
+            var queryResults = new List<MeshNode>();
+
+            // Execute queries (if any)
             var queries = GetQueries();
-            if (queries.Length == 0)
+            if (queries.Length > 0)
             {
-                _results = new List<MeshNode>();
-                return;
+                var userText = _searchText.Trim();
+                var tasks = queries.Select(async baseQuery =>
+                {
+                    // When Items are set, don't append user text — we filter in-memory
+                    var fullQuery = HasItems || string.IsNullOrEmpty(userText)
+                        ? baseQuery
+                        : $"{baseQuery} {userText}";
+                    try
+                    {
+                        return await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
+                    }
+                    catch
+                    {
+                        return new List<MeshNode>();
+                    }
+                });
+
+                var allResults = await Task.WhenAll(tasks);
+                queryResults = allResults.SelectMany(batch => batch).ToList();
             }
 
-            var userText = _searchText.Trim();
-
-            var tasks = queries.Select(async baseQuery =>
-            {
-                var fullQuery = string.IsNullOrEmpty(userText)
-                    ? baseQuery
-                    : $"{baseQuery} {userText}";
-                try
-                {
-                    return await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
-                }
-                catch
-                {
-                    return new List<MeshNode>();
-                }
-            });
-
-            var allResults = await Task.WhenAll(tasks);
-
-            _results = allResults
-                .SelectMany(batch => batch)
+            // Merge Items + query results, deduplicate by Path (Items take precedence)
+            var items = BoundItems ?? [];
+            var merged = items.AsEnumerable()
+                .Concat(queryResults)
                 .GroupBy(n => n.Path)
                 .Select(g => g.First())
                 .ToList();
+
+            if (HasItems)
+            {
+                // Cache for in-memory filtering
+                _cachedResults = merged;
+                _results = FilterCached(_searchText.Trim());
+            }
+            else
+            {
+                _results = merged;
+            }
         }
         catch
         {
@@ -122,6 +173,20 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
             _isLoading = false;
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private List<MeshNode> FilterCached(string searchText)
+    {
+        if (_cachedResults == null) return new List<MeshNode>();
+        if (string.IsNullOrEmpty(searchText)) return _cachedResults;
+
+        return _cachedResults
+            .Where(n =>
+                (n.Name ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                || (n.Path ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                || (n.NodeType ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase)
+                || (n.Id ?? "").Contains(searchText, StringComparison.OrdinalIgnoreCase))
+            .ToList();
     }
 
     private void SelectNode(MeshNode node)
@@ -150,6 +215,19 @@ public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerContro
     private async Task ResolveSelectedNodeAsync()
     {
         if (string.IsNullOrEmpty(Value)) return;
+
+        // First check Items for the selected node (avoids query round-trip)
+        var items = BoundItems ?? [];
+        if (items.Length > 0)
+        {
+            _selectedNode = items.FirstOrDefault(n =>
+                string.Equals(n.Path, Value, StringComparison.OrdinalIgnoreCase));
+            if (_selectedNode != null)
+            {
+                StateHasChanged();
+                return;
+            }
+        }
 
         try
         {

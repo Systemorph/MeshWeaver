@@ -20,7 +20,7 @@ public class InMemoryMeshQuery(
     AccessService? accessService = null,
     IDataChangeNotifier? changeNotifier = null,
     MeshConfiguration? meshConfiguration = null)
-    : IMeshQueryCore
+    : IMeshQueryProvider
 {
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
@@ -89,13 +89,16 @@ public class InMemoryMeshQuery(
         // Get the effective user ID for security filtering (from request or access context)
         var userId = GetEffectiveUserId(request);
 
+        // Context-based exclusion
+        var context = request.Context ?? parsedQuery.Context;
+
         foreach (var searchPath in pathsToSearch)
         {
             // Search MeshNodes at this path (with security filtering)
             var node = await persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
             if (node != null)
             {
-                if (_evaluator.Matches(node, parsedQuery))
+                if (_evaluator.Matches(node, parsedQuery) && !IsExcludedByContext(node, context))
                 {
                     var score = _evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
                     score += (int)PathProximity.ComputeBoost(request.ContextPath, node.Path);
@@ -111,7 +114,7 @@ public class InMemoryMeshQuery(
             await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options).WithCancellation(ct))
             {
                 // Evaluate the node itself
-                if (_evaluator.Matches(child, parsedQuery))
+                if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context))
                 {
                     var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
                     score += (int)PathProximity.ComputeBoost(request.ContextPath, child.Path);
@@ -138,7 +141,7 @@ public class InMemoryMeshQuery(
                 await foreach (var child in persistence.GetChildrenSecureAsync(ancestorPath, userId, options).WithCancellation(ct))
                 {
                     // Evaluate the node itself
-                    if (_evaluator.Matches(child, parsedQuery))
+                    if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context))
                     {
                         var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
                         score += (int)PathProximity.ComputeBoost(request.ContextPath, child.Path);
@@ -156,7 +159,7 @@ public class InMemoryMeshQuery(
             await foreach (var descendant in persistence.GetDescendantsSecureAsync(basePath, userId, options).WithCancellation(ct))
             {
                 // Evaluate the node itself
-                if (_evaluator.Matches(descendant, parsedQuery))
+                if (_evaluator.Matches(descendant, parsedQuery) && !IsExcludedByContext(descendant, context))
                 {
                     var score = _evaluator.GetFuzzyScore(descendant, parsedQuery.TextSearch);
                     score += (int)PathProximity.ComputeBoost(request.ContextPath, descendant.Path);
@@ -239,7 +242,7 @@ public class InMemoryMeshQuery(
         JsonSerializerOptions options,
         int limit = 10,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, null, ct);
+        => AutocompleteAsync(basePath, prefix, options, null, AutocompleteMode.PathFirst, limit, null, null, ct);
 
     /// <inheritdoc />
     public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -249,8 +252,9 @@ public class InMemoryMeshQuery(
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         CancellationToken ct = default)
-        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, contextPath, ct);
+        => AutocompleteAsync(basePath, prefix, options, null, mode, limit, contextPath, context, ct);
 
     /// <summary>
     /// Autocomplete with user ID for access control filtering.
@@ -263,6 +267,7 @@ public class InMemoryMeshQuery(
         AutocompleteMode mode,
         int limit = 10,
         string? contextPath = null,
+        string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(basePath);
@@ -275,6 +280,10 @@ public class InMemoryMeshQuery(
         {
             // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
             if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)
+                continue;
+
+            // Context-based exclusion for autocomplete
+            if (context != null && IsExcludedByContext(node, context))
                 continue;
 
             var name = node.Name ?? node.Id ?? node.Path ?? "";
@@ -610,5 +619,19 @@ public class InMemoryMeshQuery(
                 Timestamp = DateTimeOffset.UtcNow
             });
         }
+    }
+
+    /// <summary>
+    /// Checks whether a node should be excluded based on context.
+    /// Checks both type-level exclusion (from MeshConfiguration) and node-level exclusion.
+    /// </summary>
+    private bool IsExcludedByContext(MeshNode node, string? context)
+    {
+        if (context == null) return false;
+        if (meshConfiguration?.IsExcludedFromContext(node.NodeType, context) == true)
+            return true;
+        if (node.ExcludeFromContext?.Contains(context) == true)
+            return true;
+        return false;
     }
 }

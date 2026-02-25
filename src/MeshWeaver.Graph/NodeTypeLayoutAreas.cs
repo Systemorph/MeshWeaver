@@ -581,6 +581,12 @@ public static class NodeTypeLayoutAreas
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("gap: 8px; margin-top: 16px;");
 
+        // Cancel button
+        var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
+        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
+            .WithAppearance(Appearance.Neutral)
+            .WithNavigateToHref(viewHref));
+
         // Save button - update workspace stream
         buttonRow = buttonRow.WithView(Controls.Button("Save")
             .WithAppearance(Appearance.Accent)
@@ -658,15 +664,9 @@ public static class NodeTypeLayoutAreas
                 }
 
                 // Navigate back to overview
-                var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(viewHref));
+                var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
+                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
             }));
-
-        // Cancel button
-        var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button("Cancel")
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(viewHref));
 
         stack = stack.WithView(buttonRow);
 

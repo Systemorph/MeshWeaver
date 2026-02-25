@@ -56,6 +56,17 @@ public record Thread : ISatelliteContent
     public string? ParentPath { get; init; }
 
     /// <summary>
+    /// Azure AI Foundry persistent thread ID. When set, conversation history is server-managed.
+    /// </summary>
+    public string? PersistentThreadId { get; init; }
+
+    /// <summary>
+    /// The provider type that created this thread (e.g., "AzureFoundryPersistent").
+    /// Determines whether server-side history is available.
+    /// </summary>
+    public string? ProviderType { get; init; }
+
+    /// <summary>
     /// ISatelliteContent: permissions are checked against the parent node.
     /// </summary>
     public string? PrimaryNodePath => ParentPath;

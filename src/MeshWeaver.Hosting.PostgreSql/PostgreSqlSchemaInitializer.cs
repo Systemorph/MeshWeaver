@@ -140,21 +140,29 @@ public static class PostgreSqlSchemaInitializer
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
                 -- Group expansion: read GroupMembership MeshNodes
+                -- New model: content has "member" + "groups" array of {"group":"..."}
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 WITH RECURSIVE all_members AS (
-                    SELECT gm.namespace AS group_path, gm.content->>'id' AS member_id
-                    FROM mesh_nodes gm WHERE gm.node_type = 'GroupMembership'
+                    SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
+                    FROM mesh_nodes gm
+                    CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
+                    WHERE gm.node_type = 'GroupMembership'
                     UNION
-                    SELECT am.group_path, gm.content->>'id'
+                    SELECT am.group_path, gm.content->>'member'
                     FROM all_members am
                     JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
-                        AND gm.namespace = am.member_id
+                    WHERE EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g
+                        WHERE g->>'group' = am.member_id
+                    )
                 ),
                 leaf_members AS (
                     SELECT group_path, member_id FROM all_members
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM mesh_nodes gm
-                        WHERE gm.node_type = 'GroupMembership' AND gm.namespace = all_members.member_id
+                        SELECT 1 FROM mesh_nodes gm2
+                        CROSS JOIN LATERAL jsonb_array_elements(gm2.content->'groups') AS g2
+                        WHERE gm2.node_type = 'GroupMembership'
+                          AND g2->>'group' = all_members.member_id
                     )
                 )
                 SELECT lm.member_id, aa.namespace, perm.permission,
@@ -192,6 +200,32 @@ public static class PostgreSqlSchemaInitializer
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
+                -- Direct entries from access_control table (convenience methods)
+                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT subject, node_path, permission, is_allow
+                FROM access_control
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
+
+                -- Group expansion from group_members + access_control
+                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                WITH RECURSIVE all_members AS (
+                    SELECT group_name, member_id FROM group_members
+                    UNION
+                    SELECT am.group_name, gm.member_id
+                    FROM all_members am
+                    JOIN group_members gm ON gm.group_name = am.member_id
+                ),
+                leaf_members AS (
+                    SELECT group_name, member_id FROM all_members
+                    WHERE member_id NOT IN (SELECT DISTINCT group_name FROM group_members)
+                )
+                SELECT lm.member_id, ac.node_path, ac.permission, ac.is_allow
+                FROM access_control ac
+                JOIN leaf_members lm ON lm.group_name = ac.subject
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
+
                 -- Atomic swap
                 ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
                 ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
@@ -223,12 +257,25 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$;
 
-            -- Drop legacy triggers and tables if they exist
+            -- Simple access_control and group_members tables used by convenience methods
+            CREATE TABLE IF NOT EXISTS access_control (
+                node_path   TEXT    NOT NULL,
+                subject     TEXT    NOT NULL,
+                permission  TEXT    NOT NULL,
+                is_allow    BOOLEAN NOT NULL,
+                PRIMARY KEY (node_path, subject, permission)
+            );
+
+            CREATE TABLE IF NOT EXISTS group_members (
+                group_name  TEXT    NOT NULL,
+                member_id   TEXT    NOT NULL,
+                PRIMARY KEY (group_name, member_id)
+            );
+
+            -- Drop legacy triggers if they exist (tables are now reused)
             DROP TRIGGER IF EXISTS access_control_changed ON access_control;
             DROP TRIGGER IF EXISTS group_members_changed ON group_members;
             DROP FUNCTION IF EXISTS trg_access_control_changed();
-            DROP TABLE IF EXISTS access_control;
-            DROP TABLE IF EXISTS group_members;
 
             -- Notify function for change notifications
             CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$

@@ -21,7 +21,14 @@
             </div>
         }
     </FluentDialogBody>
-    @if (IsClosable == true)
+    @if (ViewModel.HasActions)
+    {
+        <FluentDialogFooter>
+            <NamedAreaView Stream="@Stream" ViewModel="@ViewModel.ActionsArea"
+                Area="@ViewModel.ActionsArea.Area.ToString()" />
+        </FluentDialogFooter>
+    }
+    else if (IsClosable == true)
     {
         <FluentDialogFooter>
             <FluentButton Appearance="FluentAppearance.Neutral" OnClick="HandleClose">

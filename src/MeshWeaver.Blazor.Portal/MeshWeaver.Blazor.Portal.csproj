@@ -7,8 +7,9 @@
     <SupportedPlatform Include="browser" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+    <ProjectReference Include="..\MeshWeaver.AI.Application\MeshWeaver.AI.Application.csproj" />
     <ProjectReference Include="..\MeshWeaver.Blazor\MeshWeaver.Blazor.csproj" />
-    <ProjectReference Include="..\MeshWeaver.Blazor.Chat\MeshWeaver.Blazor.Chat.csproj" />
     <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
   </ItemGroup>
   <ItemGroup>

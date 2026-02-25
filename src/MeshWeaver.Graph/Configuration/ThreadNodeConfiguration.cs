@@ -30,6 +30,7 @@ public static class ThreadNodeConfiguration
     {
         Name = "Thread",
         Icon = "/static/NodeTypeIcons/chat.svg",
+        ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(ThreadNodeConfiguration).Assembly.Location,
         HubConfiguration = config => config
             .AddThreadViews()

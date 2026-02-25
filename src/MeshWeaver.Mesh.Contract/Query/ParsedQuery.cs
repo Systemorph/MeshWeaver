@@ -13,6 +13,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Limit">Result limit from limit: qualifier</param>
 /// <param name="Source">Data source from source: qualifier</param>
 /// <param name="Select">Property names to project results onto (from select: qualifier)</param>
+/// <param name="Context">Context for visibility filtering (from context: qualifier)</param>
 public record ParsedQuery(
     QueryNode? Filter,
     string? TextSearch,
@@ -21,7 +22,8 @@ public record ParsedQuery(
     OrderByClause? OrderBy = null,
     int? Limit = null,
     QuerySource Source = QuerySource.Default,
-    IReadOnlyList<string>? Select = null
+    IReadOnlyList<string>? Select = null,
+    string? Context = null
 )
 {
     /// <summary>

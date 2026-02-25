@@ -31,7 +31,7 @@ public static class GroupNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Group",
-        Icon = "People",
+        Icon = "/static/NodeTypeIcons/people.svg",
         AssemblyLocation = typeof(GroupNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddGroupViews()

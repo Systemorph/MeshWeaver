@@ -1,5 +1,5 @@
-using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Services;
@@ -13,7 +13,7 @@ public static class BlazorPortalExtensions
 {
     /// <summary>
     /// Adds portal services including DimensionManager, CacheStorageAccessor, AppVersionService,
-    /// and ChatWindowStateService with persistent state support.
+    /// and SidePanelStateService with persistent state support.
     /// Also registers the "nonfile" route constraint used by ApplicationPage and AreaPage.
     /// Call this on the IServerSideBlazorBuilder returned by AddInteractiveServerComponents().
     /// </summary>
@@ -21,13 +21,13 @@ public static class BlazorPortalExtensions
     {
         builder.Services.AddBlazorPortalCoreServices();
         builder.Services.AddNonfileRouteConstraint();
-        builder.AddChatWindowState();
+        builder.AddSidePanelState();
         return builder;
     }
 
     /// <summary>
     /// Adds core portal services (DimensionManager, CacheStorageAccessor, AppVersionService, BlazorAutocompleteService).
-    /// Use AddBlazorPortalServices(IServerSideBlazorBuilder) for full support including chat state persistence.
+    /// Use AddBlazorPortalServices(IServerSideBlazorBuilder) for full support including side panel state persistence.
     /// </summary>
     public static IServiceCollection AddBlazorPortalCoreServices(this IServiceCollection services)
     {

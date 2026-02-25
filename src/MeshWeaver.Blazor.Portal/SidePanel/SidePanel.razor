@@ -1,0 +1,50 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+@using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
+
+<div class="side-panel">
+    <div class="side-panel-header">
+        <div class="side-panel-title-area">
+            <FluentButton Id="side-panel-menu-anchor"
+                          Appearance="FluentAppearance.Stealth"
+                          OnClick="ToggleMenu"
+                          Title="Thread menu"
+                          Class="side-panel-menu-button">
+                <FluentIcon Value="@(new Icons.Regular.Size20.ChevronDown())" Color="Color.Neutral" />
+            </FluentButton>
+            <h3 class="side-panel-title">@DisplayTitle</h3>
+            <FluentMenu Anchor="side-panel-menu-anchor" Open="@isMenuOpen" OpenChanged="@OnMenuOpenChanged">
+                @if (!HasThread)
+                {
+                    <FluentMenuItem OnClick="@OnResumeThread">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.History())" Color="Color.Neutral" Slot="start" />
+                        Resume
+                    </FluentMenuItem>
+                    <FluentMenuItem OnClick="@OnNewThread">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Color="Color.Neutral" Slot="start" />
+                        New
+                    </FluentMenuItem>
+                }
+                else
+                {
+                    <FluentMenuItem OnClick="@OnNewThread">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Add())" Color="Color.Neutral" Slot="start" />
+                        New Thread
+                    </FluentMenuItem>
+                    <FluentMenuItem OnClick="@OnResumeThread">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.History())" Color="Color.Neutral" Slot="start" />
+                        Switch Thread
+                    </FluentMenuItem>
+                }
+            </FluentMenu>
+        </div>
+        <div class="side-panel-actions">
+            @ToolbarContent
+            <FluentButton BackgroundColor="transparent" OnClick="CloseAsync" Title="Close">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
+            </FluentButton>
+        </div>
+    </div>
+    <div class="side-panel-content">
+        @ChildContent
+    </div>
+</div>

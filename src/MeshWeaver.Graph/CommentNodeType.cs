@@ -38,6 +38,7 @@ public static class CommentNodeType
     {
         Name = "Comment",
         Icon = "/static/NodeTypeIcons/comment.svg",
+        ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(CommentNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddCommentNodeViews()

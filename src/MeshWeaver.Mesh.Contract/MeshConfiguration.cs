@@ -46,4 +46,41 @@ public class MeshConfiguration(
     /// Default global creatable types: Markdown, Thread, Agent, NodeType.
     /// </summary>
     public static readonly IReadOnlyList<string> DefaultGlobalCreatableTypes = ["Markdown", "Thread", "Agent", "NodeType"];
+
+    /// <summary>
+    /// Built from registered MeshNodes' ExcludeFromContext property.
+    /// Key: context string (e.g., "search"), Value: set of node types excluded in that context.
+    /// If a type definition node (e.g., path="Thread") has ExcludeFromContext={"search"},
+    /// all instances with NodeType="Thread" are excluded when querying with context="search".
+    /// </summary>
+    private readonly Lazy<Dictionary<string, HashSet<string>>> _contextExcludedTypes = new(() =>
+    {
+        var map = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in meshNodes.Values)
+        {
+            if (node.ExcludeFromContext == null || node.ExcludeFromContext.Count == 0)
+                continue;
+
+            foreach (var ctx in node.ExcludeFromContext)
+            {
+                if (!map.TryGetValue(ctx, out var set))
+                {
+                    set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    map[ctx] = set;
+                }
+                set.Add(node.Path);
+            }
+        }
+        return map;
+    });
+
+    /// <summary>
+    /// Checks whether a given node type is excluded from a context.
+    /// </summary>
+    public bool IsExcludedFromContext(string? nodeType, string context)
+    {
+        if (string.IsNullOrEmpty(nodeType)) return false;
+        return _contextExcludedTypes.Value.TryGetValue(context, out var excluded)
+               && excluded.Contains(nodeType);
+    }
 }

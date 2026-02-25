@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout areas for Group nodes.
-/// - Overview: Shows group name/description and lists all GroupMembership children (read-only).
+/// - Overview: Shows group name/description and lists members (read-only).
 /// - Edit: Same member list with delete buttons, plus an Add Member button.
 /// </summary>
 public static class GroupLayoutAreas
@@ -37,7 +37,7 @@ public static class GroupLayoutAreas
 
     /// <summary>
     /// Renders the Overview area for a Group node.
-    /// Shows group info and lists GroupMembership children (read-only).
+    /// Shows group info and lists members from GroupMembership nodes where this group appears in their Groups list.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
@@ -82,16 +82,14 @@ public static class GroupLayoutAreas
                 {
                     foreach (var member in members)
                     {
-                        var membership = member.Content as GroupMembership
-                            ?? (member.Content is System.Text.Json.JsonElement mje
-                                ? System.Text.Json.JsonSerializer.Deserialize<GroupMembership>(mje.GetRawText())
-                                : null);
+                        var membership = DeserializeMembership(member);
+                        var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
 
                         stack = stack.WithView(Controls.Stack
                             .WithOrientation(Orientation.Horizontal)
                             .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
                             .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                            .WithView(Controls.Label(membership?.Id ?? member.Name ?? member.Id)));
+                            .WithView(Controls.Label(memberDisplay)));
                     }
                 }
             }
@@ -132,16 +130,14 @@ public static class GroupLayoutAreas
 
                 foreach (var member in members)
                 {
-                    var membership = member.Content as GroupMembership
-                        ?? (member.Content is System.Text.Json.JsonElement mje
-                            ? System.Text.Json.JsonSerializer.Deserialize<GroupMembership>(mje.GetRawText())
-                            : null);
+                    var membership = DeserializeMembership(member);
+                    var memberDisplay = membership?.DisplayName ?? membership?.Member ?? member.Name ?? member.Id;
 
                     stack = stack.WithView(Controls.Stack
                         .WithOrientation(Orientation.Horizontal)
                         .WithStyle("padding: 8px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); align-items: center; gap: 12px;")
                         .WithView(Controls.Icon(FluentIcons.Person()).WithStyle("font-size: 20px;"))
-                        .WithView(Controls.Label(membership?.Id ?? member.Name ?? member.Id).WithStyle("flex: 1;"))
+                        .WithView(Controls.Label(memberDisplay).WithStyle("flex: 1;"))
                         .WithView(Controls.Button("")
                             .WithIconStart(FluentIcons.Delete())
                             .WithAppearance(Appearance.Stealth)
@@ -162,6 +158,15 @@ public static class GroupLayoutAreas
 
             return (UiControl?)stack;
         });
+    }
+
+    private static GroupMembership? DeserializeMembership(MeshNode node)
+    {
+        if (node.Content is GroupMembership gm)
+            return gm;
+        if (node.Content is System.Text.Json.JsonElement je)
+            return System.Text.Json.JsonSerializer.Deserialize<GroupMembership>(je.GetRawText());
+        return null;
     }
 
     private static async Task ShowAddMemberDialog(UiActionContext ctx, string groupPath)
@@ -221,11 +226,16 @@ public static class GroupLayoutAreas
                         var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
                         if (catalog != null)
                         {
-                            var memberNode = new MeshNode(memberId.Split('/').Last(), groupPath)
+                            var memberName = memberId.Split('/').Last();
+                            var memberNode = new MeshNode($"{memberName}_Membership", groupPath)
                             {
                                 NodeType = Configuration.GroupMembershipNodeType.NodeType,
-                                Name = memberId,
-                                Content = new GroupMembership { Id = memberId }
+                                Name = $"{memberName} Membership",
+                                Content = new GroupMembership
+                                {
+                                    Member = memberId,
+                                    Groups = [new MembershipEntry { Group = groupPath }]
+                                }
                             };
                             await catalog.CreateNodeAsync(memberNode);
                         }

@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
+using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -63,6 +64,7 @@ public static class MeshNodeLayoutAreas
     public const string ChildrenArea = "Children";
     public const string NodeTypesArea = "NodeTypes";
     public const string AccessControlArea = "AccessControl";
+    public const string GroupsArea = "Groups";
     public const string CreateNodeArea = "Create";
     public const string EditArea = "Edit";
     public const string DeleteArea = "Delete";
@@ -100,6 +102,7 @@ public static class MeshNodeLayoutAreas
             .WithView(ThreadsArea, Threads)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
+            .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
@@ -209,7 +212,7 @@ public static class MeshNodeLayoutAreas
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var title = node?.Name ?? host.Hub.Address.ToString();
+        var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
         var iconValue = node?.Icon;
 
         // Build title with icon
@@ -223,7 +226,7 @@ public static class MeshNodeLayoutAreas
             if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
             {
                 titleContent = titleContent.WithView(Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-svg\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
@@ -459,13 +462,23 @@ public static class MeshNodeLayoutAreas
                 var hiddenQuery = string.IsNullOrEmpty(nodeTypeNamespace)
                     ? $"path: nodeType:{nodeTypePath} scope:children"
                     : $"namespace:{nodeTypeNamespace} nodeType:{nodeTypePath} scope:subtree";
+
+                // Build create href with type restriction and optional namespace restrictions
+                var nodeTypeDefinition = node.Content as NodeTypeDefinition;
+                var createNs = nodeTypeDefinition?.DefaultNamespace ?? hubPath;
+                var createPath = string.IsNullOrEmpty(createNs) ? CreateNodeArea : $"{createNs}/{CreateNodeArea}";
+                var createHref = $"/{createPath}?types={Uri.EscapeDataString(nodeTypePath)}";
+                if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
+                    createHref += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
+
                 return (UiControl?)Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
                     .WithVisibleQuery(searchTerm ?? "")
                     .WithNamespace(hubPath)
                     .WithPlaceholder("Search... (use @ for references)")
                     .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                    .WithMaxColumns(3);
+                    .WithMaxColumns(3)
+                    .WithCreateHref(createHref);
             }
 
             // Instance node catalog - excludes NodeType nodes
@@ -477,7 +490,8 @@ public static class MeshNodeLayoutAreas
                 .WithNamespace(hubPath)
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
-                .WithMaxColumns(3);
+                .WithMaxColumns(3)
+                .WithCreateHref($"/{hubPath}/{CreateNodeArea}");
         });
     }
 
@@ -492,7 +506,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:Thread -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
+            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
@@ -509,18 +523,12 @@ public static class MeshNodeLayoutAreas
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var backHref = BuildContentUrl(hubPath, OverviewArea);
 
-        return Controls.Stack
-            .WithView(Controls.Button("Back")
-                .WithAppearance(Appearance.Lightweight)
-                .WithIconStart(FluentIcons.ArrowLeft())
-                .WithNavigateToHref(backHref))
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:Thread")
-                .WithPlaceholder("Search threads...")
-                .WithRenderMode(MeshSearchRenderMode.Flat)
-                .WithMaxColumns(3));
+        return Controls.MeshSearch
+            .WithHiddenQuery($"path:{hubPath} scope:children nodeType:{ThreadNodeType.NodeType}")
+            .WithPlaceholder("Search threads...")
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(3);
     }
 
     /// <summary>
@@ -1066,6 +1074,14 @@ public static class MeshNodeLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext ctx)
         => AccessControlLayoutArea.AccessControl(host, ctx);
+
+    /// <summary>
+    /// Renders the Groups area for managing group memberships on this node.
+    /// Delegates to GroupsLayoutArea for the full management UI.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext ctx)
+        => GroupsLayoutArea.Groups(host, ctx);
 
     #endregion
 

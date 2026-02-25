@@ -20,6 +20,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
     private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IPersistenceService>();
     private readonly IMeshQuery? meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+    private readonly IMeshCatalog? meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
 
     /// <summary>
     /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
@@ -156,6 +157,68 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
+    [Description("Sets the name for the current conversation thread. " +
+                 "Call this to give the thread a meaningful name based on the conversation topic.")]
+    public async Task<string> SetThreadName(
+        [Description("Descriptive name for the thread (3-8 words)")] string name,
+        [Description("PascalCase identifier derived from the name (alphanumeric only). If omitted, auto-generated from name.")] string? id = null)
+    {
+        logger.LogInformation("SetThreadName called with name={Name}, id={Id}", name, id);
+
+        if (meshCatalog == null)
+            return "Mesh catalog not available.";
+
+        try
+        {
+            // Generate id from name if not provided
+            if (string.IsNullOrWhiteSpace(id))
+                id = GenerateIdFromName(name);
+
+            // Determine namespace from current context
+            var contextAddress = chat.Context?.Address?.ToString();
+            var ns = contextAddress?.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s)) ?? "";
+            var threadPath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+
+            var threadContent = new Thread
+            {
+                ParentPath = string.IsNullOrEmpty(ns) ? null : ns
+            };
+
+            var newNode = new MeshNode(threadPath)
+            {
+                Name = name,
+                NodeType = ThreadNodeType.NodeType,
+                Content = threadContent
+            };
+
+            var createdNode = await meshCatalog.CreateNodeAsync(newNode);
+            chat.SetThreadId(createdNode.Path);
+
+            logger.LogInformation("SetThreadName created thread at path={Path}", createdNode.Path);
+            return $"Thread created: {createdNode.Path} (Name: {name})";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error in SetThreadName");
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    private static string GenerateIdFromName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "Thread" + DateTime.UtcNow.Ticks;
+
+        var words = System.Text.RegularExpressions.Regex.Split(name, @"[\s\-_]+")
+            .Where(w => !string.IsNullOrEmpty(w))
+            .Select(w => char.ToUpperInvariant(w[0]) + w[1..].ToLowerInvariant());
+
+        var pascalCase = string.Join("", words);
+        pascalCase = System.Text.RegularExpressions.Regex.Replace(pascalCase, @"[^a-zA-Z0-9]", "");
+
+        return string.IsNullOrEmpty(pascalCase) ? "Thread" + DateTime.UtcNow.Ticks : pascalCase;
+    }
+
     [Description("Searches the mesh using query syntax. " +
                  "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Search")]
     public async Task<string> Search(
@@ -201,7 +264,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     }
 
     /// <summary>
-    /// Creates the standard tools for this plugin (read-only operations).
+    /// Creates the standard tools for this plugin (read-only operations + thread naming).
     /// </summary>
     public IList<AITool> CreateTools()
     {
@@ -209,7 +272,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
-            AIFunctionFactory.Create(NavigateTo)
+            AIFunctionFactory.Create(NavigateTo),
+            AIFunctionFactory.Create(SetThreadName)
         ];
     }
 
@@ -223,7 +287,8 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
-            AIFunctionFactory.Create(Update)
+            AIFunctionFactory.Create(Update),
+            AIFunctionFactory.Create(SetThreadName)
         ];
     }
 }
