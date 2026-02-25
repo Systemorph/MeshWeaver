@@ -38,5 +38,6 @@ public static class UserNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<AccessObject>())
             .AddDefaultLayoutAreas()
+            .AddUserActivityViews()
     };
 }

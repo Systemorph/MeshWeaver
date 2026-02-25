@@ -17,4 +17,7 @@ public record AccessObject
 
     /// <summary>Optional icon name or URL.</summary>
     public string? Icon { get; init; }
+
+    /// <summary>True for anonymous/cookie-tracked virtual users.</summary>
+    public bool IsVirtual { get; init; }
 }

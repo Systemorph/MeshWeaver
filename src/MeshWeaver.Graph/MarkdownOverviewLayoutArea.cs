@@ -45,6 +45,10 @@ public static class MarkdownOverviewLayoutArea
         // Standard children section
         container = container.WithView(LayoutAreaControl.Children(host.Hub));
 
+        // Approvals section (only if enabled and approvals exist)
+        if (host.Hub.Configuration.HasApprovals())
+            container = container.WithView(Controls.LayoutArea(host.Hub.Address, "Approvals"));
+
         // Standard inline comments section (if comments enabled)
         if (host.Hub.Configuration.HasComments())
         {

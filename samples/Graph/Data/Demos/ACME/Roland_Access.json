@@ -1,0 +1,19 @@
+{
+  "id": "Roland_Access",
+  "namespace": "ACME",
+  "name": "Roland Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Roland",
+    "displayName": "Roland Bürgi",
+    "roles": [
+      {
+        "role": "Admin"
+      },
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

@@ -110,6 +110,7 @@ public static class MeshNodeLayoutAreas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
             .WithView(ModelArea, DataModelLayoutArea.DataModel)
+            .AddWelcomeArea()
             .AddDomainLayoutAreas();
 
     /// <summary>
