@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -30,7 +30,7 @@ public class MeshNodeAutocompleteProvider(IMeshCatalog meshCatalog, IMessageHub 
                 InsertText: $"@{node.Path}/",
                 Description: node.Name ?? node.NodeType,
                 Category: node.NodeType ?? "Nodes",
-                Priority: 1000 - (node.DisplayOrder ?? 0),
+                Priority: 1000 - (node.Order ?? 0),
                 Kind: AutocompleteKind.Other
             );
         }

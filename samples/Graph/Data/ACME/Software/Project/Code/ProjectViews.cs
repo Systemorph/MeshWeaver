@@ -1,4 +1,4 @@
-// <meshweaver>
+﻿// <meshweaver>
 // Id: ProjectViews
 // DisplayName: Project Views
 // </meshweaver>
@@ -112,7 +112,7 @@ public static class ProjectViews
 
         return nodes.CombineLatest(categories, (dict, cats) =>
         {
-            var groups = dict.Values.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name)
+            var groups = dict.Values.OrderBy(n => n.Order).ThenBy(n => n.Name)
                 .GroupBy(n => GetProp(n, "category") ?? "Uncategorized")
                 .Select(g =>
                 {
@@ -244,7 +244,7 @@ public static class ProjectViews
                         Emoji = priority.Emoji,
                         Order = priority.Order,
                         IsExpanded = priority.IsExpandedByDefault,
-                        Items = Thumbnails(g.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name)),
+                        Items = Thumbnails(g.OrderBy(n => n.Order).ThenBy(n => n.Name)),
                         TotalCount = g.Count()
                     };
                 }).OrderBy(g => g.Order).ToImmutableList();

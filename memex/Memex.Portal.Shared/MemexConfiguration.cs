@@ -76,7 +76,7 @@ public static class MemexConfiguration
         // Configure AI services
         services.AddMemoryChatPersistence();
 
-        // Configure AI factories (read from appsettings, including DisplayOrder)
+        // Configure AI factories (read from appsettings, including Order)
         services.AddAzureFoundryClaude(config =>
             builder.Configuration.GetSection("Anthropic").Bind(config));
 

@@ -1,4 +1,4 @@
-using MeshWeaver.Layout;
+﻿using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Security;
 
@@ -12,14 +12,14 @@ namespace MeshWeaver.Mesh;
 /// <param name="Area">Layout area to navigate to (e.g., "Edit", "Suggest")</param>
 /// <param name="Icon">Optional icon — emoji string or SVG URL; null to skip</param>
 /// <param name="RequiredPermission">Permission the user must have for this item to appear</param>
-/// <param name="DisplayOrder">Sort order within the menu (lower = earlier)</param>
+/// <param name="Order">Sort order within the menu (lower = earlier)</param>
 /// <param name="Href">Optional absolute href — when set, navigates to this URL instead of constructing from Area</param>
 public record NodeMenuItemDefinition(
     string Label,
     string Area,
     string? Icon = null,
     Permission RequiredPermission = Permission.None,
-    int DisplayOrder = 0,
+    int Order = 0,
     string? Href = null);
 
 /// <summary>

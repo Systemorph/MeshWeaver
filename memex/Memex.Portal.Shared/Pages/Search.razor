@@ -156,13 +156,13 @@
             .Where(n => !HasParentInSet(n.Path, allPaths))
             .ToList();
 
-        // Group by category, order by path length, then DisplayOrder (if set), then name
+        // Group by category, order by path length, then Order (if set), then name
         return rootNodes
             .GroupBy(n => n.Category ?? n.NodeType ?? "Other")
             .OrderBy(g => g.Key)
             .Select(g => new CategoryGroup(g.Key, g
                 .OrderBy(n => n.Path.Length)
-                .ThenBy(n => n.DisplayOrder ?? int.MaxValue)
+                .ThenBy(n => n.Order ?? int.MaxValue)
                 .ThenBy(n => n.Name)
                 .ToList()))
             .ToList();
@@ -192,7 +192,7 @@
         return results
             .Where(n => n.Path.StartsWith(parentPath) && !HasIntermediateParent(n.Path, parent.Path, allPaths))
             .OrderBy(n => n.Path.Length)
-            .ThenBy(n => n.DisplayOrder ?? int.MaxValue)
+            .ThenBy(n => n.Order ?? int.MaxValue)
             .ThenBy(n => n.Name)
             .ToList();
     }
@@ -242,10 +242,10 @@
                 searchResults = searchResults.Where(n => n.Path != excludePath).ToArray();
             }
 
-            // Order by path length, then DisplayOrder (if set), then name
+            // Order by path length, then Order (if set), then name
             results = searchResults
                 .OrderBy(n => n.Path.Length)
-                .ThenBy(n => n.DisplayOrder ?? int.MaxValue)
+                .ThenBy(n => n.Order ?? int.MaxValue)
                 .ThenBy(n => n.Name)
                 .ToArray();
             flatResults = null;

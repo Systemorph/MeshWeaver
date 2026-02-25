@@ -68,7 +68,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Name = "Organization",
                 NodeType = "NodeType",
                 Icon = "Building",
-                DisplayOrder = 10,
+                Order = 10,
                 Content = new NodeTypeDefinition
                 {
                     Description = "An organization containing projects",
