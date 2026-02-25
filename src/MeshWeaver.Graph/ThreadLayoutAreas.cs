@@ -1,4 +1,6 @@
 using System.Reactive.Linq;
+using System.Text;
+using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -10,7 +12,9 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Graph;
@@ -31,6 +35,7 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadViews(this MessageHubConfiguration configuration)
         => configuration
+            .WithHandler<ExecuteThreadMessageRequest>(HandleExecuteThreadMessage)
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(ChatMenuProvider, MessagesMenuProvider, DelegationsMenuProvider)
             .AddLayout(layout => layout
@@ -214,58 +219,38 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders the Thread area showing the conversation content.
-    /// Queries child ThreadMessage nodes for message history.
-    /// Falls back to legacy inline Messages for backward compatibility.
+    /// Uses MeshSearchControl with reactive mode to observe ThreadMessage child nodes,
+    /// rendering each via its Overview area for live streaming updates.
     /// </summary>
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
-        // Get the node from the workspace stream
+        // Get the node from the workspace stream for header info
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Query for child ThreadMessage nodes
-        var messagesStream = Observable.FromAsync(async () =>
-        {
-            if (meshQuery == null)
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-
-            try
-            {
-                return await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children sort:Timestamp-asc"
-                ).ToListAsync() as IReadOnlyList<MeshNode>;
-            }
-            catch
-            {
-                return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>;
-            }
-        });
-
-        return nodeStream.CombineLatest(messagesStream, (nodes, messageNodes) =>
+        return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThreadView(host, node, hubPath, messageNodes ?? Array.Empty<MeshNode>());
+            return BuildThreadView(node, hubPath);
         });
     }
 
-    private static UiControl BuildThreadView(LayoutAreaHost host, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> messageNodes)
+    private static UiControl BuildThreadView(MeshNode? node, string threadPath)
     {
         var container = Controls.Stack
             .WithWidth("100%")
             .WithHeight("100%")
             .WithStyle("display: flex; flex-direction: column;");
 
-        // Header with thread title and action menu
+        // Header with thread title and back button
         var title = GetThreadTitle(node);
         var header = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
             .WithStyle("align-items: center; padding: 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
 
-        // Back button (navigate to parent context from Thread's ParentPath)
         var content = node?.Content as MeshThread;
         var parentPath = content?.ParentPath;
         var backHref = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
@@ -274,119 +259,21 @@ public static class ThreadLayoutAreas
             .WithAppearance(Appearance.Stealth)
             .WithNavigateToHref(backHref));
 
-        // Title
         header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
-
         container = container.WithView(header);
 
-        // Extract messages from child nodes, sorted by timestamp
-        var messages = messageNodes
-            .Select(n => n.Content as ThreadMessage)
-            .Where(m => m != null && m.Type != ThreadMessageType.EditingPrompt) // Exclude editing prompts
-            .OrderBy(m => m!.Timestamp)
-            .ToList();
-
-        // Fall back to legacy inline messages if no child nodes
-#pragma warning disable CS0618 // Type or member is obsolete
-        if (messages.Count == 0 && content?.Messages?.Count > 0)
-        {
-            messages = content.Messages
-                .Where(m => m.Type != ThreadMessageType.EditingPrompt)
-                .OrderBy(m => m.Timestamp)
-                .ToList()!;
-        }
-#pragma warning restore CS0618
-
-        if (messages.Count == 0)
-        {
-            // Empty state
-            container = container.WithView(Controls.Stack
-                .WithStyle("flex: 1; display: flex; align-items: center; justify-content: center; padding: 32px;")
-                .WithView(Controls.Html(
-                    "<div style=\"text-align: center; color: var(--neutral-foreground-hint);\">" +
-                    "<div style=\"font-size: 48px; margin-bottom: 16px;\">💬</div>" +
-                    "<p style=\"font-size: 1.1rem;\">No messages yet</p>" +
-                    "<p style=\"font-size: 0.9rem;\">This thread is empty.</p>" +
-                    "</div>")));
-        }
-        else
-        {
-            // Messages list
-            var messagesContainer = Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("flex: 1; overflow-y: auto; padding: 16px;");
-
-            foreach (var message in messages)
-            {
-                messagesContainer = messagesContainer.WithView(BuildMessageBubble(message!));
-            }
-
-            container = container.WithView(messagesContainer);
-        }
-
-        // Metadata footer
-        var footer = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("padding: 12px 16px; border-top: 1px solid var(--neutral-stroke-rest); color: var(--neutral-foreground-hint); font-size: 0.85rem;");
-
-        if (node != null)
-        {
-            footer = footer.WithView(Controls.Html($"<span>Last activity: {node.LastModified:g}</span>"));
-        }
-
-        container = container.WithView(footer);
+        // Messages list via reactive MeshSearchControl rendering each message's Overview area
+        container = container.WithView(Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{threadPath} nodeType:ThreadMessage sort:Order-asc")
+            .WithItemArea(ThreadMessageNodeType.OverviewArea)
+            .WithShowSearchBox(false)
+            .WithMaxColumns(1)
+            .WithGridBreakpoints(xs: 12)
+            .WithReactiveMode(true)
+            .WithDisableNavigation()
+            .WithStyle("flex: 1; overflow-y: auto; padding: 16px; width: 100%;"));
 
         return container;
-    }
-
-    private static UiControl BuildMessageBubble(ThreadMessage message)
-    {
-        var isUser = message.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
-        var isSystem = message.Role.Equals("system", StringComparison.OrdinalIgnoreCase);
-
-        var alignment = isUser ? "flex-end" : "flex-start";
-        var bgColor = isUser
-            ? "var(--accent-fill-rest)"
-            : isSystem
-                ? "var(--neutral-layer-3)"
-                : "var(--neutral-layer-2)";
-        var textColor = isUser ? "white" : "var(--neutral-foreground-rest)";
-
-        var authorName = message.AuthorName ?? (isUser ? "You" : "Assistant");
-
-        var bubbleStyle = $"max-width: 80%; padding: 12px 16px; border-radius: 12px; background: {bgColor}; color: {textColor};";
-        if (isUser)
-        {
-            bubbleStyle += " border-bottom-right-radius: 4px;";
-        }
-        else
-        {
-            bubbleStyle += " border-bottom-left-radius: 4px;";
-        }
-
-        var messageContainer = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle($"display: flex; justify-content: {alignment}; margin-bottom: 12px;");
-
-        var bubble = Controls.Stack
-            .WithStyle(bubbleStyle)
-            .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
-            .WithView(Controls.Html($"<div style=\"white-space: pre-wrap;\">{System.Web.HttpUtility.HtmlEncode(message.Text)}</div>"))
-            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp:HH:mm}</div>"));
-
-        // Add delegation link if present
-        if (!string.IsNullOrEmpty(message.DelegationPath))
-        {
-            bubble = bubble.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
-                .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
-        }
-
-        messageContainer = messageContainer.WithView(bubble);
-        return messageContainer;
     }
 
     /// <summary>
@@ -577,6 +464,196 @@ public static class ThreadLayoutAreas
                 ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
                 : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ChatArea}"));
+    }
+
+    /// <summary>
+    /// Computes the next message number by querying existing ThreadMessage children.
+    /// </summary>
+    private static async Task<int> ComputeNextMessageNumberAsync(IMessageHub hub, string threadPath)
+    {
+        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+            return 1;
+
+        var messageNodes = await meshQuery.QueryAsync<MeshNode>(
+            $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+        ).ToListAsync();
+
+        if (messageNodes.Count == 0)
+            return 1;
+
+        return messageNodes
+            .Select(n => n.Path?.Split('/').LastOrDefault())
+            .Where(id => id != null && int.TryParse(id, out _))
+            .Select(id => int.Parse(id!))
+            .DefaultIfEmpty(0)
+            .Max() + 1;
+    }
+
+    /// <summary>
+    /// Creates a ThreadMessage child node under the thread.
+    /// </summary>
+    private static async Task<string> CreateMessageNodeAsync(
+        IMessageHub hub, string threadPath, int messageNumber, ThreadMessage message)
+    {
+        var meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var messagePath = $"{threadPath}/{messageNumber}";
+
+        var messageNode = new MeshNode(messagePath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            Order = messageNumber,
+            Content = message
+        };
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var userId = accessService?.Context?.ObjectId;
+        await meshCatalog.CreateNodeAsync(messageNode, userId);
+        return messagePath;
+    }
+
+    /// <summary>
+    /// Handles ExecuteThreadMessageRequest by creating both user and response nodes,
+    /// running the agent on the hub side, and streaming updates to the response node.
+    /// This decouples agent execution from the GUI component lifecycle.
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleExecuteThreadMessage(
+        IMessageHub hub,
+        IMessageDelivery<ExecuteThreadMessageRequest> delivery,
+        CancellationToken ct)
+    {
+        var request = delivery.Message;
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
+
+        try
+        {
+            // 1. Compute next message number from existing children
+            var nextNumber = await ComputeNextMessageNumberAsync(hub, request.ThreadPath);
+
+            // 2. Create user message node
+            var userMessage = new ThreadMessage
+            {
+                Id = nextNumber.ToString(),
+                Role = "user",
+                Text = request.UserMessageText,
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput
+            };
+            await CreateMessageNodeAsync(hub, request.ThreadPath, nextNumber, userMessage);
+
+            // 3. Create empty response node
+            var responseNumber = nextNumber + 1;
+            var responseMessage = new ThreadMessage
+            {
+                Id = responseNumber.ToString(),
+                Role = "assistant",
+                Text = "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            };
+            var responsePath = await CreateMessageNodeAsync(hub, request.ThreadPath, responseNumber, responseMessage);
+
+            // 4. Initialize agent chat client
+            var chatClient = new AgentChatClient(hub.ServiceProvider);
+            chatClient.SetThreadId(request.ThreadPath);
+            await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
+
+            if (!string.IsNullOrEmpty(request.AgentName))
+                chatClient.SetSelectedAgent(request.AgentName);
+            if (request.Attachments is { Count: > 0 })
+                chatClient.SetAttachments(request.Attachments);
+
+            // 5. Load persistent thread ID from thread content if present
+            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+            if (meshCatalog != null)
+            {
+                var threadNode = await meshCatalog.GetNodeAsync(new Address(request.ThreadPath));
+                if (threadNode?.Content is MeshThread threadContent
+                    && !string.IsNullOrEmpty(threadContent.PersistentThreadId))
+                {
+                    chatClient.SetPersistentThreadId(threadContent.PersistentThreadId);
+                }
+            }
+
+            // 6. Stream response, throttle-update response node every 200ms
+            var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
+            var responseText = new StringBuilder();
+            var lastUpdate = DateTimeOffset.MinValue;
+
+            await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
+            {
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    responseText.Append(update.Text);
+
+                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
+                    {
+                        UpdateResponseNode(hub, responsePath, responseText.ToString());
+                        lastUpdate = DateTimeOffset.UtcNow;
+                    }
+                }
+            }
+
+            // 7. Final update with complete text + touch thread LastModified
+            UpdateResponseNode(hub, responsePath, responseText.ToString());
+            await TouchThreadLastModifiedAsync(hub, request.ThreadPath);
+
+            hub.Post(new ExecuteThreadMessageResponse { Success = true },
+                o => o.ResponseFor(delivery));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error handling ExecuteThreadMessageRequest for thread {ThreadPath}", request.ThreadPath);
+
+            hub.Post(new ExecuteThreadMessageResponse { Success = false, Error = ex.Message },
+                o => o.ResponseFor(delivery));
+        }
+
+        return delivery.Processed();
+    }
+
+    private static void UpdateResponseNode(IMessageHub hub, string responsePath, string text)
+    {
+        var nodeId = responsePath.Split('/').Last();
+        var updatedMessage = new ThreadMessage
+        {
+            Id = nodeId,
+            Role = "assistant",
+            Text = text,
+            Timestamp = DateTime.UtcNow,
+            Type = ThreadMessageType.AgentResponse
+        };
+        var node = new MeshNode(responsePath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            Content = updatedMessage
+        };
+        var nodeJson = JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
+        hub.Post(new DataChangeRequest { Updates = [nodeJson] },
+            o => o.WithTarget(new Address(responsePath)));
+    }
+
+    private static async Task TouchThreadLastModifiedAsync(IMessageHub hub, string threadPath)
+    {
+        try
+        {
+            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+            var existingNode = meshCatalog != null
+                ? await meshCatalog.GetNodeAsync(new Address(threadPath))
+                : null;
+
+            if (existingNode != null)
+            {
+                var updatedNode = existingNode with { LastModified = DateTime.UtcNow };
+                var nodeJson = JsonSerializer.SerializeToElement(updatedNode, hub.JsonSerializerOptions);
+                hub.Post(new DataChangeRequest { Updates = [nodeJson] },
+                    o => o.WithTarget(new Address(threadPath)));
+            }
+        }
+        catch
+        {
+            // Best effort — don't fail the whole request for a timestamp update
+        }
     }
 
     /// <summary>
