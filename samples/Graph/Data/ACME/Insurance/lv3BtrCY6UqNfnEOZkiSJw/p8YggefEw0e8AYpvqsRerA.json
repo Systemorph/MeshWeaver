@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/lv3BtrCY6UqNfnEOZkiSJw/p8YggefEw0e8AYpvqsRerA",
+  "path": "ACME/Insurance/lv3BtrCY6UqNfnEOZkiSJw/p8YggefEw0e8AYpvqsRerA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T09:22:19.477451+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "p8YggefEw0e8AYpvqsRerA",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "Good question \u2014 thanks for checking.\n\nI delegated to ACME/InsuranceAgent because \u0022run the pricing\u0022 is a domain-specific, execution task that can create/update data. As Navigator I route those actions to the appropriate specialized agent so they can safely execute domain logic and return authoritative results.\n\nWhat I sent the InsuranceAgent (summary):\n- Run pricing for @Cornerstone/Tesla and @Cornerstone/Nestle\n- Use existing pricings (prefer Draft/Quoted; otherwise most recent year)\n- Do not create new pricings without asking\n- Return a concise run summary (pricing path, id/year, status change, AggregatedTSI, TotalLocations, alerts/errors, actions taken)\n\nNext steps:\n- I can wait for the InsuranceAgent\u2019s results and relay them, or\n- If you want to change parameters (specific underwriting years, allow creating new pricings, etc.), tell me now and I\u2019ll update the request.",
+    "timestamp": "2026-02-20T09:22:19.476564Z",
+    "type": "AgentResponse"
+  }
+}

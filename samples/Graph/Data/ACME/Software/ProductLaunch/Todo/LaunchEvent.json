@@ -1,0 +1,20 @@
+{
+  "id": "LaunchEvent",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Plan virtual launch event",
+  "nodeType": "ACME/Software/Project/Todo",
+  "category": "Tasks",
+  "description": "Organize the official TaskFlow launch webinar",
+  "icon": "/static/storage/content/ACME/Software/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Plan virtual launch event",
+    "description": "Plan 1-hour launch webinar including product demo, customer testimonial, Q&A session. Target 500+ registrations. Set up event page and promotion.",
+    "category": "Marketing",
+    "priority": "High",
+    "assignee": "Emma",
+    "dueDateOffsetDays": 50,
+    "status": "Pending"
+  }
+}

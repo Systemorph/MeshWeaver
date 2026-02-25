@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/lv3BtrCY6UqNfnEOZkiSJw/XRTryMqzQUSvDVsEQdUwlg",
+  "path": "ACME/Insurance/lv3BtrCY6UqNfnEOZkiSJw/XRTryMqzQUSvDVsEQdUwlg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-20T08:46:28.423182+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "XRTryMqzQUSvDVsEQdUwlg",
+    "role": "user",
+    "text": "How many node types are in the cornerstone use case?",
+    "timestamp": "2026-02-20T08:46:28.422768Z",
+    "type": "ExecutedInput"
+  }
+}

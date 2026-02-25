@@ -1,0 +1,23 @@
+{
+  "id": "FURIB",
+  "namespace": "Northwind",
+  "name": "Furia Bacalhau e Frutos do Mar",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Furia Bacalhau e Frutos do Mar - Lisboa, Portugal",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "FURIB",
+    "companyName": "Furia Bacalhau e Frutos do Mar",
+    "contactName": "Lino Rodriguez",
+    "contactTitle": "Sales Manager",
+    "city": "Lisboa",
+    "region": "",
+    "postalCode": "1675",
+    "country": "Portugal",
+    "phone": "(1) 354-2534",
+    "fax": "(1) 354-2535"
+  }
+}

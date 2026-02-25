@@ -1,0 +1,16 @@
+{
+  "id": "David_Access",
+  "namespace": "Northwind",
+  "name": "David Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "David",
+    "displayName": "David Lee",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

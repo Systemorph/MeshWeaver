@@ -1,0 +1,23 @@
+{
+  "id": "Geitost",
+  "namespace": "Northwind",
+  "name": "Geitost",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Geitost - 500 g",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 33,
+    "productName": "Geitost",
+    "supplierId": 15,
+    "categoryId": 4,
+    "quantityPerUnit": "500 g",
+    "unitPrice": 2.5,
+    "unitsInStock": 112,
+    "unitsOnOrder": 0,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}

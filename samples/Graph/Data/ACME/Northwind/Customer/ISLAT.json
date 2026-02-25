@@ -1,0 +1,23 @@
+{
+  "id": "ISLAT",
+  "namespace": "Northwind",
+  "name": "Island Trading",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Island Trading - Cowes, UK",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "ISLAT",
+    "companyName": "Island Trading",
+    "contactName": "Helen Bennett",
+    "contactTitle": "Marketing Manager",
+    "city": "Cowes",
+    "region": "Isle of Wight",
+    "postalCode": "PO31 7PJ",
+    "country": "UK",
+    "phone": "(198) 555-8888",
+    "fax": ""
+  }
+}

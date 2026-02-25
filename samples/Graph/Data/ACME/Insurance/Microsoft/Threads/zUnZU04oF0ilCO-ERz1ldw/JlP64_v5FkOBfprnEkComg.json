@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Microsoft/Threads/zUnZU04oF0ilCO-ERz1ldw/JlP64_v5FkOBfprnEkComg",
+  "path": "ACME/Insurance/Microsoft/Threads/zUnZU04oF0ilCO-ERz1ldw/JlP64_v5FkOBfprnEkComg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-10T14:20:24.600086+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "JlP64_v5FkOBfprnEkComg",
+    "role": "user",
+    "text": "where do we stand on the pricing of microsoft?",
+    "timestamp": "2026-02-10T14:20:24.599767Z",
+    "type": "ExecutedInput"
+  }
+}

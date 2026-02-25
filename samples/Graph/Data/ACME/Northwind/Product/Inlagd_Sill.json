@@ -1,0 +1,23 @@
+{
+  "id": "Inlagd_Sill",
+  "namespace": "Northwind",
+  "name": "Inlagd Sill",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Inlagd Sill - 24 - 250 g  jars",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 36,
+    "productName": "Inlagd Sill",
+    "supplierId": 17,
+    "categoryId": 8,
+    "quantityPerUnit": "24 - 250 g  jars",
+    "unitPrice": 19.0,
+    "unitsInStock": 112,
+    "unitsOnOrder": 0,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}

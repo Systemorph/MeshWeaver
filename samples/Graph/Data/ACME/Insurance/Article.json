@@ -1,0 +1,19 @@
+{
+  "id": "Article",
+  "namespace": "ACME/Insurance",
+  "name": "Article",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A Cornerstone content article with metadata",
+  "iconName": "DocumentText",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Article",
+    "namespace": "ACME/Insurance",
+    "displayName": "Article",
+    "iconName": "DocumentText",
+    "description": "A Cornerstone content article with metadata",
+    "configuration": "config => config.WithContentType<Article>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddArticleViews())"
+  }
+}

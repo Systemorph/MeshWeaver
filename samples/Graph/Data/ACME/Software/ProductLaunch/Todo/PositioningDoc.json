@@ -1,0 +1,20 @@
+{
+  "id": "PositioningDoc",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Create product positioning document",
+  "nodeType": "ACME/Software/Project/Todo",
+  "category": "Tasks",
+  "description": "Define TaskFlow's unique value proposition and market positioning",
+  "icon": "/static/storage/content/ACME/Software/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Create product positioning document",
+    "description": "Draft the positioning statement, key messages, and differentiation points. Include the 'Enterprise-grade automation, startup-simple setup' tagline.",
+    "category": "Marketing",
+    "priority": "Critical",
+    "assignee": "Carol",
+    "dueDateOffsetDays": -3,
+    "status": "InProgress"
+  }
+}

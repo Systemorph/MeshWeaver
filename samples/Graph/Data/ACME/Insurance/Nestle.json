@@ -1,0 +1,21 @@
+{
+  "id": "Nestle",
+  "namespace": "ACME/Insurance",
+  "name": "Nestle S.A.",
+  "nodeType": "ACME/Insurance/Insured",
+  "category": "Clients",
+  "description": "Global food and beverage company - Insurance client",
+  "iconName": "Building",
+  "icon": "/static/storage/content/ACME/Insurance/icons/nestle.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "Nestle",
+    "name": "Nestle S.A.",
+    "description": "Global food and beverage company",
+    "address": "Avenue Nestle 55, 1800 Vevey, Switzerland",
+    "website": "https://nestle.com",
+    "industry": "Food & Beverage",
+    "location": "Switzerland"
+  }
+}

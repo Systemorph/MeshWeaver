@@ -1,0 +1,23 @@
+{
+  "id": "FOLKO",
+  "namespace": "Northwind",
+  "name": "Folk och f\u00e4 HB",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Folk och f\u00e4 HB - Br\u00e4cke, Sweden",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "FOLKO",
+    "companyName": "Folk och f\u00e4 HB",
+    "contactName": "Maria Larsson",
+    "contactTitle": "Owner",
+    "city": "Br\u00e4cke",
+    "region": "",
+    "postalCode": "S-844 67",
+    "country": "Sweden",
+    "phone": "0695-34 67 21",
+    "fax": ""
+  }
+}

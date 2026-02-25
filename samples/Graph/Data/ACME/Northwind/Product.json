@@ -1,0 +1,19 @@
+{
+  "id": "Product",
+  "namespace": "ACME/Northwind",
+  "name": "Product",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Product master data with inventory and pricing information",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Product",
+    "namespace": "ACME/Northwind",
+    "displayName": "Product",
+    "iconName": "ShoppingBag",
+    "description": "Product master data with inventory and pricing information",
+    "configuration": "config => config.WithContentType<ProductContent>().AddData(data => data.AddHubSource(new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).Append(\"AnalyticsCatalog\").ToArray()), source => source.WithType<Category>().WithType<Supplier>().WithType<Order>().WithType<OrderDetails>().WithType<NorthwindDataCube>())).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddProductNodeViews())"
+  }
+}

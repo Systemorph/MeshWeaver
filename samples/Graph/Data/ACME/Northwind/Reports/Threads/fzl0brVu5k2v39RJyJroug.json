@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Reports/Threads/fzl0brVu5k2v39RJyJroug",
+  "path": "ACME/Northwind/Reports/Threads/fzl0brVu5k2v39RJyJroug",
+  "name": "Hello, who\u0027s this?",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-16T18:51:01.291821+00:00",
+  "version": 2,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Northwind/Reports"
+  }
+}

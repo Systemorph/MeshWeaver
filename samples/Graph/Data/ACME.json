@@ -1,0 +1,18 @@
+{
+  "id": "ACME",
+  "name": "ACME Corporation",
+  "nodeType": "Organization",
+  "description": "ACME Corporation - A sample conglomerate containing multiple business units",
+  "icon": "/static/storage/content/ACME/logo.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Organization",
+    "name": "ACME Corporation",
+    "description": "ACME Corporation - A sample conglomerate containing multiple business units",
+    "website": "https://acme.example.com",
+    "logo": "/static/storage/content/ACME/logo.svg",
+    "location": "United States",
+    "email": "info@acme.example.com",
+    "isVerified": false
+  }
+}

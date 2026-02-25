@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/qt_mymUEdkS2M2QrL_8MsQ",
+  "path": "ACME/Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/qt_mymUEdkS2M2QrL_8MsQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:46:15.573634+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "qt_mymUEdkS2M2QrL_8MsQ",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "I\u0027ve opened the \u0022Top Customers by Revenue\u0022 report in the Analytics catalog \u2014 it shows your most profitable customer. You can change the year filter at the top to compare 2024 vs 2025 or ask me to drill into that customer\u0027s order history, lifetime value, or export the report. Which would you like next?",
+    "timestamp": "2026-02-17T14:46:15.57202Z",
+    "type": "AgentResponse"
+  }
+}

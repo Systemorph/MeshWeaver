@@ -1,0 +1,21 @@
+{
+  "id": "Plutzer_Lebensmittelgro\u00dfm\u00e4rkte_AG",
+  "namespace": "Northwind",
+  "name": "Plutzer Lebensmittelgro\u00dfm\u00e4rkte AG",
+  "nodeType": "ACME/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Plutzer Lebensmittelgro\u00dfm\u00e4rkte AG - Frankfurt, Germany",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 12,
+    "companyName": "Plutzer Lebensmittelgro\u00dfm\u00e4rkte AG",
+    "contactName": "Martin Bein",
+    "contactTitle": "International Marketing Mgr.",
+    "city": "Frankfurt",
+    "region": "",
+    "country": "Germany",
+    "phone": "(069) 992755"
+  }
+}
