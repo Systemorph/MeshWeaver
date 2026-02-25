@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q/dAhfmJcM9kqgwvgQfQdHEA",
+  "path": "Demos/Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q/dAhfmJcM9kqgwvgQfQdHEA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-19T19:46:37.920813+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "dAhfmJcM9kqgwvgQfQdHEA",
+    "role": "user",
+    "text": "Can we have a discussion about how Group Actuarial would handle submissions and other information such as email chains discussing these submissions to get an overview of what\u0027s profitable or not, and get an aggregated view?",
+    "timestamp": "2026-02-19T19:46:37.920454Z",
+    "type": "ExecutedInput"
+  }
+}

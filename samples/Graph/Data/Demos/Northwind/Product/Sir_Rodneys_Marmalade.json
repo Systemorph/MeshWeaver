@@ -1,0 +1,23 @@
+{
+  "id": "Sir_Rodneys_Marmalade",
+  "namespace": "Northwind",
+  "name": "Sir Rodney's Marmalade",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Sir Rodney's Marmalade - 30 gift boxes",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 20,
+    "productName": "Sir Rodney's Marmalade",
+    "supplierId": 8,
+    "categoryId": 3,
+    "quantityPerUnit": "30 gift boxes",
+    "unitPrice": 81.0,
+    "unitsInStock": 40,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

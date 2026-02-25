@@ -1,0 +1,23 @@
+{
+  "id": "LAMAI",
+  "namespace": "Northwind",
+  "name": "La maison d'Asie",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "La maison d'Asie - Toulouse, France",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "LAMAI",
+    "companyName": "La maison d'Asie",
+    "contactName": "Annette Roulet",
+    "contactTitle": "Sales Manager",
+    "city": "Toulouse",
+    "region": "",
+    "postalCode": "31000",
+    "country": "France",
+    "phone": "61.77.61.10",
+    "fax": "61.77.61.11"
+  }
+}

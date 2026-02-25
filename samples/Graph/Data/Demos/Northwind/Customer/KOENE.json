@@ -1,0 +1,23 @@
+{
+  "id": "KOENE",
+  "namespace": "Northwind",
+  "name": "K\u00f6niglich Essen",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "K\u00f6niglich Essen - Brandenburg, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "KOENE",
+    "companyName": "K\u00f6niglich Essen",
+    "contactName": "Philip Cramer",
+    "contactTitle": "Sales Associate",
+    "city": "Brandenburg",
+    "region": "",
+    "postalCode": "14776",
+    "country": "Germany",
+    "phone": "0555-09876",
+    "fax": ""
+  }
+}

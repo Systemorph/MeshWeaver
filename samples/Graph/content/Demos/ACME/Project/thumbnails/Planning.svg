@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Background -->
+  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
+  <!-- Calendar/planning board -->
+  <rect x="8" y="12" width="48" height="44" rx="4" stroke="#78716C" stroke-width="2" fill="none"/>
+  <path d="M8 24h48" stroke="#78716C" stroke-width="2"/>
+
+  <!-- Calendar header dots -->
+  <circle cx="16" cy="18" r="2" fill="#78716C"/>
+  <circle cx="24" cy="18" r="2" fill="#78716C"/>
+  <circle cx="32" cy="18" r="2" fill="#78716C"/>
+
+  <!-- Team members/assignments -->
+  <circle cx="20" cy="36" r="6" stroke="#78716C" stroke-width="1.5" fill="none"/>
+  <circle cx="20" cy="34" r="2" fill="#78716C"/>
+  <path d="M16 40c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="#78716C" stroke-width="1" fill="none"/>
+
+  <circle cx="36" cy="36" r="6" stroke="#78716C" stroke-width="1.5" fill="none"/>
+  <circle cx="36" cy="34" r="2" fill="#78716C"/>
+  <path d="M32 40c0-2.2 1.8-4 4-4s4 1.8 4 4" stroke="#78716C" stroke-width="1" fill="none"/>
+
+  <!-- Task indicators with red accent -->
+  <rect x="14" y="46" width="12" height="4" rx="1" fill="#DC2626"/>
+  <rect x="30" y="46" width="8" height="4" rx="1" fill="#DC2626" opacity="0.6"/>
+  <rect x="42" y="46" width="10" height="4" rx="1" fill="#DC2626" opacity="0.3"/>
+</svg>

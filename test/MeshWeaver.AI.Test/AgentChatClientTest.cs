@@ -50,20 +50,20 @@ public class AgentChatClientTest : MonolithMeshTestBase
 
     /// <summary>
     /// Tests that AgentChatClient finds TodoAgent from ACME/Project namespace
-    /// when navigating to ACME/ProductLaunch (which has NodeType="ACME/Project").
+    /// when navigating to ACME/ProductLaunch (which has NodeType="Demos/ACME/Project").
     ///
     /// Critical path verification:
-    /// - ACME/ProductLaunch.json has nodeType="ACME/Project"
+    /// - ACME/ProductLaunch.json has nodeType="Demos/ACME/Project"
     /// - TodoAgent.md is located at ACME/Project/TodoAgent
     /// - Therefore TodoAgent should be found via the NodeType path, not via ancestors
     /// </summary>
     [Fact]
     public async Task AgentChatClient_InitializeAsync_FindsTodoAgentFromNodeTypeNamespace()
     {
-        // Arrange - ACME/ProductLaunch has NodeType="ACME/Project", TodoAgent is at ACME/Project/TodoAgent
-        var contextPath = "ACME/ProductLaunch";
-        var expectedNodeType = "ACME/Project";
-        var expectedTodoAgentPath = "ACME/Project/TodoAgent";
+        // Arrange - ACME/ProductLaunch has NodeType="Demos/ACME/Project", TodoAgent is at ACME/Project/TodoAgent
+        var contextPath = "Demos/ACME/ProductLaunch";
+        var expectedNodeType = "Demos/ACME/Project";
+        var expectedTodoAgentPath = "Demos/ACME/Project/TodoAgent";
 
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();

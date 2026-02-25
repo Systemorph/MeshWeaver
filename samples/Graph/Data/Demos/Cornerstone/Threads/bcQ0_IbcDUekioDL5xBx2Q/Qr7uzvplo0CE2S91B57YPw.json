@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q/Qr7uzvplo0CE2S91B57YPw",
+  "path": "Demos/Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q/Qr7uzvplo0CE2S91B57YPw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-19T19:54:57.274229+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "Qr7uzvplo0CE2S91B57YPw",
+    "role": "user",
+    "text": "Create a new pricing for Tesla and Nestle",
+    "timestamp": "2026-02-19T19:54:57.273876Z",
+    "type": "ExecutedInput"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "Alice_Mutton",
+  "namespace": "Northwind",
+  "name": "Alice Mutton",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Alice Mutton - 20 - 1 kg tins",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 17,
+    "productName": "Alice Mutton",
+    "supplierId": 7,
+    "categoryId": 6,
+    "quantityPerUnit": "20 - 1 kg tins",
+    "unitPrice": 39.0,
+    "unitsInStock": 0,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": true
+  }
+}

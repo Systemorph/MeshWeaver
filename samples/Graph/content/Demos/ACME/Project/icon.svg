@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Background -->
+  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
+  <!-- Toolbox body -->
+  <rect x="8" y="24" width="48" height="28" rx="3" stroke="#78716C" stroke-width="2.5" fill="none"/>
+  <!-- Toolbox lid -->
+  <path d="M8 28h48" stroke="#78716C" stroke-width="2"/>
+  <!-- Handle -->
+  <path d="M24 24 V18 H40 V24" stroke="#78716C" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- Latch -->
+  <rect x="29" y="26" width="6" height="4" rx="1" fill="#DC2626"/>
+  <!-- Wrench inside toolbox -->
+  <g transform="translate(22,38)">
+    <rect x="0" y="2" width="20" height="4" rx="1.5" fill="#DC2626" opacity="0.7"/>
+    <circle cx="0" cy="4" r="4" fill="none" stroke="#DC2626" stroke-width="2"/>
+    <path d="M-2,1 L0,5 L2,1" fill="#78716C" opacity="0.3"/>
+  </g>
+  <!-- Screwdriver inside toolbox -->
+  <g transform="translate(20,44) rotate(-15)">
+    <rect x="4" y="0" width="16" height="3" rx="1" fill="#DC2626" opacity="0.5"/>
+    <rect x="0" y="-1" width="5" height="5" rx="1" fill="#78716C" opacity="0.4"/>
+  </g>
+</svg>

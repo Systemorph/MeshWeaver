@@ -1,0 +1,23 @@
+{
+  "id": "Chartreuse_verte",
+  "namespace": "Northwind",
+  "name": "Chartreuse verte",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Chartreuse verte - 750 cc per bottle",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 39,
+    "productName": "Chartreuse verte",
+    "supplierId": 18,
+    "categoryId": 1,
+    "quantityPerUnit": "750 cc per bottle",
+    "unitPrice": 18.0,
+    "unitsInStock": 69,
+    "unitsOnOrder": 0,
+    "reorderLevel": 5,
+    "discontinued": false
+  }
+}

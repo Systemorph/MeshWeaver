@@ -1,0 +1,23 @@
+{
+  "id": "SPLIR",
+  "namespace": "Northwind",
+  "name": "Split Rail Beer & Ale",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Split Rail Beer & Ale - Lander, USA",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "SPLIR",
+    "companyName": "Split Rail Beer & Ale",
+    "contactName": "Art Braunschweiger",
+    "contactTitle": "Sales Manager",
+    "city": "Lander",
+    "region": "WY",
+    "postalCode": "82520",
+    "country": "USA",
+    "phone": "(307) 555-4680",
+    "fax": "(307) 555-6525"
+  }
+}

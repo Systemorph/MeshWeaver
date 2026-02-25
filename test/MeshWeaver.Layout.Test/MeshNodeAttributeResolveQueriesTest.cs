@@ -11,7 +11,7 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "namespace:{node.namespace} nodeType:Group scope:selfAndAncestors" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME/Project");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, "Demos/ACME/Project");
 
         resolved.Should().HaveCount(1);
         resolved[0].Should().Be("namespace:ACME/Project nodeType:Group scope:selfAndAncestors");
@@ -22,10 +22,10 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "path:{node.path} nodeType:AccessAssignment" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, null, "ACME/Project/Alice_Access");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, null, "Demos/ACME/Project/Alice_Access");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("path:ACME/Project/Alice_Access nodeType:AccessAssignment");
+        resolved[0].Should().Be("path:Demos/ACME/Project/Alice_Access nodeType:AccessAssignment");
     }
 
     [Fact]
@@ -33,10 +33,10 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "namespace:{node.namespace} path:{node.path} nodeType:Role" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Alice_Access");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "Demos/ACME/Alice_Access");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("namespace:ACME path:ACME/Alice_Access nodeType:Role");
+        resolved[0].Should().Be("namespace:Demos/ACME path:Demos/ACME/Alice_Access nodeType:Role");
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "namespace:User nodeType:User", "nodeType:Role" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Alice_Access");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "Demos/ACME/Alice_Access");
 
         resolved.Should().BeEquivalentTo(queries);
     }

@@ -1,0 +1,16 @@
+{
+  "id": "Quinn_Access",
+  "namespace": "Cornerstone",
+  "name": "Quinn Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Quinn",
+    "displayName": "Quinn Johnson",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

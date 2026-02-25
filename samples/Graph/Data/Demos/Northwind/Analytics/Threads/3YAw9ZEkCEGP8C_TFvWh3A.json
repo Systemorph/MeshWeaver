@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A",
+  "path": "Demos/Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A",
+  "name": "Who is the most profitable customer for us?",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-17T15:01:08.250595+00:00",
+  "version": 7,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Northwind/Analytics"
+  }
+}

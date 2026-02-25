@@ -1,0 +1,18 @@
+{
+  "id": "Section",
+  "namespace": "",
+  "name": "Section",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A grouping container for organizing related nodes",
+  "iconName": "GridDots",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "",
+    "displayName": "Section",
+    "iconName": "GridDots",
+    "description": "A grouping container for organizing related nodes",
+    "configuration": "config => config.WithContentType<Section>()"
+  }
+}

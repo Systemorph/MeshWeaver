@@ -1,0 +1,23 @@
+{
+  "id": "Carnarvon_Tigers",
+  "namespace": "Northwind",
+  "name": "Carnarvon Tigers",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Carnarvon Tigers - 16 kg pkg.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 18,
+    "productName": "Carnarvon Tigers",
+    "supplierId": 7,
+    "categoryId": 8,
+    "quantityPerUnit": "16 kg pkg.",
+    "unitPrice": 62.5,
+    "unitsInStock": 42,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}
