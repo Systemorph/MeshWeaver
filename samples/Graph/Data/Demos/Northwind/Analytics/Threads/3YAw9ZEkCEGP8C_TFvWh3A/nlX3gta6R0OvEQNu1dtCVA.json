@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/nlX3gta6R0OvEQNu1dtCVA",
+  "path": "Demos/Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/nlX3gta6R0OvEQNu1dtCVA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:48:11.471666+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "nlX3gta6R0OvEQNu1dtCVA",
+    "role": "NorthwindAgent",
+    "authorName": "NorthwindAgent",
+    "text": "I\u0027ve opened the \u0022Sales by Category\u0022 chart (SalesByCategory) \u2014 it highlights which product categories are underperforming. Use the year selector to compare 2024 vs 2025.\n\nWould you like me to:\n- Show the categories with the lowest revenue (ranked)?\n- Compare current vs previous year performance (SalesByCategoryWithPrevYear)?\n- Drill into product-level sales for the low-performing categories (TopProductsByCategory)?\n- Export the chart or a report?\n\nWhich option do you prefer?",
+    "timestamp": "2026-02-17T14:48:11.471178Z",
+    "type": "AgentResponse"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/KD_RER4g5kusQB1XlH-hTA/gfVZCTM5i0KNnEqr6f9XiA",
+  "path": "Demos/Northwind/Analytics/Threads/KD_RER4g5kusQB1XlH-hTA/gfVZCTM5i0KNnEqr6f9XiA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T15:29:02.856851+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "gfVZCTM5i0KNnEqr6f9XiA",
+    "role": "user",
+    "text": "Export a detailed mapping of suppliers \u2192 categories for the year 2024",
+    "timestamp": "2026-02-17T15:29:02.856191Z",
+    "type": "ExecutedInput"
+  }
+}

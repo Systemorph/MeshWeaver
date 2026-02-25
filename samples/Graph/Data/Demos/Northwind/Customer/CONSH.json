@@ -1,0 +1,23 @@
+{
+  "id": "CONSH",
+  "namespace": "Northwind",
+  "name": "Consolidated Holdings",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Consolidated Holdings - London, UK",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "CONSH",
+    "companyName": "Consolidated Holdings",
+    "contactName": "Elizabeth Brown",
+    "contactTitle": "Sales Representative",
+    "city": "London",
+    "region": "",
+    "postalCode": "WX1 6LT",
+    "country": "UK",
+    "phone": "(171) 555-2282",
+    "fax": "(171) 555-9199"
+  }
+}

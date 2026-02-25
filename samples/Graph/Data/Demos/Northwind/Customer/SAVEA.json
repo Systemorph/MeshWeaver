@@ -1,0 +1,23 @@
+{
+  "id": "SAVEA",
+  "namespace": "Northwind",
+  "name": "Save-a-lot Markets",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Save-a-lot Markets - Boise, USA",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "SAVEA",
+    "companyName": "Save-a-lot Markets",
+    "contactName": "Jose Pavarotti",
+    "contactTitle": "Sales Representative",
+    "city": "Boise",
+    "region": "ID",
+    "postalCode": "83720",
+    "country": "USA",
+    "phone": "(208) 555-8097",
+    "fax": ""
+  }
+}

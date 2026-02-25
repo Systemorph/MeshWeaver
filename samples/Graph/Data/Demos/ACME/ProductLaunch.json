@@ -1,0 +1,18 @@
+{
+  "id": "ProductLaunch",
+  "namespace": "ACME",
+  "name": "TaskFlow Product Launch",
+  "nodeType": "Demos/ACME/Project",
+  "description": "Launch campaign for TaskFlow - our new workflow automation platform",
+  "iconName": "Rocket",
+  "icon": "/static/storage/content/Demos/ACME/Project/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Project",
+    "name": "TaskFlow Product Launch",
+    "description": "Q1 launch campaign for TaskFlow, targeting mid-market enterprises seeking workflow automation solutions.",
+    "status": "Active",
+    "iconName": "Rocket",
+    "targetDate": "2025-03-15T00:00:00Z"
+  }
+}

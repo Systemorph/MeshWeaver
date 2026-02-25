@@ -143,10 +143,10 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var todoNode = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var todoNode = await persistence.GetNodeAsync("Demos/ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
 
         todoNode.Should().NotBeNull("Todo node should exist");
-        todoNode!.NodeType.Should().Be("ACME/Project/Todo");
+        todoNode!.NodeType.Should().Be("Demos/ACME/Project/Todo");
         todoNode.Content.Should().NotBeNull("Todo node should have content");
 
         Output.WriteLine($"Retrieved Todo: {todoNode.Name}");
@@ -162,7 +162,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var todos = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
+        var todos = await meshQuery.QueryAsync<MeshNode>("path:Demos/ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         todos.Should().NotBeEmpty("Should have child Todo nodes");
@@ -183,7 +183,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var todoNode = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var todoNode = await persistence.GetNodeAsync("Demos/ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
 
         todoNode.Should().NotBeNull();
         todoNode!.Content.Should().NotBeNull();
@@ -212,7 +212,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Get the original todo
-        var todoNode = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var todoNode = await persistence.GetNodeAsync("Demos/ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
         todoNode.Should().NotBeNull();
 
         // Verify we can create a DataChangeRequest
@@ -230,7 +230,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task ProjectHub_CanReceiveRequests()
     {
         var client = GetClient();
-        var projectAddress = new Address("ACME/ProductLaunch");
+        var projectAddress = new Address("Demos/ACME/ProductLaunch");
 
         // Verify the hub is accessible
         var response = await client.AwaitResponse(
@@ -249,7 +249,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task TodoHub_CanReceiveRequests()
     {
         var client = GetClient();
-        var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
+        var todoAddress = new Address("Demos/ACME/ProductLaunch/Todo/DefinePersona");
 
         // Verify the hub is accessible
         var response = await client.AwaitResponse(
@@ -271,9 +271,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         var todoAddresses = new[]
         {
-            "ACME/ProductLaunch/Todo/DefinePersona",
-            "ACME/ProductLaunch/Todo/LaunchEvent",
-            "ACME/ProductLaunch/Todo/PressRelease"
+            "Demos/ACME/ProductLaunch/Todo/DefinePersona",
+            "Demos/ACME/ProductLaunch/Todo/LaunchEvent",
+            "Demos/ACME/ProductLaunch/Todo/PressRelease"
         };
 
         foreach (var addressPath in todoAddresses)
@@ -301,7 +301,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var workspace = client.GetWorkspace();
         // TodaysFocus is the overview/summary view
         var reference = new LayoutAreaReference("TodaysFocus");
-        var projectAddress = new Address("ACME/ProductLaunch");
+        var projectAddress = new Address("Demos/ACME/ProductLaunch");
 
         // Get initial view
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -333,8 +333,8 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Get the original todo
-        var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
-        var todoNode = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var todoAddress = new Address("Demos/ACME/ProductLaunch/Todo/DefinePersona");
+        var todoNode = await persistence.GetNodeAsync("Demos/ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
         todoNode.Should().NotBeNull();
 
         Output.WriteLine($"Original todo: {todoNode!.Name}");
@@ -365,7 +365,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Get an existing todo to verify the pattern
-        var todoNode = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var todoNode = await persistence.GetNodeAsync("Demos/ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
         todoNode.Should().NotBeNull();
 
         Output.WriteLine($"Todo exists: {todoNode!.Name}");
@@ -406,7 +406,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("AllTasks");
-        var projectAddress = new Address("ACME/ProductLaunch");
+        var projectAddress = new Address("Demos/ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -434,7 +434,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var workspace = client.GetWorkspace();
         // The view is named "Overview" in Todo.json, not "Details"
         var reference = new LayoutAreaReference("Overview");
-        var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
+        var todoAddress = new Address("Demos/ACME/ProductLaunch/Todo/DefinePersona");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             todoAddress,
@@ -462,8 +462,8 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var workspace = client.GetWorkspace();
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var reference = new LayoutAreaReference("AllTasks");
-        var projectAddress = new Address("ACME/ProductLaunch");
-        var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var projectAddress = new Address("Demos/ACME/ProductLaunch");
+        var todoPath = "Demos/ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get original node
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
@@ -499,7 +499,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task SoftDelete_ChangesStateToDeleted()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var todoPath = "Demos/ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
@@ -526,7 +526,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var todoPath = "Demos/ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
@@ -537,7 +537,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
 
         // Query for active items only
-        var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
+        var activeQuery = "path:Demos/ACME/ProductLaunch/Todo nodeType:Demos/ACME/Project/Todo state:Active scope:subtree";
         var activeResults = await meshQuery.QueryAsync<MeshNode>(activeQuery, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -556,7 +556,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var todoPath = "Demos/ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
@@ -567,7 +567,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         await persistence.SaveNodeAsync(deletedNode, TestContext.Current.CancellationToken);
 
         // Query for deleted items only
-        var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
+        var deletedQuery = "path:Demos/ACME/ProductLaunch/Todo nodeType:Demos/ACME/Project/Todo state:Deleted scope:subtree";
         var deletedResults = await meshQuery.QueryAsync<MeshNode>(deletedQuery, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -585,7 +585,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task Restore_ChangesStateBackToActive()
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
+        var todoPath = "Demos/ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
         var originalNode = await persistence.GetNodeAsync(todoPath, TestContext.Current.CancellationToken);
@@ -621,12 +621,12 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Create a temporary test node for this test
         var testId = $"TestTodo_{Guid.NewGuid():N}";
-        var testPath = $"ACME/ProductLaunch/Todo/{testId}";
+        var testPath = $"Demos/ACME/ProductLaunch/Todo/{testId}";
 
-        var testNode = new MeshNode(testId, "ACME/ProductLaunch/Todo")
+        var testNode = new MeshNode(testId, "Demos/ACME/ProductLaunch/Todo")
         {
             Name = "Test Todo for Permanent Delete",
-            NodeType = "ACME/Project/Todo",
+            NodeType = "Demos/ACME/Project/Todo",
             Content = new { id = testId, title = "Test Todo", status = "Pending" },
             State = MeshNodeState.Active
         };

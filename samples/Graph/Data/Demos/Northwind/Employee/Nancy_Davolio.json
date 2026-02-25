@@ -1,0 +1,24 @@
+{
+  "id": "Nancy_Davolio",
+  "namespace": "Northwind",
+  "name": "Nancy Davolio",
+  "nodeType": "Demos/Northwind/Employee",
+  "category": "Employees",
+  "description": "Nancy Davolio - Sales Representative",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 1,
+    "lastName": "Davolio",
+    "firstName": "Nancy",
+    "title": "Sales Representative",
+    "titleOfCourtesy": "Ms.",
+    "birthDate": "1948-12-08",
+    "hireDate": "1992-05-01",
+    "city": "Seattle",
+    "region": "WA",
+    "country": "USA",
+    "reportsTo": 2
+  }
+}

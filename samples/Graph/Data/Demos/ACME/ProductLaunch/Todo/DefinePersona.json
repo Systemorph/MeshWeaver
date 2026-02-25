@@ -1,0 +1,25 @@
+{
+  "id": "DefinePersona",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "Demos/ACME/ProductLaunch/Todo/DefinePersona",
+  "name": "Define target customer persona",
+  "nodeType": "Demos/ACME/Project/Todo",
+  "description": "Create detailed buyer persona for TaskFlow targeting operations managers at mid-market companies",
+  "category": "Tasks",
+  "icon": "/static/storage/content/Demos/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "lastModified": "2026-01-20T10:05:06.1472369+00:00",
+  "version": 0,
+  "state": "Active",
+  "content": {
+    "$type": "Todo",
+    "title": "Define target customer persona",
+    "description": "Research and document the ideal customer profile (ICP) for TaskFlow. Focus on operations managers and process owners at companies with 200-2000 employees who struggle with manual workflows.",
+    "category": "Research",
+    "priority": "High",
+    "assignee": "Alice",
+    "dueDateOffsetDays": -10,
+    "status": "Completed",
+    "completedAt": "2025-01-18T14:30:00Z"
+  }
+}

@@ -13,9 +13,6 @@
   <Folder Name="/samples/">
     <File Path="samples/Directory.Build.props" />
   </Folder>
-  <Folder Name="/samples/Documentation/">
-    <Project Path="samples/Documentation/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
-  </Folder>
   <Folder Name="/samples/Insurance/">
     <Project Path="samples/Insurance/MeshWeaver.Insurance.Domain/MeshWeaver.Insurance.Domain.csproj" />
     <Project Path="samples/Insurance/MeshWeaver.Insurance.SampleData/MeshWeaver.Insurance.SampleData.csproj" />
@@ -111,7 +108,6 @@
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.DataSetReader.Test/MeshWeaver.DataSetReader.Test.csproj" />
-    <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Orleans.Test/MeshWeaver.Hosting.Orleans.Test.csproj" />
     <Project Path="test/MeshWeaver.Import.Test/MeshWeaver.Import.Test.csproj" />

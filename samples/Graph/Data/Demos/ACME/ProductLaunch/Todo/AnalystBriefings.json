@@ -1,0 +1,20 @@
+{
+  "id": "AnalystBriefings",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Schedule analyst briefings",
+  "nodeType": "Demos/ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Arrange briefings with key industry analysts",
+  "icon": "/static/storage/content/Demos/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Schedule analyst briefings",
+    "description": "Reach out to Gartner, Forrester, and IDC analysts covering workflow automation. Schedule pre-launch briefings and prepare analyst-specific materials.",
+    "category": "PR",
+    "priority": "Medium",
+    "assignee": "Emma",
+    "dueDateOffsetDays": 12,
+    "status": "Pending"
+  }
+}

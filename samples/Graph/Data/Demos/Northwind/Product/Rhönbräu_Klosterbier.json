@@ -1,0 +1,23 @@
+{
+  "id": "Rh\u00f6nbr\u00e4u_Klosterbier",
+  "namespace": "Northwind",
+  "name": "Rh\u00f6nbr\u00e4u Klosterbier",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Rh\u00f6nbr\u00e4u Klosterbier - 24 - 0.5 l bottles",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 75,
+    "productName": "Rh\u00f6nbr\u00e4u Klosterbier",
+    "supplierId": 12,
+    "categoryId": 1,
+    "quantityPerUnit": "24 - 0.5 l bottles",
+    "unitPrice": 7.75,
+    "unitsInStock": 125,
+    "unitsOnOrder": 0,
+    "reorderLevel": 25,
+    "discontinued": false
+  }
+}

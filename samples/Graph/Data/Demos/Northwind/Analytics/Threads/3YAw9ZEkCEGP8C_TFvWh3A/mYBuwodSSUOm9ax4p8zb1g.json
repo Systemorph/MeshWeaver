@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/mYBuwodSSUOm9ax4p8zb1g",
+  "path": "Demos/Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/mYBuwodSSUOm9ax4p8zb1g",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:49:36.097743+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "mYBuwodSSUOm9ax4p8zb1g",
+    "role": "user",
+    "text": "Show the categories with the lowest revenue (ranked)",
+    "timestamp": "2026-02-17T14:49:36.097091Z",
+    "type": "ExecutedInput"
+  }
+}

@@ -64,6 +64,9 @@ public static class NodeMenuItemsExtensions
                 RequiredPermission: Permission.Create, DisplayOrder: 1);
         }
 
+        if (perms.HasFlag(Permission.Read))
+            yield return new("Files", MeshNodeLayoutAreas.FilesArea, DisplayOrder: 25);
+
         yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, DisplayOrder: 50);
         if (perms.HasFlag(Permission.Read))
             yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);

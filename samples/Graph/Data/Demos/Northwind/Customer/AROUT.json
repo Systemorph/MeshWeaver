@@ -1,0 +1,23 @@
+{
+  "id": "AROUT",
+  "namespace": "Northwind",
+  "name": "Around the Horn",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Around the Horn - London, UK",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "AROUT",
+    "companyName": "Around the Horn",
+    "contactName": "Thomas Hardy",
+    "contactTitle": "Sales Representative",
+    "city": "London",
+    "region": "",
+    "postalCode": "WA1 1DP",
+    "country": "UK",
+    "phone": "(171) 555-7788",
+    "fax": "(171) 555-6750"
+  }
+}

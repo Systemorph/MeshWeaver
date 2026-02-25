@@ -76,7 +76,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Autocomplete_ReturnsIconForACME()
     {
-        // Arrange - ACME has icon: "/static/storage/content/ACME/logo.svg"
+        // Arrange - ACME has icon: "/static/storage/content/Demos/ACME/logo.svg"
         var suggestions = await MeshQuery
             .AutocompleteAsync("", "ACME", AutocompleteMode.RelevanceFirst, 10)
             .ToListAsync();
@@ -88,7 +88,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
 
         suggestions.Should().NotBeEmpty();
 
-        var acme = suggestions.FirstOrDefault(s => s.Path == "ACME");
+        var acme = suggestions.FirstOrDefault(s => s.Path == "Demos/ACME");
         acme.Should().NotBeNull("Should find ACME node");
         acme!.Icon.Should().NotBeNullOrEmpty("ACME has an icon defined in its JSON");
     }
@@ -183,7 +183,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
             Output.WriteLine($"  - {s.Path}: {s.Name} (Score: {s.Score:F1})");
 
         suggestions.Should().NotBeEmpty("'acme' should match 'ACME' case-insensitively");
-        suggestions.Should().Contain(s => s.Path == "ACME");
+        suggestions.Should().Contain(s => s.Path == "Demos/ACME");
     }
 
     [Fact(Timeout = 30000)]

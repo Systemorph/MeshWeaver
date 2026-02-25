@@ -1,0 +1,23 @@
+{
+  "id": "Raclette_Courdavault",
+  "namespace": "Northwind",
+  "name": "Raclette Courdavault",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Raclette Courdavault - 5 kg pkg.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 59,
+    "productName": "Raclette Courdavault",
+    "supplierId": 28,
+    "categoryId": 4,
+    "quantityPerUnit": "5 kg pkg.",
+    "unitPrice": 55.0,
+    "unitsInStock": 79,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

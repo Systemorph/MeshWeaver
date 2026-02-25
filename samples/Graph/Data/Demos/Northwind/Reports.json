@@ -1,0 +1,11 @@
+{
+  "id": "Reports",
+  "namespace": "Northwind",
+  "name": "Reports",
+  "nodeType": "Demos/Northwind/ContentCatalog",
+  "category": "Reports",
+  "description": "Data-driven analytical reports on Northwind Traders sales, orders, products, clients, and employees",
+  "icon": "/static/storage/content/Demos/Northwind/icons/reports.svg",
+  "displayOrder": 2,
+  "isPersistent": true
+}

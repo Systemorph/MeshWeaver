@@ -9,6 +9,15 @@ Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/icon.svg
 
 MeshWeaver is a distributed platform for building data-driven applications with AI capabilities. This documentation covers the core architectural concepts.
 
+## Featured Articles
+
+| Article | Description |
+|---------|-------------|
+| [Specifying Software](MeshWeaver/Documentation/Architecture/Specifying Software) | Learn how to write iterative specifications closely aligned with implementation |
+| [From Specification to Implementation](MeshWeaver/Documentation/Architecture/Specification to Implementation) | Transform your prototypes into production-ready code |
+
+---
+
 ## What MeshWeaver Does
 
 - Build Blazor Server portals with reactive layout areas (addressable UI surfaces that embed data + business logic)

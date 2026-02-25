@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Threads/1s_RV5XJoEa6ydXvT9iQAg/5igwFXXW-0eYmVmOmJfnFA",
+  "path": "Demos/Northwind/Threads/1s_RV5XJoEa6ydXvT9iQAg/5igwFXXW-0eYmVmOmJfnFA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-18T09:25:01.193155+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "5igwFXXW-0eYmVmOmJfnFA",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "Error: Agent \u0027ACME/NorthwindAgent\u0027 not foundI\u0027ve delegated your request to the NorthwindAgent \u2014 they\u0027ll analyze the data and report back with the top finding.",
+    "timestamp": "2026-02-18T09:25:01.192568Z",
+    "type": "AgentResponse"
+  }
+}

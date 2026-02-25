@@ -218,7 +218,7 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     [HubFact]
     public async Task GetDataId_GeneratesConsistentId()
     {
-        EditLayoutArea.GetDataId("ACME/Project/Todo").Should().Be("content_ACME_Project_Todo");
+        EditLayoutArea.GetDataId("Demos/ACME/Project/Todo").Should().Be("content_ACME_Project_Todo");
         EditLayoutArea.GetDataId("path/with/slashes").Should().Be("content_path_with_slashes");
 
         await Task.CompletedTask;

@@ -1,0 +1,20 @@
+{
+  "id": "FAQDocument",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Prepare customer FAQ",
+  "nodeType": "Demos/ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Document answers to frequently asked questions",
+  "icon": "/static/storage/content/Demos/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Prepare customer FAQ",
+    "description": "Compile FAQ covering pricing, integrations, security, data handling, migration, and support. Use input from beta customers and sales team.",
+    "category": "Support",
+    "priority": "Medium",
+    "assignee": "Alice",
+    "dueDateOffsetDays": 35,
+    "status": "Pending"
+  }
+}

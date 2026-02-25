@@ -120,7 +120,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Threads", "Settings"],
+            ["Files", "Threads", "Settings"],
             "Viewer has only Read — no Create, Update, or Delete items");
     }
 
@@ -149,7 +149,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Editor gets Create + Import (no node-name because no MeshNode seeded)
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Create", "Import", "Threads", "Settings"],
+            ["Create", "Import", "Files", "Threads", "Settings"],
             "Editor has Read|Create|Update|Comment — Create/Import plus always-visible items");
     }
 
@@ -176,9 +176,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         // No "Edit" — replaced by node-name which requires MeshNode with NodeType
-        items.Should().HaveCount(5, "Admin should see all default menu items");
+        items.Should().HaveCount(6, "Admin should see all default menu items");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Create", "Import", "Threads", "Settings", "Delete"]);
+            ["Create", "Import", "Files", "Threads", "Settings", "Delete"]);
     }
 
     [Fact(Timeout = 15000)]

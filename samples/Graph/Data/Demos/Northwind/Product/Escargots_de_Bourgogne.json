@@ -1,0 +1,23 @@
+{
+  "id": "Escargots_de_Bourgogne",
+  "namespace": "Northwind",
+  "name": "Escargots de Bourgogne",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Escargots de Bourgogne - 24 pieces",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 58,
+    "productName": "Escargots de Bourgogne",
+    "supplierId": 27,
+    "categoryId": 8,
+    "quantityPerUnit": "24 pieces",
+    "unitPrice": 13.25,
+    "unitsInStock": 62,
+    "unitsOnOrder": 0,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}
