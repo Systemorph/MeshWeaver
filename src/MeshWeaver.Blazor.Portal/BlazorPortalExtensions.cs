@@ -1,5 +1,5 @@
-using MeshWeaver.Blazor.Chat;
 using MeshWeaver.Blazor.Infrastructure;
+using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Services;
@@ -27,7 +27,7 @@ public static class BlazorPortalExtensions
 
     /// <summary>
     /// Adds core portal services (DimensionManager, CacheStorageAccessor, AppVersionService, BlazorAutocompleteService).
-    /// Use AddBlazorPortalServices(IServerSideBlazorBuilder) for full support including chat state persistence.
+    /// Use AddBlazorPortalServices(IServerSideBlazorBuilder) for full support including side panel state persistence.
     /// </summary>
     public static IServiceCollection AddBlazorPortalCoreServices(this IServiceCollection services)
     {

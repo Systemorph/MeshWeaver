@@ -1,6 +1,6 @@
 using Microsoft.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor.Chat;
+namespace MeshWeaver.Blazor.Portal.SidePanel;
 
 /// <summary>
 /// Service to manage and persist side panel state across circuit reconnections.
@@ -52,7 +52,6 @@ public class SidePanelStateService
         if (State.Width != width || State.Height != height)
         {
             State = State with { Width = width, Height = height };
-            // Don't notify - size changes are persisted but don't need UI updates
         }
     }
 
@@ -70,7 +69,6 @@ public class SidePanelStateService
         if (State.ContentPath != contentPath)
         {
             State = State with { ContentPath = contentPath };
-            // Don't notify for content changes - this is internal state
         }
     }
 
@@ -86,7 +84,6 @@ public class SidePanelStateService
     public void ResetSize()
     {
         State = State with { Width = null, Height = null };
-        // Don't notify - size reset is handled by JS
     }
 
     private void NotifyStateChanged() => OnStateChanged?.Invoke();

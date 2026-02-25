@@ -1,4 +1,4 @@
-namespace MeshWeaver.Blazor.Chat;
+namespace MeshWeaver.Blazor.Portal.SidePanel;
 
 /// <summary>
 /// Represents the persisted state of the side panel.

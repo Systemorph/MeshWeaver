@@ -145,12 +145,12 @@ function checkCookieConsent() {
 }
 
 // =============================================================================
-// Chat Resizer
+// Side Panel Resizer
 // =============================================================================
 
-window.chatResizer = {
+window.sidePanelResizer = {
     startResize: function () {
-        const container = document.querySelector('.ai-chat-container');
+        const container = document.querySelector('.side-panel-container');
         if (!container) return;
 
         const mouseMoveHandler = (e) => {
@@ -244,7 +244,7 @@ export function initialize(dotNetRef) {
     blazorDotNetRef = dotNetRef;
 }
 
-export function applyChatSize(width, height) {
+export function applySidePanelSize(width, height) {
     // Size is now managed by FluentSplitter, this is a no-op
 }
 

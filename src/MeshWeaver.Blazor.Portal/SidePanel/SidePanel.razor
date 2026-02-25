@@ -1,0 +1,14 @@
+<div class="side-panel">
+    <div class="side-panel-header">
+        <h3 class="side-panel-title">Side Panel</h3>
+        <div class="side-panel-actions">
+            @ToolbarContent
+            <FluentButton BackgroundColor="transparent" OnClick="CloseAsync" Title="Close">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
+            </FluentButton>
+        </div>
+    </div>
+    <div class="side-panel-content">
+        @ChildContent
+    </div>
+</div>

@@ -1,8 +1,10 @@
-﻿using MeshWeaver.AI;
-using MeshWeaver.Blazor.Chat;
+using MeshWeaver.AI;
+using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Portal.Resize;
+using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Blazor.Services;
@@ -23,11 +25,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
 
-    // Splitter pane sizes - default 3:1 ratio (75% main, 25% chat)
+    // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";
-    private string MainPaneSizeWithChat => IsAIChatVisible ? MainPaneSize : "100%";
-    private string ChatPaneSize => SidePanelState.Width.HasValue ? $"{SidePanelState.Width.Value}%" : "25%";
-    private string ChatPaneSizeWithVisibility => IsAIChatVisible ? ChatPaneSize : "0%";
+    private string MainPaneSizeWithPanel => IsSidePanelVisible ? MainPaneSize : "100%";
+    private string SidePanelPaneSize => SidePanelState.Width.HasValue ? $"{SidePanelState.Width.Value}%" : "25%";
+    private string SidePanelPaneSizeWithVisibility => IsSidePanelVisible ? SidePanelPaneSize : "0%";
 
     /// <summary>
     /// Render fragment for header links (social media icons, etc.)
@@ -193,10 +195,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
 
-    public bool IsAIChatVisible => SidePanelState.IsVisible;
+    public bool IsSidePanelVisible => SidePanelState.IsVisible;
     protected SidePanelPosition SidePanelPositionValue => SidePanelState.Position;
 
-    public async Task ToggleAIChatVisibility()
+    public async Task ToggleSidePanel()
     {
         var context = NavigationService.Context;
 
@@ -213,6 +215,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
             // Open panel with thread
             SidePanelState.OpenWithContent(threadPath);
+            sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
             await ApplyPersistedSizeAsync();
         }
         else
@@ -231,7 +234,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private async Task ApplyPersistedSizeAsync()
     {
         await EnsureJsModuleAsync();
-        await jsModule!.InvokeVoidAsync("applyChatSize", SidePanelState.Width, SidePanelState.Height);
+        await jsModule!.InvokeVoidAsync("applySidePanelSize", SidePanelState.Width, SidePanelState.Height);
     }
 
     private async Task EnsureJsModuleAsync()
@@ -240,6 +243,21 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             "import", "./_content/MeshWeaver.Blazor.Portal/Layout/PortalLayoutBase.razor.js");
     }
 
+
+    // Side panel content state
+    private string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+
+    private ThreadChatControl GetSidePanelControl()
+    {
+        var context = NavigationService.Context;
+        var contextPath = context?.PrimaryPath;
+        var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
+
+        return new ThreadChatControl()
+            .WithThreadPath(SidePanelState.ContentPath ?? string.Empty)
+            .WithInitialContext(contextPath ?? string.Empty)
+            .WithInitialContextDisplayName(contextDisplayName ?? string.Empty);
+    }
 
     public void Dispose()
     {

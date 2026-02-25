@@ -2,7 +2,7 @@
 @inherits LayoutComponentBase
 @inject IDialogService DialogService
 
-<div class="layout @(IsAIChatVisible ? $"chat-visible chat-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
+<div class="layout @(IsSidePanelVisible ? $"panel-visible panel-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
     style="@(IsNavMenuOpen ? "overflow: hidden;" : string.Empty)">
     <div class="meshweaver-icon">
         <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
@@ -52,9 +52,9 @@
             <div class="notifications">
                 <NotificationCenter />
             </div>
-            <div class="chat">
-                <FluentButton BackgroundColor="transparent" OnClick="ToggleAIChatVisibility" Title="AI Chat">
-                    <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+            <div class="side-panel-toggle">
+                <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="Side Panel">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.PanelRight())" Color="Color.Neutral" />
                 </FluentButton>
             </div>
             <UserProfile />
@@ -88,21 +88,25 @@
     <FluentKeyCodeProvider />
 
     @* Main content area with splitter at top level (in grid-area: main).
-       @Body goes in first pane with body-content class. Chat is in second pane. *@
+       @Body goes in first pane with body-content class. Side panel is in second pane. *@
     <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
                          Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
                          Class="body-splitter">
-        <FluentMultiSplitterPane Size="@MainPaneSizeWithChat" Min="200px">
+        <FluentMultiSplitterPane Size="@MainPaneSizeWithPanel" Min="200px">
             @* Page content - body-content class applies grid-area styles *@
             <div class="body-content">
                 <FluentToastProvider MaxToastCount="3" Timeout="5000" />
                 @Body
             </div>
         </FluentMultiSplitterPane>
-        <FluentMultiSplitterPane Size="@ChatPaneSizeWithVisibility" Min="@(IsAIChatVisible ? "250px" : "0")" Max="60%" Resizable="@IsAIChatVisible" Collapsible="true" Collapsed="@(!IsAIChatVisible)">
+        <FluentMultiSplitterPane Size="@SidePanelPaneSizeWithVisibility" Min="@(IsSidePanelVisible ? "250px" : "0")" Max="60%" Resizable="@IsSidePanelVisible" Collapsible="true" Collapsed="@(!IsSidePanelVisible)">
             @* Side panel - persists across navigation, independent from @Body *@
-            <div class="ai-chat-content" style="@(IsAIChatVisible ? "" : "display: none;")">
-                <ThreadSidePanelContent @key="@("chat-singleton")" OnCloseRequested="ToggleAIChatVisibility" />
+            <div class="side-panel-wrapper" style="@(IsSidePanelVisible ? "" : "display: none;")">
+                <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
+                    <ChildContent>
+                        <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                    </ChildContent>
+                </SidePanel>
             </div>
         </FluentMultiSplitterPane>
     </FluentMultiSplitter>

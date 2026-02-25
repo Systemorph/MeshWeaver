@@ -1,10 +1,10 @@
-/* Chat side panel container */
-.chat-side-panel,
-.chat-side-panel * {
+/* Side panel container */
+.side-panel,
+.side-panel * {
     box-sizing: border-box;
 }
 
-.chat-side-panel {
+.side-panel {
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -18,7 +18,7 @@
     padding: 0;
 }
 
-.chat-header {
+.side-panel-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -31,20 +31,20 @@
     min-height: 48px;
 }
 
-.chat-title {
+.side-panel-title {
     margin: 0;
     font-size: 1.5rem;
     font-weight: 600;
     color: var(--neutral-foreground-rest);
 }
 
-.chat-actions {
+.side-panel-actions {
     display: flex;
     gap: 8px;
     align-items: center;
 }
 
-.chat-content {
+.side-panel-content {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -56,7 +56,7 @@
     overflow: hidden;
 }
 
-.chat-history-fullscreen {
+.side-panel-history-fullscreen {
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -64,16 +64,16 @@
 }
 
 /* FluentUI button styling */
-.chat-actions fluent-button {
+.side-panel-actions fluent-button {
     min-width: auto;
     padding: 8px;
 }
 
-.chat-actions fluent-button:hover {
+.side-panel-actions fluent-button:hover {
     background-color: var(--neutral-fill-secondary-hover);
 }
 
-.chat-actions fluent-button:focus-visible {
+.side-panel-actions fluent-button:focus-visible {
     outline: 2px solid var(--accent-fill-rest);
     outline-offset: 2px;
 }

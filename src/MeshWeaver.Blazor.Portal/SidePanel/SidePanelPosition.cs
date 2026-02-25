@@ -1,4 +1,4 @@
-namespace MeshWeaver.Blazor.Chat;
+namespace MeshWeaver.Blazor.Portal.SidePanel;
 
 public enum SidePanelPosition
 {

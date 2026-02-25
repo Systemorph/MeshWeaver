@@ -1,12 +1,12 @@
 using Microsoft.AspNetCore.Components;
 
-namespace MeshWeaver.Blazor.Chat;
+namespace MeshWeaver.Blazor.Portal.SidePanel;
 
 /// <summary>
 /// Generic side panel container with a header (title + toolbar + close button)
-/// and a content area. Thread-specific logic lives in ThreadSidePanelContent.
+/// and a content area. Content-specific logic lives in child components.
 /// </summary>
-public partial class ChatSidePanel : ComponentBase
+public partial class SidePanel : ComponentBase
 {
     /// <summary>
     /// Main content rendered inside the panel body.
@@ -23,7 +23,7 @@ public partial class ChatSidePanel : ComponentBase
     /// </summary>
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
-    private async Task CloseChatAsync()
+    private async Task CloseAsync()
     {
         if (OnCloseRequested.HasDelegate)
         {
