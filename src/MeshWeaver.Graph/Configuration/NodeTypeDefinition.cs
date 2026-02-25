@@ -99,8 +99,15 @@ public record NodeTypeDefinition
 
     /// <summary>
     /// Default namespace where instances of this type should be created.
-    /// Empty string means root (top-level). Null means no restriction (user chooses).
-    /// When set, the Create form locks the namespace to this value.
+    /// Empty string means root (top-level). Null means no default.
+    /// Pre-selects the namespace in the Create form but does not restrict choices.
     /// </summary>
     public string? DefaultNamespace { get; init; }
+
+    /// <summary>
+    /// Restricts which namespaces are available when creating instances of this type.
+    /// Empty string means root (top-level). Null means no restriction (user chooses freely).
+    /// When set, the Create form only allows selection from these namespaces.
+    /// </summary>
+    public List<string>? RestrictedToNamespaces { get; init; }
 }

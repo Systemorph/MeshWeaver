@@ -33,7 +33,7 @@ public static class UserNodeType
         Name = "User",
         Icon = "/static/NodeTypeIcons/person.svg",
         AssemblyLocation = typeof(UserNodeType).Assembly.Location,
-        Content = new NodeTypeDefinition { DefaultNamespace = "" },
+        Content = new NodeTypeDefinition { DefaultNamespace = "User", RestrictedToNamespaces = ["User"] },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<AccessObject>())

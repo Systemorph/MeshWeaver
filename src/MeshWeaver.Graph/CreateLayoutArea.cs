@@ -483,18 +483,35 @@ public static class CreateLayoutArea
             defaultType = typeOverride;
 
         // Parse restriction query params (e.g. ?types=X,Y&namespaces=A,B)
+        // Note: namespaces param uses != null to distinguish "absent" from "empty value" (root)
         var typesParam = host.GetQueryStringParamValue("types");
         var namespacesParam = host.GetQueryStringParamValue("namespaces");
         var restrictedTypes = !string.IsNullOrEmpty(typesParam)
             ? typesParam.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             : null;
-        var restrictedNamespaces = !string.IsNullOrEmpty(namespacesParam)
+        string[]? restrictedNamespaces = namespacesParam != null
             ? namespacesParam.Split(',', StringSplitOptions.TrimEntries)
             : null;
 
         // If types restricted to single entry, use it as default
         if (restrictedTypes is { Length: 1 })
             defaultType = restrictedTypes[0];
+
+        // When type is known, look up its NodeTypeDefinition for namespace restrictions
+        var knownType = restrictedTypes is { Length: 1 } ? restrictedTypes[0] : defaultType;
+        if (!string.IsNullOrEmpty(knownType))
+        {
+            var typeNode = meshConfiguration.Nodes.Values.FirstOrDefault(n => n.Path == knownType);
+            var typeDef = typeNode?.Content as NodeTypeDefinition;
+
+            // Apply DefaultNamespace from NodeTypeDefinition (pre-selects but doesn't restrict)
+            if (typeDef?.DefaultNamespace != null)
+                defaultNamespace = typeDef.DefaultNamespace;
+
+            // Apply RestrictedToNamespaces if not already overridden by URL param
+            if (restrictedNamespaces == null && typeDef?.RestrictedToNamespaces is { Count: > 0 })
+                restrictedNamespaces = typeDef.RestrictedToNamespaces.ToArray();
+        }
 
         // If namespaces restricted to single entry, use it as default
         if (restrictedNamespaces is { Length: 1 })
