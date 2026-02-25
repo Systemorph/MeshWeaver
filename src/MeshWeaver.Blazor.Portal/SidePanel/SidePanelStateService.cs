@@ -19,11 +19,18 @@ public class SidePanelStateService
     /// </summary>
     public event Action? OnStateChanged;
 
+    /// <summary>
+    /// Event raised when a menu action is requested (e.g., "New", "Resume").
+    /// ThreadChatView subscribes to handle mode changes.
+    /// </summary>
+    public event Action<string>? OnActionRequested;
+
     public bool IsVisible => State.IsVisible;
     public SidePanelPosition Position => State.Position;
     public int? Width => State.Width;
     public int? Height => State.Height;
     public string? ContentPath => State.ContentPath;
+    public string? Title => State.Title;
 
     public void SetVisible(bool visible)
     {
@@ -80,6 +87,23 @@ public class SidePanelStateService
         State = State with { IsVisible = true, ContentPath = contentPath };
         NotifyStateChanged();
     }
+
+    /// <summary>
+    /// Sets the display title for the side panel header.
+    /// </summary>
+    public void SetTitle(string? title)
+    {
+        if (State.Title != title)
+        {
+            State = State with { Title = title };
+            NotifyStateChanged();
+        }
+    }
+
+    /// <summary>
+    /// Requests a named action (e.g., "New", "Resume") to be handled by the active content component.
+    /// </summary>
+    public void RequestAction(string action) => OnActionRequested?.Invoke(action);
 
     public void ResetSize()
     {
