@@ -264,27 +264,33 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         if (!string.IsNullOrEmpty(nodeType))
         {
-            // Get assembly path (triggers compilation if needed for dynamic types, returns null for built-ins)
-            var assemblyPath = await GetAssemblyPathAsync(nodeType, ct);
-
             // Try to get the built-in node definition (registered via AddMeshNodes)
             meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode);
 
-            // For built-in types, get AssemblyLocation from the registered node definition
-            if (assemblyPath == null && builtInNode != null)
+            // For built-in types that already have AssemblyLocation, use their HubConfiguration
+            // directly — skip GetAssemblyPathAsync which triggers compilation and would overwrite
+            // the built-in HubConfiguration (which includes layout areas like AddUserActivityViews).
+            if (builtInNode?.AssemblyLocation != null)
             {
-                assemblyPath = builtInNode.AssemblyLocation;
+                var hubConfig = node.HubConfiguration ?? builtInNode.HubConfiguration;
+                return CopyIconFromNodeType(node with
+                {
+                    HubConfiguration = hubConfig,
+                    AssemblyLocation = builtInNode.AssemblyLocation
+                }, nodeType);
             }
 
+            // Dynamic types: get assembly path (triggers compilation if needed)
+            var assemblyPath = await GetAssemblyPathAsync(nodeType, ct);
+
             // Get hub configuration: keep existing or resolve from cache/built-in
-            // Fall back to built-in HubConfiguration for types like User, Markdown, etc.
-            var hubConfig = node.HubConfiguration
+            var hubConfigDynamic = node.HubConfiguration
                 ?? GetCachedHubConfiguration(nodeType)
                 ?? builtInNode?.HubConfiguration;
 
             return CopyIconFromNodeType(node with
             {
-                HubConfiguration = hubConfig,
+                HubConfiguration = hubConfigDynamic,
                 AssemblyLocation = assemblyPath ?? node.AssemblyLocation
             }, nodeType);
         }
