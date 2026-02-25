@@ -1,0 +1,23 @@
+{
+  "id": "Sir_Rodneys_Scones",
+  "namespace": "Northwind",
+  "name": "Sir Rodney's Scones",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Sir Rodney's Scones - 24 pkgs. x 4 pieces",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 21,
+    "productName": "Sir Rodney's Scones",
+    "supplierId": 8,
+    "categoryId": 3,
+    "quantityPerUnit": "24 pkgs. x 4 pieces",
+    "unitPrice": 10.0,
+    "unitsInStock": 3,
+    "unitsOnOrder": 40,
+    "reorderLevel": 5,
+    "discontinued": false
+  }
+}

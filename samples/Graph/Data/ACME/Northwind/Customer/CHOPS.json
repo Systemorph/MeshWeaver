@@ -1,0 +1,23 @@
+{
+  "id": "CHOPS",
+  "namespace": "Northwind",
+  "name": "Chop-suey Chinese",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Chop-suey Chinese - Bern, Switzerland",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "CHOPS",
+    "companyName": "Chop-suey Chinese",
+    "contactName": "Yang Wang",
+    "contactTitle": "Owner",
+    "city": "Bern",
+    "region": "",
+    "postalCode": "3012",
+    "country": "Switzerland",
+    "phone": "0452-076545",
+    "fax": ""
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "id": "GlobalManufacturing",
+  "namespace": "ACME/Insurance",
+  "name": "Global Manufacturing Corp",
+  "nodeType": "ACME/Insurance/Insured",
+  "category": "Clients",
+  "description": "US manufacturing corporation - Insurance client",
+  "iconName": "Building",
+  "icon": "/static/storage/content/ACME/Insurance/icons/globalmanufacturing.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "GlobalManufacturing",
+    "name": "Global Manufacturing Corp",
+    "description": "US manufacturing corporation with global operations",
+    "address": "500 Industrial Boulevard, Detroit, MI 48201, United States",
+    "industry": "Manufacturing",
+    "location": "United States"
+  }
+}

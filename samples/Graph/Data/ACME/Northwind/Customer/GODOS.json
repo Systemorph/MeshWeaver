@@ -1,0 +1,23 @@
+{
+  "id": "GODOS",
+  "namespace": "Northwind",
+  "name": "Godos Cocina T\u00edpica",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Godos Cocina T\u00edpica - Sevilla, Spain",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "GODOS",
+    "companyName": "Godos Cocina T\u00edpica",
+    "contactName": "Jos\u00e9 Pedro Freyre",
+    "contactTitle": "Sales Manager",
+    "city": "Sevilla",
+    "region": "",
+    "postalCode": "41101",
+    "country": "Spain",
+    "phone": "(95) 555 82 82",
+    "fax": ""
+  }
+}

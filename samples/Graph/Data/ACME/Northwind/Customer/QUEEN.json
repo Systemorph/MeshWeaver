@@ -1,0 +1,23 @@
+{
+  "id": "QUEEN",
+  "namespace": "Northwind",
+  "name": "Queen Cozinha",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Queen Cozinha - Sao Paulo, Brazil",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "QUEEN",
+    "companyName": "Queen Cozinha",
+    "contactName": "L\u00facia Carvalho",
+    "contactTitle": "Marketing Assistant",
+    "city": "Sao Paulo",
+    "region": "SP",
+    "postalCode": "05487-020",
+    "country": "Brazil",
+    "phone": "(11) 555-1189",
+    "fax": ""
+  }
+}

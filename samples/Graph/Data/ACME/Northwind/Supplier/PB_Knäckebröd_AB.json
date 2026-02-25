@@ -1,0 +1,21 @@
+{
+  "id": "PB_Kn\u00e4ckebr\u00f6d_AB",
+  "namespace": "Northwind",
+  "name": "PB Kn\u00e4ckebr\u00f6d AB",
+  "nodeType": "ACME/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "PB Kn\u00e4ckebr\u00f6d AB - G\u00f6teborg, Sweden",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 9,
+    "companyName": "PB Kn\u00e4ckebr\u00f6d AB",
+    "contactName": "Lars Peterson",
+    "contactTitle": "Sales Agent",
+    "city": "G\u00f6teborg",
+    "region": "",
+    "country": "Sweden",
+    "phone": "031-987 65 43"
+  }
+}

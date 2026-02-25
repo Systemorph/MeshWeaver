@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/KD_RER4g5kusQB1XlH-hTA/T3IYM6UMaEex62CZWKf-gQ",
+  "path": "ACME/Northwind/Analytics/Threads/KD_RER4g5kusQB1XlH-hTA/T3IYM6UMaEex62CZWKf-gQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T15:18:53.585474+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "T3IYM6UMaEex62CZWKf-gQ",
+    "role": "user",
+    "text": "\u0022Which suppliers provide products in each category?\u0022",
+    "timestamp": "2026-02-17T15:18:53.584165Z",
+    "type": "ExecutedInput"
+  }
+}

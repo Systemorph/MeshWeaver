@@ -1,0 +1,23 @@
+{
+  "id": "MAISD",
+  "namespace": "Northwind",
+  "name": "Maison Dewey",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Maison Dewey - Bruxelles, Belgium",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "MAISD",
+    "companyName": "Maison Dewey",
+    "contactName": "Catherine Dewey",
+    "contactTitle": "Sales Agent",
+    "city": "Bruxelles",
+    "region": "",
+    "postalCode": "B-1180",
+    "country": "Belgium",
+    "phone": "(02) 201 24 67",
+    "fax": "(02) 201 24 68"
+  }
+}

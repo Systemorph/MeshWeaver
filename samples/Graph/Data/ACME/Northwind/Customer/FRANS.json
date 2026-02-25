@@ -1,0 +1,23 @@
+{
+  "id": "FRANS",
+  "namespace": "Northwind",
+  "name": "Franchi S.p.A.",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Franchi S.p.A. - Torino, Italy",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "FRANS",
+    "companyName": "Franchi S.p.A.",
+    "contactName": "Paolo Accorti",
+    "contactTitle": "Sales Representative",
+    "city": "Torino",
+    "region": "",
+    "postalCode": "10100",
+    "country": "Italy",
+    "phone": "011-4988260",
+    "fax": "011-4988261"
+  }
+}

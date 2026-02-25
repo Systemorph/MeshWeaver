@@ -1,0 +1,23 @@
+{
+  "id": "SEVES",
+  "namespace": "Northwind",
+  "name": "Seven Seas Imports",
+  "nodeType": "ACME/Northwind/Customer",
+  "category": "Customers",
+  "description": "Seven Seas Imports - London, UK",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "SEVES",
+    "companyName": "Seven Seas Imports",
+    "contactName": "Hari Kumar",
+    "contactTitle": "Sales Manager",
+    "city": "London",
+    "region": "",
+    "postalCode": "OX15 4NB",
+    "country": "UK",
+    "phone": "(171) 555-1717",
+    "fax": "(171) 555-5646"
+  }
+}

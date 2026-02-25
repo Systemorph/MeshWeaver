@@ -1,0 +1,23 @@
+{
+  "id": "C\u00f4te_de_Blaye",
+  "namespace": "Northwind",
+  "name": "C\u00f4te de Blaye",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "C\u00f4te de Blaye - 12 - 75 cl bottles",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 38,
+    "productName": "C\u00f4te de Blaye",
+    "supplierId": 18,
+    "categoryId": 1,
+    "quantityPerUnit": "12 - 75 cl bottles",
+    "unitPrice": 263.5,
+    "unitsInStock": 17,
+    "unitsOnOrder": 0,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}

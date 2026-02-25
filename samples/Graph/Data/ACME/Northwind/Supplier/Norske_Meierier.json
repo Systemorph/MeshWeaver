@@ -1,0 +1,21 @@
+{
+  "id": "Norske_Meierier",
+  "namespace": "Northwind",
+  "name": "Norske Meierier",
+  "nodeType": "ACME/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Norske Meierier - Sandvika, Norway",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 15,
+    "companyName": "Norske Meierier",
+    "contactName": "Beate Vileid",
+    "contactTitle": "Marketing Manager",
+    "city": "Sandvika",
+    "region": "",
+    "country": "Norway",
+    "phone": "(0)2-953010"
+  }
+}

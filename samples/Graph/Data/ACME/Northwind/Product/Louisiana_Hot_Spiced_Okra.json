@@ -1,0 +1,23 @@
+{
+  "id": "Louisiana_Hot_Spiced_Okra",
+  "namespace": "Northwind",
+  "name": "Louisiana Hot Spiced Okra",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Louisiana Hot Spiced Okra - 24 - 8 oz jars",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 66,
+    "productName": "Louisiana Hot Spiced Okra",
+    "supplierId": 2,
+    "categoryId": 2,
+    "quantityPerUnit": "24 - 8 oz jars",
+    "unitPrice": 17.0,
+    "unitsInStock": 4,
+    "unitsOnOrder": 100,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}

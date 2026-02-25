@@ -1,0 +1,16 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/U1QRZXx92kOL-Bq-MbHvbw",
+  "path": "ACME/Insurance/U1QRZXx92kOL-Bq-MbHvbw",
+  "name": "this page i am looking at at the moment, what is t...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-20T10:35:57.110734+00:00",
+  "version": 3,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Cornerstone",
+    "primaryNodePath": "Cornerstone"
+  }
+}

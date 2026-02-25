@@ -1,0 +1,24 @@
+{
+  "id": "Robert_King",
+  "namespace": "Northwind",
+  "name": "Robert King",
+  "nodeType": "ACME/Northwind/Employee",
+  "category": "Employees",
+  "description": "Robert King - Sales Representative",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 7,
+    "lastName": "King",
+    "firstName": "Robert",
+    "title": "Sales Representative",
+    "titleOfCourtesy": "Mr.",
+    "birthDate": "1960-05-29",
+    "hireDate": "1994-01-02",
+    "city": "London",
+    "region": "",
+    "country": "UK",
+    "reportsTo": 5
+  }
+}

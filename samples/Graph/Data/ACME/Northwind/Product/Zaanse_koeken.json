@@ -1,0 +1,23 @@
+{
+  "id": "Zaanse_koeken",
+  "namespace": "Northwind",
+  "name": "Zaanse koeken",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Zaanse koeken - 10 - 4 oz boxes",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 47,
+    "productName": "Zaanse koeken",
+    "supplierId": 22,
+    "categoryId": 3,
+    "quantityPerUnit": "10 - 4 oz boxes",
+    "unitPrice": 9.5,
+    "unitsInStock": 36,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

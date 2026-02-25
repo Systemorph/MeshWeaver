@@ -1,0 +1,19 @@
+{
+  "id": "Article",
+  "namespace": "ACME/Software",
+  "name": "Article",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "An ACME content article with metadata",
+  "iconName": "DocumentText",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Article",
+    "namespace": "ACME/Software",
+    "displayName": "Article",
+    "iconName": "DocumentText",
+    "description": "An ACME content article with metadata",
+    "configuration": "config => config.WithContentType<Article>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddArticleViews())"
+  }
+}

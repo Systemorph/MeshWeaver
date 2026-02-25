@@ -1,0 +1,23 @@
+{
+  "id": "Teatime_Chocolate_Biscuits",
+  "namespace": "Northwind",
+  "name": "Teatime Chocolate Biscuits",
+  "nodeType": "ACME/Northwind/Product",
+  "category": "Products",
+  "description": "Teatime Chocolate Biscuits - 10 boxes x 12 pieces",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 19,
+    "productName": "Teatime Chocolate Biscuits",
+    "supplierId": 8,
+    "categoryId": 3,
+    "quantityPerUnit": "10 boxes x 12 pieces",
+    "unitPrice": 9.2,
+    "unitsInStock": 25,
+    "unitsOnOrder": 0,
+    "reorderLevel": 5,
+    "discontinued": false
+  }
+}

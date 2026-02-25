@@ -1,0 +1,20 @@
+{
+  "id": "PartnerOutreach",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "name": "Identify launch partners",
+  "nodeType": "ACME/Software/Project/Todo",
+  "category": "Tasks",
+  "description": "Recruit integration and channel partners for launch",
+  "icon": "/static/storage/content/ACME/Software/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Identify launch partners",
+    "description": "Reach out to Slack, Salesforce, and HubSpot for integration partnerships. Identify 3 consulting partners for implementation services.",
+    "category": "Partnerships",
+    "priority": "Medium",
+    "assignee": "Carol",
+    "dueDateOffsetDays": 42,
+    "status": "Pending"
+  }
+}
