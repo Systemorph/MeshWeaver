@@ -568,3 +568,103 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         projectRecords[0].NodePath.Should().Be("data/project2");
     }
 }
+
+/// <summary>
+/// Tests that source:activity queries work via InMemoryMeshQuery.
+/// InMemory doesn't support SQL JOIN, so source:activity is treated like a normal query
+/// (returns all matching nodes without activity ordering). Activity ordering is only
+/// available with PostgreSQL provider.
+/// </summary>
+public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
+
+    [Fact(Timeout = 10000)]
+    public async Task SourceActivity_ReturnsAllMatchingNodes()
+    {
+        // Arrange
+        var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
+
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/alpha") with
+        {
+            Name = "Alpha",
+            NodeType = "Organization"
+        }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with
+        {
+            Name = "Beta",
+            NodeType = "Organization"
+        }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/gamma") with
+        {
+            Name = "Gamma",
+            NodeType = "Organization"
+        }, JsonOptions);
+
+        // Act - source:activity query via InMemory (filters still apply, ordering is default)
+        var query = "source:activity nodeType:Organization path:org scope:children";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
+            .OfType<MeshNode>()
+            .ToListAsync();
+
+        // Assert - all matching nodes are returned (source:activity is stripped by parser)
+        results.Should().HaveCount(3);
+        results.Select(n => n.Name).Should().Contain(["Alpha", "Beta", "Gamma"]);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task SourceActivity_RespectsNodeTypeFilter()
+    {
+        // Arrange
+        var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
+
+        await persistence.SaveNodeAsync(MeshNode.FromPath("data/proj1") with
+        {
+            Name = "Project One",
+            NodeType = "Project"
+        }, JsonOptions);
+        await persistence.SaveNodeAsync(MeshNode.FromPath("data/doc1") with
+        {
+            Name = "Document One",
+            NodeType = "Document"
+        }, JsonOptions);
+
+        // Act
+        var query = "source:activity nodeType:Project path:data scope:children";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
+            .OfType<MeshNode>()
+            .ToListAsync();
+
+        // Assert - only Project nodes returned
+        results.Should().ContainSingle();
+        results[0].Name.Should().Be("Project One");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task SourceActivity_RespectsLimit()
+    {
+        // Arrange
+        var persistence = new InMemoryPersistenceService();
+        var meshQuery = new InMemoryMeshQuery(persistence);
+
+        for (var i = 0; i < 5; i++)
+        {
+            await persistence.SaveNodeAsync(MeshNode.FromPath($"items/item{i}") with
+            {
+                Name = $"Item {i}",
+                NodeType = "Item"
+            }, JsonOptions);
+        }
+
+        // Act
+        var query = "source:activity nodeType:Item path:items scope:children limit:3";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
+            .OfType<MeshNode>()
+            .ToListAsync();
+
+        // Assert
+        results.Should().HaveCount(3);
+    }
+}
