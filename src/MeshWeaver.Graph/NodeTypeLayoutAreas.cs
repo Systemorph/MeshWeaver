@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
@@ -8,7 +8,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -266,7 +265,7 @@ public static class NodeTypeLayoutAreas
                 .WithIcon(FluentIcons.Document())
                 .WithSkin(s => s.WithExpanded(true));
 
-            foreach (var typeNode in nodeTypes.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            foreach (var typeNode in nodeTypes.OrderBy(n => n.Order).ThenBy(n => n.Name))
             {
                 var typeHref = $"/{typeNode.Path}";
                 typesGroup = typesGroup.WithView(
@@ -284,7 +283,7 @@ public static class NodeTypeLayoutAreas
                 .WithIcon(FluentIcons.Bot())
                 .WithSkin(s => s.WithExpanded(true));
 
-            foreach (var agentNode in agents.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+            foreach (var agentNode in agents.OrderBy(n => n.Order).ThenBy(n => n.Name))
             {
                 var agentHref = $"/{agentNode.Path}";
                 agentsGroup = agentsGroup.WithView(
@@ -486,7 +485,7 @@ public static class NodeTypeLayoutAreas
         host.UpdateData(displayNameDataId, node.Name ?? "");
         host.UpdateData(descriptionDataId, content?.Description ?? "");
         host.UpdateData(iconNameDataId, node.Icon ?? "");
-        host.UpdateData(displayOrderDataId, (node.DisplayOrder ?? 0).ToString());
+        host.UpdateData(displayOrderDataId, (node.Order ?? 0).ToString());
         host.UpdateData(childrenQueryDataId, content?.ChildrenQuery ?? "");
         host.UpdateData(dependenciesDataId, content?.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
         host.UpdateData(configurationDataId, content?.Configuration ?? "config => config");
@@ -643,7 +642,7 @@ public static class NodeTypeLayoutAreas
                 {
                     Name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
                     Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
-                    DisplayOrder = displayOrder,
+                    Order = displayOrder,
                     Content = updatedDefinition
                 };
 

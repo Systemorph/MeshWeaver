@@ -1,14 +1,11 @@
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
@@ -63,6 +60,6 @@ public static class ApprovalExtensions
             host.Hub, host.Hub.Address.ToString());
         if (perms.HasFlag(Permission.Update))
             yield return new NodeMenuItemDefinition("Request Approval", "RequestApproval",
-                DisplayOrder: 30);
+                Order: 30);
     }
 }

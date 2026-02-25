@@ -251,7 +251,7 @@ public class PersistentThreadTest
     {
         public string Name => "NonPersistent";
         public IReadOnlyList<string> Models => [];
-        public int DisplayOrder => 0;
+        public int Order => 0;
         // IsPersistent uses default interface member (false)
 
         public Task<Microsoft.Agents.AI.ChatClientAgent> CreateAgentAsync(
@@ -265,7 +265,7 @@ public class PersistentThreadTest
     {
         public string Name => "Persistent";
         public IReadOnlyList<string> Models => [];
-        public int DisplayOrder => 0;
+        public int Order => 0;
         public bool IsPersistent => true;
 
         public Task<Microsoft.Agents.AI.ChatClientAgent> CreateAgentAsync(

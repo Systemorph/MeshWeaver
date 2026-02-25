@@ -30,7 +30,7 @@ public record AgentDisplayInfo
     /// <summary>
     /// Display order within group (lower = first)
     /// </summary>
-    public int DisplayOrder { get; init; }
+    public int Order { get; init; }
 
     /// <summary>
     /// Auto-calculated indent level based on delegation hierarchy

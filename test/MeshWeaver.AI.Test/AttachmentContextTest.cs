@@ -101,7 +101,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         public string Name => "CapturingFactory";
         public IReadOnlyList<string> Models => ["capturing-model"];
-        public int DisplayOrder => 0;
+        public int Order => 0;
 
         public Task<ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config,

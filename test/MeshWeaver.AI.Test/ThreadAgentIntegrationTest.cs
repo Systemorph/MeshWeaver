@@ -96,7 +96,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
     {
         public string Name => "FakeFactory";
         public IReadOnlyList<string> Models => ["fake-model"];
-        public int DisplayOrder => 0;
+        public int Order => 0;
 
         public Task<ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config,

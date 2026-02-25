@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
@@ -336,7 +336,7 @@ public partial class MeshSearchView : IDisposable
     private List<MeshNode> ApplySorting(List<MeshNode> nodes, SortConfig? sorting)
     {
         if (sorting == null || string.IsNullOrEmpty(sorting.SortByProperty))
-            return nodes.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name).ToList();
+            return nodes.OrderBy(n => n.Order).ThenBy(n => n.Name).ToList();
 
         var sorted = sorting.Ascending
             ? nodes.OrderBy(n => GetSortValue(n, sorting.SortByProperty))

@@ -5,7 +5,6 @@ using System.Text.RegularExpressions;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -660,7 +659,7 @@ public class AgentChatClient : IAgentChat
             Path = x.Path,
             Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
             GroupName = x.Config.GroupName,
-            DisplayOrder = x.Config.DisplayOrder,
+            Order = x.Config.Order,
             Icon = x.Config.Icon,
             CustomIconSvg = x.Config.CustomIconSvg,
             AgentConfiguration = x.Config
@@ -738,9 +737,9 @@ public class AgentChatClient : IAgentChat
     {
         if (string.IsNullOrEmpty(modelName))
         {
-            // Return first factory ordered by DisplayOrder
+            // Return first factory ordered by Order
             return chatClientFactories
-                .OrderBy(f => f.DisplayOrder)
+                .OrderBy(f => f.Order)
                 .FirstOrDefault();
         }
 
@@ -756,7 +755,7 @@ public class AgentChatClient : IAgentChat
         // Fallback: return first factory
         logger.LogWarning("[AgentChatClient] Model {ModelName} not found in any factory, using first available", modelName);
         return chatClientFactories
-            .OrderBy(f => f.DisplayOrder)
+            .OrderBy(f => f.Order)
             .FirstOrDefault();
     }
 

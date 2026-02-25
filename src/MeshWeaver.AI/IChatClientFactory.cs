@@ -21,7 +21,7 @@ public interface IChatClientFactory
     /// <summary>
     /// Display order for sorting in model dropdown (lower = first)
     /// </summary>
-    int DisplayOrder { get; }
+    int Order { get; }
 
     /// <summary>
     /// Whether this factory creates persistent agents with server-side thread management.

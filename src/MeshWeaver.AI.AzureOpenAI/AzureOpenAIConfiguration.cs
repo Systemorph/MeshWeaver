@@ -23,5 +23,5 @@ public class AzureOpenAIConfiguration
     /// <summary>
     /// Display order in model dropdown (lower = first)
     /// </summary>
-    public int DisplayOrder { get; set; } = 0;
+    public int Order { get; set; } = 0;
 }

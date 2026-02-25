@@ -175,10 +175,10 @@ public class AgentSelectionTest
     }
 
     /// <summary>
-    /// Tests agent ordering by DisplayOrder then DisplayName.
+    /// Tests agent ordering by Order then DisplayName.
     /// </summary>
     [Fact]
-    public void OrderByRelevance_OrdersByDisplayOrderThenDisplayName()
+    public void OrderByRelevance_OrdersByOrderThenDisplayName()
     {
         // Arrange
         var agents = new List<AgentDisplayInfo>
@@ -186,21 +186,21 @@ public class AgentSelectionTest
             new()
             {
                 Name = "Navigator",
-                DisplayOrder = -1,
+                Order = -1,
                 Description = "Navigation",
                 AgentConfiguration = new AgentConfiguration { Id = "Navigator", DisplayName = "Navigator" }
             },
             new()
             {
                 Name = "TodoAgent",
-                DisplayOrder = -10, // Lower = first
+                Order = -10, // Lower = first
                 Description = "Project tasks",
                 AgentConfiguration = new AgentConfiguration { Id = "TodoAgent", DisplayName = "Todo Agent" }
             },
             new()
             {
                 Name = "ACMEAgent",
-                DisplayOrder = 0,
+                Order = 0,
                 Description = "ACME specific",
                 AgentConfiguration = new AgentConfiguration { Id = "ACMEAgent", DisplayName = "ACME Agent" }
             }
@@ -209,19 +209,19 @@ public class AgentSelectionTest
         // Act
         var ordered = AgentOrderingHelper.OrderByRelevance(agents, null, null);
 
-        // Assert - Ordered by DisplayOrder: -10, -1, 0
+        // Assert - Ordered by Order: -10, -1, 0
         ordered.Should().HaveCount(3);
-        ordered[0].Name.Should().Be("TodoAgent", "DisplayOrder -10 comes first");
-        ordered[1].Name.Should().Be("Navigator", "DisplayOrder -1 comes second");
-        ordered[2].Name.Should().Be("ACMEAgent", "DisplayOrder 0 comes last");
+        ordered[0].Name.Should().Be("TodoAgent", "Order -10 comes first");
+        ordered[1].Name.Should().Be("Navigator", "Order -1 comes second");
+        ordered[2].Name.Should().Be("ACMEAgent", "Order 0 comes last");
     }
 
     /// <summary>
     /// Scenario: When AgentContext has pre-loaded AvailableAgents,
-    /// the ordering should work based on DisplayOrder.
+    /// the ordering should work based on Order.
     /// </summary>
     [Fact]
-    public void AgentContext_WithPreloadedAgents_OrdersByDisplayOrder()
+    public void AgentContext_WithPreloadedAgents_OrdersByOrder()
     {
         // Arrange
         var todoAgentConfig = new AgentConfiguration
@@ -229,7 +229,7 @@ public class AgentSelectionTest
             Id = "TodoAgent",
             DisplayName = "Project Task Agent",
             Description = "Handles project tasks",
-            DisplayOrder = -10, // Lower = first
+            Order = -10, // Lower = first
             IsDefault = true,
             ExposedInNavigator = true
         };
@@ -239,7 +239,7 @@ public class AgentSelectionTest
             Id = "Navigator",
             DisplayName = "Navigator",
             Description = "General navigation agent",
-            DisplayOrder = -1,
+            Order = -1,
             IsDefault = false
         };
 
@@ -249,26 +249,26 @@ public class AgentSelectionTest
             new()
             {
                 Name = navigatorConfig.Id,
-                DisplayOrder = navigatorConfig.DisplayOrder,
+                Order = navigatorConfig.Order,
                 Description = navigatorConfig.Description ?? "",
                 AgentConfiguration = navigatorConfig
             },
             new()
             {
                 Name = todoAgentConfig.Id,
-                DisplayOrder = todoAgentConfig.DisplayOrder,
+                Order = todoAgentConfig.Order,
                 Description = todoAgentConfig.Description ?? "",
                 AgentConfiguration = todoAgentConfig
             }
         };
 
-        // Act - Order by DisplayOrder
+        // Act - Order by Order
         var ordered = AgentOrderingHelper.OrderByRelevance(displayInfos, null, null);
 
         // Assert - TodoAgent (-10) comes before Navigator (-1)
         ordered.Should().HaveCount(2);
-        ordered[0].Name.Should().Be("TodoAgent", "DisplayOrder -10 comes first");
-        ordered[1].Name.Should().Be("Navigator", "DisplayOrder -1 comes second");
+        ordered[0].Name.Should().Be("TodoAgent", "Order -10 comes first");
+        ordered[1].Name.Should().Be("Navigator", "Order -1 comes second");
     }
 
     #region Helper Methods

@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Reactive.Linq;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -819,7 +818,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 DisplayName: typePath,
                 Icon: GetGlobalTypeIcon(typePath),
                 Description: GetGlobalTypeDescription(typePath),
-                DisplayOrder: GetGlobalTypeDisplayOrder(typePath),
+                Order: GetGlobalTypeOrder(typePath),
                 SubNamespace: GetGlobalTypeSubNamespace(typePath)
             );
         }
@@ -837,7 +836,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             DisplayName: typePath.Split('/').Last(),
             Icon: "Cube",
             Description: $"Create a {typePath.Split('/').Last()}",
-            DisplayOrder: 0
+            Order: 0
         );
     }
 
@@ -859,7 +858,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _ => $"Create a {globalType}"
     };
 
-    private static int GetGlobalTypeDisplayOrder(string globalType) => globalType switch
+    private static int GetGlobalTypeOrder(string globalType) => globalType switch
     {
         "Markdown" => 1000,
         "NodeType" => 1001,
@@ -888,7 +887,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             DisplayName: node.Name ?? GetLastPathSegment(node.Path),
             Icon: icon,
             Description: typeDef?.Description,
-            DisplayOrder: node.DisplayOrder ?? 0
+            Order: node.Order ?? 0
         );
     }
 

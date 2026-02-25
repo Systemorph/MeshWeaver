@@ -41,7 +41,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// <summary>
     /// Display order for sorting in model dropdown (lower = first)
     /// </summary>
-    public abstract int DisplayOrder { get; }
+    public abstract int Order { get; }
 
     /// <summary>
     /// Creates a ChatClientAgent for the given configuration.

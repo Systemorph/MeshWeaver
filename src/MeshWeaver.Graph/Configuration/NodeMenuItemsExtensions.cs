@@ -85,21 +85,21 @@ public static class NodeMenuItemsExtensions
                 ? MeshNodeLayoutAreas.BuildContentUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, $"type={Uri.EscapeDataString(hubPath)}")
                 : null;
             yield return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
-                RequiredPermission: Permission.Create, DisplayOrder: 0, Href: createHref);
+                RequiredPermission: Permission.Create, Order: 0, Href: createHref);
             yield return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
-                RequiredPermission: Permission.Create, DisplayOrder: 1);
+                RequiredPermission: Permission.Create, Order: 1);
         }
 
         if (perms.HasFlag(Permission.Read))
-            yield return new("Files", MeshNodeLayoutAreas.FilesArea, DisplayOrder: 25);
+            yield return new("Files", MeshNodeLayoutAreas.FilesArea, Order: 25);
 
-        yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, DisplayOrder: 50);
+        yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, Order: 50);
         if (perms.HasFlag(Permission.Read))
-            yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, DisplayOrder: 90);
+            yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, Order: 90);
 
         if (perms.HasFlag(Permission.Delete))
             yield return new("Delete", MeshNodeLayoutAreas.DeleteArea,
-                RequiredPermission: Permission.Delete, DisplayOrder: 100);
+                RequiredPermission: Permission.Delete, Order: 100);
     }
 
     /// <summary>
@@ -181,7 +181,7 @@ public static class NodeMenuItemsExtensions
         => await config.EvaluateMenuItemsAsync(host, ctx, null);
 
     /// <summary>
-    /// Evaluates all registered providers for a specific menu context, collects items, and sorts by DisplayOrder.
+    /// Evaluates all registered providers for a specific menu context, collects items, and sorts by Order.
     /// </summary>
     internal static async Task<IReadOnlyList<NodeMenuItemDefinition>> EvaluateMenuItemsAsync(
         this MessageHubConfiguration config, LayoutAreaHost host, RenderingContext ctx, string? menuContext)
@@ -199,7 +199,7 @@ public static class NodeMenuItemsExtensions
             }
         }
 
-        items.Sort((a, b) => a.DisplayOrder.CompareTo(b.DisplayOrder));
+        items.Sort((a, b) => a.Order.CompareTo(b.Order));
         return items;
     }
 }

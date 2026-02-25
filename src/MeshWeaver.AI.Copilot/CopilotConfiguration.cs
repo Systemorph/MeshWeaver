@@ -1,4 +1,4 @@
-namespace MeshWeaver.AI.Copilot;
+﻿namespace MeshWeaver.AI.Copilot;
 
 /// <summary>
 /// Configuration for GitHub Copilot SDK integration.
@@ -30,7 +30,7 @@ public class CopilotConfiguration
     /// <summary>
     /// Display order in model dropdown (lower = first).
     /// </summary>
-    public int DisplayOrder { get; set; } = 10;
+    public int Order { get; set; } = 10;
 
     /// <summary>
     /// Whether to enable streaming responses.

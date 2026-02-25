@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -54,7 +54,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
             Name = "Organization 1",
             NodeType = "org",
             Icon = "Building",
-            DisplayOrder = 10
+            Order = 10
         };
 
         // Act
@@ -236,19 +236,19 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     [Fact]
-    public async Task Update_NodeDisplayOrder_AffectsSortOrder()
+    public async Task Update_NodeOrder_AffectsSortOrder()
     {
         // Arrange
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "First", DisplayOrder = 20 }, JsonOptions);
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Second", DisplayOrder = 10 }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "First", Order = 20 }, JsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Second", Order = 10 }, JsonOptions);
 
         // Act
         var children = await _persistence.GetChildrenAsync("graph", JsonOptions).ToListAsync(TestContext.Current.CancellationToken);
 
-        // Assert - should be ordered by DisplayOrder
+        // Assert - should be ordered by Order
         children.Should().HaveCount(2);
-        children.First().Name.Should().Be("Second"); // DisplayOrder 10
-        children.Last().Name.Should().Be("First"); // DisplayOrder 20
+        children.First().Name.Should().Be("Second"); // Order 10
+        children.Last().Name.Should().Be("First"); // Order 20
     }
 
     #endregion

@@ -1,5 +1,4 @@
-using System.ClientModel;
-using Azure.AI.Agents.Persistent;
+﻿using Azure.AI.Agents.Persistent;
 using Azure.Identity;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Messaging;
@@ -44,7 +43,7 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
 
     public IReadOnlyList<string> Models => configuration.Models;
 
-    public int DisplayOrder => configuration.DisplayOrder;
+    public int Order => configuration.Order;
 
     public bool IsPersistent => true;
 

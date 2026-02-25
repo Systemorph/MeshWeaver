@@ -10,7 +10,6 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
@@ -110,7 +109,7 @@ public enum StoryStatus
             Name = "Story",
             NodeType = "NodeType",
             Icon = "Document",
-            DisplayOrder = 30,
+            Order = 30,
             Content = new NodeTypeDefinition
             {
                 Description = "A user story or task",
@@ -138,7 +137,7 @@ public record Organization
             Name = "Organization",
             NodeType = "NodeType",
             Icon = "Building",
-            DisplayOrder = 10,
+            Order = 10,
             Content = new NodeTypeDefinition
             {
                 Description = "An organization",
@@ -166,7 +165,7 @@ public record Project
             Name = "Project",
             NodeType = "NodeType",
             Icon = "Folder",
-            DisplayOrder = 20,
+            Order = 20,
             Content = new NodeTypeDefinition
             {
                 Description = "A project",
@@ -193,7 +192,7 @@ public record Graph
             Name = "Graph",
             NodeType = "NodeType",
             Icon = "Diagram",
-            DisplayOrder = 0,
+            Order = 0,
             Content = new NodeTypeDefinition
             {
                 Description = "The graph root",

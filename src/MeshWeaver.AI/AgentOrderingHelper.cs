@@ -72,7 +72,7 @@ public static class AgentOrderingHelper
                 Path = x.Path,
                 Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
                 GroupName = x.Config.GroupName,
-                DisplayOrder = x.Config.DisplayOrder,
+                Order = x.Config.Order,
                 IndentLevel = 0,
                 Icon = x.Config.Icon,
                 CustomIconSvg = x.Config.CustomIconSvg,
@@ -108,7 +108,7 @@ public static class AgentOrderingHelper
     }
 
     /// <summary>
-    /// Orders agents by DisplayOrder then by DisplayName.
+    /// Orders agents by Order then by DisplayName.
     /// </summary>
     public static IReadOnlyList<AgentDisplayInfo> OrderByRelevance(
         IEnumerable<AgentDisplayInfo> agents,
@@ -116,7 +116,7 @@ public static class AgentOrderingHelper
         string? nodeTypePath)
     {
         return agents
-            .OrderBy(a => a.DisplayOrder)
+            .OrderBy(a => a.Order)
             .ThenBy(a => a.AgentConfiguration.DisplayName ?? a.Name)
             .ToList();
     }

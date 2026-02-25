@@ -56,9 +56,9 @@ public static class ThreadLayoutAreas
         LayoutAreaHost host, RenderingContext ctx)
     {
         await Task.CompletedTask;
-        yield return new("New Chat", "new-chat", DisplayOrder: 0);
-        yield return new("History", "history", DisplayOrder: 10);
-        yield return new("Full Screen", "fullscreen", DisplayOrder: 20);
+        yield return new("New Chat", "new-chat", Order: 0);
+        yield return new("History", "history", Order: 10);
+        yield return new("Full Screen", "fullscreen", Order: 20);
     }
 
     /// <summary>
@@ -68,7 +68,7 @@ public static class ThreadLayoutAreas
         LayoutAreaHost host, RenderingContext ctx)
     {
         await Task.CompletedTask;
-        yield return new("Chat", ThreadNodeType.ChatArea, DisplayOrder: 10);
+        yield return new("Chat", ThreadNodeType.ChatArea, Order: 10);
     }
 
     /// <summary>
@@ -78,7 +78,7 @@ public static class ThreadLayoutAreas
         LayoutAreaHost host, RenderingContext ctx)
     {
         await Task.CompletedTask;
-        yield return new("Messages", ThreadNodeType.ThreadArea, DisplayOrder: 11);
+        yield return new("Messages", ThreadNodeType.ThreadArea, Order: 11);
     }
 
     /// <summary>
@@ -88,7 +88,7 @@ public static class ThreadLayoutAreas
         LayoutAreaHost host, RenderingContext ctx)
     {
         await Task.CompletedTask;
-        yield return new("Delegations", ThreadNodeType.HistoryArea, DisplayOrder: 12);
+        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12);
     }
 
     /// <summary>

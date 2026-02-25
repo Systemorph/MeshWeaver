@@ -35,7 +35,7 @@ public class InsuranceApplicationAttribute : MeshNodeProviderAttribute
         {
             Name = "Pricing",
             Icon = "Calculator",
-            DisplayOrder = 100,
+            Order = 100,
             HubConfiguration = InsuranceApplicationExtensions.ConfigureSinglePricingApplication
         }
     ];

@@ -105,7 +105,7 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
                 }
                 return true;
             })
-            .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
+            .OrderBy(n => n.Order ?? int.MaxValue)
             .ThenBy(n => n.Name);
 
         foreach (var child in children)
@@ -225,7 +225,7 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
             Name = sourceNode.Name,
             NodeType = sourceNode.NodeType,
             Icon = sourceNode.Icon,
-            DisplayOrder = sourceNode.DisplayOrder,
+            Order = sourceNode.Order,
             Content = sourceNode.Content,
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,
@@ -248,7 +248,7 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
                     Name = descendantNode.Name,
                     NodeType = descendantNode.NodeType,
                     Icon = descendantNode.Icon,
-                    DisplayOrder = descendantNode.DisplayOrder,
+                    Order = descendantNode.Order,
                     Content = descendantNode.Content,
                     AssemblyLocation = descendantNode.AssemblyLocation,
                     HubConfiguration = descendantNode.HubConfiguration,
@@ -322,7 +322,7 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
 
                 return false;
             })
-            .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
+            .OrderBy(n => n.Order ?? int.MaxValue)
             .ThenBy(n => n.Name);
 
         foreach (var result in results)
