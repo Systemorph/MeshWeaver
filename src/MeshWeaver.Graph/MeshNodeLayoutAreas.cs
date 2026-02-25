@@ -462,12 +462,13 @@ public static class MeshNodeLayoutAreas
                     ? $"nodeType:{nodeTypePath} scope:subtree"
                     : $"namespace:{nodeTypeNamespace} nodeType:{nodeTypePath} scope:subtree";
 
-                // Build create href with type restriction and optional namespace from DefaultNamespace
+                // Build create href with type restriction and optional namespace restrictions
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
                 var createNs = nodeTypeDefinition?.DefaultNamespace ?? hubPath;
-                var createHref = $"/{createNs}/{CreateNodeArea}?types={Uri.EscapeDataString(nodeTypePath)}";
-                if (nodeTypeDefinition?.DefaultNamespace != null)
-                    createHref += $"&namespaces={Uri.EscapeDataString(nodeTypeDefinition.DefaultNamespace)}";
+                var createPath = string.IsNullOrEmpty(createNs) ? CreateNodeArea : $"{createNs}/{CreateNodeArea}";
+                var createHref = $"/{createPath}?types={Uri.EscapeDataString(nodeTypePath)}";
+                if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
+                    createHref += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
 
                 return (UiControl?)Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
