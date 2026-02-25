@@ -24,6 +24,17 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
     private readonly ConcurrentDictionary<string, UserActivityRecord> _pendingUpdates = new();
     private readonly SemaphoreSlim _flushLock = new(1, 1);
 
+    /// <summary>
+    /// Node types excluded from activity tracking.
+    /// Satellite content (ISatelliteContent) is also excluded automatically.
+    /// </summary>
+    private static readonly HashSet<string> ExcludedNodeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "User",
+        "Role",
+        "Group",
+    };
+
     public ActivityTrackingPersistenceDecorator(
         IPersistenceServiceCore inner,
         IActivityStore activityStore,
@@ -42,7 +53,10 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
     {
         var result = await _inner.GetNodeAsync(path, options, ct);
         if (result != null)
+        {
             TrackActivity(path, result, ActivityType.Read);
+            await FlushPendingActivitiesAsync();
+        }
         return result;
     }
 
@@ -89,6 +103,12 @@ public class ActivityTrackingPersistenceDecorator : IPersistenceServiceCore
     {
         // Skip tracking for system paths
         if (string.IsNullOrEmpty(path) || path.StartsWith('_'))
+            return;
+
+        // Skip satellite content (Threads, AccessAssignments, etc.) and excluded node types
+        if (node?.Content is ISatelliteContent)
+            return;
+        if (node?.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
             return;
 
         var userId = _accessService.Context?.ObjectId;

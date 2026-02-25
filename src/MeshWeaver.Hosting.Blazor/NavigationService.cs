@@ -1,6 +1,7 @@
 using System.Reactive.Subjects;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
@@ -158,6 +159,10 @@ public class NavigationService : INavigationService
         _context = context;
         CurrentNamespace = context.Namespace;
 
+        // Track navigation activity for "Recently Viewed"
+        if (node != null)
+            TrackNavigationActivity(node);
+
         OnNavigationContextChanged?.Invoke(context);
 
         // Load creatable types in background when namespace changes
@@ -221,6 +226,55 @@ public class NavigationService : INavigationService
             // Node loading is best-effort for prerender optimization
             return null;
         }
+    }
+
+    /// <summary>
+    /// Node types excluded from activity tracking.
+    /// Satellite content (ISatelliteContent) is also excluded automatically.
+    /// </summary>
+    private static readonly HashSet<string> ExcludedNodeTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "User",
+        "Role",
+        "Group",
+    };
+
+    /// <summary>
+    /// Records a navigation activity for the "Recently Viewed" dashboard section.
+    /// Fire-and-forget: failures are logged but don't affect navigation.
+    /// </summary>
+    private void TrackNavigationActivity(MeshNode node)
+    {
+        var activityStore = _hub.ServiceProvider.GetService<IActivityStore>();
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        if (activityStore == null || accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
+            return;
+
+        // Skip system/internal paths
+        if (string.IsNullOrEmpty(node.Path) || node.Path.StartsWith('_'))
+            return;
+
+        // Skip satellite content (Threads, AccessAssignments, etc.) and excluded node types
+        if (node.Content is ISatelliteContent)
+            return;
+        if (node.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var record = new UserActivityRecord
+        {
+            Id = node.Path.Replace("/", "_"),
+            NodePath = node.Path,
+            UserId = userId,
+            ActivityType = ActivityType.Read,
+            FirstAccessedAt = now,
+            LastAccessedAt = now,
+            AccessCount = 1,
+            NodeName = node.Name,
+            NodeType = node.NodeType,
+            Namespace = node.Namespace
+        };
+        _ = activityStore.SaveActivitiesAsync(userId, [record]);
     }
 
     private static (string? Area, string? Id) ParseRemainder(string? remainder)

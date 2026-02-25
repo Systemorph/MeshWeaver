@@ -23,7 +23,8 @@ public static class UserActivityLayoutAreas
         => configuration.AddLayout(layout => layout.WithView(ActivityArea, Activity));
 
     /// <summary>
-    /// Renders the user's personal dashboard with 4 sections.
+    /// Renders the user's personal dashboard: welcome header, compact chat entry,
+    /// and a responsive 3-column grid (Recently Viewed, Notifications, Pending Actions).
     /// </summary>
     public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
     {
@@ -34,24 +35,29 @@ public static class UserActivityLayoutAreas
         return Observable.FromAsync(async () =>
         {
             var dashboard = Controls.Stack.WithWidth("100%")
-                .WithStyle("max-width: 960px; margin: 0 auto; padding: 24px;");
+                .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px;");
 
             // Welcome header
             var userName = accessService?.Context?.Name ?? "User";
             dashboard = dashboard.WithView(Controls.Html(
-                $"<h1 style=\"margin: 0 0 24px 0;\">Welcome back, {EscapeHtml(userName)}</h1>"));
+                $"<h2 style=\"margin: 0 0 16px 0;\">Welcome back, {EscapeHtml(userName)}</h2>"));
 
-            // 1. Chat Entry
+            // Compact chat entry
             dashboard = dashboard.WithView(BuildChatEntry(host, nodePath));
 
-            // 2. Recent Activity
-            dashboard = dashboard.WithView(await BuildRecentActivity(host, userId));
+            // 3-column responsive grid
+            var columns = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithWrap(true)
+                .WithHorizontalGap(16)
+                .WithVerticalGap(16)
+                .WithWidth("100%");
 
-            // 3. Notifications
-            dashboard = dashboard.WithView(BuildNotifications(nodePath, userId));
+            columns = columns.WithView(await BuildRecentActivity(host, userId));
+            columns = columns.WithView(BuildNotifications(nodePath, userId));
+            columns = columns.WithView(BuildPendingActions(userId));
 
-            // 4. Pending Actions (approvals assigned to this user)
-            dashboard = dashboard.WithView(BuildPendingActions(userId));
+            dashboard = dashboard.WithView(columns);
 
             return (UiControl?)dashboard;
         });
@@ -60,12 +66,8 @@ public static class UserActivityLayoutAreas
     private static UiControl BuildChatEntry(LayoutAreaHost host, string nodePath)
     {
         var section = Controls.Stack.WithWidth("100%")
-            .WithStyle("margin-bottom: 32px; padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);");
+            .WithStyle("margin-bottom: 16px; padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);");
 
-        section = section.WithView(Controls.Html(
-            "<h3 style=\"margin: 0 0 12px 0;\">Ask anything</h3>"));
-
-        // ThreadChatControl for new threads
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
             .WithInitialContextDisplayName("Home");
@@ -74,13 +76,14 @@ public static class UserActivityLayoutAreas
         return section;
     }
 
+    private static readonly string ColumnStyle =
+        "flex: 1 1 calc(33.33% - 16px); min-width: 280px; padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);";
+
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        var section = Controls.Stack.WithWidth("100%")
-            .WithStyle("margin-bottom: 32px;");
+        var section = Controls.Stack.WithStyle(ColumnStyle);
 
-        section = section.WithView(Controls.Html(
-            "<h2 style=\"margin: 0 0 16px 0;\">Recent Activity</h2>"));
+        section = section.WithView(Controls.PaneHeader("Recently Viewed"));
 
         var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
         if (activityStore == null || string.IsNullOrEmpty(userId))
@@ -126,11 +129,9 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildNotifications(string nodePath, string userId)
     {
-        var section = Controls.Stack.WithWidth("100%")
-            .WithStyle("margin-bottom: 32px;");
+        var section = Controls.Stack.WithStyle(ColumnStyle);
 
-        section = section.WithView(Controls.Html(
-            "<h2 style=\"margin: 0 0 16px 0;\">Notifications</h2>"));
+        section = section.WithView(Controls.PaneHeader("Notifications"));
 
         // Use MeshSearchControl to query notification nodes under this user
         var searchControl = Controls.MeshSearch
@@ -148,11 +149,9 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildPendingActions(string userId)
     {
-        var section = Controls.Stack.WithWidth("100%")
-            .WithStyle("margin-bottom: 32px;");
+        var section = Controls.Stack.WithStyle(ColumnStyle);
 
-        section = section.WithView(Controls.Html(
-            "<h2 style=\"margin: 0 0 16px 0;\">Pending Actions</h2>"));
+        section = section.WithView(Controls.PaneHeader("Pending Actions"));
 
         // Query approval nodes where this user is the approver
         var searchControl = Controls.MeshSearch
