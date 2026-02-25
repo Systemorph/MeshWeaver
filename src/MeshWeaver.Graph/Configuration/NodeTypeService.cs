@@ -135,11 +135,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         return task.ContinueWith(t =>
         {
-            // On failure, remove from cache to allow retry
+            // On failure, remove from cache to allow retry and return null
             if (t.IsFaulted || t.IsCanceled)
             {
                 _compilationTasks.TryRemove(nodeTypePath, out _);
                 _releaseKeys.TryRemove(nodeTypePath, out _);
+                return null;
             }
             return t.Result?.AssemblyPath;
         }, TaskContinuationOptions.ExecuteSynchronously);
@@ -266,15 +267,20 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // Get assembly path (triggers compilation if needed for dynamic types, returns null for built-ins)
             var assemblyPath = await GetAssemblyPathAsync(nodeType, ct);
 
+            // Try to get the built-in node definition (registered via AddMeshNodes)
+            meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode);
+
             // For built-in types, get AssemblyLocation from the registered node definition
-            if (assemblyPath == null && meshConfiguration.Nodes.TryGetValue(nodeType, out var builtInNode))
+            if (assemblyPath == null && builtInNode != null)
             {
                 assemblyPath = builtInNode.AssemblyLocation;
             }
 
             // Get hub configuration: keep existing or resolve from cache/built-in
+            // Fall back to built-in HubConfiguration for types like User, Markdown, etc.
             var hubConfig = node.HubConfiguration
-                ?? GetCachedHubConfiguration(nodeType);
+                ?? GetCachedHubConfiguration(nodeType)
+                ?? builtInNode?.HubConfiguration;
 
             return CopyIconFromNodeType(node with
             {

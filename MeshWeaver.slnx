@@ -50,6 +50,7 @@
     <Project Path="src/MeshWeaver.AI.AzureOpenAI/MeshWeaver.AI.AzureOpenAI.csproj" />
     <Project Path="src/MeshWeaver.AI/MeshWeaver.AI.csproj" />
     <Project Path="src/MeshWeaver.AI.ClaudeCode/MeshWeaver.AI.ClaudeCode.csproj" />
+    <Project Path="src/MeshWeaver.AI.Copilot/MeshWeaver.AI.Copilot.csproj" />
     <Project Path="src/MeshWeaver.Blazor.AI/MeshWeaver.Blazor.AI.csproj" />
     <Project Path="src/MeshWeaver.Application.Styles/MeshWeaver.Application.Styles.csproj" />
     <Project Path="src/MeshWeaver.Blazor.Radzen/MeshWeaver.Blazor.Radzen.csproj" />
@@ -81,6 +82,7 @@
     <Project Path="src/MeshWeaver.Hosting.Orleans/MeshWeaver.Hosting.Orleans.csproj" />
     <Project Path="src/MeshWeaver.Hosting.AzureStorage/MeshWeaver.Hosting.AzureStorage.csproj" />
     <Project Path="src/MeshWeaver.Hosting.Cosmos/MeshWeaver.Hosting.Cosmos.csproj" />
+    <Project Path="src/MeshWeaver.Hosting.PostgreSql/MeshWeaver.Hosting.PostgreSql.csproj" />
     <Project Path="src/MeshWeaver.Hosting/MeshWeaver.Hosting.csproj" />
     <Project Path="src/MeshWeaver.Import/MeshWeaver.Import.csproj" />
     <Project Path="src/MeshWeaver.Kernel.Hub/MeshWeaver.Kernel.Hub.csproj" />
@@ -119,6 +121,8 @@
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Blazor.Test/MeshWeaver.Hosting.Blazor.Test.csproj" />
+    <Project Path="test/MeshWeaver.Hosting.Test/MeshWeaver.Hosting.Test.csproj" />
     <Project Path="test/MeshWeaver.Hub.Fixture/MeshWeaver.Hub.Fixture.csproj" />
     <Project Path="test/MeshWeaver.Kernel.Test/MeshWeaver.Kernel.Test.csproj" />
     <Project Path="test/MeshWeaver.Markdown.Collaboration.Test/MeshWeaver.Markdown.Collaboration.Test.csproj" />

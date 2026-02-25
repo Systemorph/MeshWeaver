@@ -110,7 +110,6 @@ public static class MeshNodeLayoutAreas
             .WithView(DataArea, Data)
             .WithView(SchemaArea, Schema)
             .WithView(ModelArea, DataModelLayoutArea.DataModel)
-            .AddWelcomeArea()
             .AddDomainLayoutAreas();
 
     /// <summary>
@@ -518,13 +517,17 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
-    /// Modules can override this view (e.g. ThreadLayoutAreas adds a Create button).
+    /// Uses activity-based sorting so the user sees their most recently accessed threads first.
     /// </summary>
     [Browsable(false)]
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
+        return Controls.MeshSearch
+            .WithHiddenQuery($"source:activity nodeType:Thread namespace:{hubPath}")
+            .WithNamespace(hubPath)
+            .WithRenderMode(MeshSearchRenderMode.Flat);
     }
 
     /// <summary>

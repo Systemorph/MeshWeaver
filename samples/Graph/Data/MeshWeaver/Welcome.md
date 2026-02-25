@@ -1,3 +1,7 @@
+---
+Description: Welcome page for new and anonymous visitors
+---
+
 # Welcome to MeshWeaver
 
 MeshWeaver is your collaborative knowledge platform that brings together documents, approvals, and AI-powered assistance in one place.
@@ -11,6 +15,6 @@ MeshWeaver is your collaborative knowledge platform that brings together documen
 
 ## Getting started
 
-Sign in to access your personal dashboard with recent activity, notifications, and pending actions.
+[Sign in](/login) to access your personal dashboard with recent activity, notifications, and pending actions.
 
 Or try the chat widget below to ask a question — no account required.
