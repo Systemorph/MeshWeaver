@@ -171,6 +171,16 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await AssertNodeLoadsWithoutHanging(nodePath);
     }
 
+    /// <summary>
+    /// Tests that the Activity area loads for User nodes.
+    /// This verifies UserActivityLayoutAreas is properly registered via UserNodeType.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task User_Activity_LoadsWithoutHanging()
+    {
+        await AssertAreaLoadsWithoutHanging("User/Roland", "Activity");
+    }
+
     #endregion
 
     #region Cornerstone Node Tests
