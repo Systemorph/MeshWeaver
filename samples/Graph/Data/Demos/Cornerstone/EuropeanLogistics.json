@@ -1,0 +1,20 @@
+{
+  "id": "EuropeanLogistics",
+  "namespace": "Cornerstone",
+  "name": "European Logistics Ltd",
+  "nodeType": "Demos/Cornerstone/Insured",
+  "category": "Clients",
+  "description": "UK logistics and transportation company - Insurance client",
+  "iconName": "Building",
+  "icon": "/static/storage/content/Demos/Cornerstone/icons/europeanlogistics.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "EuropeanLogistics",
+    "name": "European Logistics Ltd",
+    "description": "UK logistics and transportation company",
+    "address": "Logistics Park, Birmingham B1 1AA, United Kingdom",
+    "industry": "Logistics & Transportation",
+    "location": "United Kingdom"
+  }
+}

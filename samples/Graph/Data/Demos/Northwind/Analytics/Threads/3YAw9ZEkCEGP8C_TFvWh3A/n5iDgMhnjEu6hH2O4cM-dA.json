@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/n5iDgMhnjEu6hH2O4cM-dA",
+  "path": "Demos/Northwind/Analytics/Threads/3YAw9ZEkCEGP8C_TFvWh3A/n5iDgMhnjEu6hH2O4cM-dA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-17T14:55:42.608413+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "n5iDgMhnjEu6hH2O4cM-dA",
+    "role": "user",
+    "text": "Display SalesByCategory chart for the year 2024 and show the bottom 3 categories",
+    "timestamp": "2026-02-17T14:55:42.607711Z",
+    "type": "ExecutedInput"
+  }
+}

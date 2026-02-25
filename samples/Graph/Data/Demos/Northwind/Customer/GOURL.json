@@ -1,0 +1,23 @@
+{
+  "id": "GOURL",
+  "namespace": "Northwind",
+  "name": "Gourmet Lanchonetes",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Gourmet Lanchonetes - Campinas, Brazil",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "GOURL",
+    "companyName": "Gourmet Lanchonetes",
+    "contactName": "Andr\u00e9 Fonseca",
+    "contactTitle": "Sales Associate",
+    "city": "Campinas",
+    "region": "SP",
+    "postalCode": "04876-786",
+    "country": "Brazil",
+    "phone": "(11) 555-9482",
+    "fax": ""
+  }
+}

@@ -11,13 +11,22 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 
 ---
 
+## Featured Articles
+
+| Article | Description |
+|---------|-------------|
+| [Agentic AI](MeshWeaver/Documentation/AI/AgenticAI) | Understand the paradigm shift to proactive, goal-oriented AI agents |
+| [Vibe Coding](MeshWeaver/Documentation/AI/Vibe Coding) | Can AI build complex business apps? Watch the Mesh Bros put it to the test |
+
+---
+
 ## What do you want to do?
 
 | I want to... | Go here |
 |--------------|---------|
 | Use mesh tools in agents | [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin) - Get, Search, Update, NavigateTo |
 | Understand agent architecture | [Agentic AI](MeshWeaver/Documentation/Architecture/AgenticAI) - Multi-agent patterns |
-| See AI in action | [ACME Case Studies](MeshWeaver/Documentation/ACME) - Practical examples |
+| See AI in action | [ACME Case Studies](Demos/ACME/Documentation) - Practical examples |
 
 ---
 

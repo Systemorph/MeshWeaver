@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Background -->
+  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
+  <!-- List items with checkboxes -->
+  <rect x="10" y="12" width="10" height="10" rx="2" stroke="#78716C" stroke-width="2" fill="none"/>
+  <path d="M12 17l2 2 4-4" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M26 17h28" stroke="#78716C" stroke-width="2" stroke-linecap="round"/>
+
+  <rect x="10" y="28" width="10" height="10" rx="2" stroke="#78716C" stroke-width="2" fill="none"/>
+  <path d="M12 33l2 2 4-4" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M26 33h28" stroke="#78716C" stroke-width="2" stroke-linecap="round"/>
+
+  <rect x="10" y="44" width="10" height="10" rx="2" stroke="#78716C" stroke-width="2" fill="none"/>
+  <path d="M26 49h20" stroke="#78716C" stroke-width="2" stroke-linecap="round"/>
+  <!-- Wrench accent -->
+  <g transform="translate(48,48) rotate(-45)" opacity="0.4">
+    <rect x="-1.5" y="-8" width="3" height="12" rx="1" fill="#DC2626"/>
+    <circle cx="0" cy="-8" r="3" fill="none" stroke="#DC2626" stroke-width="1.5"/>
+  </g>
+</svg>

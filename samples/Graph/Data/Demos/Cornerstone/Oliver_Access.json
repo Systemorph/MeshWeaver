@@ -1,0 +1,16 @@
+{
+  "id": "Oliver_Access",
+  "namespace": "Cornerstone",
+  "name": "Oliver Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Oliver",
+    "displayName": "Oliver Chen",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

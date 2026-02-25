@@ -1,0 +1,21 @@
+{
+  "id": "Grandma_Kellys_Homestead",
+  "namespace": "Northwind",
+  "name": "Grandma Kelly's Homestead",
+  "nodeType": "Demos/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Grandma Kelly's Homestead - Ann Arbor, USA",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 3,
+    "companyName": "Grandma Kelly's Homestead",
+    "contactName": "Regina Murphy",
+    "contactTitle": "Sales Representative",
+    "city": "Ann Arbor",
+    "region": "MI",
+    "country": "USA",
+    "phone": "(313) 555-5735"
+  }
+}

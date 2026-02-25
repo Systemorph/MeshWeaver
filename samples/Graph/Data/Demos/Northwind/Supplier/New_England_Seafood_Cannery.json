@@ -1,0 +1,21 @@
+{
+  "id": "New_England_Seafood_Cannery",
+  "namespace": "Northwind",
+  "name": "New England Seafood Cannery",
+  "nodeType": "Demos/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "New England Seafood Cannery - Boston, USA",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 19,
+    "companyName": "New England Seafood Cannery",
+    "contactName": "Robb Merchant",
+    "contactTitle": "Wholesale Account Agent",
+    "city": "Boston",
+    "region": "MA",
+    "country": "USA",
+    "phone": "(617) 555-3267"
+  }
+}

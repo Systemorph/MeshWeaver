@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <linearGradient id="insuredGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4B5563"/>
+      <stop offset="100%" stop-color="#9CA3AF"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="24" height="24" rx="4" fill="#F3F4F6"/>
+  <!-- Stone fortress building -->
+  <rect x="3" y="8" width="12" height="14" rx="1" fill="url(#insuredGrad)"/>
+  <!-- Fortress crenellations -->
+  <rect x="2" y="5" width="4" height="4" rx="0.5" fill="url(#insuredGrad)"/>
+  <rect x="7" y="5" width="4" height="4" rx="0.5" fill="url(#insuredGrad)"/>
+  <rect x="12" y="5" width="4" height="4" rx="0.5" fill="url(#insuredGrad)"/>
+  <!-- Windows -->
+  <rect x="5" y="10" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
+  <rect x="9" y="10" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
+  <!-- Door -->
+  <rect x="7" y="17" width="4" height="5" rx="0.5" fill="#e2e8f0"/>
+  <!-- Shield overlay -->
+  <path d="M19 7 L22.5 9 V13 C22.5 15.5 21 17.5 19 18.5 C17 17.5 15.5 15.5 15.5 13 V9 Z" fill="#9CA3AF" stroke="#4B5563" stroke-width="0.8"/>
+  <!-- Shield checkmark -->
+  <path d="M17.5 12.5 L18.5 13.5 L20.5 11" stroke="white" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

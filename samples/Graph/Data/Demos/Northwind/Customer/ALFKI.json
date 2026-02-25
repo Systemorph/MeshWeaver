@@ -1,0 +1,23 @@
+{
+  "id": "ALFKI",
+  "namespace": "Northwind",
+  "name": "Alfreds Futterkiste",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Alfreds Futterkiste - Berlin, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "ALFKI",
+    "companyName": "Alfreds Futterkiste",
+    "contactName": "Maria Anders",
+    "contactTitle": "Sales Representative",
+    "city": "Berlin",
+    "region": "",
+    "postalCode": "12209",
+    "country": "Germany",
+    "phone": "030-0074321",
+    "fax": "030-0076545"
+  }
+}

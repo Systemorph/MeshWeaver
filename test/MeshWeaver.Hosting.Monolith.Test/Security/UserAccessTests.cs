@@ -75,7 +75,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         await securityService.AddUserRoleAsync("NewUser", "Admin", null, "system", TestTimeout);
 
-        var permissions = await securityService.GetEffectivePermissionsAsync("ACME/SomeProject", "NewUser", TestTimeout);
+        var permissions = await securityService.GetEffectivePermissionsAsync("Demos/ACME/SomeProject", "NewUser", TestTimeout);
         permissions.Should().Be(Permission.All);
     }
 
@@ -104,7 +104,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Roland", TestTimeout);
         var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "Roland", TestTimeout);
-        var permDeep = await securityService.GetEffectivePermissionsAsync("ACME/ProductLaunch/Todo/Task1", "Roland", TestTimeout);
+        var permDeep = await securityService.GetEffectivePermissionsAsync("Demos/ACME/ProductLaunch/Todo/Task1", "Roland", TestTimeout);
 
         permMeshWeaver.Should().Be(Permission.All);
         permACME.Should().Be(Permission.All);
@@ -115,10 +115,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task GetEffectivePermissions_NamespacedEditor_HasEditorInNamespace()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await securityService.AddUserRoleAsync("Alice", "Editor", "ACME", "system", TestTimeout);
+        await securityService.AddUserRoleAsync("Alice", "Editor", "Demos/ACME", "system", TestTimeout);
 
-        var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "Alice", TestTimeout);
-        var permChild = await securityService.GetEffectivePermissionsAsync("ACME/ProductLaunch", "Alice", TestTimeout);
+        var permACME = await securityService.GetEffectivePermissionsAsync("Demos/ACME", "Alice", TestTimeout);
+        var permChild = await securityService.GetEffectivePermissionsAsync("Demos/ACME/ProductLaunch", "Alice", TestTimeout);
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Alice", TestTimeout);
 
         permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);

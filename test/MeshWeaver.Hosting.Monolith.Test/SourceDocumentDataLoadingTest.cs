@@ -65,21 +65,21 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         {
             // Microsoft 2026 - PropertyRisks from JSON
             new object[] { new DataLoadingTestCase(
-                "Cornerstone/Microsoft/2026",
+                "Demos/Cornerstone/Microsoft/2026",
                 "PropertyRisk",
                 ExpectedMinCount: 1,
                 Description: "Microsoft 2026 should load PropertyRisks from JSON") },
 
             // Microsoft 2026 - ReinsuranceAcceptances from Slip.md
             new object[] { new DataLoadingTestCase(
-                "Cornerstone/Microsoft/2026",
+                "Demos/Cornerstone/Microsoft/2026",
                 "ReinsuranceAcceptance",
                 ExpectedMinCount: 1,
                 Description: "Microsoft 2026 should load ReinsuranceAcceptances from Slip.md") },
 
             // Microsoft 2026 - ReinsuranceSections from Slip.md
             new object[] { new DataLoadingTestCase(
-                "Cornerstone/Microsoft/2026",
+                "Demos/Cornerstone/Microsoft/2026",
                 "ReinsuranceSection",
                 ExpectedMinCount: 1,
                 Description: "Microsoft 2026 should load ReinsuranceSections from Slip.md") },
@@ -138,7 +138,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that a node hub can be initialized and has the expected data types registered.
     /// </summary>
     [Theory(Timeout = 30000)]
-    [InlineData("Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
+    [InlineData("Demos/Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
     public async Task NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
     {
         var client = GetClient();
@@ -168,7 +168,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// This helps catch configuration issues early.
     /// </summary>
     [Theory(Timeout = 5000)]
-    [InlineData("Cornerstone/Microsoft/2026", "Submissions/Slip.md")]
+    [InlineData("Demos/Cornerstone/Microsoft/2026", "Submissions/Slip.md")]
     public void SourceDocuments_ExistInFileSystem(string nodeAddress, string relativePath)
     {
         var basePath = TestPaths.SamplesGraphData;
@@ -186,9 +186,9 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Checks that key properties are present and have valid values.
     /// </summary>
     [Theory(Timeout = 60000)]
-    [InlineData("Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
-    [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
-    [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
+    [InlineData("Demos/Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
+    [InlineData("Demos/Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
+    [InlineData("Demos/Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
     public async Task LoadedData_HasValidStructure(string nodeAddress, string typeName, params string[] requiredProperties)
     {
         var client = GetClient();

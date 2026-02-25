@@ -1,0 +1,23 @@
+{
+  "id": "ERNSH",
+  "namespace": "Northwind",
+  "name": "Ernst Handel",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Ernst Handel - Graz, Austria",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "ERNSH",
+    "companyName": "Ernst Handel",
+    "contactName": "Roland Mendel",
+    "contactTitle": "Sales Manager",
+    "city": "Graz",
+    "region": "",
+    "postalCode": "8010",
+    "country": "Austria",
+    "phone": "7675-3425",
+    "fax": "7675-3426"
+  }
+}

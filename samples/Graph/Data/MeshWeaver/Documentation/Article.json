@@ -1,0 +1,19 @@
+{
+  "id": "Article",
+  "namespace": "MeshWeaver/Documentation",
+  "name": "Article",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A MeshWeaver documentation article with metadata",
+  "iconName": "DocumentText",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Article",
+    "namespace": "MeshWeaver/Documentation",
+    "displayName": "Article",
+    "iconName": "DocumentText",
+    "description": "A MeshWeaver documentation article with metadata",
+    "configuration": "config => config.WithContentType<Article>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddArticleViews())"
+  }
+}

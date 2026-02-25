@@ -1,0 +1,21 @@
+{
+  "id": "Microsoft",
+  "namespace": "Cornerstone",
+  "name": "Microsoft Corporation",
+  "nodeType": "Demos/Cornerstone/Insured",
+  "category": "Clients",
+  "description": "Global technology company - Insurance client",
+  "iconName": "Building",
+  "icon": "/static/storage/content/Demos/Cornerstone/icons/microsoft.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "Microsoft",
+    "name": "Microsoft Corporation",
+    "description": "Global technology company",
+    "address": "One Microsoft Way, Redmond, WA 98052, United States",
+    "website": "https://microsoft.com",
+    "industry": "Technology",
+    "location": "United States"
+  }
+}

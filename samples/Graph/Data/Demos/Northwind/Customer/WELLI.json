@@ -1,0 +1,23 @@
+{
+  "id": "WELLI",
+  "namespace": "Northwind",
+  "name": "Wellington Importadora",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Wellington Importadora - Resende, Brazil",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "WELLI",
+    "companyName": "Wellington Importadora",
+    "contactName": "Paula Parente",
+    "contactTitle": "Sales Manager",
+    "city": "Resende",
+    "region": "SP",
+    "postalCode": "08737-363",
+    "country": "Brazil",
+    "phone": "(14) 555-8122",
+    "fax": ""
+  }
+}

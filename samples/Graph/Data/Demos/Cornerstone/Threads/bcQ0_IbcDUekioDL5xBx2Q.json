@@ -1,0 +1,16 @@
+{
+  "$type": "MeshNode",
+  "id": "Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q",
+  "path": "Demos/Cornerstone/Threads/bcQ0_IbcDUekioDL5xBx2Q",
+  "name": "Can we have a discussion about how Group Actuarial...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-19T19:58:40.295071+00:00",
+  "version": 4,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Cornerstone",
+    "primaryNodePath": "Cornerstone"
+  }
+}

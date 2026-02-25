@@ -1,0 +1,21 @@
+{
+  "id": "Tesla",
+  "namespace": "Cornerstone",
+  "name": "Tesla, Inc.",
+  "nodeType": "Demos/Cornerstone/Insured",
+  "category": "Clients",
+  "description": "Electric vehicle and clean energy company - Insurance client",
+  "iconName": "Building",
+  "icon": "/static/storage/content/Demos/Cornerstone/icons/tesla.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "Tesla",
+    "name": "Tesla, Inc.",
+    "description": "Electric vehicle and clean energy company",
+    "address": "1 Tesla Road, Austin, TX 78725, United States",
+    "website": "https://tesla.com",
+    "industry": "Automotive & Energy",
+    "location": "United States"
+  }
+}

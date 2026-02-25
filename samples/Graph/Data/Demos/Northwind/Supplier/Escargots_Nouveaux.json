@@ -1,0 +1,21 @@
+{
+  "id": "Escargots_Nouveaux",
+  "namespace": "Northwind",
+  "name": "Escargots Nouveaux",
+  "nodeType": "Demos/Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Escargots Nouveaux - Montceau, France",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 27,
+    "companyName": "Escargots Nouveaux",
+    "contactName": "Marie Delamare",
+    "contactTitle": "Sales Manager",
+    "city": "Montceau",
+    "region": "",
+    "country": "France",
+    "phone": "85.57.00.07"
+  }
+}

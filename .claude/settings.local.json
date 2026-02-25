@@ -112,7 +112,9 @@
       "Bash(git show:*)",
       "WebFetch(domain:cdnjs.cloudflare.com)",
       "Bash(tr:*)",
-      "Bash(cmp:*)"
+      "Bash(cmp:*)",
+      "Bash(while read f)",
+      "Bash(do sed -i '' 's|/static/storage/content/ACME/Project/Todo/icon.svg|/static/storage/content/Demos/ACME/Project/Todo/icon.svg|g' \"$f\" done)"
     ],
     "deny": []
   },

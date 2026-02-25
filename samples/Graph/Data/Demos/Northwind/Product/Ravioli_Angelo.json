@@ -1,0 +1,23 @@
+{
+  "id": "Ravioli_Angelo",
+  "namespace": "Northwind",
+  "name": "Ravioli Angelo",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Ravioli Angelo - 24 - 250 g pkgs.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 57,
+    "productName": "Ravioli Angelo",
+    "supplierId": 26,
+    "categoryId": 5,
+    "quantityPerUnit": "24 - 250 g pkgs.",
+    "unitPrice": 19.5,
+    "unitsInStock": 36,
+    "unitsOnOrder": 0,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}

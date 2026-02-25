@@ -1,0 +1,23 @@
+{
+  "id": "GREAL",
+  "namespace": "Northwind",
+  "name": "Great Lakes Food Market",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Great Lakes Food Market - Eugene, USA",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "GREAL",
+    "companyName": "Great Lakes Food Market",
+    "contactName": "Howard Snyder",
+    "contactTitle": "Marketing Manager",
+    "city": "Eugene",
+    "region": "OR",
+    "postalCode": "97403",
+    "country": "USA",
+    "phone": "(503) 555-7555",
+    "fax": ""
+  }
+}

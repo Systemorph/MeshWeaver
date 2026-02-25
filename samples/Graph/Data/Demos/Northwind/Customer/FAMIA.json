@@ -1,0 +1,23 @@
+{
+  "id": "FAMIA",
+  "namespace": "Northwind",
+  "name": "Familia Arquibaldo",
+  "nodeType": "Demos/Northwind/Customer",
+  "category": "Customers",
+  "description": "Familia Arquibaldo - Sao Paulo, Brazil",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "FAMIA",
+    "companyName": "Familia Arquibaldo",
+    "contactName": "Aria Cruz",
+    "contactTitle": "Marketing Assistant",
+    "city": "Sao Paulo",
+    "region": "SP",
+    "postalCode": "05442-030",
+    "country": "Brazil",
+    "phone": "(11) 555-9857",
+    "fax": ""
+  }
+}

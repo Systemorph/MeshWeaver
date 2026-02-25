@@ -24,21 +24,21 @@ public class StorageAdapterTests
         await _fixture.CleanDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        var node = new MeshNode("Story1", "ACME/Project")
+        var node = new MeshNode("Story1", "Demos/ACME/Project")
         {
             Name = "Story One",
             NodeType = "Story"
         };
 
         await adapter.WriteAsync(node, _options);
-        var result = await adapter.ReadAsync("ACME/Project/Story1", _options);
+        var result = await adapter.ReadAsync("Demos/ACME/Project/Story1", _options);
 
         result.Should().NotBeNull();
         result!.Id.Should().Be("Story1");
-        result.Namespace.Should().Be("ACME/Project");
+        result.Namespace.Should().Be("Demos/ACME/Project");
         result.Name.Should().Be("Story One");
         result.NodeType.Should().Be("Story");
-        result.Path.Should().Be("ACME/Project/Story1");
+        result.Path.Should().Be("Demos/ACME/Project/Story1");
     }
 
     [Fact]

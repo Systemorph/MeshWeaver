@@ -1,0 +1,23 @@
+{
+  "id": "Scottish_Longbreads",
+  "namespace": "Northwind",
+  "name": "Scottish Longbreads",
+  "nodeType": "Demos/Northwind/Product",
+  "category": "Products",
+  "description": "Scottish Longbreads - 10 boxes x 8 pieces",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 68,
+    "productName": "Scottish Longbreads",
+    "supplierId": 8,
+    "categoryId": 3,
+    "quantityPerUnit": "10 boxes x 8 pieces",
+    "unitPrice": 12.5,
+    "unitsInStock": 6,
+    "unitsOnOrder": 10,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}
