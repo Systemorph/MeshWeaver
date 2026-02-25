@@ -1,11 +1,8 @@
-using System.Reactive.Linq;
-using MeshWeaver.AI;
+﻿using System.Reactive.Linq;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,7 +19,7 @@ public static class UserActivityLayoutAreas
     /// <summary>
     /// Adds the Activity view to the User node's layout.
     /// </summary>
-    public static MessageHubConfiguration AddUserActivityViews(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddUserActivityLayoutAreas(this MessageHubConfiguration configuration)
         => configuration.AddLayout(layout => layout.WithView(ActivityArea, Activity));
 
     /// <summary>

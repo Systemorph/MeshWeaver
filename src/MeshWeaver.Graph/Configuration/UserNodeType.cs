@@ -1,5 +1,4 @@
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -32,12 +31,13 @@ public static class UserNodeType
     {
         Name = "User",
         Icon = "/static/NodeTypeIcons/person.svg",
+        NodeType = NodeType,
         AssemblyLocation = typeof(UserNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "User", RestrictedToNamespaces = ["User"] },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<AccessObject>())
             .AddDefaultLayoutAreas()
-            .AddUserActivityViews()
+            .AddUserActivityLayoutAreas()
     };
 }
