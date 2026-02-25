@@ -225,7 +225,7 @@ public static class MeshNodeLayoutAreas
             if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
             {
                 titleContent = titleContent.WithView(Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-svg\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
