@@ -15,6 +15,7 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
+using Memex.Portal.Shared.Authentication;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
@@ -331,6 +332,7 @@ public static class MemexConfiguration
         app.MapMeshMcp();
 
         app.MapMeshWeaver();
+        app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<UserContextMiddleware>();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)

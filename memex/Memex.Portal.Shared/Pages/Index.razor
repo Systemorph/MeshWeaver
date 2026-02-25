@@ -1,6 +1,25 @@
 @page "/"
 @using MeshWeaver.Blazor.Components
+@using MeshWeaver.Messaging
+@inject AccessService AccessService
 
 <PageTitle>Memex Portal</PageTitle>
 
-<LayoutArea Address="Organization" Area="Search" Top="true" />
+@if (IsRealUser)
+{
+    <LayoutArea Address="@UserAddress" Area="Activity" Top="true" />
+}
+else
+{
+    <LayoutArea Address="Organization" Area="Welcome" Top="true" />
+}
+
+@code {
+    private bool IsRealUser =>
+        AccessService?.Context != null
+        && !string.Equals(AccessService.Context.ObjectId, "Public", StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrEmpty(AccessService.Context.ObjectId)
+        && !AccessService.Context.IsVirtual;
+
+    private string UserAddress => $"User/{AccessService?.Context?.ObjectId}";
+}
