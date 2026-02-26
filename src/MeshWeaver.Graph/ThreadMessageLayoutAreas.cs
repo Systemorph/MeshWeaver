@@ -111,25 +111,47 @@ public static class ThreadMessageLayoutAreas
         var authorName = message.AuthorName ?? "You";
 
         var bubble = Controls.Stack
-            .WithStyle("max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: var(--neutral-foreground-on-accent);")
-            .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
-            .WithView(new MarkdownControl(message.Text).WithStyle("background: transparent; color: inherit;"))
-            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
+            .WithStyle("max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--neutral-layer-4); border-inline-end: 3px solid var(--accent-fill-rest); color: var(--neutral-foreground-rest);")
+            .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; color: var(--accent-fill-rest); margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
+            .WithView(new MarkdownControl(message.Text) { ShowReferences = false }.WithStyle("background: transparent;"))
+            .WithView(BuildReferenceChips(message.Text))
+            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
             bubble = bubble.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
-                .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
+                .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
         return Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; justify-content: flex-end; margin-bottom: 12px;")
+            .WithStyle("align-items: flex-end; margin-bottom: 12px;")
             .WithView(bubble);
+    }
+
+    /// <summary>
+    /// Builds compact inline reference chips from @references found in message text.
+    /// </summary>
+    private static UiControl BuildReferenceChips(string? text)
+    {
+        var paths = MarkdownReferenceExtractor.GetUniquePaths(text);
+        if (paths.Count == 0)
+            return Controls.Html("");
+
+        var chipHtml = string.Join(" ", paths.Select(path =>
+        {
+            var displayName = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
+            var encoded = System.Web.HttpUtility.HtmlEncode(displayName);
+            var encodedPath = System.Web.HttpUtility.HtmlEncode(path);
+            return $"<a href=\"/{encodedPath}\" title=\"{encodedPath}\" style=\"display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; background: var(--neutral-layer-2); border: 1px solid var(--neutral-stroke-rest); border-radius: 16px; font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none; white-space: nowrap;\">" +
+                   $"<span style=\"max-width: 120px; overflow: hidden; text-overflow: ellipsis;\">{encoded}</span></a>";
+        }));
+
+        return Controls.Html($"<div style=\"display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;\">{chipHtml}</div>");
     }
 
     /// <summary>
@@ -187,7 +209,7 @@ public static class ThreadMessageLayoutAreas
 
         return Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; justify-content: flex-start; margin-bottom: 12px;")
+            .WithStyle("align-items: flex-start; margin-bottom: 12px;")
             .WithView(bubble);
     }
 

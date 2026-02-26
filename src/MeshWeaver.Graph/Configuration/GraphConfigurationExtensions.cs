@@ -1,4 +1,5 @@
-﻿using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.AI;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -26,7 +27,11 @@ public static class GraphConfigurationExtensions
                 .AddAgentType()
                 .AddCodeType()
                 .AddMarkdownType()
-                .AddThreadType()
+                .AddThreadType(config => config
+                    .AddThreadViews()
+                    .AddMeshDataSource(source => source
+                        .WithContentType<AI.Thread>()
+                        .WithType<ThreadMessage>(ThreadMessageNodeType.NodeType)))
                 .AddThreadMessageType()
                 .AddCommentType()
                 .AddAccessAssignmentType()
