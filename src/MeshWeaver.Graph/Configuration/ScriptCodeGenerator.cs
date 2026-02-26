@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
@@ -120,7 +120,7 @@ internal class ScriptCodeGenerator
         sb.AppendLine($"    Name = \"{EscapeString(node.Name)}\",");
         sb.AppendLine($"    NodeType = \"{EscapeString(node.NodeType)}\",");
         sb.AppendLine($"    Icon = \"{EscapeString(node.Icon)}\",");
-        sb.AppendLine($"    DisplayOrder = {(node.DisplayOrder.HasValue ? node.DisplayOrder.Value.ToString() : "null")},");
+        sb.AppendLine($"    Order = {(node.Order.HasValue ? node.Order.Value.ToString() : "null")},");
         sb.AppendLine($"    LastModified = DateTimeOffset.Parse(\"{node.LastModified:O}\"),");
         sb.AppendLine("    HubConfiguration = ConfigureHub");
         sb.AppendLine("}");

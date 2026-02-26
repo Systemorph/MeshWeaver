@@ -168,7 +168,7 @@ public static class AgentView
             infoCard = infoCard.WithView(BuildInfoRow("Group", agent.GroupName));
         if (!string.IsNullOrEmpty(agent.Icon))
             infoCard = infoCard.WithView(BuildInfoRow("Icon", agent.Icon));
-        infoCard = infoCard.WithView(BuildInfoRow("Display Order", agent.DisplayOrder.ToString()));
+        infoCard = infoCard.WithView(BuildInfoRow("Display Order", agent.Order.ToString()));
         if (!string.IsNullOrEmpty(agent.PreferredModel))
             infoCard = infoCard.WithView(BuildInfoRow("Preferred Model", agent.PreferredModel));
         if (!string.IsNullOrEmpty(agent.ContextMatchPattern))
@@ -263,7 +263,7 @@ public static class AgentView
         var descriptionDataId = Guid.NewGuid().AsString();
         var iconNameDataId = Guid.NewGuid().AsString();
         var groupNameDataId = Guid.NewGuid().AsString();
-        var displayOrderDataId = Guid.NewGuid().AsString();
+        var orderDataId = Guid.NewGuid().AsString();
         var preferredModelDataId = Guid.NewGuid().AsString();
         var contextMatchPatternDataId = Guid.NewGuid().AsString();
         var isDefaultDataId = Guid.NewGuid().AsString();
@@ -275,7 +275,7 @@ public static class AgentView
         host.UpdateData(descriptionDataId, agent.Description ?? "");
         host.UpdateData(iconNameDataId, agent.Icon ?? "");
         host.UpdateData(groupNameDataId, agent.GroupName ?? "");
-        host.UpdateData(displayOrderDataId, agent.DisplayOrder.ToString());
+        host.UpdateData(orderDataId, agent.Order.ToString());
         host.UpdateData(preferredModelDataId, agent.PreferredModel ?? "");
         host.UpdateData(contextMatchPatternDataId, agent.ContextMatchPattern ?? "");
         host.UpdateData(isDefaultDataId, agent.IsDefault ? "true" : "false");
@@ -328,7 +328,7 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Order:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("0")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayOrderDataId) }));
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
 
         // Preferred Model
         stack = stack.WithView(Controls.Stack
@@ -403,16 +403,16 @@ public static class AgentView
                 var newDescription = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
                 var newIconName = await host.Stream.GetDataStream<string>(iconNameDataId).FirstAsync();
                 var newGroupName = await host.Stream.GetDataStream<string>(groupNameDataId).FirstAsync();
-                var newDisplayOrderStr = await host.Stream.GetDataStream<string>(displayOrderDataId).FirstAsync();
+                var newOrderStr = await host.Stream.GetDataStream<string>(orderDataId).FirstAsync();
                 var newPreferredModel = await host.Stream.GetDataStream<string>(preferredModelDataId).FirstAsync();
                 var newContextMatchPattern = await host.Stream.GetDataStream<string>(contextMatchPatternDataId).FirstAsync();
                 var newIsDefaultStr = await host.Stream.GetDataStream<string>(isDefaultDataId).FirstAsync();
                 var newExposedInNavigatorStr = await host.Stream.GetDataStream<string>(exposedInNavigatorDataId).FirstAsync();
                 var newInstructions = await host.Stream.GetDataStream<string>(instructionsDataId).FirstAsync();
 
-                // Parse display order
-                if (!int.TryParse(newDisplayOrderStr, out var newDisplayOrder))
-                    newDisplayOrder = 0;
+                // Parse order
+                if (!int.TryParse(newOrderStr, out var newOrder))
+                    newOrder = 0;
 
                 // Parse booleans
                 var newIsDefault = newIsDefaultStr?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
@@ -425,7 +425,7 @@ public static class AgentView
                     Description = string.IsNullOrWhiteSpace(newDescription) ? null : newDescription,
                     Icon = string.IsNullOrWhiteSpace(newIconName) ? null : newIconName,
                     GroupName = string.IsNullOrWhiteSpace(newGroupName) ? null : newGroupName,
-                    DisplayOrder = newDisplayOrder,
+                    Order = newOrder,
                     PreferredModel = string.IsNullOrWhiteSpace(newPreferredModel) ? null : newPreferredModel,
                     ContextMatchPattern = string.IsNullOrWhiteSpace(newContextMatchPattern) ? null : newContextMatchPattern,
                     IsDefault = newIsDefault,

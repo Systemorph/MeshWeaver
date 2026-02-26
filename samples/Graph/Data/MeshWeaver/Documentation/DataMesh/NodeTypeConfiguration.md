@@ -29,7 +29,7 @@ A NodeType is itself a node with `nodeType: "NodeType"`. It consists of:
   "nodeType": "NodeType",
   "description": "An organization containing projects",
   "icon": "Building",
-  "displayOrder": 10,
+  "order": 10,
   "isPersistent": true
 }
 ```
@@ -43,7 +43,7 @@ A NodeType is itself a node with `nodeType: "NodeType"`. It consists of:
   "displayName": "Organization",
   "icon": "Building",
   "description": "An organization containing projects",
-  "displayOrder": 10,
+  "order": 10,
   "configuration": "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
 }
 ```
@@ -182,6 +182,6 @@ config
 ## Best Practices
 
 1. **Use meaningful namespaces**: Group related types together
-2. **Set display order**: Control catalog sorting with displayOrder
+2. **Set order**: Control catalog sorting with order
 3. **Choose appropriate icons**: Use Fluent UI icons
 4. **Write clear descriptions**: Help users understand the type's purpose

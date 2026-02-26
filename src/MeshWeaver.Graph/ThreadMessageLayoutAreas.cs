@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using Humanizer;
 using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -103,26 +104,21 @@ public static class ThreadMessageLayoutAreas
         var authorName = message.AuthorName ?? "You";
 
         var container = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("display: flex; justify-content: flex-end; margin-bottom: 12px;");
-
-        var bubble = Controls.Stack
-            .WithStyle("max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: white;")
+            .WithStyle("padding: 12px 16px; margin-left: 48px; margin-bottom: 12px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: white;")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
             .WithView(new MarkdownControl(message.Text).WithStyle("color: white;"))
-            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp:HH:mm}</div>"));
+            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
-            bubble = bubble.WithView(Controls.Stack
+            container = container.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
-        container = container.WithView(bubble);
         return container;
     }
 
@@ -132,31 +128,32 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     private static UiControl BuildAgentResponseView(ThreadMessage message)
     {
-        var authorName = message.AuthorName ?? "Assistant";
+        var authorName = message.AuthorName ?? message.AgentName ?? "Assistant";
         var isSystem = message.Role.Equals("system", StringComparison.OrdinalIgnoreCase);
         var bgColor = isSystem ? "var(--neutral-layer-3)" : "var(--neutral-layer-2)";
 
-        var container = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("display: flex; justify-content: flex-start; margin-bottom: 12px;");
+        // Build subtitle with model info (agent name is shown as authorName above)
+        var subtitle = !string.IsNullOrEmpty(message.ModelName)
+            ? $"<div style=\"font-size: 0.75rem; opacity: 0.6; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(message.ModelName)}</div>"
+            : "";
 
-        var bubble = Controls.Stack
-            .WithStyle($"max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-left-radius: 4px; background: {bgColor}; color: var(--neutral-foreground-rest);")
+        var container = Controls.Stack
+            .WithStyle($"padding: 12px 16px; margin-right: 48px; margin-bottom: 12px; border-radius: 12px; border-bottom-left-radius: 4px; background: var(--neutral-layer-floating); color: var(--neutral-foreground-rest);")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
-            .WithView(new MarkdownControl(message.Text))
-            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp:HH:mm}</div>"));
+            .WithView(Controls.Html(subtitle))
+            .WithView(new MarkdownControl(message.Text).WithStyle("width: 100%;"))
+            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
-            bubble = bubble.WithView(Controls.Stack
+            container = container.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
-        container = container.WithView(bubble);
         return container;
     }
 
@@ -188,7 +185,7 @@ public static class ThreadMessageLayoutAreas
         {
             ThreadMessageType.EditingPrompt => "Editing",
             ThreadMessageType.ExecutedInput => "User",
-            ThreadMessageType.AgentResponse => "Assistant",
+            ThreadMessageType.AgentResponse => message?.AgentName ?? "Assistant",
             _ => role
         };
 

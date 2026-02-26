@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
@@ -88,7 +88,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
             Name = "Acme Corp",
             NodeType = "organization",
             Icon = "Building",
-            DisplayOrder = 10,
+            Order = 10,
             LastModified = DateTimeOffset.Parse("2024-01-15T10:30:00Z")
         };
 
@@ -104,7 +104,7 @@ public class DynamicMeshNodeAttributeGeneratorTest
         source.Should().Contain("Name = \"Acme Corp\"");
         source.Should().Contain("NodeType = \"organization\"");
         source.Should().Contain("Icon = \"Building\"");
-        source.Should().Contain("DisplayOrder = 10");
+        source.Should().Contain("Order = 10");
     }
 
     [Fact]

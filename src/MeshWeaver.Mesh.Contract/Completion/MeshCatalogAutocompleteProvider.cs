@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
 
@@ -28,7 +28,7 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
         {
             var topLevelNodes = meshCatalog.Configuration.Nodes.Values
                 .Where(n => n.Segments.Count == 1)
-                .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
+                .OrderBy(n => n.Order ?? int.MaxValue)
                 .ThenBy(n => n.Name);
 
             foreach (var node in topLevelNodes)
@@ -39,7 +39,7 @@ public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutoc
                     InsertText: $"@{node.Path}/",
                     Description: node.Name,
                     Category: "Prefixes",
-                    Priority: PrefixCategoryPriority - (node.DisplayOrder ?? 0),
+                    Priority: PrefixCategoryPriority - (node.Order ?? 0),
                     Kind: AutocompleteKind.Other
                 );
             }

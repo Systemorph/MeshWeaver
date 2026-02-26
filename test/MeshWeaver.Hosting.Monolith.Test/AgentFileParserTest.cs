@@ -132,7 +132,7 @@ public class AgentFileParserTest
             exposedInNavigator: true
             contextMatchPattern: address=like=*Test*
             preferredModel: gpt-4
-            displayOrder: 10
+            order: 10
             ---
 
             Full agent instructions.
@@ -149,7 +149,7 @@ public class AgentFileParserTest
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
         agentConfig.PreferredModel.Should().Be("gpt-4");
-        agentConfig.DisplayOrder.Should().Be(10);
+        agentConfig.Order.Should().Be(10);
     }
 
     [Fact(Timeout = 10000)]
@@ -328,7 +328,7 @@ public class AgentFileParserTest
             exposedInNavigator: true
             contextMatchPattern: address=like=*Test*
             preferredModel: gpt-4
-            displayOrder: 5
+            order: 5
             delegations:
               - agentPath: Helper
                 instructions: Help with tasks
@@ -361,7 +361,7 @@ public class AgentFileParserTest
         agentConfig.ExposedInNavigator.Should().BeTrue();
         agentConfig.ContextMatchPattern.Should().Be("address=like=*Test*");
         agentConfig.PreferredModel.Should().Be("gpt-4");
-        agentConfig.DisplayOrder.Should().Be(5);
+        agentConfig.Order.Should().Be(5);
         agentConfig.Delegations.Should().HaveCount(1);
         agentConfig.Delegations![0].AgentPath.Should().Be("Helper");
         agentConfig.Instructions.Should().Contain("# Complete Agent Instructions");

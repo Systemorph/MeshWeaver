@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
@@ -206,7 +206,7 @@ public class UnifiedReferenceAutocompleteProvider(
                 .Where(n => n.Segments.Count == 1)
                 .Where(n => string.IsNullOrEmpty(prefix) ||
                            n.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(n => n.DisplayOrder ?? int.MaxValue)
+                .OrderBy(n => n.Order ?? int.MaxValue)
                 .ThenBy(n => n.Name)
                 .Take(10);
 
@@ -219,7 +219,7 @@ public class UnifiedReferenceAutocompleteProvider(
                         InsertText: $"@{node.Path}/",
                         Description: node.Name,
                         Category: "Types",
-                        Priority: PrefixPriority - (node.DisplayOrder ?? 0),
+                        Priority: PrefixPriority - (node.Order ?? 0),
                         Kind: AutocompleteKind.Other
                     );
                 }

@@ -1,4 +1,4 @@
-using Azure;
+﻿using Azure;
 using Azure.AI.OpenAI;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -34,7 +34,7 @@ public class AzureOpenAIChatClientAgentFactory(
 
     public override IReadOnlyList<string> Models => credentials.Models;
 
-    public override int DisplayOrder => credentials.DisplayOrder;
+    public override int Order => credentials.Order;
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {

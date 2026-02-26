@@ -4,7 +4,7 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Content type for NodeType MeshNodes.
-/// Properties like Name, Icon, DisplayOrder, Namespace are on MeshNode itself.
+/// Properties like Name, Icon, Order, Namespace are on MeshNode itself.
 /// This record holds only NodeType-specific configuration.
 /// </summary>
 public record NodeTypeDefinition

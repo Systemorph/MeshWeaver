@@ -1,4 +1,4 @@
-namespace MeshWeaver.Mesh;
+﻿namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Represents a node type that can be created as a child of the current node.
@@ -8,7 +8,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="DisplayName">Optional display name for the type in UI</param>
 /// <param name="Icon">Optional icon URL or identifier for UI</param>
 /// <param name="Description">Optional description of this node type</param>
-/// <param name="DisplayOrder">Display order for sorting in UI lists</param>
+/// <param name="Order">Display order for sorting in UI lists</param>
 /// <param name="ContentType">The content type for this node type, used for collecting properties in create dialog</param>
 /// <param name="SubNamespace">Optional sub-namespace folder for created nodes (e.g., "Threads" creates at parent/Threads/id). Defaults to last segment of NodeTypePath.</param>
 public record CreatableTypeInfo(
@@ -16,7 +16,7 @@ public record CreatableTypeInfo(
     string? DisplayName = null,
     string? Icon = null,
     string? Description = null,
-    int DisplayOrder = 0,
+    int Order = 0,
     Type? ContentType = null,
     string? SubNamespace = null);
 

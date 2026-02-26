@@ -7,9 +7,9 @@ category: Agents
 exposedInNavigator: true
 preferredModel: claude-opus-4-5-20251101
 delegations:
-  - agentPath: Research
+  - agentPath: Agent/Research
     instructions: Gather information before planning
-  - agentPath: Executor
+  - agentPath: Agent/Executor
     instructions: Execute planned tasks
 ---
 

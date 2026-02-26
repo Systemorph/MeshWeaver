@@ -39,7 +39,7 @@ Portal (LayoutAreaView)
    |                                        |    → EvaluateMenuItemsAsync(host, ctx)
    |                                        |    → runs each provider (IAsyncEnumerable)
    |                                        |    → permission checks inline
-   |                                        |    → sorted by DisplayOrder
+   |                                        |    → sorted by Order
    |                                        |    → stored as MenuControl at $Menu
    |                                        |
    |  $Menu stream update                   |
@@ -61,13 +61,13 @@ config => config
             host.Hub, host.Hub.Address.ToString());
         if (perms.HasFlag(Permission.Update))
             yield return new NodeMenuItemDefinition("Suggest", "Suggest",
-                RequiredPermission: Permission.Update, DisplayOrder: 11);
+                RequiredPermission: Permission.Update, Order: 11);
     })
     .AddLayout(layout => layout
         .WithView("Suggest", MyEditArea.Suggest))
 ```
 
-Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `DisplayOrder`.
+Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Order`.
 
 ### NodeMenuItemDefinition
 
@@ -77,7 +77,7 @@ Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Disp
 | `Area` | `string` | Layout area to navigate to when clicked |
 | `Icon` | `string?` | Optional emoji or SVG URL; `null` to skip |
 | `RequiredPermission` | `Permission` | Permission the user must have (e.g., `Permission.Update`) |
-| `DisplayOrder` | `int` | Sort order within the menu (lower = earlier) |
+| `Order` | `int` | Sort order within the menu (lower = earlier) |
 | `Href` | `string?` | Optional absolute href — when set, navigates directly instead of using Area |
 
 ### NodeMenuItemProvider
@@ -90,7 +90,7 @@ config.AddNodeMenuItems(
     {
         var canDoSpecialThing = await CheckSomethingAsync(host.Hub);
         if (canDoSpecialThing)
-            yield return new NodeMenuItemDefinition("Special", "SpecialArea", DisplayOrder: 20);
+            yield return new NodeMenuItemDefinition("Special", "SpecialArea", Order: 20);
     }))
 ```
 

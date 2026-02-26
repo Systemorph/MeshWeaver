@@ -191,7 +191,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 5000)]
-    public async Task Menu_ItemsAreSortedByDisplayOrder()
+    public async Task Menu_ItemsAreSortedByOrder()
     {
         // Seed Admin so we get all items for sorting verification
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -210,8 +210,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var items = await FetchMenuItemsAsync(client, nodeAddress);
 
-        items.Should().BeInAscendingOrder(i => i.DisplayOrder,
-            "menu items should be sorted by DisplayOrder");
+        items.Should().BeInAscendingOrder(i => i.Order,
+            "menu items should be sorted by Order");
     }
 
     [Fact(Timeout = 5000)]

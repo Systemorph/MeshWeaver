@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -39,5 +41,6 @@ public static class UserNodeType
                 .WithContentType<AccessObject>())
             .AddDefaultLayoutAreas()
             .AddUserActivityLayoutAreas()
+            .AddLayout(layout => layout.WithDefaultArea(UserActivityLayoutAreas.ActivityArea))
     };
 }

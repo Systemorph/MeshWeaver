@@ -72,7 +72,7 @@ public record Story
             Name = "Story",
             NodeType = "NodeType",
             Icon = "Document",
-            DisplayOrder = 30,
+            Order = 30,
             Content = new NodeTypeDefinition
             {
                 Description = "A user story"
@@ -99,7 +99,7 @@ public record Graph
             Name = "Graph",
             NodeType = "NodeType",
             Icon = "Diagram",
-            DisplayOrder = 0,
+            Order = 0,
             Content = new NodeTypeDefinition
             {
                 Description = "The graph root"

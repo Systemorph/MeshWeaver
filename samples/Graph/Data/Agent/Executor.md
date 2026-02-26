@@ -7,7 +7,7 @@ category: Agents
 exposedInNavigator: true
 preferredModel: claude-sonnet-4-5-20251101
 delegations:
-  - agentPath: Research
+  - agentPath: Agent/Research
     instructions: Look up information if needed
 ---
 

@@ -22,7 +22,14 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     /// </summary>
     public string? InitialContextDisplayName { get; init; }
 
+    /// <summary>
+    /// When true, hides the empty-state placeholder (icon + text) shown when there are no messages.
+    /// Useful for compact/embedded chat (e.g., dashboard).
+    /// </summary>
+    public bool HideEmptyState { get; init; }
+
     public ThreadChatControl WithThreadPath(string threadPath) => this with { ThreadPath = threadPath };
     public ThreadChatControl WithInitialContext(string context) => this with { InitialContext = context };
     public ThreadChatControl WithInitialContextDisplayName(string displayName) => this with { InitialContextDisplayName = displayName };
+    public ThreadChatControl WithHideEmptyState(bool hide = true) => this with { HideEmptyState = hide };
 }
