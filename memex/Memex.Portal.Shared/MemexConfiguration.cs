@@ -133,13 +133,10 @@ public static class MemexConfiguration
                 options.LogoutPath = logoutPath;
         });
 
-        // Always persist data protection keys so cookies survive app restarts
-        var keysPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Memex", "DataProtection-Keys");
-        Directory.CreateDirectory(keysPath);
+        // Data protection: set application name here, but key persistence is deployment-specific.
+        // Monolith → PersistKeysToFileSystem (in Program.cs)
+        // Distributed → PersistKeysToAzureBlobStorage + ProtectKeysWithAzureKeyVault (in Program.cs)
         services.AddDataProtection()
-            .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
             .SetApplicationName("MemexPortal");
 
         if (externalProviders.Count > 0)
