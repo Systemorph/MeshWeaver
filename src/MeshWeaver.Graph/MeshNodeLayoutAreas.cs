@@ -224,8 +224,16 @@ public static class MeshNodeLayoutAreas
         {
             if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
             {
-                titleContent = titleContent.WithView(Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-svg\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+                if (iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                {
+                    titleContent = titleContent.WithView(Controls.Html(
+                        $"<span class=\"header-icon-svg\" style=\"--icon-url: url('{iconValue}'); display: inline-block; width: 48px; height: 48px; border-radius: 8px; background-color: currentColor; -webkit-mask-image: var(--icon-url); mask-image: var(--icon-url); -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center;\" role=\"img\"></span>"));
+                }
+                else
+                {
+                    titleContent = titleContent.WithView(Controls.Html(
+                        $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
+                }
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {

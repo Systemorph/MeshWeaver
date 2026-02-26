@@ -11,7 +11,6 @@ using MeshWeaver.AI;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -100,16 +99,31 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // Get the node stream to extract ParentPath from thread content
+        // Node stream — used only for the observable title sub-view
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        // Static container — emits once, not rebuilt on every node update
+        var container = Controls.Stack
+            .WithWidth("100%")
+            .WithHeight("100%")
+            .WithStyle("display: flex; flex-direction: column;");
+
+        // 1. Title — observable sub-view bound to meshNode.Name
+        container = container.WithView(nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var title = GetThreadTitle(node);
+            return (UiControl?)Controls.Html(
+                $"<h2 style=\"margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>");
+        }));
+
+        // 2. Chat control — observable sub-view for context resolution from node data
+        container = container.WithView(nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
 
-            // Use ParentPath as context if available (the main object), otherwise fall back to hubPath
             var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
                 ? threadContent.ParentPath
                 : hubPath;
@@ -120,8 +134,11 @@ public static class ThreadLayoutAreas
             return (UiControl?)new ThreadChatControl()
                 .WithThreadPath(hubPath)
                 .WithInitialContext(contextPath)
-                .WithInitialContextDisplayName(contextDisplayName);
-        });
+                .WithInitialContextDisplayName(contextDisplayName)
+                .WithStyle("flex: 1; overflow: hidden;");
+        }));
+
+        return Observable.Return<UiControl?>(container);
     }
 
     private static string GetContextDisplayName(string path)
@@ -140,48 +157,40 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Renders the Create area for Thread nodes.
-    /// Auto-creates a thread with generated name and redirects to ChatArea.
-    /// Thread nodes are created as direct children: {parentPath}/{threadId}
-    /// Requires Update permission on the parent node.
+    /// Confirms the transient node (created by the Create New form) and redirects to the default area (Chat).
     /// </summary>
     public static IObservable<UiControl?> CreateView(LayoutAreaHost host, RenderingContext _)
     {
-        var parentAddress = host.Hub.Address;
-        var parentPath = parentAddress.ToString();
+        var currentPath = host.Hub.Address.ToString();
 
-        // Auto-create and redirect
         return Observable.FromAsync(async () =>
         {
-            // Permission gate: thread creation requires Update permission
-            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, parentPath);
-            if (!canEdit)
+            var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+            var existingNode = await meshCatalog.GetNodeAsync(new Address(currentPath));
+
+            if (existingNode == null)
             {
                 return (UiControl?)Controls.Html(
-                    "<p style=\"color: var(--error-foreground); padding: 24px;\">Access denied: You do not have permission to create threads here.</p>");
+                    "<p style=\"color: var(--error-foreground); padding: 24px;\">Thread node not found.</p>");
             }
 
-            var now = DateTime.UtcNow;
-            var nodeId = Guid.NewGuid().AsString();
-            var name = $"Thread {now:yyyy-MM-dd HH:mm}";
-
-            var threadContent = new MeshThread
+            // Ensure ParentPath is set on the thread content
+            var content = existingNode.Content as MeshThread ?? new MeshThread();
+            var parentPath = existingNode.GetParentPath();
+            if (string.IsNullOrEmpty(content.ParentPath) && !string.IsNullOrEmpty(parentPath))
             {
-                ParentPath = parentPath
+                content = content with { ParentPath = parentPath };
+            }
+
+            var confirmedNode = existingNode with
+            {
+                Content = content,
+                State = MeshNodeState.Active
             };
 
-            var threadPath = string.IsNullOrEmpty(parentPath) ? nodeId : $"{parentPath}/{nodeId}";
-
-            var newNode = new MeshNode(threadPath)
-            {
-                Name = name,
-                NodeType = ThreadNodeType.NodeType,
-                Content = threadContent
-            };
-
-            var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
             try
             {
-                var createdNode = await meshCatalog.CreateNodeAsync(newNode).ConfigureAwait(false);
+                var createdNode = await meshCatalog.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
                 return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ChatArea));
             }
             catch (Exception ex)
@@ -226,57 +235,54 @@ public static class ThreadLayoutAreas
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // Get the node from the workspace stream for header info
-        // StartWith emits immediately so the header renders with fallback title while node data loads
+        // Node stream for the title sub-view — only this part is observable
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream
-            .StartWith(Array.Empty<MeshNode>())
-            .Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildThreadView(node, hubPath);
-        });
-    }
-
-    private static UiControl BuildThreadView(MeshNode? node, string threadPath)
-    {
+        // Static layout — emits once, not rebuilt on every node update
         var container = Controls.Stack
             .WithWidth("100%")
             .WithHeight("100%")
             .WithStyle("display: flex; flex-direction: column;");
 
-        // Header with thread title and back button
-        var title = GetThreadTitle(node);
-        var header = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("align-items: center; padding: 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;");
+        // 1. Header — observable sub-view bound to node name (only title reacts to data)
+        container = container.WithView(nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            return (UiControl?)BuildThreadHeader(node, hubPath);
+        }));
 
-        var content = node?.Content as MeshThread;
-        var parentPath = content?.ParentPath;
-        var backHref = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
-        header = header.WithView(Controls.Button("")
-            .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
-            .WithAppearance(Appearance.Stealth)
-            .WithNavigateToHref(backHref));
-
-        header = header.WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
-        container = container.WithView(header);
-
-        // Messages list via reactive MeshSearchControl rendering each message's Overview area
+        // 2. Messages — MeshSearchControl with reactive mode handles its own cell-path data binding
         container = container.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{threadPath} nodeType:ThreadMessage sort:Order-asc")
+            .WithHiddenQuery($"namespace:{hubPath} nodeType:ThreadMessage sort:Order-asc")
             .WithItemArea(ThreadMessageNodeType.OverviewArea)
             .WithShowSearchBox(false)
             .WithMaxColumns(1)
             .WithGridBreakpoints(xs: 12)
             .WithReactiveMode(true)
             .WithDisableNavigation()
+            .WithShowLoadingIndicator(true)
             .WithStyle("flex: 1; overflow-y: auto; padding: 16px; width: 100%;"));
 
-        return container;
+        return Observable.Return<UiControl?>(container);
+    }
+
+    private static UiControl BuildThreadHeader(MeshNode? node, string threadPath)
+    {
+        var title = GetThreadTitle(node);
+        var content = node?.Content as MeshThread;
+        var parentPath = content?.ParentPath;
+        var backHref = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
+
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("align-items: center; padding: 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
+            .WithView(Controls.Button("")
+                .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
+                .WithAppearance(Appearance.Stealth)
+                .WithNavigateToHref(backHref))
+            .WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
     }
 
     /// <summary>
