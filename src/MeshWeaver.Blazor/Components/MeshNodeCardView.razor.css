@@ -30,6 +30,12 @@
     flex-shrink: 0;
 }
 
+@media (prefers-color-scheme: dark) {
+    .mesh-node-card-image {
+        filter: invert(1);
+    }
+}
+
 .mesh-node-card-placeholder {
     width: 48px;
     height: 48px;

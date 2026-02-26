@@ -503,6 +503,28 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
+    private int? BoundMaxColumns
+    {
+        get
+        {
+            if (ViewModel?.MaxColumns is int i) return i;
+            if (ViewModel?.MaxColumns is JsonElement je && je.ValueKind == JsonValueKind.Number)
+                return je.GetInt32();
+            return null;
+        }
+    }
+
+    private string AreaGridStyle
+    {
+        get
+        {
+            var maxCols = BoundMaxColumns;
+            if (maxCols.HasValue)
+                return $"grid-template-columns: repeat({maxCols.Value}, 1fr);";
+            return "";
+        }
+    }
+
     private bool BoundDisableNavigation
     {
         get

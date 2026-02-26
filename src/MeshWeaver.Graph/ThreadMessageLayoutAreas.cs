@@ -104,10 +104,7 @@ public static class ThreadMessageLayoutAreas
 
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; justify-content: flex-end; margin-bottom: 12px;");
-
-        var bubble = Controls.Stack
-            .WithStyle("max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: white;")
+            .WithStyle("padding: 12px 16px; padding-left: 32px; margin-bottom: 12px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: white;")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
             .WithView(new MarkdownControl(message.Text).WithStyle("color: white;"))
             .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp:HH:mm}</div>"));
@@ -115,14 +112,13 @@ public static class ThreadMessageLayoutAreas
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
-            bubble = bubble.WithView(Controls.Stack
+            container = container.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
-        container = container.WithView(bubble);
         return container;
     }
 
@@ -138,10 +134,7 @@ public static class ThreadMessageLayoutAreas
 
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("display: flex; justify-content: flex-start; margin-bottom: 12px;");
-
-        var bubble = Controls.Stack
-            .WithStyle($"max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-left-radius: 4px; background: {bgColor}; color: var(--neutral-foreground-rest);")
+            .WithStyle($"padding: 12px 16px; padding-right: 32px; margin-bottom: 12px; border-radius: 12px; border-bottom-left-radius: 4px; background: {bgColor}; color: var(--neutral-foreground-rest);")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
             .WithView(new MarkdownControl(message.Text))
             .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp:HH:mm}</div>"));
@@ -149,14 +142,13 @@ public static class ThreadMessageLayoutAreas
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
-            bubble = bubble.WithView(Controls.Stack
+            container = container.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
-        container = container.WithView(bubble);
         return container;
     }
 

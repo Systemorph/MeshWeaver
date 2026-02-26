@@ -102,7 +102,7 @@
                         <div class="mesh-search-grid-wrapper">
                             @if (!string.IsNullOrEmpty(BoundItemArea))
                             {
-                                <div class="mesh-search-area-grid">
+                                <div class="mesh-search-area-grid" style="@AreaGridStyle">
                                     @foreach (var item in group.Items)
                                     {
                                         if (item is MeshNode node)

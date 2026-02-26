@@ -1,7 +1,7 @@
 .mw-landing {
     font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     line-height: 1.6;
-    max-width: 960px;
+    max-width: 1200px;
     margin: 0 auto;
     padding: 0 20px;
 }
@@ -32,6 +32,11 @@
     margin: 0 0 16px;
     position: relative;
     letter-spacing: -0.02em;
+    outline: none;
+}
+
+.mw-landing *:focus-visible {
+    outline: none;
 }
 
 .mw-hero .mw-subtitle {
