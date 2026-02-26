@@ -359,7 +359,7 @@ dist/
 # Kernel cache files
 samples/Graph/Data/kernel/
 samples/Graph/Data/test/
-samples/Graph/Data/VUsers/
+samples/Graph/Data/VUser/
 
 # Chat partitions (user-specific chat history)
 **/chats/

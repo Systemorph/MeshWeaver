@@ -16,8 +16,17 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     {
         _options = options.Value;
 
-        // Determine paths based on provider or custom configuration
-        (_loginPath, _logoutPath) = GetProviderPaths(_options.Provider);
+        // When external providers are configured, route through the login chooser page
+        if (_options.Providers.Count > 0)
+        {
+            _loginPath = "/login";
+            _logoutPath = "/auth/logout";
+        }
+        else
+        {
+            // Determine paths based on provider or custom configuration
+            (_loginPath, _logoutPath) = GetProviderPaths(_options.Provider);
+        }
 
         // Override with custom paths if specified
         if (!string.IsNullOrEmpty(_options.LoginPath))
@@ -27,6 +36,17 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     }
 
     public string ProviderName => _options.Provider;
+
+    /// <summary>
+    /// Gets the configured external providers for use by the login page.
+    /// </summary>
+    public IReadOnlyList<ExternalProviderConfig> GetAvailableProviders() => _options.Providers;
+
+    /// <summary>
+    /// Whether dev login should be shown (no external providers configured and using Dev provider).
+    /// </summary>
+    public bool IsDevMode => _options.Providers.Count == 0 &&
+                             _options.Provider == AuthenticationProviders.Dev;
 
     public string GetLoginUrl(string? returnUrl = null)
     {

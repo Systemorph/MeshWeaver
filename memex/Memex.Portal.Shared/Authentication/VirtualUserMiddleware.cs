@@ -79,12 +79,12 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
             if (persistence == null)
                 return;
 
-            var userPath = $"VUsers/{virtualUserId}";
+            var userPath = $"VUser/{virtualUserId}";
             var exists = await persistence.ExistsAsync(userPath);
             if (exists)
                 return;
 
-            var userNode = new MeshNode(virtualUserId, "VUsers")
+            var userNode = new MeshNode(virtualUserId, "VUser")
             {
                 Name = "Guest",
                 NodeType = "User",

@@ -16,6 +16,7 @@ using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
 using Memex.Portal.Shared.Authentication;
+using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
@@ -30,6 +31,7 @@ using MeshWeaver.Hosting.Security;
 using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Builder;
@@ -106,18 +108,23 @@ public static class MemexConfiguration
         services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
 
-        // Configure authentication - based on Authentication:Provider or EntraId configuration
-        var authSection = builder.Configuration.GetSection(AuthenticationOptions.SectionName);
+        // Configure authentication
+        var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
         var entraIdConfig = builder.Configuration.GetSection("EntraId");
 
         // Determine provider: explicit config > EntraId presence > Dev default
         var provider = authSection["Provider"]
             ?? (entraIdConfig.GetChildren().Any() ? AuthenticationProviders.MicrosoftIdentity : AuthenticationProviders.Dev);
 
+        // Bind providers list from configuration
+        var externalProviders = authSection.GetSection("Providers").Get<List<ExternalProviderConfig>>()
+                                ?? new List<ExternalProviderConfig>();
+
         // Register authentication navigation service
         services.AddAuthenticationNavigation(options =>
         {
             options.Provider = provider;
+            options.Providers = externalProviders;
 
             // Allow custom paths from config
             if (authSection["LoginPath"] is { } loginPath)
@@ -126,40 +133,131 @@ public static class MemexConfiguration
                 options.LogoutPath = logoutPath;
         });
 
-        // Configure authentication middleware based on provider
-        switch (provider)
+        // Always persist data protection keys so cookies survive app restarts
+        var keysPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Memex", "DataProtection-Keys");
+        Directory.CreateDirectory(keysPath);
+        services.AddDataProtection()
+            .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
+            .SetApplicationName("MemexPortal");
+
+        if (externalProviders.Count > 0)
         {
-            case AuthenticationProviders.MicrosoftIdentity:
-                JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-                services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-                    .AddMicrosoftIdentityWebApp(entraIdConfig);
-                services.AddControllersWithViews()
-                    .AddMicrosoftIdentityUI();
-                break;
+            // Multi-provider mode: cookie is always the primary scheme
+            var authBuilder = services.AddAuthentication(options =>
+            {
+                options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+                options.DefaultChallengeScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+            })
+            .AddCookie(options =>
+            {
+                options.LoginPath = "/login";
+                options.LogoutPath = "/auth/logout";
+                options.ExpireTimeSpan = TimeSpan.FromDays(14);
+                options.SlidingExpiration = true;
+                options.Cookie.Name = "MemexAuth";
+                options.Cookie.HttpOnly = true;
+                options.Cookie.IsEssential = true;
+                options.Cookie.SameSite = SameSiteMode.Lax;
+            });
 
-            default:
-                // Persist data protection keys so cookies survive app restarts
-                var keysPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Memex", "DataProtection-Keys");
-                Directory.CreateDirectory(keysPath);
-                services.AddDataProtection()
-                    .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
-                    .SetApplicationName("MemexPortal");
+            // Register each configured external provider
+            foreach (var ep in externalProviders)
+            {
+                switch (ep.Name.ToLowerInvariant())
+                {
+                    case "microsoft":
+                        JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+                        authBuilder.AddMicrosoftIdentityWebApp(options =>
+                        {
+                            options.ClientId = ep.ClientId;
+                            options.ClientSecret = ep.ClientSecret;
+                            options.TenantId = ep.TenantId ?? "common";
+                            options.Instance = "https://login.microsoftonline.com/";
+                            options.CallbackPath = "/signin-microsoft";
+                        }, cookieOptions => { }, "Microsoft");
+                        services.AddControllersWithViews().AddMicrosoftIdentityUI();
+                        break;
 
-                services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-                    .AddCookie(options =>
-                    {
-                        options.LoginPath = "/dev/login";
-                        options.LogoutPath = "/dev/logout";
-                        options.ExpireTimeSpan = TimeSpan.FromDays(7);
-                        options.SlidingExpiration = true;
-                        options.Cookie.Name = "MemexDevAuth";
-                        options.Cookie.HttpOnly = true;
-                        options.Cookie.IsEssential = true;
-                        options.Cookie.SameSite = SameSiteMode.Lax;
-                    });
-                break;
+                    case "google":
+                        authBuilder.AddOAuth("Google", options =>
+                        {
+                            options.ClientId = ep.ClientId;
+                            options.ClientSecret = ep.ClientSecret;
+                            options.CallbackPath = "/signin-google";
+                            options.AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
+                            options.TokenEndpoint = "https://oauth2.googleapis.com/token";
+                            options.UserInformationEndpoint = "https://www.googleapis.com/oauth2/v3/userinfo";
+                            options.Scope.Add("openid");
+                            options.Scope.Add("profile");
+                            options.Scope.Add("email");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
+                        });
+                        break;
+
+                    case "linkedin":
+                        authBuilder.AddOAuth("LinkedIn", options =>
+                        {
+                            options.ClientId = ep.ClientId;
+                            options.ClientSecret = ep.ClientSecret;
+                            options.CallbackPath = "/signin-linkedin";
+                            options.AuthorizationEndpoint = "https://www.linkedin.com/oauth/v2/authorization";
+                            options.TokenEndpoint = "https://www.linkedin.com/oauth/v2/accessToken";
+                            options.UserInformationEndpoint = "https://api.linkedin.com/v2/userinfo";
+                            options.Scope.Add("openid");
+                            options.Scope.Add("profile");
+                            options.Scope.Add("email");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
+                        });
+                        break;
+
+                    case "apple":
+                        authBuilder.AddOAuth("Apple", options =>
+                        {
+                            options.ClientId = ep.ClientId;
+                            options.ClientSecret = ep.ClientSecret;
+                            options.CallbackPath = "/signin-apple";
+                            options.AuthorizationEndpoint = "https://appleid.apple.com/auth/authorize";
+                            options.TokenEndpoint = "https://appleid.apple.com/auth/token";
+                            options.Scope.Add("name");
+                            options.Scope.Add("email");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
+                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
+                        });
+                        break;
+                }
+            }
+        }
+        else if (provider == AuthenticationProviders.MicrosoftIdentity)
+        {
+            // Legacy single-provider MicrosoftIdentity mode
+            JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+                .AddMicrosoftIdentityWebApp(entraIdConfig);
+            services.AddControllersWithViews()
+                .AddMicrosoftIdentityUI();
+        }
+        else
+        {
+            // Dev/Cookie-based authentication (backward compatible)
+            services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+                .AddCookie(options =>
+                {
+                    options.LoginPath = "/dev/login";
+                    options.LogoutPath = "/dev/logout";
+                    options.ExpireTimeSpan = TimeSpan.FromDays(7);
+                    options.SlidingExpiration = true;
+                    options.Cookie.Name = "MemexDevAuth";
+                    options.Cookie.HttpOnly = true;
+                    options.Cookie.IsEssential = true;
+                    options.Cookie.SameSite = SameSiteMode.Lax;
+                });
         }
 
         services.AddAuthorization();
@@ -334,6 +432,7 @@ public static class MemexConfiguration
         app.MapMeshWeaver();
         app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<UserContextMiddleware>();
+        app.UseMiddleware<OnboardingMiddleware>();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(
