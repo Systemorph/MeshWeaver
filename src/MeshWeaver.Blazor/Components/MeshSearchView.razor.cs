@@ -605,8 +605,12 @@ public partial class MeshSearchView : IDisposable
         var ns = BoundCreateNamespace;
         if (string.IsNullOrEmpty(ns)) return;
 
-        // Navigate to the namespace's Create area — the form handles type selection
-        Navigation.NavigateTo($"/{ns}/Create");
+        var createUrl = $"/{ns}/{MeshNodeLayoutAreas.CreateNodeArea}";
+        var nodeType = BoundCreateNodeType;
+        if (!string.IsNullOrEmpty(nodeType))
+            createUrl += $"?types={Uri.EscapeDataString(nodeType)}";
+
+        Navigation.NavigateTo(createUrl);
     }
 
     private MeshNodeCardControl GetCardControl(MeshNode node) =>
