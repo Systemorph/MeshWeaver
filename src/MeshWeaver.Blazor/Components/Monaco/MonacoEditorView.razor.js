@@ -305,6 +305,11 @@ export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = fals
             editorInstance.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
                 editorInstance.trigger('keyboard', 'type', { text: '\n' });
             });
+
+            // Allow Alt+Enter for new line in chat mode (same as Shift+Enter)
+            editorInstance.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => {
+                editorInstance.trigger('keyboard', 'type', { text: '\n' });
+            });
         }
         // In code edit mode, Enter naturally inserts newlines (default Monaco behavior)
 
