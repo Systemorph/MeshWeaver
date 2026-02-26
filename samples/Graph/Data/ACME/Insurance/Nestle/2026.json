@@ -1,6 +1,6 @@
 {
   "id": "2026",
-  "namespace": "Cornerstone/Nestle",
+  "namespace": "ACME/Insurance/Nestle",
   "name": "Nestle 2026",
   "nodeType": "ACME/Insurance/Pricing",
   "category": "Pricings",

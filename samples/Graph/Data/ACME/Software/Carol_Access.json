@@ -1,6 +1,6 @@
 {
   "id": "Carol_Access",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "Carol Access",
   "nodeType": "AccessAssignment",
   "content": {

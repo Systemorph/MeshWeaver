@@ -1,6 +1,6 @@
 {
   "id": "Refrescos_Americanas_LTDA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Refrescos Americanas LTDA",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

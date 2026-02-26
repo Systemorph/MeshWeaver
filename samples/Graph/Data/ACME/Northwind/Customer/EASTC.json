@@ -1,6 +1,6 @@
 {
   "id": "EASTC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Eastern Connection",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

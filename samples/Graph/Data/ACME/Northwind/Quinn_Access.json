@@ -1,6 +1,6 @@
 {
   "id": "Quinn_Access",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind",
   "name": "Quinn Access",
   "nodeType": "AccessAssignment",
   "content": {

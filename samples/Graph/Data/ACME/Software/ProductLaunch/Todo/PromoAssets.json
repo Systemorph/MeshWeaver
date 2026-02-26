@@ -1,6 +1,6 @@
 {
   "id": "PromoAssets",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "path": "ACME/Software/ProductLaunch/Todo/PromoAssets",
   "name": "Design promotional assets",
   "nodeType": "ACME/Software/Project/Todo",

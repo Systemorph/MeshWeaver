@@ -1,6 +1,6 @@
 {
   "id": "QUEDE",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Que Del\u00edcia",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

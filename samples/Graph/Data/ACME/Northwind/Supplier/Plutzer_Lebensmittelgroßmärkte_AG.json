@@ -1,6 +1,6 @@
 {
   "id": "Plutzer_Lebensmittelgro\u00dfm\u00e4rkte_AG",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Plutzer Lebensmittelgro\u00dfm\u00e4rkte AG",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

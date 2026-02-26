@@ -1,6 +1,6 @@
 {
   "id": "Nord-Ost-Fisch_Handelsgesellschaft_mbH",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Nord-Ost-Fisch Handelsgesellschaft mbH",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

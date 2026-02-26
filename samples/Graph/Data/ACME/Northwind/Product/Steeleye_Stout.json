@@ -1,6 +1,6 @@
 {
   "id": "Steeleye_Stout",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Steeleye Stout",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

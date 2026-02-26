@@ -1,6 +1,6 @@
 {
   "id": "WHITC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "White Clover Markets",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

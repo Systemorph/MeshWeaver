@@ -1,6 +1,6 @@
 {
   "id": "Reports",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind",
   "name": "Reports",
   "nodeType": "ACME/Northwind/ContentCatalog",
   "category": "Reports",

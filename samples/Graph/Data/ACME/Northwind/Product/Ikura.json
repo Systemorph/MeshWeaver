@@ -1,6 +1,6 @@
 {
   "id": "Ikura",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Ikura",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

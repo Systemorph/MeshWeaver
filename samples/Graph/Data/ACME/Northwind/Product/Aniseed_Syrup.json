@@ -1,6 +1,6 @@
 {
   "id": "Aniseed_Syrup",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Aniseed Syrup",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

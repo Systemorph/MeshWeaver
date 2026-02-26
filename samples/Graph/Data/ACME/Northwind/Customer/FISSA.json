@@ -1,6 +1,6 @@
 {
   "id": "FISSA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "FISSA Fabrica Inter. Salchichas S.A.",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

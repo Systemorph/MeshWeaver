@@ -1,6 +1,6 @@
 {
   "id": "THEBI",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "The Big Cheese",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

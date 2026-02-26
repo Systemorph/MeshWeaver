@@ -1,6 +1,6 @@
 {
   "id": "2026",
-  "namespace": "Cornerstone/Microsoft",
+  "namespace": "ACME/Insurance/Microsoft",
   "name": "Microsoft 2026",
   "nodeType": "ACME/Insurance/Pricing",
   "category": "Pricings",

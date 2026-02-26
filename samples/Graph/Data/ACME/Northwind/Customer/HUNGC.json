@@ -1,6 +1,6 @@
 {
   "id": "HUNGC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Hungry Coyote Import Store",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

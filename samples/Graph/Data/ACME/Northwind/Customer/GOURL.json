@@ -1,6 +1,6 @@
 {
   "id": "GOURL",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Gourmet Lanchonetes",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

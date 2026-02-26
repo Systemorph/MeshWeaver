@@ -1,6 +1,6 @@
 {
   "id": "Norske_Meierier",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Norske Meierier",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

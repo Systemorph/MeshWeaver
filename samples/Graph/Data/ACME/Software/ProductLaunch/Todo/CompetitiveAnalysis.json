@@ -1,6 +1,6 @@
 {
   "id": "CompetitiveAnalysis",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Conduct competitive analysis",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

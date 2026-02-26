@@ -1,6 +1,6 @@
 {
   "id": "Lyngbysild",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Lyngbysild",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

@@ -1,6 +1,6 @@
 {
   "id": "DefinePersona",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "path": "ACME/Software/ProductLaunch/Todo/DefinePersona",
   "name": "Define target customer persona",
   "nodeType": "ACME/Software/Project/Todo",

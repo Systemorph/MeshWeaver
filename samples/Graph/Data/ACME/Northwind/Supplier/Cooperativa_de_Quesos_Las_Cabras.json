@@ -1,6 +1,6 @@
 {
   "id": "Cooperativa_de_Quesos_Las_Cabras",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Cooperativa de Quesos 'Las Cabras'",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

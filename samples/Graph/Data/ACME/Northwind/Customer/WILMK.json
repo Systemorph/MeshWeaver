@@ -1,6 +1,6 @@
 {
   "id": "WILMK",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Wilman Kala",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

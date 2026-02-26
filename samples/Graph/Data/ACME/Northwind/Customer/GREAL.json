@@ -1,6 +1,6 @@
 {
   "id": "GREAL",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Great Lakes Food Market",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

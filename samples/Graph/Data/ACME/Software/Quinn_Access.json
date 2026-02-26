@@ -1,6 +1,6 @@
 {
   "id": "Quinn_Access",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "Quinn Access",
   "nodeType": "AccessAssignment",
   "content": {

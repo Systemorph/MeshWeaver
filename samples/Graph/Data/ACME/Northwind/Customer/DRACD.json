@@ -1,6 +1,6 @@
 {
   "id": "DRACD",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Drachenblut Delikatessen",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "Andrew_Fuller",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Andrew Fuller",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

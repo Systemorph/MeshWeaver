@@ -1,6 +1,6 @@
 {
   "id": "SIMOB",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Simons bistro",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

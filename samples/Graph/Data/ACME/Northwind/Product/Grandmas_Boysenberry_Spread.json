@@ -1,6 +1,6 @@
 {
   "id": "Grandmas_Boysenberry_Spread",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Grandma's Boysenberry Spread",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

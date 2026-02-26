@@ -14,6 +14,6 @@
     "displayName": "Employee",
     "iconName": "User",
     "description": "Employee master data with job title and location",
-    "configuration": "config => config.WithContentType<EmployeeContent>().AddData(data => data.AddHubSource(new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).Append(\"AnalyticsCatalog\").ToArray()), source => source.WithType<Order>().WithType<OrderDetails>().WithType<Product>().WithType<NorthwindDataCube>())).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddEmployeeNodeViews())"
+    "configuration": "config => config.WithContentType<EmployeeContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddEmployeeNodeViews())"
   }
 }

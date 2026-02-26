@@ -1,6 +1,6 @@
 {
   "id": "Zaanse_Snoepfabriek",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Zaanse Snoepfabriek",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

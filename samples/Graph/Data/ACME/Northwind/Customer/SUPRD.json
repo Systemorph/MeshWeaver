@@ -1,6 +1,6 @@
 {
   "id": "SUPRD",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Supr\u00eames d\u00e9lices",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

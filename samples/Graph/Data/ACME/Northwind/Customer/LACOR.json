@@ -1,6 +1,6 @@
 {
   "id": "LACOR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "La corne d'abondance",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

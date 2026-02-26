@@ -1,6 +1,6 @@
 {
   "id": "Genen_Shouyu",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Genen Shouyu",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

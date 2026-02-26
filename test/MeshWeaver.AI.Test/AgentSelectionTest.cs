@@ -30,7 +30,7 @@ public class AgentSelectionTest
     }
 
     /// <summary>
-    /// Scenario: ACME/ProductLaunch has NodeType="Demos/ACME/Project"
+    /// Scenario: ACME/ProductLaunch has NodeType="ACME/Software/Project"
     /// TodoAgent is defined at ACME/Project/TodoAgent
     /// When getting agents for ACME/ProductLaunch, TodoAgent should be found via the NodeType namespace.
     /// </summary>
@@ -38,8 +38,8 @@ public class AgentSelectionTest
     public async Task QueryAgentsAsync_ProductLaunchWithNodeType_FindsTodoAgentFromNodeTypeNamespace()
     {
         // Arrange
-        var contextPath = "Demos/ACME/ProductLaunch";
-        var nodeTypePath = "Demos/ACME/Project";
+        var contextPath = "ACME/Software/ProductLaunch";
+        var nodeTypePath = "ACME/Software/Project";
 
         // The ProductLaunch node with NodeType pointing to ACME/Project
         var productLaunchNode = new MeshNode("ProductLaunch", "ACME")
@@ -120,7 +120,7 @@ public class AgentSelectionTest
     public async Task QueryAgentsAsync_PathWithoutNodeType_FindsAgentsFromPathHierarchy()
     {
         // Arrange
-        var contextPath = "Demos/ACME/ProductLaunch";
+        var contextPath = "ACME/Software/ProductLaunch";
 
         // Node without a custom NodeType (defaults to Markdown)
         var productLaunchNode = new MeshNode("ProductLaunch", "ACME")

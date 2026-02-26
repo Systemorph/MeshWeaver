@@ -1,6 +1,6 @@
 {
   "id": "KOENE",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "K\u00f6niglich Essen",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

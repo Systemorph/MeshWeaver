@@ -1,6 +1,6 @@
 {
   "id": "Camembert_Pierrot",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Camembert Pierrot",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

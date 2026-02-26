@@ -1,6 +1,6 @@
 {
   "id": "ALFKI",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Alfreds Futterkiste",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

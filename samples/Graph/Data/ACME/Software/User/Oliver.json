@@ -1,6 +1,6 @@
 {
   "id": "Oliver",
-  "namespace": "ACME",
+  "namespace": "ACME/Software/User",
   "name": "Oliver Chen",
   "nodeType": "User",
   "description": "Compliance Officer at ACME",

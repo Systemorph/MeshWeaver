@@ -26,7 +26,7 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 |--------------|---------|
 | Use mesh tools in agents | [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin) - Get, Search, Update, NavigateTo |
 | Understand agent architecture | [Agentic AI](MeshWeaver/Documentation/Architecture/AgenticAI) - Multi-agent patterns |
-| See AI in action | [ACME Case Studies](Demos/ACME/Documentation) - Practical examples |
+| See AI in action | [ACME Case Studies](ACME/Software/Documentation) - Practical examples |
 
 ---
 

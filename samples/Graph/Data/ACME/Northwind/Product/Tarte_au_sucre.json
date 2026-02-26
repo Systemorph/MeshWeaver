@@ -1,6 +1,6 @@
 {
   "id": "Tarte_au_sucre",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Tarte au sucre",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -1,6 +1,6 @@
 {
   "id": "THECR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "The Cracker Box",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

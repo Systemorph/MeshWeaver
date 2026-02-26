@@ -1,6 +1,6 @@
 {
   "id": "ROMEY",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Romero y tomillo",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

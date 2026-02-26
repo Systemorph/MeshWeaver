@@ -1,6 +1,6 @@
 {
   "id": "Wimmers_gute_Semmelkn\u00f6del",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Wimmers gute Semmelkn\u00f6del",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

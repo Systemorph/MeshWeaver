@@ -1,6 +1,6 @@
 {
   "id": "MEREP",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "M\u00e8re Paillarde",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

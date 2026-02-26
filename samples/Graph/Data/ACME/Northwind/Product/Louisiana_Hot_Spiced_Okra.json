@@ -1,6 +1,6 @@
 {
   "id": "Louisiana_Hot_Spiced_Okra",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Louisiana Hot Spiced Okra",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

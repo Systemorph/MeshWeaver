@@ -1,6 +1,6 @@
 {
   "id": "Gula_Malacca",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gula Malacca",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

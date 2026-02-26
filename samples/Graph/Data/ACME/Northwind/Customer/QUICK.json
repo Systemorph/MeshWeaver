@@ -1,6 +1,6 @@
 {
   "id": "QUICK",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "QUICK-Stop",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

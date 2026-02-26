@@ -1,6 +1,6 @@
 {
   "id": "FOLIG",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Folies gourmandes",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

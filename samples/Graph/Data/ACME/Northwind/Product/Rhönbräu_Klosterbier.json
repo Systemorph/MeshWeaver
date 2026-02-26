@@ -1,6 +1,6 @@
 {
   "id": "Rh\u00f6nbr\u00e4u_Klosterbier",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Rh\u00f6nbr\u00e4u Klosterbier",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

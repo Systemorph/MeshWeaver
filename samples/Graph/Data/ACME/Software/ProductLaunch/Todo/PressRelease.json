@@ -1,6 +1,6 @@
 {
   "id": "PressRelease",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Write press release draft",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

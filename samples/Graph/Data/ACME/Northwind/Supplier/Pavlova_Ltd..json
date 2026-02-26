@@ -1,6 +1,6 @@
 {
   "id": "Pavlova_Ltd.",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Pavlova, Ltd.",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

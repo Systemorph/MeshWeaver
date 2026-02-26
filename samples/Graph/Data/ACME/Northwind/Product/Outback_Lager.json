@@ -1,6 +1,6 @@
 {
   "id": "Outback_Lager",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Outback Lager",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

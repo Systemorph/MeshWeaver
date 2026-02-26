@@ -332,12 +332,12 @@ public class CosmosSqlGeneratorTests
     public void ValueConversion_PreservesStringWithSlash()
     {
         var query = new ParsedQuery(
-            new QueryComparison(new QueryCondition("nodeType", QueryOperator.Equal, ["Demos/ACME/Project/Todo"])),
+            new QueryComparison(new QueryCondition("nodeType", QueryOperator.Equal, ["ACME/Software/Project/Todo"])),
             null);
 
         var (_, parameters) = _generator.GenerateWhereClause(query);
 
-        parameters["@p0"].Should().Be("Demos/ACME/Project/Todo");
+        parameters["@p0"].Should().Be("ACME/Software/Project/Todo");
     }
 
     #endregion

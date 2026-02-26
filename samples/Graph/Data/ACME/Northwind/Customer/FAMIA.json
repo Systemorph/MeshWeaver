@@ -1,6 +1,6 @@
 {
   "id": "FAMIA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Familia Arquibaldo",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

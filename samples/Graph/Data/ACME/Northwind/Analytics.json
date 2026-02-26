@@ -1,6 +1,6 @@
 {
   "id": "Analytics",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind",
   "name": "Analytics",
   "nodeType": "ACME/Northwind/AnalyticsCatalog",
   "category": "Analytics",

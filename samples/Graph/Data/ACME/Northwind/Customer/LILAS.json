@@ -1,6 +1,6 @@
 {
   "id": "LILAS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "LILA-Supermercado",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

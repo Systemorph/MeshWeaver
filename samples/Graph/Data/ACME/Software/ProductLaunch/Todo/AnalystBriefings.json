@@ -1,6 +1,6 @@
 {
   "id": "AnalystBriefings",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Schedule analyst briefings",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

@@ -1,6 +1,6 @@
 {
   "id": "FURIB",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Furia Bacalhau e Frutos do Mar",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

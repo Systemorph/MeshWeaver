@@ -1,6 +1,6 @@
 {
   "id": "ISLAT",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Island Trading",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

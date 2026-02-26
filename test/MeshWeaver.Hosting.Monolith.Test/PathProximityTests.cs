@@ -55,7 +55,7 @@ public class PathProximityTests
     [InlineData("Systemorph/Marketing", "Systemorph/Marketing", 40.0)]         // distance=0
     [InlineData("Systemorph/Marketing", "Systemorph/Marketing/Campaign1", 20.0)] // distance=1
     [InlineData("Systemorph/Marketing", "Systemorph/Projects", 13.333333333333334)] // distance=2
-    [InlineData("Systemorph/Marketing", "Demos/ACME/Projects", 6.666666666666667)]   // distance=5 (3-segment result)
+    [InlineData("Systemorph/Marketing", "ACME/Software/Projects", 6.666666666666667)]   // distance=5 (3-segment result)
     public void ComputeBoost_ProximityExamples(string context, string result, double expected)
     {
         PathProximity.ComputeBoost(context, result).Should().BeApproximately(expected, 0.01);
@@ -66,7 +66,7 @@ public class PathProximityTests
     {
         var context = "Systemorph/Marketing";
         var closeBoost = PathProximity.ComputeBoost(context, "Systemorph/Projects");
-        var farBoost = PathProximity.ComputeBoost(context, "Demos/ACME/Projects");
+        var farBoost = PathProximity.ComputeBoost(context, "ACME/Software/Projects");
 
         closeBoost.Should().BeGreaterThan(farBoost);
     }

@@ -1,6 +1,6 @@
 {
   "id": "EmailCampaign",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Create email nurture sequence",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

@@ -85,7 +85,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateChild_WithTodoType_ShowsNameDescriptionForm()
     {
         var client = GetClient();
-        var parentAddress = new Address("Demos/ACME/ProductLaunch");
+        var parentAddress = new Address("ACME/Software/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         await client.AwaitResponse(
@@ -131,7 +131,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
-        var parentAddress = new Address("Demos/ACME/ProductLaunch");
+        var parentAddress = new Address("ACME/Software/ProductLaunch");
 
         Output.WriteLine("Initializing hub...");
         await client.AwaitResponse(
@@ -181,14 +181,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Create a unique transient node
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"Demos/ACME/ProductLaunch/Todo/TestTask{uniqueId}";
+        var nodePath = $"ACME/Software/ProductLaunch/Todo/TestTask{uniqueId}";
 
         Output.WriteLine($"Creating transient node at: {nodePath}");
 
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Test Task",
-            NodeType = "Demos/ACME/Project/Todo",
+            NodeType = "ACME/Software/Project/Todo",
             State = MeshNodeState.Transient
         };
 
@@ -265,14 +265,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"Demos/ACME/ProductLaunch/Todo/EditorTest{uniqueId}";
+        var nodePath = $"ACME/Software/ProductLaunch/Todo/EditorTest{uniqueId}";
 
         Output.WriteLine($"Creating transient node at: {nodePath}");
 
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Editor Test Task",
-            NodeType = "Demos/ACME/Project/Todo",
+            NodeType = "ACME/Software/Project/Todo",
             State = MeshNodeState.Transient
         };
 
@@ -349,14 +349,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"Demos/ACME/ProductLaunch/Todo/CreateTest{uniqueId}";
+        var nodePath = $"ACME/Software/ProductLaunch/Todo/CreateTest{uniqueId}";
 
         Output.WriteLine($"Creating transient node at: {nodePath}");
 
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Create Test Task",
-            NodeType = "Demos/ACME/Project/Todo",
+            NodeType = "ACME/Software/Project/Todo",
             State = MeshNodeState.Transient
         };
 
@@ -434,14 +434,14 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"Demos/ACME/ProductLaunch/Todo/E2E{uniqueId}";
+        var nodePath = $"ACME/Software/ProductLaunch/Todo/E2E{uniqueId}";
 
         Output.WriteLine($"Creating transient node at: {nodePath}");
 
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "E2E Test Task",
-            NodeType = "Demos/ACME/Project/Todo",
+            NodeType = "ACME/Software/Project/Todo",
             State = MeshNodeState.Transient
         };
 
@@ -459,7 +459,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             retrievedNode.Should().NotBeNull("Transient node should be retrievable");
             retrievedNode!.State.Should().Be(MeshNodeState.Transient);
             retrievedNode.Name.Should().Be("E2E Test Task");
-            retrievedNode.NodeType.Should().Be("Demos/ACME/Project/Todo");
+            retrievedNode.NodeType.Should().Be("ACME/Software/Project/Todo");
             Output.WriteLine($"Retrieved transient node successfully");
         }
         finally
@@ -501,7 +501,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
         var creatableTypes = await nodeTypeService
-            .GetCreatableTypesAsync("Demos/ACME/ProductLaunch", TestContext.Current.CancellationToken)
+            .GetCreatableTypesAsync("ACME/Software/ProductLaunch", TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Found {creatableTypes.Count} creatable types:");
@@ -513,8 +513,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         creatableTypes.Should().NotBeEmpty("ProductLaunch should have creatable types");
 
         // Verify Todo type is among the creatable types
-        var todoType = creatableTypes.FirstOrDefault(t => t.NodeTypePath == "Demos/ACME/Project/Todo");
-        todoType.Should().NotBeNull("Demos/ACME/Project/Todo should be a creatable type");
+        var todoType = creatableTypes.FirstOrDefault(t => t.NodeTypePath == "ACME/Software/Project/Todo");
+        todoType.Should().NotBeNull("ACME/Software/Project/Todo should be a creatable type");
     }
 
     #endregion
@@ -538,7 +538,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"Demos/ACME/ProductLaunch/Todo/UIFlowTest{uniqueId}";
+        var nodePath = $"ACME/Software/ProductLaunch/Todo/UIFlowTest{uniqueId}";
 
         Output.WriteLine($"Creating transient node at: {nodePath}");
 
@@ -547,7 +547,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "UI Flow Test Task",
-            NodeType = "Demos/ACME/Project/Todo",
+            NodeType = "ACME/Software/Project/Todo",
             State = MeshNodeState.Transient
             // NOTE: No Content set - this is how CreateChild creates the node
         };
@@ -662,7 +662,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var nodePath = $"Demos/ACME/ProductLaunch/Todo/DataReqTest{uniqueId}";
+        var nodePath = $"ACME/Software/ProductLaunch/Todo/DataReqTest{uniqueId}";
 
         Output.WriteLine($"Creating node at: {nodePath}");
 
@@ -680,7 +680,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Data Request Test Task",
-            NodeType = "Demos/ACME/Project/Todo",
+            NodeType = "ACME/Software/Project/Todo",
             State = MeshNodeState.Transient,
             Content = todoContent
         };
@@ -786,7 +786,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var query = "path:Demos/ACME/ProductLaunch/Todo/DefinePersona";
+        var query = "path:ACME/Software/ProductLaunch/Todo/DefinePersona";
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
@@ -819,7 +819,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task Baseline_OverviewAreaRenders()
     {
         var client = GetClient();
-        var parentAddress = new Address("Demos/ACME/ProductLaunch");
+        var parentAddress = new Address("ACME/Software/ProductLaunch");
 
         await client.AwaitResponse(
             new PingRequest(),

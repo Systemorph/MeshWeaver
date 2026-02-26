@@ -1,6 +1,6 @@
 {
   "id": "Nord-Ost_Matjeshering",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Nord-Ost Matjeshering",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -25,21 +25,21 @@ public class QueryTests
         await _fixture.CleanDataAsync();
         var adapter = _fixture.StorageAdapter;
 
-        await adapter.WriteAsync(new MeshNode("Story1", "Demos/ACME/Project")
+        await adapter.WriteAsync(new MeshNode("Story1", "ACME/Software/Project")
         {
             Name = "Story One",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High"}""", _options)
         }, _options);
 
-        await adapter.WriteAsync(new MeshNode("Story2", "Demos/ACME/Project")
+        await adapter.WriteAsync(new MeshNode("Story2", "ACME/Software/Project")
         {
             Name = "Story Two",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Closed","priority":"Low"}""", _options)
         }, _options);
 
-        await adapter.WriteAsync(new MeshNode("Alice", "Demos/ACME/Team")
+        await adapter.WriteAsync(new MeshNode("Alice", "ACME/Software/Team")
         {
             Name = "Alice",
             NodeType = "Person"
@@ -77,7 +77,7 @@ public class QueryTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options))
@@ -107,7 +107,7 @@ public class QueryTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project/Story1 scope:exact");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project/Story1 scope:exact");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options))
@@ -158,7 +158,7 @@ public class QueryTests
             NodeType = "Organization"
         }, _options);
 
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project/Story1 scope:ancestors");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project/Story1 scope:ancestors");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options))
@@ -167,7 +167,7 @@ public class QueryTests
         // Ancestors: ACME, ACME/Project (NOT Story1 itself)
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path).Should()
-            .BeEquivalentTo("ACME", "Demos/ACME/Project");
+            .BeEquivalentTo("ACME", "ACME/Software/Project");
     }
 
     [Fact]
@@ -244,7 +244,7 @@ public class QueryTests
         var request = new MeshQueryRequest
         {
             Query = "nodeType:Story",
-            DefaultPath = "Demos/ACME/Project"
+            DefaultPath = "ACME/Software/Project"
         };
 
         var results = new List<object>();
