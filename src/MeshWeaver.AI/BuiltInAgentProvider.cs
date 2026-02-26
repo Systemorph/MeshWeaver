@@ -31,7 +31,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                         - "Fix the login bug" -> Name: Fix Login Bug / Id: FixLoginBug
                         """,
         ExposedInNavigator = false,
-        DisplayOrder = 999, // Very low priority, utility agent
+        Order = 999, // Very low priority, utility agent
     };
 
     private static readonly MeshNode[] Nodes =

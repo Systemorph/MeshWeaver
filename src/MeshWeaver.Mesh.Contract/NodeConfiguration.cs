@@ -44,11 +44,6 @@ public record NodeTypeConfiguration
     public string? Description { get; init; }
 
     /// <summary>
-    /// Display order for sorting in autocomplete lists (lower values appear first).
-    /// </summary>
-    public int? DisplayOrder { get; init; }
-
-    /// <summary>
     /// Validator types for this NodeType.
     /// These validators run in addition to any globally registered validators.
     /// Validators are resolved via DI and can handle specific operations via SupportedOperations.

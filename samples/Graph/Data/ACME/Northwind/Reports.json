@@ -6,6 +6,6 @@
   "category": "Reports",
   "description": "Data-driven analytical reports on Northwind Traders sales, orders, products, clients, and employees",
   "icon": "/static/storage/content/ACME/Northwind/icons/reports.svg",
-  "displayOrder": 2,
+  "order": 2,
   "isPersistent": true
 }

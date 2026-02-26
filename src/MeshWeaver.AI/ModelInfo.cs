@@ -1,4 +1,4 @@
-namespace MeshWeaver.AI;
+﻿namespace MeshWeaver.AI;
 
 /// <summary>
 /// Information about an available AI model including its provider.
@@ -18,7 +18,7 @@ public record ModelInfo
     /// <summary>
     /// Display order from the factory (lower = first).
     /// </summary>
-    public int DisplayOrder { get; init; }
+    public int Order { get; init; }
 
     /// <summary>
     /// Display string showing provider and model.

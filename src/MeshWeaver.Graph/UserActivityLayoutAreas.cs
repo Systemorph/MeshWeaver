@@ -23,8 +23,9 @@ public static class UserActivityLayoutAreas
         => configuration.AddLayout(layout => layout.WithView(ActivityArea, Activity));
 
     /// <summary>
-    /// Renders the user's personal dashboard: welcome header, compact chat entry,
-    /// and a responsive 3-column grid (Recently Viewed, Notifications, Pending Actions).
+    /// Renders the user's personal dashboard: welcome header,
+    /// responsive 3-column grid (Recently Viewed, Notifications, Pending Actions),
+    /// and compact chat entry at the bottom.
     /// </summary>
     public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
     {
@@ -34,30 +35,34 @@ public static class UserActivityLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
-            var dashboard = Controls.Stack.WithWidth("100%")
-                .WithStyle("max-width: 1200px; margin: 0 auto; padding: 24px;");
+            var dashboard = Controls.Stack
+                .WithWidth("100%")
+                .WithVerticalGap(16);
 
             // Welcome header
             var userName = accessService?.Context?.Name ?? "User";
-            dashboard = dashboard.WithView(Controls.Html(
-                $"<h2 style=\"margin: 0 0 16px 0;\">Welcome back, {EscapeHtml(userName)}</h2>"));
-
-            // Compact chat entry
-            dashboard = dashboard.WithView(BuildChatEntry(host, nodePath));
+            dashboard = dashboard.WithView(Controls.H2($"Welcome back, {userName}"));
 
             // 3-column responsive grid
-            var columns = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithWrap(true)
-                .WithHorizontalGap(16)
-                .WithVerticalGap(16)
-                .WithWidth("100%");
+            var grid = Controls.LayoutGrid
+                .WithStyle("width: 100%;")
+                .WithView(
+                    await BuildRecentActivity(host, userId),
+                    skin => skin.WithXs(12).WithSm(4)
+                )
+                .WithView(
+                    BuildNotifications(nodePath, userId),
+                    skin => skin.WithXs(12).WithSm(4)
+                )
+                .WithView(
+                    BuildPendingActions(userId),
+                    skin => skin.WithXs(12).WithSm(4)
+                );
 
-            columns = columns.WithView(await BuildRecentActivity(host, userId));
-            columns = columns.WithView(BuildNotifications(nodePath, userId));
-            columns = columns.WithView(BuildPendingActions(userId));
+            dashboard = dashboard.WithView(grid);
 
-            dashboard = dashboard.WithView(columns);
+            // Chat entry at the bottom
+            dashboard = dashboard.WithView(BuildChatEntry(host, nodePath));
 
             return (UiControl?)dashboard;
         });
@@ -65,23 +70,17 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildChatEntry(LayoutAreaHost host, string nodePath)
     {
-        var section = Controls.Stack.WithWidth("100%")
-            .WithStyle("margin-bottom: 16px; padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);");
-
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
-            .WithInitialContextDisplayName("Home");
+            .WithInitialContextDisplayName("Home")
+            .WithHideEmptyState();
 
-        section = section.WithView(chatControl);
-        return section;
+        return Controls.Stack.WithWidth("100%").WithView(chatControl);
     }
-
-    private static readonly string ColumnStyle =
-        "flex: 1 1 calc(33.33% - 16px); min-width: 280px; padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; background: var(--neutral-layer-2);";
 
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        var section = Controls.Stack.WithStyle(ColumnStyle);
+        var section = Controls.Stack;
 
         section = section.WithView(Controls.PaneHeader("Recently Viewed"));
 
@@ -106,7 +105,7 @@ public static class UserActivityLayoutAreas
             return section;
         }
 
-        var list = Controls.Stack.WithWidth("100%").WithStyle("gap: 4px;");
+        var list = Controls.Stack.WithVerticalGap(4);
         foreach (var activity in recent)
         {
             var nodeTypeBadge = !string.IsNullOrEmpty(activity.NodeType)
@@ -129,7 +128,7 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildNotifications(string nodePath, string userId)
     {
-        var section = Controls.Stack.WithStyle(ColumnStyle);
+        var section = Controls.Stack;
 
         section = section.WithView(Controls.PaneHeader("Notifications"));
 
@@ -149,7 +148,7 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildPendingActions(string userId)
     {
-        var section = Controls.Stack.WithStyle(ColumnStyle);
+        var section = Controls.Stack;
 
         section = section.WithView(Controls.PaneHeader("Pending Actions"));
 

@@ -6,7 +6,7 @@
   "category": "Analytics",
   "description": "Dashboards and analytics views for Northwind Traders data",
   "icon": "/static/storage/content/ACME/Northwind/icons/analytics.svg",
-  "displayOrder": 3,
+  "order": 3,
   "isPersistent": true,
   "content": {
     "$type": "CatalogContent",

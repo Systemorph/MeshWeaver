@@ -1,6 +1,4 @@
-using MeshWeaver.AI;
-using MeshWeaver.Mesh;
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -22,7 +20,7 @@ public class CopilotChatClientAgentFactory(
 
     public override IReadOnlyList<string> Models => configuration.Models;
 
-    public override int DisplayOrder => configuration.DisplayOrder;
+    public override int Order => configuration.Order;
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {

@@ -28,7 +28,7 @@ public class ClaudeCodeConfiguration
     /// <summary>
     /// Display order in model dropdown (lower = first).
     /// </summary>
-    public int DisplayOrder { get; set; } = 5;
+    public int Order { get; set; } = 5;
 
     /// <summary>
     /// Maximum conversation turns before stopping.

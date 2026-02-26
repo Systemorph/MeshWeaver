@@ -43,7 +43,7 @@ public static class MarkdownLayoutAreas
             host.Hub, host.Hub.Address.ToString());
         if (perms.HasFlag(Permission.Update))
             yield return new NodeMenuItemDefinition("Edit", EditArea,
-                RequiredPermission: Permission.Update, DisplayOrder: 10);
+                RequiredPermission: Permission.Update, Order: 10);
     }
 
     private static async IAsyncEnumerable<NodeMenuItemDefinition> SuggestMenuProvider(
@@ -53,6 +53,6 @@ public static class MarkdownLayoutAreas
             host.Hub, host.Hub.Address.ToString());
         if (perms.HasFlag(Permission.Update))
             yield return new NodeMenuItemDefinition("Suggest", SuggestArea,
-                RequiredPermission: Permission.Update, DisplayOrder: 11);
+                RequiredPermission: Permission.Update, Order: 11);
     }
 }

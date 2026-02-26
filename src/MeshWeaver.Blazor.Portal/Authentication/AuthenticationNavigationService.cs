@@ -16,8 +16,9 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     {
         _options = options.Value;
 
-        // Determine paths based on provider or custom configuration
-        (_loginPath, _logoutPath) = GetProviderPaths(_options.Provider);
+        // Always route through the unified /login page
+        _loginPath = "/login";
+        _logoutPath = _options.Providers.Count > 0 ? "/auth/logout" : "/dev/logout";
 
         // Override with custom paths if specified
         if (!string.IsNullOrEmpty(_options.LoginPath))
@@ -27,6 +28,16 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     }
 
     public string ProviderName => _options.Provider;
+
+    /// <summary>
+    /// Gets the configured external providers for use by the login page.
+    /// </summary>
+    public IReadOnlyList<ExternalProviderConfig> GetAvailableProviders() => _options.Providers;
+
+    /// <summary>
+    /// Whether dev login should be shown on the login page.
+    /// </summary>
+    public bool IsDevMode => _options.EnableDevLogin;
 
     public string GetLoginUrl(string? returnUrl = null)
     {
@@ -47,15 +58,4 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
         return $"{path}{separator}{_options.ReturnUrlParameterName}={Uri.EscapeDataString(returnUrl)}";
     }
 
-    private static (string loginPath, string logoutPath) GetProviderPaths(string provider)
-    {
-        return provider switch
-        {
-            AuthenticationProviders.Dev => ("/dev/login", "/dev/logout"),
-            AuthenticationProviders.MicrosoftIdentity => ("/MicrosoftIdentity/Account/SignIn", "/MicrosoftIdentity/Account/SignOut"),
-            AuthenticationProviders.Google => ("/signin-google", "/signout"),
-            AuthenticationProviders.Custom => ("/login", "/logout"),
-            _ => ("/login", "/logout")
-        };
-    }
 }

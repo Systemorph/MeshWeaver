@@ -6,13 +6,13 @@ icon: Compass
 category: Agents
 isDefault: true
 exposedInNavigator: false
-displayOrder: -1
+order: -1
 delegations:
-  - agentPath: Planner
+  - agentPath: Agent/Planner
     instructions: Complex multi-step tasks requiring analysis and planning
-  - agentPath: Executor
+  - agentPath: Agent/Executor
     instructions: "Direct actions: create, update, delete nodes"
-  - agentPath: Research
+  - agentPath: Agent/Research
     instructions: "Information lookup, web search, document retrieval"
   - agentPath: ACME/MeshAgent
     instructions: Manages the mesh graph structure. Can read, create, update, and delete nodes.
@@ -94,9 +94,9 @@ For Northwind Traders analytics queries (sales, products, customers, orders, emp
 
 # When to Delegate
 
-- **Complex planning** -> Planner
-- **Create/update/delete actions** -> Executor or domain agent
-- **Research/web search** -> Research
+- **Complex planning** -> Agent/Planner
+- **Create/update/delete actions** -> Agent/Executor or domain agent
+- **Research/web search** -> Agent/Research
 - **Domain-specific questions** -> Domain agents (TodoAgent, InsuranceAgent, etc.)
 
 # Guidelines

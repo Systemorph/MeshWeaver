@@ -1,7 +1,7 @@
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Messaging;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.AI;
 
 namespace MeshWeaver.AI.AzureFoundry;
 
@@ -32,7 +32,7 @@ public class AzureClaudeChatClientAgentFactory(
 
     public override IReadOnlyList<string> Models => configuration.Models;
 
-    public override int DisplayOrder => configuration.DisplayOrder;
+    public override int Order => configuration.Order;
 
     protected override IChatClient CreateChatClient(AgentConfiguration agentConfig)
     {

@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 
 using System.Text.RegularExpressions;
 
@@ -30,7 +30,7 @@ public class ModelCommand : IChatCommand
 
             var grouped = context.AvailableModels
                 .GroupBy(m => m.Provider)
-                .OrderBy(g => g.First().DisplayOrder);
+                .OrderBy(g => g.First().Order);
 
             var modelList = string.Join("\n", grouped.Select(g =>
                 $"**{g.Key}**: {string.Join(", ", g.Select(m => m.Name))}"));
@@ -67,7 +67,7 @@ public class ModelCommand : IChatCommand
         {
             var grouped = context.AvailableModels
                 .GroupBy(m => m.Provider)
-                .OrderBy(g => g.First().DisplayOrder);
+                .OrderBy(g => g.First().Order);
 
             var modelList = string.Join("\n", grouped.Select(g =>
                 $"**{g.Key}**: {string.Join(", ", g.Select(m => m.Name))}"));

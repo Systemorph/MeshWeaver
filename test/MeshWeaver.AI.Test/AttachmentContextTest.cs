@@ -101,7 +101,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         public string Name => "CapturingFactory";
         public IReadOnlyList<string> Models => ["capturing-model"];
-        public int DisplayOrder => 0;
+        public int Order => 0;
 
         public Task<ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config,
@@ -308,5 +308,107 @@ public class AttachmentContextTest : MonolithMeshTestBase
         // Attachments before user message
         attachmentIndex.Should().BeLessThan(userMessageIndex,
             "attachments should come before user message");
+    }
+
+    /// <summary>
+    /// Verifies that attaching an agent node does NOT inject its content into the prompt.
+    /// </summary>
+    [Fact]
+    public async Task AgentAttachment_ExcludedFromContextContent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (agentChat, factory) = await SetupAgentChatAsync(ct);
+
+        // Attach an agent node as an attachment
+        agentChat.SetAttachments(["Agent/Research"]);
+
+        const string userText = "Help me find data";
+        await foreach (var _ in agentChat.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, userText)], ct)) { }
+
+        factory.AllCapturedMessages.Should().NotBeEmpty();
+        var assembledPrompt = GetLastUserMessageText(factory.AllCapturedMessages);
+        assembledPrompt.Should().NotBeNullOrEmpty();
+
+        // Agent attachment should NOT appear as context content
+        assembledPrompt.Should().NotContain("## Attachment: Agent/Research",
+            "agent attachments should be filtered out of context content");
+    }
+
+    /// <summary>
+    /// Verifies that when the main context path is an agent node, the context section is still included.
+    /// </summary>
+    [Fact]
+    public async Task MainContext_IncludedEvenIfAgent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var factory = (CapturingChatClientFactory)Mesh.ServiceProvider.GetRequiredService<IChatClientFactory>();
+
+        var agentChat = new AgentChatClient(Mesh.ServiceProvider);
+        await agentChat.InitializeAsync("Agent/Navigator");
+
+        var query = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        MeshNode? navigatorNode = null;
+        await foreach (var node in query.QueryAsync<MeshNode>("path:Agent/Navigator scope:self", null, ct))
+        {
+            navigatorNode = node;
+            break;
+        }
+        navigatorNode.Should().NotBeNull();
+
+        agentChat.SetContext(new AgentContext
+        {
+            Address = new Address("Agent", "Navigator"),
+            Node = navigatorNode
+        });
+
+        agentChat.SetThreadId($"Agent/Navigator/{Guid.NewGuid().AsString()}");
+
+        var agents = await agentChat.GetOrderedAgentsAsync();
+        agents.Should().NotBeEmpty();
+        agentChat.SetSelectedAgent(agents[0].Name);
+
+        const string userText = "What can you do?";
+        await foreach (var _ in agentChat.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, userText)], ct)) { }
+
+        factory.AllCapturedMessages.Should().NotBeEmpty();
+        var assembledPrompt = GetLastUserMessageText(factory.AllCapturedMessages);
+        assembledPrompt.Should().NotBeNullOrEmpty();
+
+        // The main context section should still be present
+        assembledPrompt.Should().Contain("# Current Application Context",
+            "main context should always be included, even when the context path is an agent");
+    }
+
+    /// <summary>
+    /// Verifies that an @Agent/Research reference in message text overrides the combobox-selected agent.
+    /// </summary>
+    [Fact]
+    public async Task FirstAgentReferenceInMessage_OverridesComboboxSelection()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (agentChat, factory) = await SetupAgentChatAsync(ct);
+
+        // Explicitly select Navigator via the combobox
+        agentChat.SetSelectedAgent("Navigator");
+
+        // Send a message that references @Agent/Research (like the UI does when user types @Agent/Research)
+        // Also set Agent/Research as an attachment (the UI adds @references to attachments)
+        agentChat.SetAttachments(["Agent/Research"]);
+
+        const string userText = "Please look up sales data @Agent/Research";
+        await foreach (var _ in agentChat.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, userText)], ct)) { }
+
+        factory.AllCapturedMessages.Should().NotBeEmpty();
+        var assembledPrompt = GetLastUserMessageText(factory.AllCapturedMessages);
+        assembledPrompt.Should().NotBeNullOrEmpty();
+
+        // The agent instructions in the prompt should be Research's, not Navigator's
+        assembledPrompt.Should().Contain("You are Research",
+            "the @Agent/Research reference should override the Navigator combobox selection");
+        assembledPrompt.Should().NotContain("You are **Navigator**",
+            "Navigator's instructions should NOT be present when Research was selected via @reference");
     }
 }

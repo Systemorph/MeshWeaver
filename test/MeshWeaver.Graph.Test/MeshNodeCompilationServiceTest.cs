@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -343,7 +343,7 @@ public record ComponentType
             Name = "Header Component",
             NodeType = "type/component",
             Icon = "Header",
-            DisplayOrder = 1,
+            Order = 1,
             LastModified = DateTimeOffset.UtcNow
         };
 
@@ -374,7 +374,7 @@ public record ComponentType
         loadedNode.Name.Should().Be("Header Component");
         loadedNode.NodeType.Should().Be("type/component");
         loadedNode.Icon.Should().Be("Header");
-        loadedNode.DisplayOrder.Should().Be(1);
+        loadedNode.Order.Should().Be(1);
     }
 
     [Fact(Timeout = 25000)]

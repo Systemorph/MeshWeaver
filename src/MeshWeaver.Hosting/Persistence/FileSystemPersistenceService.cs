@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 
@@ -147,7 +147,7 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
             Name = sourceNode.Name,
             NodeType = sourceNode.NodeType,
             Icon = sourceNode.Icon,
-            DisplayOrder = sourceNode.DisplayOrder,
+            Order = sourceNode.Order,
             Content = sourceNode.Content,
             AssemblyLocation = sourceNode.AssemblyLocation,
             HubConfiguration = sourceNode.HubConfiguration,

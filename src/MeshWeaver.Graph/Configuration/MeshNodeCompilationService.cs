@@ -227,7 +227,6 @@ internal class MeshNodeCompilationService(
                                     HubConfiguration = hubConfig,
                                     DisplayName = meshNode.Name,
                                     Icon = meshNode.Icon,
-                                    DisplayOrder = meshNode.DisplayOrder
                                 });
                             }
                         }
@@ -533,7 +532,6 @@ internal class MeshNodeCompilationService(
                                     HubConfiguration = hubConfig,
                                     DisplayName = meshNode.Name,
                                     Icon = meshNode.Icon,
-                                    DisplayOrder = meshNode.DisplayOrder
                                 });
                             }
                         }

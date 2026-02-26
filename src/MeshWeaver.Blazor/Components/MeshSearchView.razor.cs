@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Reactive.Linq;
 using Microsoft.AspNetCore.Components;
@@ -69,6 +69,32 @@ public partial class MeshSearchView : IDisposable
         {
             if (ViewModel?.ShowSearchBox is bool show) return show;
             if (ViewModel?.ShowSearchBox is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.False) return false;
+                if (je.ValueKind == JsonValueKind.True) return true;
+            }
+            return true; // default
+        }
+    }
+    private bool BoundShowEmptyMessage
+    {
+        get
+        {
+            if (ViewModel?.ShowEmptyMessage is bool show) return show;
+            if (ViewModel?.ShowEmptyMessage is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.False) return false;
+                if (je.ValueKind == JsonValueKind.True) return true;
+            }
+            return true; // default
+        }
+    }
+    private bool BoundShowLoadingIndicator
+    {
+        get
+        {
+            if (ViewModel?.ShowLoadingIndicator is bool show) return show;
+            if (ViewModel?.ShowLoadingIndicator is JsonElement je)
             {
                 if (je.ValueKind == JsonValueKind.False) return false;
                 if (je.ValueKind == JsonValueKind.True) return true;
@@ -336,7 +362,7 @@ public partial class MeshSearchView : IDisposable
     private List<MeshNode> ApplySorting(List<MeshNode> nodes, SortConfig? sorting)
     {
         if (sorting == null || string.IsNullOrEmpty(sorting.SortByProperty))
-            return nodes.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name).ToList();
+            return nodes.OrderBy(n => n.Order).ThenBy(n => n.Name).ToList();
 
         var sorted = sorting.Ascending
             ? nodes.OrderBy(n => GetSortValue(n, sorting.SortByProperty))
@@ -487,6 +513,28 @@ public partial class MeshSearchView : IDisposable
             if (ViewModel?.ItemArea is JsonElement je && je.ValueKind == JsonValueKind.String)
                 return je.GetString();
             return null;
+        }
+    }
+
+    private int? BoundMaxColumns
+    {
+        get
+        {
+            if (ViewModel?.MaxColumns is int i) return i;
+            if (ViewModel?.MaxColumns is JsonElement je && je.ValueKind == JsonValueKind.Number)
+                return je.GetInt32();
+            return null;
+        }
+    }
+
+    private string AreaGridStyle
+    {
+        get
+        {
+            var maxCols = BoundMaxColumns;
+            if (maxCols.HasValue)
+                return $"grid-template-columns: repeat({maxCols.Value}, 1fr);";
+            return "";
         }
     }
 

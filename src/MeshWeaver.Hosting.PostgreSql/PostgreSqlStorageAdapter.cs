@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -100,7 +100,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
         cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
-        cmd.Parameters.AddWithValue(node.DisplayOrder.HasValue ? node.DisplayOrder.Value : DBNull.Value);
+        cmd.Parameters.AddWithValue(node.Order.HasValue ? node.Order.Value : DBNull.Value);
         cmd.Parameters.AddWithValue(node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified);
         cmd.Parameters.AddWithValue(node.Version);
         cmd.Parameters.AddWithValue((short)node.State);
@@ -424,7 +424,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             NodeType = reader.IsDBNull(reader.GetOrdinal("node_type")) ? null : reader.GetString(reader.GetOrdinal("node_type")),
             Category = reader.IsDBNull(reader.GetOrdinal("category")) ? null : reader.GetString(reader.GetOrdinal("category")),
             Icon = reader.IsDBNull(reader.GetOrdinal("icon")) ? null : reader.GetString(reader.GetOrdinal("icon")),
-            DisplayOrder = reader.IsDBNull(reader.GetOrdinal("display_order")) ? null : reader.GetInt32(reader.GetOrdinal("display_order")),
+            Order = reader.IsDBNull(reader.GetOrdinal("display_order")) ? null : reader.GetInt32(reader.GetOrdinal("display_order")),
             LastModified = new DateTimeOffset(reader.GetDateTime(reader.GetOrdinal("last_modified")), TimeSpan.Zero),
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),

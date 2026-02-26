@@ -21,7 +21,7 @@ public class PostgreSqlSqlGenerator
         ["description"] = "n.description",
         ["category"] = "n.category",
         ["icon"] = "n.icon",
-        ["displayOrder"] = "n.display_order",
+        ["order"] = "n.display_order",
         ["display_order"] = "n.display_order",
         ["lastModified"] = "n.last_modified",
         ["last_modified"] = "n.last_modified",
@@ -38,7 +38,7 @@ public class PostgreSqlSqlGenerator
     /// </summary>
     private static readonly HashSet<string> NonTextColumns = new(StringComparer.OrdinalIgnoreCase)
     {
-        "displayOrder", "display_order", "version", "state", "lastModified", "last_modified"
+        "order", "display_order", "version", "state", "lastModified", "last_modified"
     };
 
     private static bool IsTextField(string selector) =>

@@ -155,9 +155,9 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string? Icon { get; init; }
 
     /// <summary>
-    /// Display order for sorting (lower values appear first, null values appear last).
+    /// Order for sorting (lower values appear first, null values appear last).
     /// </summary>
-    public int? DisplayOrder { get; init; }
+    public int? Order { get; init; }
 
     /// <summary>
     /// Timestamp when this node was last modified.

@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
@@ -15,9 +16,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
@@ -508,6 +507,8 @@ public static class MeshNodeLayoutAreas
         return Controls.MeshSearch
             .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
             .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
+            .WithShowLoadingIndicator(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
             .WithSectionCounts(true)
@@ -606,7 +607,7 @@ public static class MeshNodeLayoutAreas
                 stack = stack.WithView(Controls.Html($"<h3 style=\"margin: 0 0 16px 0;\">Types in {node?.Namespace ?? hubPath}</h3>"));
 
                 var typesGrid = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2));
-                foreach (var typeNode in nodeTypeChildren.OrderBy(n => n.DisplayOrder).ThenBy(n => n.Name))
+                foreach (var typeNode in nodeTypeChildren.OrderBy(n => n.Order).ThenBy(n => n.Name))
                 {
                     // Skip if it's the same as own type
                     if (ownType != null && typeNode.Path == ownType.Path)

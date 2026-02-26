@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -117,7 +117,7 @@ public class AgentFileParser : IFileFormatParser
             }).ToList(),
             PreferredModel = frontMatter.PreferredModel,
             ContextMatchPattern = frontMatter.ContextMatchPattern,
-            DisplayOrder = frontMatter.DisplayOrder
+            Order = frontMatter.Order
         };
 
         var node = new MeshNode(id, ns)
@@ -163,7 +163,7 @@ public class AgentFileParser : IFileFormatParser
             ExposedInNavigator = agentConfig?.ExposedInNavigator ?? false,
             ContextMatchPattern = agentConfig?.ContextMatchPattern,
             PreferredModel = agentConfig?.PreferredModel,
-            DisplayOrder = agentConfig?.DisplayOrder ?? 0,
+            Order = agentConfig?.Order ?? 0,
             CustomIconSvg = agentConfig?.CustomIconSvg,
             Delegations = agentConfig?.Delegations?.Select(d => new DelegationFrontMatter
             {
@@ -236,7 +236,7 @@ public class AgentFileParser : IFileFormatParser
                 ExposedInNavigator = ExtractBool(element, "exposedInNavigator"),
                 PreferredModel = ExtractString(element, "preferredModel"),
                 ContextMatchPattern = ExtractString(element, "contextMatchPattern"),
-                DisplayOrder = ExtractInt(element, "displayOrder"),
+                Order = ExtractInt(element, "order"),
                 Delegations = ExtractDelegations(element)
             };
         }
@@ -357,7 +357,7 @@ public class AgentFileParser : IFileFormatParser
         public bool ExposedInNavigator { get; set; }
         public string? ContextMatchPattern { get; set; }
         public string? PreferredModel { get; set; }
-        public int DisplayOrder { get; set; }
+        public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
         public List<DelegationFrontMatter>? Delegations { get; set; }
     }

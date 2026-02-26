@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
@@ -7,13 +6,11 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -61,7 +58,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     {
     }
 
-    private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
+    private static readonly JsonSerializerOptions SetupJsonOptions = new();
 
     private static void SetupTestConfiguration(InMemoryPersistenceService persistence)
     {
@@ -76,7 +73,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Name = "Story",
             NodeType = "NodeType",
             Icon = "Document",
-            DisplayOrder = 30,
+            Order = 30,
             Content = new NodeTypeDefinition
             {
                 Description = "A user story or task"
@@ -96,7 +93,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             Name = "Graph",
             NodeType = "NodeType",
             Icon = "Diagram",
-            DisplayOrder = 0,
+            Order = 0,
             Content = new NodeTypeDefinition
             {
                 Description = "The graph root"

@@ -1,4 +1,4 @@
-using MeshWeaver.Blazor.Components.Monaco;
+﻿using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -155,7 +155,7 @@ public partial class MeshNodeEditorView
                 Name = _name,
                 NodeType = _node.NodeType,
                 Icon = _node.Icon,
-                DisplayOrder = _node.DisplayOrder,
+                Order = _node.Order,
                 Content = _node.Content,
                 AssemblyLocation = _node.AssemblyLocation,
                 HubConfiguration = _node.HubConfiguration,
@@ -228,7 +228,7 @@ public partial class MeshNodeEditorView
                 Name = _node.Name,
                 NodeType = _node.NodeType,
                 Icon = _node.Icon,
-                DisplayOrder = _node.DisplayOrder,
+                Order = _node.Order,
                 Content = newContent,
                 AssemblyLocation = _node.AssemblyLocation,
                 HubConfiguration = _node.HubConfiguration,

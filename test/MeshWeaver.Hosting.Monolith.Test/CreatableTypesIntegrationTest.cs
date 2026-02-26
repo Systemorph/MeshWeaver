@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -11,10 +11,8 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -54,7 +52,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     {
     }
 
-    private static readonly JsonSerializerOptions SetupJsonOptions = new JsonSerializerOptions();
+    private static readonly JsonSerializerOptions SetupJsonOptions = new();
 
     private static void SetupTestData(InMemoryPersistenceService persistence)
     {
@@ -134,7 +132,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "Markdown",
             NodeType = "NodeType",
             Icon = "Document",
-            DisplayOrder = 1000,
+            Order = 1000,
             Content = markdownTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(markdownTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -149,7 +147,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Name = "NodeType",
             NodeType = "NodeType",
             Icon = "Code",
-            DisplayOrder = 1001,
+            Order = 1001,
             Content = nodeTypeTypeDef
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(nodeTypeTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -608,7 +606,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task CreatableTypes_SortedByDisplayOrder()
+    public async Task CreatableTypes_SortedByOrder()
     {
         // Act
         var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);

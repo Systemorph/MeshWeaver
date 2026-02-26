@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
@@ -422,7 +422,7 @@ public record MeshNodeProperties
 
     public string? Icon { get; init; }
 
-    public int? DisplayOrder { get; init; }
+    public int? Order { get; init; }
 
     [Editable(false)]
     public MeshNodeState State { get; init; }
@@ -441,7 +441,7 @@ public record MeshNodeProperties
         NodeType = node.NodeType,
         Category = node.Category,
         Icon = node.Icon,
-        DisplayOrder = node.DisplayOrder,
+        Order = node.Order,
         State = node.State,
         LastModified = node.LastModified,
         Version = node.Version,
@@ -452,6 +452,6 @@ public record MeshNodeProperties
         Name = Name,
         Category = Category,
         Icon = Icon,
-        DisplayOrder = DisplayOrder,
+        Order = Order,
     };
 }

@@ -81,7 +81,7 @@ public record AgentConfiguration
     /// Display order for sorting agents in the UI.
     /// Lower values appear first.
     /// </summary>
-    public int DisplayOrder { get; init; }
+    public int Order { get; init; }
 }
 
 /// <summary>
