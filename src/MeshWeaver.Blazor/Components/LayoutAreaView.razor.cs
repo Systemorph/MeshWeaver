@@ -29,7 +29,7 @@ public partial class LayoutAreaView
         BindViewModel();
         if (AreaStream is not null
             && (!AreaStream.Reference.Equals(ViewModel.Reference) ||
-                !AreaStream.Owner.Equals(ViewModel.Address)))
+                !AreaStream.Owner.Equals(Address)))
         {
             Logger.LogDebug("LayoutAreaView disposing stale stream for {Address}/{Reference} (parameters changed)",
                 ViewModel.Address, ViewModel.Reference);

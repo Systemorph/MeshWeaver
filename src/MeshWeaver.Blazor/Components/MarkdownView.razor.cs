@@ -55,6 +55,7 @@ public partial class MarkdownView
         DataBind(ViewModel.Markdown, x => x.Markdown);
         DataBind(ViewModel.Html, x => x.Html);
         DataBind(ViewModel.CodeSubmissions, x => x.CodeSubmissionsRaw);
+        DataBind(ViewModel.ShowReferences, x => x.ShowReferencesSection);
 
         if (Html == null)
         {

@@ -55,8 +55,8 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery)
         var suggestions = await meshQuery.AutocompleteAsync("", "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = $"{s.Path}/",
-            InsertText = $"@{s.Path}/",
+            Label = s.Path,
+            InsertText = $"@{s.Path}",
             Description = s.NodeType ?? s.Name,
             Detail = s.Name,
             Category = "Addresses"
@@ -68,8 +68,8 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery)
         var suggestions = await meshQuery.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = $"{s.Path}/",
-            InsertText = $"@{s.Path}/",
+            Label = s.Path,
+            InsertText = $"@{s.Path}",
             Description = s.NodeType ?? "",
             Detail = s.Name,
             Category = ""
@@ -99,8 +99,8 @@ public class BlazorAutocompleteService(IMeshQuery meshQuery)
         var suggestions = await meshQuery.AutocompleteAsync(basePath, namePrefix, 20).ToArrayAsync();
         return suggestions.Select(s => new CompletionItem
         {
-            Label = $"{s.Path}/",
-            InsertText = $"@{s.Path}/",
+            Label = s.Path,
+            InsertText = $"@{s.Path}",
             Description = s.NodeType ?? s.Name,
             Detail = s.Name,
             Category = "Addresses"

@@ -20,4 +20,10 @@ public record MarkdownControl(object Markdown)
     /// Actual type is IReadOnlyCollection&lt;MeshWeaver.Kernel.SubmitCodeRequest&gt;.
     /// </summary>
     public object? CodeSubmissions { get; init; }
+
+    /// <summary>
+    /// Whether to show the References section below the rendered markdown.
+    /// Defaults to true.
+    /// </summary>
+    public object ShowReferences { get; init; } = true;
 }

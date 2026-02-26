@@ -258,14 +258,50 @@ public partial class MeshSearchView : IDisposable
         _reactiveSubscription?.Dispose();
         var query = BuildFullQuery();
         var request = MeshQueryRequest.FromQuery(query);
+
+        // Track the current set of paths. MeshSearchView only cares about
+        // which nodes exist (structural changes), not their content.
+        // Individual cards handle their own content updates via LayoutAreaView.
+        var knownPaths = new HashSet<string>();
+
         _reactiveSubscription = MeshQuery.ObserveQuery<MeshNode>(request)
             .Subscribe(change =>
             {
+                // Compute updated path set without touching _nodes yet.
+                HashSet<string> newPaths;
+                if (change.ChangeType == QueryChangeType.Initial ||
+                    change.ChangeType == QueryChangeType.Reset)
+                {
+                    newPaths = change.Items.Select(n => n.Path!).ToHashSet();
+                }
+                else if (change.ChangeType == QueryChangeType.Added)
+                {
+                    newPaths = new HashSet<string>(knownPaths);
+                    foreach (var item in change.Items)
+                        if (item.Path != null)
+                            newPaths.Add(item.Path);
+                }
+                else if (change.ChangeType == QueryChangeType.Removed)
+                {
+                    newPaths = new HashSet<string>(knownPaths);
+                    foreach (var item in change.Items)
+                        if (item.Path != null)
+                            newPaths.Remove(item.Path);
+                }
+                else
+                {
+                    // Updated — content changed but set of nodes didn't.
+                    return;
+                }
+
+                // Only re-render when the set of paths actually changed.
+                if (!_isLoading && knownPaths.SetEquals(newPaths))
+                    return;
+
+                knownPaths = newPaths;
+
                 InvokeAsync(() =>
                 {
-                    var prevCount = _nodes.Count;
-                    var prevPaths = _nodes.Select(n => n.Path).ToHashSet();
-
                     if (change.ChangeType == QueryChangeType.Initial ||
                         change.ChangeType == QueryChangeType.Reset)
                     {
@@ -280,15 +316,6 @@ public partial class MeshSearchView : IDisposable
                         var removedPaths = change.Items.Select(n => n.Path).ToHashSet();
                         _nodes.RemoveAll(n => removedPaths.Contains(n.Path));
                     }
-                    else if (change.ChangeType == QueryChangeType.Updated)
-                    {
-                        foreach (var updated in change.Items)
-                        {
-                            var idx = _nodes.FindIndex(n => n.Path == updated.Path);
-                            if (idx >= 0) _nodes[idx] = updated;
-                            else _nodes.Add(updated);
-                        }
-                    }
 
                     // Exclude base path if configured
                     if (BoundExcludeBasePath && !string.IsNullOrEmpty(BoundNamespace))
@@ -297,14 +324,9 @@ public partial class MeshSearchView : IDisposable
                         _nodes = _nodes.Where(n => n.Path != basePath).ToList();
                     }
 
-                    // Skip re-render if node set hasn't changed
-                    var newPaths = _nodes.Select(n => n.Path).ToHashSet();
-                    if (_isLoading || prevCount != _nodes.Count || !prevPaths.SetEquals(newPaths))
-                    {
-                        _computedGroups = ProcessResults(_nodes);
-                        _isLoading = false;
-                        StateHasChanged();
-                    }
+                    _computedGroups = ProcessResults(_nodes);
+                    _isLoading = false;
+                    StateHasChanged();
                 });
             });
     }
