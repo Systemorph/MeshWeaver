@@ -27,9 +27,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";
-    private string MainPaneSizeWithPanel => IsSidePanelVisible ? MainPaneSize : "100%";
     private string SidePanelPaneSize => SidePanelState.Width.HasValue ? $"{SidePanelState.Width.Value}%" : "25%";
-    private string SidePanelPaneSizeWithVisibility => IsSidePanelVisible ? SidePanelPaneSize : "0%";
 
     /// <summary>
     /// Render fragment for header links (social media icons, etc.)

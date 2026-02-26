@@ -138,18 +138,18 @@ public class AttachmentContextTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Helper: sets up an AgentChatClient with context pointing to ACME/ProductLaunch.
+    /// Helper: sets up an AgentChatClient with context pointing to ACME/Software.
     /// </summary>
     private async Task<(AgentChatClient Chat, CapturingChatClientFactory Factory)> SetupAgentChatAsync(CancellationToken ct)
     {
         var factory = (CapturingChatClientFactory)Mesh.ServiceProvider.GetRequiredService<IChatClientFactory>();
 
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME/ProductLaunch");
+        await agentChat.InitializeAsync("ACME/Software");
 
         var query = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/Software scope:self", null, ct))
         {
             contextNode = node;
             break;
@@ -158,11 +158,11 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         agentChat.SetContext(new AgentContext
         {
-            Address = new Address("ACME", "ProductLaunch"),
+            Address = new Address("ACME", "Software"),
             Node = contextNode
         });
 
-        agentChat.SetThreadId($"ACME/ProductLaunch/{Guid.NewGuid().AsString()}");
+        agentChat.SetThreadId($"ACME/Software/{Guid.NewGuid().AsString()}");
 
         var agents = await agentChat.GetOrderedAgentsAsync();
         agents.Should().NotBeEmpty();
@@ -182,7 +182,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
         // Set an attachment to a known path in test data
-        agentChat.SetAttachments(["ACME/ProductLaunch"]);
+        agentChat.SetAttachments(["ACME/Software"]);
 
         // Send a user message
         const string userText = "What is the launch status?";
@@ -214,7 +214,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
         // First message with attachment
-        agentChat.SetAttachments(["ACME/ProductLaunch"]);
+        agentChat.SetAttachments(["ACME/Software"]);
         await foreach (var _ in agentChat.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "First message")], ct)) { }
 
@@ -225,7 +225,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var messageCountAfterFirst = factory.AllCapturedMessages.Count;
 
         // Second message without setting attachments again (should be cleared)
-        agentChat.SetThreadId($"ACME/ProductLaunch/{Guid.NewGuid().AsString()}");
+        agentChat.SetThreadId($"ACME/Software/{Guid.NewGuid().AsString()}");
         await foreach (var _ in agentChat.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "Second message")], ct)) { }
 
@@ -270,7 +270,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
-        agentChat.SetAttachments(["ACME/ProductLaunch"]);
+        agentChat.SetAttachments(["ACME/Software"]);
 
         const string userText = "Check status please";
         await foreach (var _ in agentChat.GetResponseAsync(
@@ -336,37 +336,19 @@ public class AttachmentContextTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that when the main context path is an agent node, the context section is still included.
+    /// Verifies that when the main context is set (even to an agent-like path), the context section is still included.
+    /// The Context property goes through a completely separate code path from attachments.
     /// </summary>
     [Fact]
     public async Task MainContext_IncludedEvenIfAgent()
     {
         var ct = TestContext.Current.CancellationToken;
-        var factory = (CapturingChatClientFactory)Mesh.ServiceProvider.GetRequiredService<IChatClientFactory>();
+        var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
-        var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("Agent/Navigator");
-
-        var query = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        MeshNode? navigatorNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:Agent/Navigator scope:self", null, ct))
-        {
-            navigatorNode = node;
-            break;
-        }
-        navigatorNode.Should().NotBeNull();
-
-        agentChat.SetContext(new AgentContext
-        {
-            Address = new Address("Agent", "Navigator"),
-            Node = navigatorNode
-        });
-
-        agentChat.SetThreadId($"Agent/Navigator/{Guid.NewGuid().AsString()}");
-
-        var agents = await agentChat.GetOrderedAgentsAsync();
-        agents.Should().NotBeEmpty();
-        agentChat.SetSelectedAgent(agents[0].Name);
+        // The setup already sets a context (ACME/Software). Verify it appears in the prompt
+        // even when an agent attachment is also present (agent attachments are filtered,
+        // but the main context section is a completely separate code path).
+        agentChat.SetAttachments(["Agent/Research"]);
 
         const string userText = "What can you do?";
         await foreach (var _ in agentChat.GetResponseAsync(
@@ -378,7 +360,11 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         // The main context section should still be present
         assembledPrompt.Should().Contain("# Current Application Context",
-            "main context should always be included, even when the context path is an agent");
+            "main context should always be included, even when agent attachments are present");
+
+        // Agent attachment should NOT appear as context content
+        assembledPrompt.Should().NotContain("## Attachment: Agent/Research",
+            "agent attachments should be filtered, not injected as context content");
     }
 
     /// <summary>

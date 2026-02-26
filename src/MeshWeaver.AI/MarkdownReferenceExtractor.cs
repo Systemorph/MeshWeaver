@@ -191,10 +191,15 @@ public static class MarkdownReferenceExtractor
 
     private static bool IsKnownCommand(string path)
     {
-        // Filter out known @ command patterns that aren't references
-        var knownPrefixes = new[] { "agent/", "model/" };
-        return knownPrefixes.Any(prefix =>
-            path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        // Filter out known @ command patterns that aren't references.
+        // Use case-sensitive match for "agent/" so that lowercase @agent/Name
+        // (command syntax) is filtered, but @Agent/Research (path reference
+        // to the Agent namespace) is preserved.
+        if (path.StartsWith("agent/", StringComparison.Ordinal))
+            return true;
+        if (path.StartsWith("model/", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return false;
     }
 
     private static string RemoveTextAtIndex(string text, int startIndex, int length)

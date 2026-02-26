@@ -249,12 +249,55 @@ export function applySidePanelSize(width, height) {
 }
 
 // =============================================================================
+// Markdown Theme (github-markdown CSS switching)
+// =============================================================================
+
+function updateMarkdownTheme() {
+    let themeLink = document.getElementById('github-markdown-theme');
+
+    if (!themeLink) {
+        themeLink = document.createElement('link');
+        themeLink.id = 'github-markdown-theme';
+        themeLink.rel = 'stylesheet';
+        document.head.appendChild(themeLink);
+    }
+
+    const isDarkMode = window.themeHandler
+        ? window.themeHandler.getEffectiveTheme() === 'dark'
+        : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+
+    const basePath = '_content/MeshWeaver.Blazor/css/';
+    const cdnPath = 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/';
+
+    const localTheme = isDarkMode
+        ? basePath + 'github-markdown-dark.css'
+        : basePath + 'github-markdown-light.css';
+
+    if (themeLink.href !== window.location.origin + '/' + localTheme) {
+        themeLink.href = localTheme;
+        themeLink.onerror = function () {
+            const cdnTheme = isDarkMode
+                ? cdnPath + 'github-markdown-dark.min.css'
+                : cdnPath + 'github-markdown-light.min.css';
+            themeLink.href = cdnTheme;
+        };
+    }
+}
+
+// =============================================================================
 // Initialization
 // =============================================================================
 
 function initializePage() {
     checkCookieConsent();
     window.themeHandler.initialize();
+
+    // Initialize markdown theme and register for theme changes
+    updateMarkdownTheme();
+    window.themeHandler.registerThemeChangeCallback(() => updateMarkdownTheme());
+    if (window.matchMedia) {
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => updateMarkdownTheme());
+    }
 }
 
 if (document.readyState === 'loading') {

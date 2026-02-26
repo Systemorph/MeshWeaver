@@ -89,27 +89,35 @@
 
     @* Main content area with splitter at top level (in grid-area: main).
        @Body goes in first pane with body-content class. Side panel is in second pane. *@
-    <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
-                         Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
-                         Class="body-splitter">
-        <FluentMultiSplitterPane Size="@MainPaneSizeWithPanel" Min="200px">
-            @* Page content - body-content class applies grid-area styles *@
-            <div class="body-content">
-                <FluentToastProvider MaxToastCount="3" Timeout="5000" />
-                @Body
-            </div>
-        </FluentMultiSplitterPane>
-        <FluentMultiSplitterPane Size="@SidePanelPaneSizeWithVisibility" Min="@(IsSidePanelVisible ? "250px" : "0")" Max="60%" Resizable="@IsSidePanelVisible" Collapsible="true" Collapsed="@(!IsSidePanelVisible)">
-            @* Side panel - persists across navigation, independent from @Body *@
-            <div class="side-panel-wrapper" style="@(IsSidePanelVisible ? "" : "display: none;")">
-                <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
-                    <ChildContent>
-                        <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
-                    </ChildContent>
-                </SidePanel>
-            </div>
-        </FluentMultiSplitterPane>
-    </FluentMultiSplitter>
+    @if (IsSidePanelVisible)
+    {
+        <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
+                             Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
+                             Class="body-splitter">
+            <FluentMultiSplitterPane Size="@MainPaneSize" Min="200px">
+                <div class="body-content">
+                    <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+                    @Body
+                </div>
+            </FluentMultiSplitterPane>
+            <FluentMultiSplitterPane Size="@SidePanelPaneSize" Min="250px" Max="60%" Resizable="true">
+                <div class="side-panel-wrapper">
+                    <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
+                        <ChildContent>
+                            <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                        </ChildContent>
+                    </SidePanel>
+                </div>
+            </FluentMultiSplitterPane>
+        </FluentMultiSplitter>
+    }
+    else
+    {
+        <div class="body-content" style="grid-area: main;">
+            <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+            @Body
+        </div>
+    }
 
     <div id="blazor-error-ui">
         An unhandled error has occurred.

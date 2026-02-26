@@ -13,6 +13,20 @@ namespace MeshWeaver.Data.Serialization;
 
 public static class JsonSynchronizationStream
 {
+    private static ILogger GetLogger(IServiceProvider serviceProvider)
+    {
+        try
+        {
+            return serviceProvider.GetService<ILoggerFactory>()
+                       ?.CreateLogger(typeof(JsonSynchronizationStream))
+                   ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance.CreateLogger(typeof(JsonSynchronizationStream));
+        }
+        catch (ObjectDisposedException)
+        {
+            return Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance.CreateLogger(typeof(JsonSynchronizationStream));
+        }
+    }
+
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
         Address owner,
@@ -24,8 +38,7 @@ public static class JsonSynchronizationStream
         if (hub.RunLevel > MessageHubRunLevel.Started)
             throw new ObjectDisposedException($"ParentHub {hub.Address} is disposing, cannot create stream for {reference}.");
 
-        var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-            .CreateLogger(typeof(JsonSynchronizationStream));
+        var logger = GetLogger(hub.ServiceProvider);
         // link to deserialized world. Will also potentially link to workspace.
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
 
@@ -107,8 +120,7 @@ public static class JsonSynchronizationStream
     where TReference : WorkspaceReference
     {
         var hub = workspace.Hub;
-        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-            .CreateLogger(typeof(JsonSynchronizationStream));
+        var logger = GetLogger(hub.ServiceProvider);
 
         var fromWorkspace = workspace
             .ReduceManager
@@ -175,8 +187,7 @@ public static class JsonSynchronizationStream
             .Where(predicate)
             .Select(x =>
             {
-                var logger = stream.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger(typeof(JsonSynchronizationStream));
+                var logger = GetLogger(stream.Hub.ServiceProvider);
                 logger.LogDebug("ToDataChanged processing change item: StreamId={StreamId}, ChangeType={ChangeType}, ChangedBy={ChangedBy}, UpdatesCount={UpdatesCount}",
                     stream.ClientId, x.ChangeType, x.ChangedBy, x.Updates.Count);
 

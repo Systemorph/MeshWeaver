@@ -227,10 +227,13 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         // Get the node from the workspace stream for header info
+        // StartWith emits immediately so the header renders with fallback title while node data loads
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.Select(nodes =>
+        return nodeStream
+            .StartWith(Array.Empty<MeshNode>())
+            .Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             return BuildThreadView(node, hubPath);

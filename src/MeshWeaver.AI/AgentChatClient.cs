@@ -375,11 +375,11 @@ public class AgentChatClient : IAgentChat
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // Detect agent attachments (for context content filtering)
-        await DetectAgentAttachmentsAsync();
+        DetectAgentAttachments();
 
         // Detect agent @references in message text (for selection override)
         var lastMessageText = messages.LastOrDefault() is { } last ? ExtractTextFromMessage(last) : null;
-        await DetectMessageAgentReferencesAsync(lastMessageText);
+        DetectMessageAgentReferences(lastMessageText);
 
         // Select which agent to use (async to avoid deadlock in Blazor context)
         var agent = await SelectAgentAsync(messages.LastOrDefault());
@@ -442,11 +442,11 @@ public class AgentChatClient : IAgentChat
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         // Detect agent attachments (for context content filtering)
-        await DetectAgentAttachmentsAsync();
+        DetectAgentAttachments();
 
         // Detect agent @references in message text (for selection override)
         var lastMessageTextStreaming = messages.LastOrDefault() is { } lastMsg ? ExtractTextFromMessage(lastMsg) : null;
-        await DetectMessageAgentReferencesAsync(lastMessageTextStreaming);
+        DetectMessageAgentReferences(lastMessageTextStreaming);
 
         // Select which agent to use (async to avoid deadlock in Blazor context)
         var agent = await SelectAgentAsync(messages.LastOrDefault());
@@ -690,11 +690,11 @@ public class AgentChatClient : IAgentChat
             }
         }
 
-        // 5. Global fallback: ensure default/global agents are always included
+        // 5. Query default agents from Agent namespace
         try
         {
-            var globalQuery = "nodeType:Agent";
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(globalQuery))
+            var agentNamespaceQuery = "path:Agent nodeType:Agent scope:Subtree";
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>(agentNamespaceQuery))
             {
                 if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     agentsDict[config.Id] = (config, node.Path ?? "");
@@ -702,7 +702,7 @@ public class AgentChatClient : IAgentChat
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error querying global agents");
+            logger.LogWarning(ex, "Error querying Agent namespace");
         }
 
         // Convert to AgentDisplayInfo
@@ -902,40 +902,38 @@ public class AgentChatClient : IAgentChat
         queuedLayoutAreaContent.Enqueue(layoutAreaContent);
     }
 
-    private async Task<bool> IsAgentNodeAsync(string path)
+    private bool IsAgentPath(string path)
     {
-        if (meshQuery == null) return false;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{path} scope:self"))
-        {
-            return node.NodeType == "Agent";
-        }
-        return false;
+        // Check if the path matches a loaded agent's path or resolves to an agent ID
+        return loadedAgents.Any(a =>
+            a.Path.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+            a.Name.Equals(path.Split('/').Last(), StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task DetectAgentAttachmentsAsync()
+    private void DetectAgentAttachments()
     {
         agentAttachmentPaths = new(StringComparer.OrdinalIgnoreCase);
-        if (currentAttachments is not { Count: > 0 } || meshQuery == null)
+        if (currentAttachments is not { Count: > 0 })
             return;
 
         foreach (var path in currentAttachments)
         {
             var cleanPath = path.TrimStart('@');
-            if (await IsAgentNodeAsync(cleanPath))
+            if (IsAgentPath(cleanPath))
                 agentAttachmentPaths.Add(cleanPath);
         }
     }
 
-    private async Task DetectMessageAgentReferencesAsync(string? messageText)
+    private void DetectMessageAgentReferences(string? messageText)
     {
         firstMessageAgentPath = null;
-        if (string.IsNullOrEmpty(messageText) || meshQuery == null)
+        if (string.IsNullOrEmpty(messageText))
             return;
 
         var referencePaths = MarkdownReferenceExtractor.GetUniquePaths(messageText);
         foreach (var refPath in referencePaths)
         {
-            if (await IsAgentNodeAsync(refPath))
+            if (IsAgentPath(refPath))
             {
                 firstMessageAgentPath = refPath;
                 return; // First agent wins

@@ -10,7 +10,6 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components.Rendering;
-using Microsoft.JSInterop;
 using MarkdownExtensions = MeshWeaver.Markdown.MarkdownExtensions;
 
 namespace MeshWeaver.Blazor.Components;
@@ -33,7 +32,6 @@ public partial class MarkdownView
 
     private bool _codeSubmitted;
     private bool _kernelNodeCreated;
-    private IJSObjectReference? _jsModule;
 
     /// <summary>
     /// Collection of UCR hyperlink references found in the markdown (@ syntax).
@@ -101,21 +99,6 @@ public partial class MarkdownView
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender)
-        {
-            // Initialize JS module for markdown theme handling
-            try
-            {
-                _jsModule = await JSRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", "./_content/MeshWeaver.Blazor/Components/MarkdownView.razor.js");
-                await _jsModule.InvokeVoidAsync("ensureMarkdownTheme");
-            }
-            catch (JSException)
-            {
-                // JS not available during prerendering
-            }
-        }
-
         await base.OnAfterRenderAsync(firstRender);
 
         // Submit code to kernel on first render
@@ -183,19 +166,6 @@ public partial class MarkdownView
             catch (Exception ex)
             {
                 Console.WriteLine($"Warning: Error deleting kernel node: {ex.Message}");
-            }
-        }
-
-        // Dispose JS module
-        if (_jsModule != null)
-        {
-            try
-            {
-                await _jsModule.DisposeAsync();
-            }
-            catch (JSException)
-            {
-                // JS not available during disposal
             }
         }
 
