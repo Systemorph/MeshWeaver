@@ -31,6 +31,7 @@ public static class GraphConfigurationExtensions
                 .AddCommentType()
                 .AddAccessAssignmentType()
                 .AddUserType()
+                .AddVUserType()
                 .AddGroupType()
                 .AddRoleType()
                 .AddGroupMembershipType()

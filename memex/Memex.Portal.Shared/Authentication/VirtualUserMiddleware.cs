@@ -87,7 +87,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
             var userNode = new MeshNode(virtualUserId, "VUser")
             {
                 Name = "Guest",
-                NodeType = "User",
+                NodeType = "VUser",
                 State = MeshNodeState.Active,
                 Content = new AccessObject
                 {
