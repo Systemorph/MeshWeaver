@@ -137,11 +137,31 @@ public static class ThreadMessageLayoutAreas
             ? $"<div style=\"font-size: 0.75rem; opacity: 0.6; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(message.ModelName)}</div>"
             : "";
 
+        // Show progress indicator when response text is empty (agent is generating)
+        UiControl contentView;
+        if (string.IsNullOrEmpty(message.Text))
+        {
+            contentView = Controls.Html(
+                "<div style=\"display: flex; align-items: center; gap: 8px; padding: 8px 0;\">" +
+                "<span class=\"agent-thinking-dots\" style=\"display: inline-flex; gap: 4px;\">" +
+                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0s;\"></span>" +
+                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.2s;\"></span>" +
+                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.4s;\"></span>" +
+                "</span>" +
+                "<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Generating response...</span>" +
+                "</div>" +
+                "<style>@keyframes agent-dots-blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }</style>");
+        }
+        else
+        {
+            contentView = new MarkdownControl(message.Text).WithStyle("width: 100%;");
+        }
+
         var container = Controls.Stack
             .WithStyle($"padding: 12px 16px; margin-right: 48px; margin-bottom: 12px; border-radius: 12px; border-bottom-left-radius: 4px; background: var(--neutral-layer-floating); color: var(--neutral-foreground-rest);")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
             .WithView(Controls.Html(subtitle))
-            .WithView(new MarkdownControl(message.Text).WithStyle("width: 100%;"))
+            .WithView(contentView)
             .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
         // Add delegation link if present
