@@ -1,0 +1,195 @@
+@page "/onboarding"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using MeshWeaver.Blazor.Infrastructure
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
+@inject AccessService AccessService
+@inject NavigationManager Navigation
+
+<PageTitle>Complete Your Profile - Memex Portal</PageTitle>
+
+<div class="onboarding-container">
+    <div class="onboarding-card">
+        <div class="onboarding-header">
+            <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
+            <h1>Complete Your Profile</h1>
+            <p class="onboarding-subtitle">Tell us a bit about yourself to get started</p>
+        </div>
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
+                @errorMessage
+            </FluentMessageBar>
+        }
+
+        <EditForm Model="model" OnValidSubmit="HandleSubmit" FormName="onboarding">
+            <DataAnnotationsValidator />
+
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+                <FluentTextField Label="Name"
+                                 Required="true"
+                                 @bind-Value="model.Name"
+                                 Placeholder="Your full name"
+                                 Style="width: 100%;" />
+
+                <FluentTextField Label="Email"
+                                 Required="true"
+                                 @bind-Value="model.Email"
+                                 Placeholder="you@example.com"
+                                 Style="width: 100%;" />
+
+                <FluentTextArea Label="Bio"
+                                @bind-Value="model.Bio"
+                                Placeholder="A short bio about yourself (optional)"
+                                Rows="3"
+                                Style="width: 100%;" />
+
+                <FluentTextField Label="Role"
+                                 @bind-Value="model.Role"
+                                 Placeholder="e.g., Developer, Manager, Designer (optional)"
+                                 Style="width: 100%;" />
+
+                <FluentTextField Label="Avatar URL"
+                                 @bind-Value="model.AvatarUrl"
+                                 Placeholder="https://example.com/avatar.jpg (optional)"
+                                 Style="width: 100%;" />
+
+                <FluentButton Type="ButtonType.Submit"
+                              Appearance="Appearance.Accent"
+                              Style="width: 100%; margin-top: 8px;"
+                              Loading="isSaving"
+                              Disabled="isSaving">
+                    Get Started
+                </FluentButton>
+            </FluentStack>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private OnboardingModel model = new();
+    private bool isSaving;
+    private string? errorMessage;
+
+    [Inject] private IServiceProvider ServiceProvider { get; set; } = default!;
+
+    protected override void OnInitialized()
+    {
+        var context = AccessService?.Context;
+        if (context != null)
+        {
+            model.Name = context.Name ?? "";
+            model.Email = context.Email ?? "";
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        if (string.IsNullOrWhiteSpace(model.Name) || string.IsNullOrWhiteSpace(model.Email))
+        {
+            errorMessage = "Name and Email are required.";
+            return;
+        }
+
+        isSaving = true;
+        errorMessage = null;
+
+        try
+        {
+            var portalApp = ServiceProvider.GetService<PortalApplication>();
+            if (portalApp == null)
+            {
+                errorMessage = "Portal not available. Please try again.";
+                return;
+            }
+
+            var persistence = portalApp.Hub.ServiceProvider.GetService<IPersistenceService>();
+            if (persistence == null)
+            {
+                errorMessage = "Storage not available. Please try again.";
+                return;
+            }
+
+            var userId = AccessService?.Context?.ObjectId;
+            if (string.IsNullOrEmpty(userId))
+            {
+                errorMessage = "Not authenticated. Please sign in again.";
+                return;
+            }
+
+            var userPath = $"User/{userId}";
+            var node = await persistence.GetNodeAsync(userPath);
+
+            var content = new Dictionary<string, object?>
+            {
+                ["name"] = model.Name.Trim(),
+                ["email"] = model.Email.Trim(),
+            };
+
+            if (!string.IsNullOrWhiteSpace(model.Bio))
+                content["bio"] = model.Bio.Trim();
+            if (!string.IsNullOrWhiteSpace(model.Role))
+                content["role"] = model.Role.Trim();
+            if (!string.IsNullOrWhiteSpace(model.AvatarUrl))
+                content["avatar"] = model.AvatarUrl.Trim();
+
+            if (node != null)
+            {
+                // Update existing node to Active
+                node = node with
+                {
+                    Name = model.Name.Trim(),
+                    State = MeshNodeState.Active,
+                    Content = content
+                };
+            }
+            else
+            {
+                // Create new Active node
+                node = new MeshNode(userId, "User")
+                {
+                    Name = model.Name.Trim(),
+                    NodeType = "User",
+                    State = MeshNodeState.Active,
+                    Content = content
+                };
+            }
+
+            await persistence.SaveNodeAsync(node);
+
+            // Navigate to home
+            Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to save profile: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private class OnboardingModel
+    {
+        public string Name { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string? Bio { get; set; }
+        public string? Role { get; set; }
+        public string? AvatarUrl { get; set; }
+    }
+
+    private static class Icons
+    {
+        public static class Regular
+        {
+            public static class Size24
+            {
+                public class PersonAdd : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.PersonAdd { }
+            }
+        }
+    }
+}
