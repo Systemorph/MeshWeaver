@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
@@ -13,46 +12,48 @@ using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
+/// <summary>
+/// Tests for activity tracking via IActivityStore (as used by NavigationService).
+/// Activity is tracked at the navigation level (ApplicationPage), not at the persistence layer.
+/// </summary>
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly InMemoryPersistenceService _innerPersistence = new();
     private readonly InMemoryActivityStore _activityStore = new();
-    private readonly AccessService _accessService = new();
-    private ActivityTrackingPersistenceDecorator? _decoratorInstance;
-    private ActivityTrackingPersistenceDecorator _decorator => _decoratorInstance ??= new(
-        _innerPersistence,
-        _activityStore,
-        _accessService,
-        NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
+    private static UserActivityRecord CreateActivityRecord(string userId, string path, string? name = null, string? nodeType = null, ActivityType type = ActivityType.Read)
+    {
+        var now = System.DateTimeOffset.UtcNow;
+        return new UserActivityRecord
+        {
+            Id = path.Replace("/", "_"),
+            NodePath = path,
+            UserId = userId,
+            ActivityType = type,
+            FirstAccessedAt = now,
+            LastAccessedAt = now,
+            AccessCount = 1,
+            NodeName = name,
+            NodeType = nodeType,
+        };
+    }
+
     [Fact(Timeout = 10000)]
-    public async Task GetNodeAsync_TracksReadActivity()
+    public async Task SaveActivities_TracksReadActivity()
     {
         // Arrange
         var userId = "user-123";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with
-        {
-            Name = "Acme Corp",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
+        var record = CreateActivityRecord(userId, "org/acme", "Acme Corp", "Type/Organization");
 
         // Act
-        var node = await _decorator.GetNodeAsync("org/acme", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync();
+        await _activityStore.SaveActivitiesAsync(userId, [record]);
 
         // Assert
-        node.Should().NotBeNull();
-
-        // Check activity was recorded
         var activities = await _activityStore.GetActivitiesAsync(userId);
-
         activities.Should().ContainSingle();
         var activity = activities.First();
         activity.NodePath.Should().Be("org/acme");
@@ -62,22 +63,17 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 10000)]
-    public async Task SaveNodeAsync_TracksWriteActivity()
+    public async Task SaveActivities_TracksWriteActivity()
     {
         // Arrange
         var userId = "user-456";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
+        var record = CreateActivityRecord(userId, "org/contoso", "Contoso Ltd", "Type/Organization", ActivityType.Write);
 
         // Act
-        await _decorator.SaveNodeAsync(MeshNode.FromPath("org/contoso") with
-        {
-            Name = "Contoso Ltd",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
+        await _activityStore.SaveActivitiesAsync(userId, [record]);
 
         // Assert
         var activities = await _activityStore.GetActivitiesAsync(userId);
-
         activities.Should().ContainSingle();
         var activity = activities.First();
         activity.NodePath.Should().Be("org/contoso");
@@ -89,81 +85,30 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Arrange
         var userId = "user-789";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with { Name = "Fabrikam" }, JsonOptions);
 
-        // Act - access the same node multiple times
-        await _decorator.GetNodeAsync("org/fabrikam", JsonOptions);
-        await _decorator.GetNodeAsync("org/fabrikam", JsonOptions);
-        await _decorator.GetNodeAsync("org/fabrikam", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync();
+        // Act - save activity for the same node multiple times (simulating repeated navigations)
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/fabrikam", "Fabrikam")]);
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/fabrikam", "Fabrikam")]);
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/fabrikam", "Fabrikam")]);
 
         // Assert
         var activities = await _activityStore.GetActivitiesAsync(userId);
-
         activities.Should().ContainSingle();
         activities.First().AccessCount.Should().Be(3);
     }
 
     [Fact(Timeout = 10000)]
-    public async Task NoUserContext_DoesNotTrackActivity()
-    {
-        // Arrange - no user context set
-        _accessService.SetContext(null);
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/anonymous") with { Name = "Anonymous" }, JsonOptions);
-
-        // Act
-        await _decorator.GetNodeAsync("org/anonymous", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync();
-
-        // Assert - no activity should exist (no user context)
-        var activities = await _activityStore.GetActivitiesAsync("");
-        activities.Should().BeEmpty();
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task ActivityPaths_NotTracked()
-    {
-        // Arrange
-        var userId = "user-activity";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("_activity/test") with { Name = "Activity Node" }, JsonOptions);
-
-        // Act
-        await _decorator.GetNodeAsync("_activity/test", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync();
-
-        // Assert - should not track access to _activity paths (system paths skipped)
-        var activities = await _activityStore.GetActivitiesAsync(userId);
-        activities.Should().BeEmpty();
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task ActivityRecords_CanBeQueried_FromPartition()
+    public async Task ActivityRecords_CanBeQueried()
     {
         // Arrange
         var userId = "user-query";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
 
-        // Create some nodes
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/alpha") with
-        {
-            Name = "Alpha",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with
-        {
-            Name = "Beta",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
+        // Save activities for multiple nodes
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/alpha", "Alpha", "Type/Organization")]);
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/beta", "Beta", "Type/Organization")]);
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/alpha", "Alpha", "Type/Organization")]); // Access alpha again
 
-        // Access nodes to create activity
-        await _decorator.GetNodeAsync("org/alpha", JsonOptions);
-        await _decorator.GetNodeAsync("org/beta", JsonOptions);
-        await _decorator.GetNodeAsync("org/alpha", JsonOptions); // Access alpha again
-        await _decorator.FlushPendingActivitiesAsync();
-
-        // Act - query user's activity
+        // Act
         var activityRecords = (await _activityStore.GetActivitiesAsync(userId))
             .OrderByDescending(a => a.AccessCount)
             .ToList();
@@ -181,34 +126,15 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Arrange
         var userId = "user-order";
-        _accessService.SetContext(new AccessContext { ObjectId = userId });
 
-        // Create nodes
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/first") with
-        {
-            Name = "First",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/second") with
-        {
-            Name = "Second",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
-        await _innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/third") with
-        {
-            Name = "Third",
-            NodeType = "Type/Organization"
-        }, JsonOptions);
-
-        // Access in specific order
-        await _decorator.GetNodeAsync("org/first", JsonOptions);
-        await Task.Delay(10); // Small delay to ensure different timestamps
-        await _decorator.GetNodeAsync("org/second", JsonOptions);
+        // Access in specific order with delays
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/first", "First", "Type/Organization")]);
         await Task.Delay(10);
-        await _decorator.GetNodeAsync("org/third", JsonOptions);
-        await _decorator.FlushPendingActivitiesAsync();
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/second", "Second", "Type/Organization")]);
+        await Task.Delay(10);
+        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/third", "Third", "Type/Organization")]);
 
-        // Act - get activity records ordered by lastAccessedAt descending (most recent first)
+        // Act
         var results = (await _activityStore.GetActivitiesAsync(userId)).ToList();
 
         // Assert
@@ -257,50 +183,54 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task Catalog_WithActivity_CanLoadNodesFromActivityPaths()
     {
         // Arrange
-        var innerPersistence = new InMemoryPersistenceService();
-        var accessService = new AccessService();
-        accessService.SetContext(new AccessContext { ObjectId = "catalog-user" });
-
+        var persistence = new InMemoryPersistenceService();
         var activityStore = new InMemoryActivityStore();
-        var decorator = new ActivityTrackingPersistenceDecorator(
-            innerPersistence,
-            activityStore,
-            accessService,
-            NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
+        var userId = "catalog-user";
 
         // Create nodes
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/alpha") with
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Type/Organization"
         }, JsonOptions);
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with
         {
             Name = "Beta",
             NodeType = "Type/Organization"
         }, JsonOptions);
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("org/gamma") with
+        await persistence.SaveNodeAsync(MeshNode.FromPath("org/gamma") with
         {
             Name = "Gamma",
             NodeType = "Type/Organization"
         }, JsonOptions);
 
-        // Access beta first, then gamma, then alpha (so alpha is most recent)
-        await decorator.GetNodeAsync("org/beta", JsonOptions);
-        await Task.Delay(10);
-        await decorator.GetNodeAsync("org/gamma", JsonOptions);
-        await Task.Delay(10);
-        await decorator.GetNodeAsync("org/alpha", JsonOptions);
-        await decorator.FlushPendingActivitiesAsync();
+        // Simulate navigation activity: beta first, then gamma, then alpha (alpha most recent)
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "org_beta", NodePath = "org/beta", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Beta", NodeType = "Type/Organization"
+        }]);
+        await Task.Delay(20);
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "org_gamma", NodePath = "org/gamma", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Gamma", NodeType = "Type/Organization"
+        }]);
+        await Task.Delay(20);
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "org_alpha", NodePath = "org/alpha", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Alpha", NodeType = "Type/Organization"
+        }]);
 
         // Act - get activity records ordered by lastAccessedAt
-        var activityRecords = (await activityStore.GetActivitiesAsync("catalog-user")).ToList();
+        var activityRecords = (await activityStore.GetActivitiesAsync(userId)).ToList();
 
         // Load actual nodes from activity records (as Catalog does)
         var nodes = new List<MeshNode>();
         foreach (var activity in activityRecords)
         {
-            var node = await innerPersistence.GetNodeAsync(activity.NodePath, JsonOptions);
+            var node = await persistence.GetNodeAsync(activity.NodePath, JsonOptions);
             if (node != null)
                 nodes.Add(node);
         }
@@ -316,53 +246,44 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task Catalog_ActivityChangesOrder_AfterNewAccess()
     {
         // Arrange
-        var innerPersistence = new InMemoryPersistenceService();
-        var accessService = new AccessService();
-        accessService.SetContext(new AccessContext { ObjectId = "reorder-user" });
-
-        // Create nodes
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("doc/doc1") with
-        {
-            Name = "Document 1",
-            NodeType = "Type/Document"
-        }, JsonOptions);
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("doc/doc2") with
-        {
-            Name = "Document 2",
-            NodeType = "Type/Document"
-        }, JsonOptions);
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("doc/doc3") with
-        {
-            Name = "Document 3",
-            NodeType = "Type/Document"
-        }, JsonOptions);
+        var activityStore = new InMemoryActivityStore();
+        var userId = "reorder-user";
 
         // PHASE 1: Initial access order - doc1, doc2, doc3
-        var activityStore = new InMemoryActivityStore();
-        var decorator1 = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, activityStore, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-        await decorator1.GetNodeAsync("doc/doc1", JsonOptions);
-        await Task.Delay(10);
-        await decorator1.GetNodeAsync("doc/doc2", JsonOptions);
-        await Task.Delay(10);
-        await decorator1.GetNodeAsync("doc/doc3", JsonOptions);
-        await decorator1.FlushPendingActivitiesAsync();
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "doc_doc1", NodePath = "doc/doc1", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 1", NodeType = "Type/Document"
+        }]);
+        await Task.Delay(20);
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "doc_doc2", NodePath = "doc/doc2", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 2", NodeType = "Type/Document"
+        }]);
+        await Task.Delay(20);
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "doc_doc3", NodePath = "doc/doc3", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 3", NodeType = "Type/Document"
+        }]);
 
         // Query initial order
-        var initialOrder = (await activityStore.GetActivitiesAsync("reorder-user")).Select(a => a.NodePath).ToList();
+        var initialOrder = (await activityStore.GetActivitiesAsync(userId)).Select(a => a.NodePath).ToList();
         initialOrder[0].Should().Be("doc/doc3"); // Most recent
         initialOrder[1].Should().Be("doc/doc2");
         initialOrder[2].Should().Be("doc/doc1"); // Least recent
 
         // PHASE 2: Access doc1 again - it should become most recent
-        var decorator2 = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, activityStore, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
         await Task.Delay(20);
-        await decorator2.GetNodeAsync("doc/doc1", JsonOptions);
-        await decorator2.FlushPendingActivitiesAsync();
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "doc_doc1", NodePath = "doc/doc1", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 1", NodeType = "Type/Document"
+        }]);
 
         // Query new order
-        var newOrder = (await activityStore.GetActivitiesAsync("reorder-user")).Select(a => a.NodePath).ToList();
+        var newOrder = (await activityStore.GetActivitiesAsync(userId)).Select(a => a.NodePath).ToList();
         newOrder[0].Should().Be("doc/doc1"); // Now most recent
         newOrder[1].Should().Be("doc/doc3");
         newOrder[2].Should().Be("doc/doc2");
@@ -514,46 +435,54 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     public async Task Catalog_ActivityRecords_CanBeFilteredByNodeType()
     {
         // Arrange
-        var innerPersistence = new InMemoryPersistenceService();
-        var accessService = new AccessService();
-        accessService.SetContext(new AccessContext { ObjectId = "search-user" });
+        var persistence = new InMemoryPersistenceService();
+        var activityStore = new InMemoryActivityStore();
+        var userId = "search-user";
 
         // Create nodes with different types
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("data/project1") with
+        await persistence.SaveNodeAsync(MeshNode.FromPath("data/project1") with
         {
             Name = "Project Alpha",
             NodeType = "Project"
         }, JsonOptions);
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("data/doc1") with
+        await persistence.SaveNodeAsync(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
             NodeType = "Document"
         }, JsonOptions);
-        await innerPersistence.SaveNodeAsync(MeshNode.FromPath("data/project2") with
+        await persistence.SaveNodeAsync(MeshNode.FromPath("data/project2") with
         {
             Name = "Project Beta",
             NodeType = "Project"
         }, JsonOptions);
 
-        // Access all nodes to create activity
-        var activityStore = new InMemoryActivityStore();
-        var decorator = new ActivityTrackingPersistenceDecorator(
-            innerPersistence, activityStore, accessService, NullLogger<ActivityTrackingPersistenceDecorator>.Instance);
-        await decorator.GetNodeAsync("data/project1", JsonOptions);
-        await Task.Delay(10);
-        await decorator.GetNodeAsync("data/doc1", JsonOptions);
-        await Task.Delay(10);
-        await decorator.GetNodeAsync("data/project2", JsonOptions);
-        await decorator.FlushPendingActivitiesAsync();
+        // Simulate navigation activity for all nodes
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "data_project1", NodePath = "data/project1", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Project Alpha", NodeType = "Project"
+        }]);
+        await Task.Delay(20);
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "data_doc1", NodePath = "data/doc1", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document One", NodeType = "Document"
+        }]);
+        await Task.Delay(20);
+        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
+        {
+            Id = "data_project2", NodePath = "data/project2", UserId = userId, ActivityType = ActivityType.Read,
+            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Project Beta", NodeType = "Project"
+        }]);
 
         // Act - get activity records and filter by nodeType manually (as catalog would do)
-        var allActivityRecords = (await activityStore.GetActivitiesAsync("search-user")).ToList();
+        var allActivityRecords = (await activityStore.GetActivitiesAsync(userId)).ToList();
 
         // Load nodes and filter by type
         var projectRecords = new List<UserActivityRecord>();
         foreach (var activity in allActivityRecords)
         {
-            var node = await innerPersistence.GetNodeAsync(activity.NodePath, JsonOptions);
+            var node = await persistence.GetNodeAsync(activity.NodePath, JsonOptions);
             if (node?.NodeType == "Project")
             {
                 projectRecords.Add(activity);
