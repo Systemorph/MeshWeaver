@@ -1,6 +1,6 @@
 {
   "id": "AnalyzeFinancials",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "name": "Analyze financial statements",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

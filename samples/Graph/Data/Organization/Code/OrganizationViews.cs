@@ -3,6 +3,9 @@
 // DisplayName: Organization Views
 // </meshweaver>
 
+using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
+
 /// <summary>
 /// Custom views for Organization nodes.
 /// </summary>
@@ -132,6 +135,22 @@ public static class OrganizationViews
         container = container.WithView(Controls.Html(
             "<hr style=\"border: none; border-top: 1px solid var(--neutral-stroke-rest); margin: 24px 0;\" />"));
 
+        // Markdown content (if any)
+        var markdownContent = GetMarkdownContent(node);
+        if (!string.IsNullOrWhiteSpace(markdownContent))
+        {
+            container = container.WithView(
+                new CollaborativeMarkdownControl()
+                    .WithValue(markdownContent)
+                    .WithNodePath(hubPath)
+                    .WithHubAddress(host.Hub.Address.ToString())
+                    .WithCanComment(false));
+
+            // Add spacing before children
+            container = container.WithView(Controls.Html(
+                "<div style=\"margin-top: 24px;\"></div>"));
+        }
+
         // Use LayoutAreaControl to render the standard Catalog view for children
         container = container.WithView(
             LayoutAreaControl.Children(host.Hub));
@@ -141,9 +160,7 @@ public static class OrganizationViews
 
     private static string? GetNodeLogo(MeshNode? node)
     {
-        if (node?.Icon?.StartsWith("data:") == true || node?.Icon?.StartsWith("http") == true || node?.Icon?.StartsWith("/") == true)
-            return node.Icon;
-        return null;
+        return MeshNodeThumbnailControl.GetImageUrlForNode(node);
     }
 
     private static string GetInitials(string name)
@@ -153,5 +170,19 @@ public static class OrganizationViews
         if (parts.Length >= 2)
             return $"{char.ToUpper(parts[0][0])}{char.ToUpper(parts[1][0])}";
         return name.Length >= 2 ? $"{char.ToUpper(name[0])}{char.ToUpper(name[1])}" : char.ToUpper(name[0]).ToString();
+    }
+
+    private static string GetMarkdownContent(MeshNode? node)
+    {
+        if (node?.Content == null)
+            return string.Empty;
+
+        if (node.Content is MarkdownContent markdownContent)
+            return markdownContent.Content;
+
+        if (node.Content is string stringContent)
+            return stringContent;
+
+        return string.Empty;
     }
 }

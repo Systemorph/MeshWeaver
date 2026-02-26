@@ -1,6 +1,6 @@
 {
   "id": "CalculateRiskScore",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "name": "Calculate risk score",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

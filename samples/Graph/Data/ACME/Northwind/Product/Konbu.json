@@ -1,6 +1,6 @@
 {
   "id": "Konbu",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Konbu",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -1,6 +1,6 @@
 {
   "id": "Laughing_Lumberjack_Lager",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Laughing Lumberjack Lager",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

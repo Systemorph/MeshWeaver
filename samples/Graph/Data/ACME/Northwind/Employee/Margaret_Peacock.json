@@ -1,6 +1,6 @@
 {
   "id": "Margaret_Peacock",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Margaret Peacock",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

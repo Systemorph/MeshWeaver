@@ -1,6 +1,6 @@
 {
   "id": "David_Access",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "David Access",
   "nodeType": "AccessAssignment",
   "content": {

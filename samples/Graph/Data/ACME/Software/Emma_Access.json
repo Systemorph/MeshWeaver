@@ -1,6 +1,6 @@
 {
   "id": "Emma_Access",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "Emma Access",
   "nodeType": "AccessAssignment",
   "content": {

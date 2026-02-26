@@ -1,6 +1,6 @@
 {
   "id": "Laura_Callahan",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Laura Callahan",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

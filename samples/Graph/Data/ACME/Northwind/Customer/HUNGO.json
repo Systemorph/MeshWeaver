@@ -1,6 +1,6 @@
 {
   "id": "HUNGO",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Hungry Owl All-Night Grocers",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

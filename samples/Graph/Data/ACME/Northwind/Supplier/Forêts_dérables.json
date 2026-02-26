@@ -1,6 +1,6 @@
 {
   "id": "For\u00eats_d\u00e9rables",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "For\u00eats d'\u00e9rables",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

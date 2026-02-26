@@ -1,6 +1,6 @@
 {
   "id": "WOLZA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Wolski  Zajazd",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

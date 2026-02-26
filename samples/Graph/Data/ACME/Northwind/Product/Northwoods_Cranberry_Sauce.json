@@ -1,6 +1,6 @@
 {
   "id": "Northwoods_Cranberry_Sauce",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Northwoods Cranberry Sauce",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

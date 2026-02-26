@@ -1,6 +1,6 @@
 {
   "id": "BSBEV",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "B's Beverages",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

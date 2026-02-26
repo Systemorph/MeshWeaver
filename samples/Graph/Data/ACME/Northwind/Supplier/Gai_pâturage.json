@@ -1,6 +1,6 @@
 {
   "id": "Gai_p\u00e2turage",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Gai p\u00e2turage",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

@@ -1,6 +1,6 @@
 {
   "id": "AROUT",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Around the Horn",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

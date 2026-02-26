@@ -1,6 +1,6 @@
 {
   "id": "SANTG",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Sant\u00e9 Gourmet",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

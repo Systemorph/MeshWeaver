@@ -1,6 +1,6 @@
 {
   "id": "WANDK",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Die Wandernde Kuh",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

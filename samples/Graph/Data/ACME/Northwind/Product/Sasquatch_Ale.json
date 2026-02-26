@@ -1,6 +1,6 @@
 {
   "id": "Sasquatch_Ale",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Sasquatch Ale",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -1,22 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="insTextGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#4B5563"/>
       <stop offset="100%" stop-color="#9CA3AF"/>
     </linearGradient>
   </defs>
   <!-- Background -->
   <rect width="64" height="64" rx="8" fill="#F3F4F6"/>
-  <!-- Shield shape -->
-  <path d="M32 8 L52 18 V34 C52 46 42 54 32 58 C22 54 12 46 12 34 V18 Z" fill="url(#shieldGrad)"/>
-  <!-- Shield inner highlight -->
-  <path d="M32 12 L48 20 V34 C48 44 40 50 32 54 C24 50 16 44 16 34 V20 Z" fill="#F3F4F6" opacity="0.15"/>
-  <!-- Umbrella handle (vertical line) -->
-  <line x1="32" y1="26" x2="32" y2="46" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-  <!-- Umbrella canopy (dome) -->
-  <path d="M20 30 Q20 20 32 20 Q44 20 44 30" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-  <!-- Umbrella scallops -->
-  <path d="M20 30 Q24 26 28 30 Q30 26 32 30 Q34 26 36 30 Q40 26 44 30" fill="none" stroke="white" stroke-width="2" stroke-linecap="round"/>
-  <!-- Umbrella handle hook -->
-  <path d="M32 46 Q32 49 35 49" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Three chevrons - grey highlighted, others dimmed -->
+  <g transform="translate(32, 23)">
+    <!-- Top chevron (grey - HIGHLIGHTED) -->
+    <path d="M-12,-13 L0,-7 L12,-13" fill="none" stroke="#6B7280" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Middle chevron (blue - dimmed) -->
+    <path d="M-12,-6 L0,0 L12,-6" fill="none" stroke="#2563EB" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"/>
+    <!-- Bottom chevron (red - dimmed) -->
+    <path d="M-12,1 L0,7 L12,1" fill="none" stroke="#DC2626" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"/>
+  </g>
+  <!-- Company name -->
+  <text x="32" y="48" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="url(#insTextGrad)" text-anchor="middle" letter-spacing="3">ACME</text>
+  <!-- Division subtitle -->
+  <text x="32" y="57" font-family="Arial, sans-serif" font-size="5" fill="#6B7280" text-anchor="middle" letter-spacing="2">INSURANCE</text>
 </svg>

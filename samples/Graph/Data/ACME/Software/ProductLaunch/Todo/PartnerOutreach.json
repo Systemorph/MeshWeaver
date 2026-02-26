@@ -1,6 +1,6 @@
 {
   "id": "PartnerOutreach",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Identify launch partners",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

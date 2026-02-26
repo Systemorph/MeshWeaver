@@ -1,6 +1,6 @@
 {
   "id": "OCEAN",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Oc\u00e9ano Atl\u00e1ntico Ltda.",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

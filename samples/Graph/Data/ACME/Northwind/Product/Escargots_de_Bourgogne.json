@@ -1,6 +1,6 @@
 {
   "id": "Escargots_de_Bourgogne",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Escargots de Bourgogne",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

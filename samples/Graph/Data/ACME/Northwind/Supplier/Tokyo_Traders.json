@@ -1,6 +1,6 @@
 {
   "id": "Tokyo_Traders",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Tokyo Traders",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

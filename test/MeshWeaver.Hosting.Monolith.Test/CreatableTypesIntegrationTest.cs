@@ -72,10 +72,18 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(orgTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
-        // Create ACME organization (instance of Organization)
-        var acmeNode = MeshNode.FromPath("Demos/ACME") with
+        // Create ACME Corporation (top-level organization)
+        var acmeCorpNode = MeshNode.FromPath("ACME") with
         {
-            Name = "ACME Corp",
+            Name = "ACME Corporation",
+            NodeType = "Organization"
+        };
+        ((IPersistenceServiceCore)persistence).SaveNodeAsync(acmeCorpNode, SetupJsonOptions).GetAwaiter().GetResult();
+
+        // Create ACME Software organization (sub-organization under ACME)
+        var acmeNode = MeshNode.FromPath("ACME/Software") with
+        {
+            Name = "ACME Software",
             NodeType = "Organization"
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(acmeNode, SetupJsonOptions).GetAwaiter().GetResult();
@@ -85,7 +93,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Description = "A project within ACME"
         };
-        var projectTypeNode = MeshNode.FromPath("Demos/ACME/Project") with
+        var projectTypeNode = MeshNode.FromPath("ACME/Software/Project") with
         {
             Name = "Project",
             NodeType = "NodeType",
@@ -99,7 +107,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         {
             Description = "A todo item in a project"
         };
-        var todoTypeNode = MeshNode.FromPath("Demos/ACME/Project/Todo") with
+        var todoTypeNode = MeshNode.FromPath("ACME/Software/Project/Todo") with
         {
             Name = "Todo",
             NodeType = "NodeType",
@@ -109,10 +117,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(todoTypeNode, SetupJsonOptions).GetAwaiter().GetResult();
 
         // Create ACME/ProductLaunch (instance of ACME/Project)
-        var productLaunchNode = MeshNode.FromPath("Demos/ACME/ProductLaunch") with
+        var productLaunchNode = MeshNode.FromPath("ACME/Software/ProductLaunch") with
         {
             Name = "Product Launch",
-            NodeType = "Demos/ACME/Project"
+            NodeType = "ACME/Software/Project"
         };
         ((IPersistenceServiceCore)persistence).SaveNodeAsync(productLaunchNode, SetupJsonOptions).GetAwaiter().GetResult();
 
@@ -172,10 +180,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ACME_CreatableTypes_IncludesProjectAndGlobalTypes()
     {
         // Act - ACME is an Organization, should be able to create ACME/Project
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("Demos/ACME", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - Should include ACME/Project (defined under ACME)
-        creatableTypes.Should().Contain(t => t.NodeTypePath == "Demos/ACME/Project");
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Software/Project");
         // Should also include global types
         creatableTypes.Should().Contain(t => t.NodeTypePath == "Markdown");
         creatableTypes.Should().Contain(t => t.NodeTypePath == "NodeType");
@@ -185,7 +193,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// Test that verifies the MeshNodePickerControl type queries for the Create form.
     /// Uses the EXACT same code path as CreateLayoutArea.BuildCreateNewFormAsync
     /// to build queries, then runs them like MeshNodePickerView.LoadResultsAsync does.
-    /// When at "ACME" (NodeType=Organization), should return Organization, ACME/Project, and global types.
+    /// When at "ACME/Software" (NodeType=Organization), should return Organization, ACME/Software/Project, and global types.
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task CreateForm_TypePicker_Queries_ReturnCorrectTypes()
@@ -194,8 +202,8 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
-        // Simulate: user is at "ACME" (an Organization) and opens Create form
-        var parentPath = "ACME";
+        // Simulate: user is at "ACME/Software" (an Organization) and opens Create form
+        var parentPath = "ACME/Software";
 
         // === EXACT copy of CreateLayoutArea.BuildCreateNewFormAsync logic ===
         string? currentNodeType = null;
@@ -209,7 +217,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
                 break;
             }
         }
-        currentNodeType.Should().Be("Organization", "ACME should be of NodeType Organization");
+        currentNodeType.Should().Be("Organization", "ACME/Software should be of NodeType Organization");
 
         var effectiveNamespace = parentPath;
         string defaultType;
@@ -226,7 +234,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         }
 
         Output.WriteLine($"parentPath={parentPath}, currentNodeType={currentNodeType}, effectiveNamespace={effectiveNamespace}, defaultType={defaultType}");
-        effectiveNamespace.Should().Be("ACME");
+        effectiveNamespace.Should().Be("ACME/Software");
         defaultType.Should().Be("Organization");
 
         // Build type queries — EXACT copy of production code
@@ -261,7 +269,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             "Organization type should be available when creating inside an Organization node");
 
         // Assert: ACME/Project should be in results (child type under ACME)
-        deduped.Should().Contain(n => n.Path == "ACME/Project",
+        deduped.Should().Contain(n => n.Path == "ACME/Software/Project",
             "ACME/Project should be available as a child type");
 
         // Assert: Global types should be in results
@@ -402,7 +410,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that ProductLaunch type picker queries include ACME/Project/Todo and ACME/Project (own type).
+    /// Test that ProductLaunch type picker queries include ACME/Software/Project/Todo and ACME/Software/Project (own type).
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task CreateForm_TypePicker_ForProductLaunch_IncludesTodoAndProject()
@@ -411,7 +419,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
-        var parentPath = "ACME/ProductLaunch";
+        var parentPath = "ACME/Software/ProductLaunch";
 
         string? currentNodeType = null;
         await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{parentPath}", ct: ct).WithCancellation(ct))
@@ -419,18 +427,18 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             currentNodeType = node.NodeType;
             break;
         }
-        currentNodeType.Should().Be("ACME/Project");
+        currentNodeType.Should().Be("ACME/Software/Project");
 
         var typeQueries = BuildTypePickerQueries(parentPath, currentNodeType, meshConfiguration);
         var deduped = await ExecuteTypePickerQueries(typeQueries, meshQuery, ct);
 
-        // ACME/Project/Todo should be found (child type of ACME/Project)
-        deduped.Should().Contain(n => n.Path == "ACME/Project/Todo",
-            "ACME/Project/Todo should be available as child type of ACME/Project");
+        // ACME/Software/Project/Todo should be found (child type of ACME/Software/Project)
+        deduped.Should().Contain(n => n.Path == "ACME/Software/Project/Todo",
+            "ACME/Software/Project/Todo should be available as child type of ACME/Software/Project");
 
-        // ACME/Project itself should be found (the node's own type)
-        deduped.Should().Contain(n => n.Path == "ACME/Project",
-            "ACME/Project (own type) should be available when creating inside a Project instance");
+        // ACME/Software/Project itself should be found (the node's own type)
+        deduped.Should().Contain(n => n.Path == "ACME/Software/Project",
+            "ACME/Software/Project (own type) should be available when creating inside a Project instance");
 
         // Markdown should be found (global)
         deduped.Should().Contain(n => n.Path == "Markdown",
@@ -496,10 +504,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ProductLaunch_CreatableTypes_IncludesTodo()
     {
         // Act - ProductLaunch is an instance of ACME/Project, should be able to create ACME/Project/Todo
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("Demos/ACME/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        creatableTypes.Should().Contain(t => t.NodeTypePath == "Demos/ACME/Project/Todo");
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Software/Project/Todo");
         // Should also include global types
         creatableTypes.Should().Contain(t => t.NodeTypePath == "Markdown");
     }
@@ -515,20 +523,20 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
     {
         // Arrange - Verify the data setup is correct
-        var productLaunchNode = await Persistence.GetNodeAsync("Demos/ACME/ProductLaunch", TestContext.Current.CancellationToken);
+        var productLaunchNode = await Persistence.GetNodeAsync("ACME/Software/ProductLaunch", TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist");
-        productLaunchNode!.NodeType.Should().Be("Demos/ACME/Project", "ProductLaunch should be of NodeType ACME/Project");
+        productLaunchNode!.NodeType.Should().Be("ACME/Software/Project", "ProductLaunch should be of NodeType ACME/Project");
 
-        var projectTypeNode = await Persistence.GetNodeAsync("Demos/ACME/Project", TestContext.Current.CancellationToken);
-        projectTypeNode.Should().NotBeNull("Demos/ACME/Project NodeType should exist");
-        projectTypeNode!.NodeType.Should().Be("NodeType", "Demos/ACME/Project should be a NodeType");
+        var projectTypeNode = await Persistence.GetNodeAsync("ACME/Software/Project", TestContext.Current.CancellationToken);
+        projectTypeNode.Should().NotBeNull("ACME/Software/Project NodeType should exist");
+        projectTypeNode!.NodeType.Should().Be("NodeType", "ACME/Software/Project should be a NodeType");
 
-        var todoTypeNode = await Persistence.GetNodeAsync("Demos/ACME/Project/Todo", TestContext.Current.CancellationToken);
-        todoTypeNode.Should().NotBeNull("Demos/ACME/Project/Todo NodeType should exist");
-        todoTypeNode!.NodeType.Should().Be("NodeType", "Demos/ACME/Project/Todo should be a NodeType");
+        var todoTypeNode = await Persistence.GetNodeAsync("ACME/Software/Project/Todo", TestContext.Current.CancellationToken);
+        todoTypeNode.Should().NotBeNull("ACME/Software/Project/Todo NodeType should exist");
+        todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Software/Project/Todo should be a NodeType");
 
         // Act - Get creatable types for ProductLaunch
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("Demos/ACME/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software/ProductLaunch", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - Should include Todo (from ACME/Project's children) and global types
         Output.WriteLine($"Found {creatableTypes.Count} creatable types for ACME/ProductLaunch:");
@@ -537,7 +545,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine($"  - {t.NodeTypePath}: {t.DisplayName}");
         }
 
-        creatableTypes.Should().Contain(t => t.NodeTypePath == "Demos/ACME/Project/Todo",
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Software/Project/Todo",
             "ProductLaunch (instance of ACME/Project) should be able to create ACME/Project/Todo");
         creatableTypes.Should().Contain(t => t.NodeTypePath == "Markdown", "Should include global Markdown type");
         creatableTypes.Should().Contain(t => t.NodeTypePath == "NodeType", "Should include global NodeType type");
@@ -547,20 +555,20 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task CreateNode_ViaRequest_Succeeds()
     {
         // Arrange - Create a new Todo node under ProductLaunch
-        var newTodoNode = MeshNode.FromPath("Demos/ACME/ProductLaunch/my-todo") with
+        var newTodoNode = MeshNode.FromPath("ACME/Software/ProductLaunch/my-todo") with
         {
             Name = "My Todo",
-            NodeType = "Demos/ACME/Project/Todo"
+            NodeType = "ACME/Software/Project/Todo"
         };
 
         // Act
         await Persistence.SaveNodeAsync(newTodoNode, TestContext.Current.CancellationToken);
 
         // Assert - Verify the node was created
-        var createdNode = await Persistence.GetNodeAsync("Demos/ACME/ProductLaunch/my-todo", TestContext.Current.CancellationToken);
+        var createdNode = await Persistence.GetNodeAsync("ACME/Software/ProductLaunch/my-todo", TestContext.Current.CancellationToken);
         createdNode.Should().NotBeNull();
         createdNode!.Name.Should().Be("My Todo");
-        createdNode.NodeType.Should().Be("Demos/ACME/Project/Todo");
+        createdNode.NodeType.Should().Be("ACME/Software/Project/Todo");
     }
 
     [Fact(Timeout = 30000)]
@@ -570,10 +578,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var restrictedTypeDef = new NodeTypeDefinition
         {
             Description = "A project with restricted creatable types",
-            CreatableTypes = new List<string> { "Demos/ACME/Project/Todo" },
+            CreatableTypes = new List<string> { "ACME/Software/Project/Todo" },
             IncludeGlobalTypes = false
         };
-        var restrictedTypeNode = MeshNode.FromPath("Demos/ACME/RestrictedProject") with
+        var restrictedTypeNode = MeshNode.FromPath("ACME/Software/RestrictedProject") with
         {
             Name = "Restricted Project",
             NodeType = "NodeType",
@@ -582,19 +590,19 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         await Persistence.SaveNodeAsync(restrictedTypeNode, TestContext.Current.CancellationToken);
 
         // Create an instance of the restricted type
-        var restrictedInstance = MeshNode.FromPath("Demos/ACME/MyRestrictedProject") with
+        var restrictedInstance = MeshNode.FromPath("ACME/Software/MyRestrictedProject") with
         {
             Name = "My Restricted Project",
-            NodeType = "Demos/ACME/RestrictedProject"
+            NodeType = "ACME/Software/RestrictedProject"
         };
         await Persistence.SaveNodeAsync(restrictedInstance, TestContext.Current.CancellationToken);
 
         // Act
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("Demos/ACME/MyRestrictedProject", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software/MyRestrictedProject", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - Should only include explicitly configured types
         creatableTypes.Should().HaveCount(1);
-        creatableTypes.Should().Contain(t => t.NodeTypePath == "Demos/ACME/Project/Todo");
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Software/Project/Todo");
         creatableTypes.Should().NotContain(t => t.NodeTypePath == "Markdown");
         creatableTypes.Should().NotContain(t => t.NodeTypePath == "NodeType");
     }
@@ -603,7 +611,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task CreatableTypes_SortedByDisplayOrder()
     {
         // Act
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("Demos/ACME", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software", TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - Global types should be at the end (display order 1000 and 1001)
         var lastTwo = creatableTypes.TakeLast(2).ToList();
@@ -1039,24 +1047,24 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading
 
         // Verify expected nodes exist
-        var acmeProject = await Persistence.GetNodeAsync("Demos/ACME/Project");
-        acmeProject.Should().NotBeNull("Demos/ACME/Project should exist in sample data");
-        Output.WriteLine($"Demos/ACME/Project: NodeType={acmeProject?.NodeType}, Content={acmeProject?.Content?.GetType().Name}");
+        var acmeProject = await Persistence.GetNodeAsync("ACME/Software/Project");
+        acmeProject.Should().NotBeNull("ACME/Software/Project should exist in sample data");
+        Output.WriteLine($"ACME/Software/Project: NodeType={acmeProject?.NodeType}, Content={acmeProject?.Content?.GetType().Name}");
 
-        var acmeProjectTodo = await Persistence.GetNodeAsync("Demos/ACME/Project/Todo");
-        acmeProjectTodo.Should().NotBeNull("Demos/ACME/Project/Todo should exist in sample data");
-        Output.WriteLine($"Demos/ACME/Project/Todo: NodeType={acmeProjectTodo?.NodeType}, Content={acmeProjectTodo?.Content?.GetType().Name}");
+        var acmeProjectTodo = await Persistence.GetNodeAsync("ACME/Software/Project/Todo");
+        acmeProjectTodo.Should().NotBeNull("ACME/Software/Project/Todo should exist in sample data");
+        Output.WriteLine($"ACME/Software/Project/Todo: NodeType={acmeProjectTodo?.NodeType}, Content={acmeProjectTodo?.Content?.GetType().Name}");
 
-        var productLaunch = await Persistence.GetNodeAsync("Demos/ACME/ProductLaunch");
-        productLaunch.Should().NotBeNull("Demos/ACME/ProductLaunch should exist in sample data");
-        Output.WriteLine($"Demos/ACME/ProductLaunch: NodeType={productLaunch?.NodeType}, Content={productLaunch?.Content?.GetType().Name}");
+        var productLaunch = await Persistence.GetNodeAsync("ACME/Software/ProductLaunch");
+        productLaunch.Should().NotBeNull("ACME/Software/ProductLaunch should exist in sample data");
+        Output.WriteLine($"ACME/Software/ProductLaunch: NodeType={productLaunch?.NodeType}, Content={productLaunch?.Content?.GetType().Name}");
     }
 
     [Fact(Timeout = 30000)]
     public async Task FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
     {
         // Get children of ACME/Project - uses lazy loading
-        var children = await Persistence.GetChildrenAsync("Demos/ACME/Project").ToListAsync();
+        var children = await Persistence.GetChildrenAsync("ACME/Software/Project").ToListAsync();
 
         Output.WriteLine($"Children of ACME/Project ({children.Count} total):");
         foreach (var child in children)
@@ -1065,15 +1073,15 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         }
 
         // Should include Todo
-        children.Should().Contain(c => c.Path == "Demos/ACME/Project/Todo",
-            "Demos/ACME/Project/Todo should be a child of ACME/Project");
+        children.Should().Contain(c => c.Path == "ACME/Software/Project/Todo",
+            "ACME/Software/Project/Todo should be a child of ACME/Project");
     }
 
     [Fact(Timeout = 30000)]
     public async Task FileSystem_QueryChildNodeTypes_ShouldFindTodo()
     {
         // This is the exact query used by GetCreatableTypesAsync
-        var query = "path:Demos/ACME/Project nodeType:NodeType scope:children";
+        var query = "path:ACME/Software/Project nodeType:NodeType scope:children";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).OfType<MeshNode>().ToListAsync();
 
         Output.WriteLine($"Query '{query}' returned {results.Count} results:");
@@ -1083,7 +1091,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         }
 
         // Should find ACME/Project/Todo
-        results.Should().Contain(r => r.Path == "Demos/ACME/Project/Todo",
+        results.Should().Contain(r => r.Path == "ACME/Software/Project/Todo",
             "Query should find ACME/Project/Todo as a child NodeType of ACME/Project");
     }
 
@@ -1091,7 +1099,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     public async Task FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
     {
         // Use the NodeTypeService from DI - it properly gets JsonSerializerOptions from IMessageHub
-        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("Demos/ACME/ProductLaunch").ToListAsync();
+        var creatableTypes = await NodeTypeService.GetCreatableTypesAsync("ACME/Software/ProductLaunch").ToListAsync();
 
         Output.WriteLine($"Creatable types for ACME/ProductLaunch ({creatableTypes.Count} total):");
         foreach (var ct in creatableTypes)
@@ -1100,7 +1108,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         }
 
         // Should include ACME/Project/Todo
-        creatableTypes.Should().Contain(t => t.NodeTypePath == "Demos/ACME/Project/Todo",
+        creatableTypes.Should().Contain(t => t.NodeTypePath == "ACME/Software/Project/Todo",
             "ProductLaunch (instance of ACME/Project) should be able to create ACME/Project/Todo");
     }
 }

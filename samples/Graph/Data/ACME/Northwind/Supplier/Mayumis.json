@@ -1,6 +1,6 @@
 {
   "id": "Mayumis",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Mayumi's",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

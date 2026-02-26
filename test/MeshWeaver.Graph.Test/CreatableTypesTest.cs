@@ -50,14 +50,14 @@ public class CreatableTypesTest
     {
         // Arrange
         var rules = new CreatableTypesRules { IncludeDefaults = false }
-            .Add(_ => new[] { "Demos/ACME/Project", "Demos/ACME/Task" });
+            .Add(_ => new[] { "ACME/Software/Project", "ACME/Software/Task" });
 
         // Act
         var types = rules.GetCreatableTypes(null, []).ToList();
 
         // Assert
-        types.Should().Contain("Demos/ACME/Project");
-        types.Should().Contain("Demos/ACME/Task");
+        types.Should().Contain("ACME/Software/Project");
+        types.Should().Contain("ACME/Software/Task");
     }
 
     [Fact]
@@ -102,14 +102,14 @@ public class CreatableTypesTest
     public void CreatableTypesRules_RuleCanUseParentNode()
     {
         // Arrange
-        var parentNode = new MeshNode("Demos/ACME/ProjectA")
+        var parentNode = new MeshNode("ACME/Software/ProjectA")
         {
-            NodeType = "Demos/ACME/Project"
+            NodeType = "ACME/Software/Project"
         };
 
         var rules = new CreatableTypesRules { IncludeDefaults = false }
-            .Add(parent => parent?.NodeType == "Demos/ACME/Project"
-                ? new[] { "Demos/ACME/Project/Todo" }
+            .Add(parent => parent?.NodeType == "ACME/Software/Project"
+                ? new[] { "ACME/Software/Project/Todo" }
                 : Array.Empty<string>());
 
         // Act - with matching parent
@@ -119,7 +119,7 @@ public class CreatableTypesTest
         var typesWithNull = rules.GetCreatableTypes(null, []).ToList();
 
         // Assert
-        typesWithParent.Should().Contain("Demos/ACME/Project/Todo");
+        typesWithParent.Should().Contain("ACME/Software/Project/Todo");
         typesWithNull.Should().BeEmpty();
     }
 
@@ -150,12 +150,12 @@ public class CreatableTypesTest
         // Arrange & Act
         var definition = new NodeTypeDefinition
         {
-            CreatableTypes = ["Demos/ACME/Project/Todo", "Demos/ACME/Project/Story"]
+            CreatableTypes = ["ACME/Software/Project/Todo", "ACME/Software/Project/Story"]
         };
 
         // Assert
         definition.CreatableTypes.Should().HaveCount(2);
-        definition.CreatableTypes.Should().Contain("Demos/ACME/Project/Todo");
+        definition.CreatableTypes.Should().Contain("ACME/Software/Project/Todo");
     }
 
     [Fact]

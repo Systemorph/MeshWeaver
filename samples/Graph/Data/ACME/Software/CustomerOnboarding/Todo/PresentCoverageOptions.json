@@ -1,7 +1,7 @@
 {
   "$type": "MeshNode",
   "id": "PresentCoverageOptions",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "path": "ACME/Software/CustomerOnboarding/Todo/PresentCoverageOptions",
   "name": "Present coverage options",
   "nodeType": "ACME/Software/Project/Todo",

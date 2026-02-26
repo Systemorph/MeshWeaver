@@ -1,6 +1,6 @@
 {
   "id": "DUMON",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Du monde entier",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

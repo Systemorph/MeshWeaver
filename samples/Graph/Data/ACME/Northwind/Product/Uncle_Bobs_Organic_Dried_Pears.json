@@ -1,6 +1,6 @@
 {
   "id": "Uncle_Bobs_Organic_Dried_Pears",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Uncle Bob's Organic Dried Pears",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

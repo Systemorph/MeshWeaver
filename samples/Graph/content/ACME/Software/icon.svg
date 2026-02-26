@@ -1,16 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="codeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="swTextGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#991B1B"/>
       <stop offset="100%" stop-color="#EF4444"/>
     </linearGradient>
   </defs>
   <!-- Background -->
   <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
-  <!-- Left angle bracket < -->
-  <path d="M24 22 L10 32 L24 42" fill="none" stroke="url(#codeGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- Right angle bracket > -->
-  <path d="M40 22 L54 32 L40 42" fill="none" stroke="url(#codeGrad)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <!-- Forward slash / -->
-  <line x1="36" y1="18" x2="28" y2="46" stroke="#DC2626" stroke-width="4" stroke-linecap="round"/>
+  <!-- Three chevrons - red highlighted, others dimmed -->
+  <g transform="translate(32, 23)">
+    <!-- Top chevron (grey - dimmed) -->
+    <path d="M-12,-13 L0,-7 L12,-13" fill="none" stroke="#6B7280" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"/>
+    <!-- Middle chevron (blue - dimmed) -->
+    <path d="M-12,-6 L0,0 L12,-6" fill="none" stroke="#2563EB" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.3"/>
+    <!-- Bottom chevron (red - HIGHLIGHTED) -->
+    <path d="M-12,1 L0,7 L12,1" fill="none" stroke="#DC2626" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- Company name -->
+  <text x="32" y="48" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="url(#swTextGrad)" text-anchor="middle" letter-spacing="3">ACME</text>
+  <!-- Division subtitle -->
+  <text x="32" y="57" font-family="Arial, sans-serif" font-size="5" fill="#DC2626" text-anchor="middle" letter-spacing="2">SOFTWARE</text>
 </svg>

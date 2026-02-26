@@ -1,6 +1,6 @@
 {
   "id": "LAMAI",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "La maison d'Asie",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

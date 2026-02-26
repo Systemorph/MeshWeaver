@@ -1,6 +1,6 @@
 {
   "id": "Ipoh_Coffee",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Ipoh Coffee",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

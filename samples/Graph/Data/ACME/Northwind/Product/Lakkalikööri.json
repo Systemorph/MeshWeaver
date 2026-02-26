@@ -1,6 +1,6 @@
 {
   "id": "Lakkalik\u00f6\u00f6ri",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Lakkalik\u00f6\u00f6ri",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

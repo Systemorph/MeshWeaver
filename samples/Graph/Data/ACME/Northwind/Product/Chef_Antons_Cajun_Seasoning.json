@@ -1,6 +1,6 @@
 {
   "id": "Chef_Antons_Cajun_Seasoning",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Chef Anton's Cajun Seasoning",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

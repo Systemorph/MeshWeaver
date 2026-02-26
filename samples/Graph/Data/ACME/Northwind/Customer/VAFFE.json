@@ -1,6 +1,6 @@
 {
   "id": "VAFFE",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Vaffeljernet",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "SPECD",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Sp\u00e9cialit\u00e9s du monde",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

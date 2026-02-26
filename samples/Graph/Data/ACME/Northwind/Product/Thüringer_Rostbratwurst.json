@@ -1,6 +1,6 @@
 {
   "id": "Th\u00fcringer_Rostbratwurst",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Th\u00fcringer Rostbratwurst",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

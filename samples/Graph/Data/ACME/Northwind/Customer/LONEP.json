@@ -1,6 +1,6 @@
 {
   "id": "LONEP",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Lonesome Pine Restaurant",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

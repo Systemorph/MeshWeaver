@@ -1,6 +1,6 @@
 {
   "id": "PARIS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Paris sp\u00e9cialit\u00e9s",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "FAQDocument",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Prepare customer FAQ",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

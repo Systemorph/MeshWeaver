@@ -1,6 +1,6 @@
 {
   "id": "New_England_Seafood_Cannery",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "New England Seafood Cannery",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

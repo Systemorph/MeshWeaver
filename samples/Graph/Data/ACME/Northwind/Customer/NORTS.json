@@ -1,6 +1,6 @@
 {
   "id": "NORTS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "North/South",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

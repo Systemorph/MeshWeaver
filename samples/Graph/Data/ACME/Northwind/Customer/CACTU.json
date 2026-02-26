@@ -1,6 +1,6 @@
 {
   "id": "CACTU",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Cactus Comidas para llevar",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -216,7 +216,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange - Threads are stored as direct children: {parentPath}/{threadId}
         var userId = "TestUser";
-        var parentPath = "Demos/ACME/ProductLaunch";
+        var parentPath = "ACME/Software/ProductLaunch";
         var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {

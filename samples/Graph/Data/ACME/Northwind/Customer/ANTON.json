@@ -1,6 +1,6 @@
 {
   "id": "ANTON",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Antonio Moreno Taquer\u00eda",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

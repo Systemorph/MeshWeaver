@@ -1,6 +1,6 @@
 {
   "id": "Bob_Access",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "Bob Access",
   "nodeType": "AccessAssignment",
   "content": {

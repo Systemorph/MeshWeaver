@@ -1,6 +1,6 @@
 {
   "id": "LAUGB",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Laughing Bacchus Wine Cellars",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

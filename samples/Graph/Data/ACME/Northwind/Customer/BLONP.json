@@ -1,6 +1,6 @@
 {
   "id": "BLONP",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Blondesddsl p\u00e8re et fils",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -71,8 +71,8 @@ public class StorageImporterTests : IDisposable
         result.NodesImported.Should().BeGreaterThan(0);
 
         // ACME children should be copied
-        var todoAgentExists = await target.ExistsAsync("Demos/ACME/Project/TodoAgent", ct);
-        todoAgentExists.Should().BeTrue("Demos/ACME/Project/TodoAgent should have been imported");
+        var todoAgentExists = await target.ExistsAsync("ACME/Software/Project/TodoAgent", ct);
+        todoAgentExists.Should().BeTrue("ACME/Software/Project/TodoAgent should have been imported");
 
         // Nodes outside ACME should NOT be copied
         var executorExists = await target.ExistsAsync("Executor", ct);
@@ -378,8 +378,9 @@ public class StorageImporterTests : IDisposable
         // Arrange - verify exact node count for DataMesh subtree
         // DataMesh/ contains: CollaborativeEditing.md, CRUD.md, DataConfiguration.md,
         // DataModeling.md, InteractiveMarkdown.md, NodeTypeConfiguration.md, QuerySyntax.md,
-        // UnifiedPath.md, plus UnifiedPath/{AreaPrefix,ContentPrefix,DataPrefix,SchemaPrefix,Syntax}.md
-        // = 13 .md nodes total (c1-c6.json are partition data, not nodes)
+        // UnifiedPath.md, What is a Data Mesh.md, plus:
+        // - CollaborativeEditing/{c1-c6}.json (6 comment nodes) + c1/reply1.json (1 reply)
+        // - UnifiedPath/{AreaPrefix,ContentPrefix,DataPrefix,sample,SchemaPrefix,Syntax}.md (6 children)
         Directory.Exists(_sourceDir).Should().BeTrue();
         var source = new FileSystemStorageAdapter(_sourceDir);
         var target = new FileSystemStorageAdapter(_targetDir);
@@ -393,15 +394,19 @@ public class StorageImporterTests : IDisposable
             RootPath = "MeshWeaver/Documentation/DataMesh"
         }, ct);
 
-        // Assert - 19 nodes: 8 direct .md children + 6 Comment .json children of CollaborativeEditing + 5 UnifiedPath .md children
-        result.NodesImported.Should().Be(19,
-            "DataMesh/ has 8 .md children + CollaborativeEditing/ has 6 .json comment nodes + UnifiedPath/ has 5 .md children = 19 total");
+        // Assert - 22 nodes total:
+        // - 9 direct .md children of DataMesh (including CollaborativeEditing.md, What is a Data Mesh.md)
+        // - 7 nodes under CollaborativeEditing/ (c1-c6 + c1/reply1)
+        // - 6 UnifiedPath .md children (including sample.md)
+        result.NodesImported.Should().Be(22,
+            "DataMesh/ has 9 .md children + CollaborativeEditing/ has 7 comment nodes + UnifiedPath/ has 6 .md children = 22 total");
 
-        // Verify every expected node
+        // Verify key expected nodes
         var expectedNodes = new[]
         {
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1",
+            "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1/reply1",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c2",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c3",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c4",
@@ -417,8 +422,10 @@ public class StorageImporterTests : IDisposable
             "MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix",
             "MeshWeaver/Documentation/DataMesh/UnifiedPath/ContentPrefix",
             "MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix",
+            "MeshWeaver/Documentation/DataMesh/UnifiedPath/sample",
             "MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix",
             "MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax",
+            "MeshWeaver/Documentation/DataMesh/What is a Data Mesh",
         };
 
         foreach (var nodePath in expectedNodes)
@@ -456,9 +463,9 @@ public class StorageImporterTests : IDisposable
         // Act
         var result = await importer.ImportAsync(ct: ct);
 
-        // Assert - should import DataMesh + all 19 children = 20 total
-        result.NodesImported.Should().Be(20,
-            "DataMesh.md (1) + DataMesh/ children (8) + CollaborativeEditing/ comments (6) + UnifiedPath/ children (5) = 20");
+        // Assert - should import DataMesh + all 22 children = 23 total
+        result.NodesImported.Should().Be(23,
+            "DataMesh.md (1) + DataMesh/ children (9) + CollaborativeEditing/ comments (7) + UnifiedPath/ children (6) = 23");
 
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh", ct)).Should().BeTrue();
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration", ct)).Should().BeTrue();
@@ -523,7 +530,7 @@ public class StorageImporterTests : IDisposable
         }, ct);
 
         // Assert
-        result.NodesImported.Should().Be(19, "DataMesh subtree has 19 nodes (8 .md + 6 comment .json + 5 UnifiedPath .md)");
+        result.NodesImported.Should().Be(22, "DataMesh subtree has 22 nodes (9 .md + 7 comment .json + 6 UnifiedPath .md)");
         result.NodesRemoved.Should().Be(0,
             "re-importing same subtree should produce zero removals");
 

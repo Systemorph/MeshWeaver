@@ -1,6 +1,6 @@
 {
   "id": "RATTC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Rattlesnake Canyon Grocery",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

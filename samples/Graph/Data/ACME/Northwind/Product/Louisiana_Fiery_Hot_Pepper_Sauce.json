@@ -1,6 +1,6 @@
 {
   "id": "Louisiana_Fiery_Hot_Pepper_Sauce",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Louisiana Fiery Hot Pepper Sauce",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

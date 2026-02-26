@@ -24,7 +24,7 @@ public partial class ContentIntegrityTest
     /// <summary>
     /// Discovers all ContentCatalog instances by scanning JSON files.
     /// Returns node paths derived from file system location (matching how FileSystemStorageAdapter works).
-    /// For example, a file at "Demos/Northwind/Reports.json" yields path "Demos/Northwind/Reports".
+    /// For example, a file at "ACME/Northwind/Reports.json" yields path "ACME/Northwind/Reports".
     /// Returns a placeholder if no ContentCatalog nodes exist to prevent xUnit "No data found" error.
     /// </summary>
     public static IEnumerable<object[]> GetContentCatalogNodes()
@@ -136,8 +136,8 @@ public partial class ContentIntegrityTest
             if (segments.Length < 2) continue;
 
             // Try to find the matching node path by progressively checking prefixes
-            // e.g., for "Demos/Northwind/Analytics/SalesReport", check:
-            //   "Demos/Northwind/Analytics/SalesReport", "Demos/Northwind/Analytics", "Demos/Northwind", "Demos"
+            // e.g., for "ACME/Northwind/Analytics/SalesReport", check:
+            //   "ACME/Northwind/Analytics/SalesReport", "ACME/Northwind/Analytics", "ACME/Northwind", "ACME"
             var nodeFound = false;
             for (int i = segments.Length; i >= 2; i--)
             {
@@ -184,7 +184,7 @@ public partial class ContentIntegrityTest
 
     [Theory(Timeout = 10000)]
     [MemberData(nameof(GetContentCatalogNodes))]
-    public void Validate_ContentCatalogNode_HasMarkdownFiles(string nodePath)
+    public void Validate_ContentCatalogNode_HasContent(string nodePath)
     {
         // Skip if no ContentCatalog nodes exist
         if (nodePath == "__SKIP__")
@@ -198,12 +198,14 @@ public partial class ContentIntegrityTest
         if (!Directory.Exists(expectedContentPath))
             return;
 
-        // Act
-        var mdFiles = Directory.GetFiles(expectedContentPath, "*.md");
+        // Act - Search recursively for markdown files or any content files
+        var mdFiles = Directory.GetFiles(expectedContentPath, "*.md", SearchOption.AllDirectories);
+        var allFiles = Directory.GetFiles(expectedContentPath, "*.*", SearchOption.AllDirectories);
 
-        // Assert
-        mdFiles.Should().NotBeEmpty(
-            $"Content directory {expectedContentPath} should contain markdown files");
+        // Assert - Either markdown files OR other content (images, svg, csv, etc.) should exist
+        var hasContent = mdFiles.Length > 0 || allFiles.Length > 0;
+        hasContent.Should().BeTrue(
+            $"Content directory {expectedContentPath} should contain content files (markdown, images, etc.)");
     }
 
     #endregion

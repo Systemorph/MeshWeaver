@@ -1,6 +1,6 @@
 {
   "id": "Filo_Mix",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Filo Mix",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

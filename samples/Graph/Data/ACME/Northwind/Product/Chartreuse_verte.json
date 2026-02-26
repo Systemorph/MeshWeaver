@@ -1,6 +1,6 @@
 {
   "id": "Chartreuse_verte",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Chartreuse verte",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

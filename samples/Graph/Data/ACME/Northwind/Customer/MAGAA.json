@@ -1,6 +1,6 @@
 {
   "id": "MAGAA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Magazzini Alimentari Riuniti",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

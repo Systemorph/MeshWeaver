@@ -1,6 +1,6 @@
 {
   "id": "SPLIR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Split Rail Beer & Ale",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",
