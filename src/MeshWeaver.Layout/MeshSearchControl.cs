@@ -121,6 +121,12 @@ public record MeshSearchControl()
     public object? DisableNavigation { get; init; }
 
     /// <summary>
+    /// Whether to show the "No items found." message when there are no results (default true).
+    /// Set to false to render nothing when the search returns no items.
+    /// </summary>
+    public object? ShowEmptyMessage { get; init; }
+
+    /// <summary>
     /// Pre-computed grouped search results. When set, the Blazor component
     /// uses these groups directly instead of computing them from lambdas.
     /// This is the serializable output of ProcessResults().
@@ -182,6 +188,9 @@ public record MeshSearchControl()
 
     public MeshSearchControl WithGridSpacing(int spacing) =>
         this with { Grid = (Grid ?? new GridConfig()) with { Spacing = spacing } };
+
+    // Show empty message
+    public MeshSearchControl WithShowEmptyMessage(bool show) => this with { ShowEmptyMessage = show };
 
     // Reactive mode
     public MeshSearchControl WithReactiveMode(bool reactive) => this with { ReactiveMode = reactive };

@@ -507,6 +507,7 @@ public static class MeshNodeLayoutAreas
         return Controls.MeshSearch
             .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
             .WithShowSearchBox(false)
+            .WithShowEmptyMessage(false)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             // No explicit grouping - defaults to NodeType which gives meaningful labels
             .WithSectionCounts(true)
