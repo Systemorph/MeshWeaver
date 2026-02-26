@@ -183,4 +183,14 @@ public record ThreadMessage
     /// Defaults to ExecutedInput for backward compatibility.
     /// </summary>
     public ThreadMessageType Type { get; init; } = ThreadMessageType.ExecutedInput;
+
+    /// <summary>
+    /// The name of the agent that generated this response (for AgentResponse messages).
+    /// </summary>
+    public string? AgentName { get; init; }
+
+    /// <summary>
+    /// The model used to generate this response (for AgentResponse messages).
+    /// </summary>
+    public string? ModelName { get; init; }
 }

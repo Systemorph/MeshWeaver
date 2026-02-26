@@ -594,8 +594,8 @@ public static class ThreadLayoutAreas
                 }
             }
 
-            // 7. Final update with complete text + touch thread LastModified
-            UpdateResponseNode(hub, responsePath, responseText.ToString());
+            // 7. Final update with complete text + agent/model info + touch thread LastModified
+            UpdateResponseNode(hub, responsePath, responseText.ToString(), request.AgentName, request.ModelName);
             await TouchThreadLastModifiedAsync(hub, request.ThreadPath);
 
             hub.Post(new ExecuteThreadMessageResponse { Success = true },
@@ -612,7 +612,7 @@ public static class ThreadLayoutAreas
         return delivery.Processed();
     }
 
-    private static void UpdateResponseNode(IMessageHub hub, string responsePath, string text)
+    private static void UpdateResponseNode(IMessageHub hub, string responsePath, string text, string? agentName = null, string? modelName = null)
     {
         var nodeId = responsePath.Split('/').Last();
         var updatedMessage = new ThreadMessage
@@ -621,7 +621,9 @@ public static class ThreadLayoutAreas
             Role = "assistant",
             Text = text,
             Timestamp = DateTime.UtcNow,
-            Type = ThreadMessageType.AgentResponse
+            Type = ThreadMessageType.AgentResponse,
+            AgentName = agentName,
+            ModelName = modelName
         };
         var node = new MeshNode(responsePath)
         {

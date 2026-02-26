@@ -89,6 +89,19 @@ public partial class MeshSearchView : IDisposable
             return true; // default
         }
     }
+    private bool BoundShowLoadingIndicator
+    {
+        get
+        {
+            if (ViewModel?.ShowLoadingIndicator is bool show) return show;
+            if (ViewModel?.ShowLoadingIndicator is JsonElement je)
+            {
+                if (je.ValueKind == JsonValueKind.False) return false;
+                if (je.ValueKind == JsonValueKind.True) return true;
+            }
+            return true; // default
+        }
+    }
     private bool BoundExcludeBasePath => ViewModel?.ExcludeBasePath is bool exclude ? exclude : true;
     private bool BoundLiveSearch => ViewModel?.LiveSearch is bool live ? live : true;
     private bool BoundReactiveMode
