@@ -146,8 +146,7 @@ public static class CommentsView
     public static UiControl BuildInlineCommentsSection(LayoutAreaHost host)
     {
         var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 32px; border-top: 1px solid var(--neutral-stroke-rest); padding-top: 16px;");
-        section = section.WithView(Controls.Html("<h3 style=\"margin: 0 0 12px 0;\">Comments</h3>"));
-        section = section.WithView(Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.CommentsArea));
+        section = section.WithView(Controls.LayoutArea(host.Hub.Address, MeshNodeLayoutAreas.CommentsArea).WithShowProgress(false));
         return section;
     }
 

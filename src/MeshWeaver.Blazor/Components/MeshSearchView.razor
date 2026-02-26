@@ -64,7 +64,7 @@
                 }
             </div>
         }
-        else if (!HasResults())
+        else if (!HasResults() && BoundShowEmptyMessage)
         {
             <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
         }
