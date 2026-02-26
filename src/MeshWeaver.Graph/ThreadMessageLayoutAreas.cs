@@ -56,7 +56,14 @@ public static class ThreadMessageLayoutAreas
         var message = node?.Content as ThreadMessage;
         if (message == null)
         {
-            return Controls.Html("<div style=\"color: var(--neutral-foreground-hint); padding: 8px;\">No message content</div>");
+            // Node not yet loaded — show loading skeleton as progress indicator
+            return Controls.Html(
+                "<div style=\"padding: 12px 16px; margin-bottom: 12px;\">" +
+                "<div style=\"height: 14px; width: 80px; background: var(--neutral-stroke-rest); border-radius: 4px; margin-bottom: 8px; animation: agent-skeleton-pulse 1.5s ease-in-out infinite;\"></div>" +
+                "<div style=\"height: 14px; width: 60%; background: var(--neutral-stroke-rest); border-radius: 4px; margin-bottom: 6px; animation: agent-skeleton-pulse 1.5s ease-in-out infinite; animation-delay: 0.1s;\"></div>" +
+                "<div style=\"height: 14px; width: 40%; background: var(--neutral-stroke-rest); border-radius: 4px; animation: agent-skeleton-pulse 1.5s ease-in-out infinite; animation-delay: 0.2s;\"></div>" +
+                "</div>" +
+                "<style>@keyframes agent-skeleton-pulse { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }</style>");
         }
 
         return message.Type switch

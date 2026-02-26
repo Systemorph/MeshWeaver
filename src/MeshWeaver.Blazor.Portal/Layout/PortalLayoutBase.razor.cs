@@ -244,17 +244,30 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     // Side panel content state
     private string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+    private ThreadChatControl? _cachedSidePanelControl;
+    private string? _cachedContentPath;
+    private string? _cachedContextPath;
 
     private ThreadChatControl GetSidePanelControl()
     {
         var context = NavigationService.Context;
         var contextPath = context?.PrimaryPath;
-        var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
+        var contentPath = SidePanelState.ContentPath ?? string.Empty;
 
-        return new ThreadChatControl()
-            .WithThreadPath(SidePanelState.ContentPath ?? string.Empty)
+        // Return cached instance if inputs haven't changed
+        if (_cachedSidePanelControl != null
+            && _cachedContentPath == contentPath
+            && _cachedContextPath == contextPath)
+            return _cachedSidePanelControl;
+
+        var contextDisplayName = context?.Node?.Name ?? context?.Node?.Id;
+        _cachedContentPath = contentPath;
+        _cachedContextPath = contextPath;
+        _cachedSidePanelControl = new ThreadChatControl()
+            .WithThreadPath(contentPath)
             .WithInitialContext(contextPath ?? string.Empty)
             .WithInitialContextDisplayName(contextDisplayName ?? string.Empty);
+        return _cachedSidePanelControl;
     }
 
     public void Dispose()

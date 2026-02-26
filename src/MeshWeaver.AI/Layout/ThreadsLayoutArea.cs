@@ -39,6 +39,7 @@ public static class ThreadsLayoutArea
         return Controls.MeshSearch
             .WithHiddenQuery($"source:activity nodeType:Thread namespace:{nodePath}")
             .WithNamespace(nodePath)
-            .WithRenderMode(MeshSearchRenderMode.Flat);
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCreateNodeType("Thread");
     }
 }

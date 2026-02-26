@@ -100,9 +100,10 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             ShowProgress = true
         };
 
-        // Use the last segment of the address for the page title
-        var titleSegment = context.Address.Segments.LastOrDefault() ?? context.Address.Type;
-        PageTitle = titleSegment;
+        // Use node name for the page title, falling back to the last address segment
+        PageTitle = context.Node?.Name
+            ?? context.Address.Segments.LastOrDefault()
+            ?? context.Address.Type;
     }
 
     protected override void OnAfterRender(bool firstRender)

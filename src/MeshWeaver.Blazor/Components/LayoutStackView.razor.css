@@ -1,7 +1,0 @@
-/* SVG icons use fill="currentColor" which defaults to black in <img> context.
-   Invert them in dark mode so they appear light on dark backgrounds. */
-@media (prefers-color-scheme: dark) {
-    ::deep .header-icon-svg[src$=".svg"] {
-        filter: invert(1);
-    }
-}
