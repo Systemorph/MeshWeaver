@@ -476,7 +476,7 @@ public static class NodeTypeLayoutAreas
         var displayNameDataId = Guid.NewGuid().AsString();
         var descriptionDataId = Guid.NewGuid().AsString();
         var iconNameDataId = Guid.NewGuid().AsString();
-        var displayOrderDataId = Guid.NewGuid().AsString();
+        var orderDataId = Guid.NewGuid().AsString();
         var childrenQueryDataId = Guid.NewGuid().AsString();
         var dependenciesDataId = Guid.NewGuid().AsString();
         var configurationDataId = Guid.NewGuid().AsString();
@@ -485,7 +485,7 @@ public static class NodeTypeLayoutAreas
         host.UpdateData(displayNameDataId, node.Name ?? "");
         host.UpdateData(descriptionDataId, content?.Description ?? "");
         host.UpdateData(iconNameDataId, node.Icon ?? "");
-        host.UpdateData(displayOrderDataId, (node.Order ?? 0).ToString());
+        host.UpdateData(orderDataId, (node.Order ?? 0).ToString());
         host.UpdateData(childrenQueryDataId, content?.ChildrenQuery ?? "");
         host.UpdateData(dependenciesDataId, content?.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
         host.UpdateData(configurationDataId, content?.Configuration ?? "config => config");
@@ -530,7 +530,7 @@ public static class NodeTypeLayoutAreas
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("0")
                 .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(displayOrderDataId) }));
+            { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
 
         // Children Query
         stack = stack.WithView(Controls.Stack
@@ -596,14 +596,14 @@ public static class NodeTypeLayoutAreas
                 var displayName = await host.Stream.GetDataStream<string>(displayNameDataId).FirstAsync();
                 var description = await host.Stream.GetDataStream<string>(descriptionDataId).FirstAsync();
                 var iconName = await host.Stream.GetDataStream<string>(iconNameDataId).FirstAsync();
-                var displayOrderStr = await host.Stream.GetDataStream<string>(displayOrderDataId).FirstAsync();
+                var orderStr = await host.Stream.GetDataStream<string>(orderDataId).FirstAsync();
                 var childrenQuery = await host.Stream.GetDataStream<string>(childrenQueryDataId).FirstAsync();
                 var dependenciesStr = await host.Stream.GetDataStream<string>(dependenciesDataId).FirstAsync();
                 var configuration = await host.Stream.GetDataStream<string>(configurationDataId).FirstAsync();
 
-                // Parse display order
-                if (!int.TryParse(displayOrderStr, out var displayOrder))
-                    displayOrder = 0;
+                // Parse order
+                if (!int.TryParse(orderStr, out var order))
+                    order = 0;
 
                 // Parse dependencies
                 List<string>? dependencies = null;
@@ -642,7 +642,7 @@ public static class NodeTypeLayoutAreas
                 {
                     Name = string.IsNullOrWhiteSpace(displayName) ? null : displayName,
                     Icon = string.IsNullOrWhiteSpace(iconName) ? null : iconName,
-                    Order = displayOrder,
+                    Order = order,
                     Content = updatedDefinition
                 };
 

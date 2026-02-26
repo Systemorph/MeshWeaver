@@ -961,7 +961,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
           "nodeType": "NodeType",
           "description": "Catalog of organizations",
           "iconName": "Building",
-          "displayOrder": 8,
+          "order": 8,
           "isPersistent": true,
           "content": {
             "$type": "NodeTypeDefinition",
@@ -970,7 +970,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
             "displayName": "Organizations",
             "iconName": "Building",
             "description": "Catalog of organizations",
-            "displayOrder": 8
+            "order": 8
           }
         }
         """;
@@ -1003,7 +1003,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
           "nodeType": "Type/Organizations",
           "description": "Catalog of organizations",
           "iconName": "Building",
-          "displayOrder": 10,
+          "order": 10,
           "isPersistent": true,
           "content": {}
         }

@@ -6,7 +6,7 @@ icon: Compass
 category: Agents
 isDefault: true
 exposedInNavigator: false
-displayOrder: -1
+order: -1
 delegations:
   - agentPath: Planner
     instructions: Complex multi-step tasks requiring analysis and planning

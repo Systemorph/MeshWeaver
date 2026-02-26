@@ -132,7 +132,7 @@ public class AgentFileParserTest
             exposedInNavigator: true
             contextMatchPattern: address=like=*Test*
             preferredModel: gpt-4
-            displayOrder: 10
+            order: 10
             ---
 
             Full agent instructions.
@@ -328,7 +328,7 @@ public class AgentFileParserTest
             exposedInNavigator: true
             contextMatchPattern: address=like=*Test*
             preferredModel: gpt-4
-            displayOrder: 5
+            order: 5
             delegations:
               - agentPath: Helper
                 instructions: Help with tasks

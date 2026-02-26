@@ -99,11 +99,11 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Assert
         orderedAgents.Should().NotBeEmpty("Agents should be found from the mesh");
 
-        // CRITICAL: TodoAgent should be FIRST because it has displayOrder: -10
-        // (lower displayOrder = higher priority)
+        // CRITICAL: TodoAgent should be FIRST because it has order: -10
+        // (lower order = higher priority)
         var firstAgent = orderedAgents.First();
         firstAgent.Name.Should().Be("TodoAgent",
-            "TodoAgent should be FIRST agent because it has displayOrder: -10 (lowest)");
+            "TodoAgent should be FIRST agent because it has order: -10 (lowest)");
         firstAgent.Path.Should().Be(expectedTodoAgentPath,
             "TodoAgent should come from the NodeType path (ACME/Project)");
     }
