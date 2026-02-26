@@ -236,7 +236,7 @@ public class AgentFileParser : IFileFormatParser
                 ExposedInNavigator = ExtractBool(element, "exposedInNavigator"),
                 PreferredModel = ExtractString(element, "preferredModel"),
                 ContextMatchPattern = ExtractString(element, "contextMatchPattern"),
-                Order = ExtractInt(element, "displayOrder"),
+                Order = ExtractInt(element, "order"),
                 Delegations = ExtractDelegations(element)
             };
         }

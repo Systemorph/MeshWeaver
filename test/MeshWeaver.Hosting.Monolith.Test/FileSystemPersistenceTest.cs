@@ -341,7 +341,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
                 "id": "graph",
                 "name": "Graph Root",
                 "nodeType": "graph",
-                "displayOrder": 1
+                "order": 1
             }
             """);
 
@@ -351,7 +351,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
                 "namespace": "graph",
                 "name": "Loaded Org 1",
                 "nodeType": "org",
-                "displayOrder": 10
+                "order": 10
             }
             """);
 
@@ -361,7 +361,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
                 "namespace": "graph",
                 "name": "Loaded Org 2",
                 "nodeType": "org",
-                "displayOrder": 20
+                "order": 20
             }
             """);
 

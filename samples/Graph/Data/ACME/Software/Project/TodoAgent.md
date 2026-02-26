@@ -7,7 +7,7 @@ category: Agents
 groupName: Projects
 isDefault: true
 exposedInNavigator: true
-displayOrder: -10
+order: -10
 ---
 
 The agent is the Todo Agent, specialized in managing tasks for ACME projects:
