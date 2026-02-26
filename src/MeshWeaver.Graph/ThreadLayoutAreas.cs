@@ -30,16 +30,15 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Adds the thread-specific views to the hub's layout.
-    /// Sets Chat as the default area for interactive conversations.
+    /// Thread area is the default — shows title + ThreadChatControl.
     /// </summary>
     public static MessageHubConfiguration AddThreadViews(this MessageHubConfiguration configuration)
         => configuration
             .WithHandler<ExecuteThreadMessageRequest>(HandleExecuteThreadMessage)
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
-            .AddNodeMenuItems(ChatMenuProvider, MessagesMenuProvider, DelegationsMenuProvider)
+            .AddNodeMenuItems(DelegationsMenuProvider)
             .AddLayout(layout => layout
-                .WithDefaultArea(ThreadNodeType.ChatArea)
-                .WithView(ThreadNodeType.ChatArea, ChatView)
+                .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
@@ -61,26 +60,6 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Main menu item: Chat (interactive chat view).
-    /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> ChatMenuProvider(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        await Task.CompletedTask;
-        yield return new("Chat", ThreadNodeType.ChatArea, Order: 10);
-    }
-
-    /// <summary>
-    /// Main menu item: Messages (read-only message history).
-    /// </summary>
-    private static async IAsyncEnumerable<NodeMenuItemDefinition> MessagesMenuProvider(
-        LayoutAreaHost host, RenderingContext ctx)
-    {
-        await Task.CompletedTask;
-        yield return new("Messages", ThreadNodeType.ThreadArea, Order: 11);
-    }
-
-    /// <summary>
     /// Main menu item: Delegations (sub-thread history).
     /// </summary>
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DelegationsMenuProvider(
@@ -90,74 +69,15 @@ public static class ThreadLayoutAreas
         yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12);
     }
 
-    /// <summary>
-    /// Renders the Chat area with an interactive chat interface.
-    /// Provides markdown editing with @ completion, reference chips, and streaming responses.
-    /// When viewing a thread directly, the context is set to the thread's ParentPath (the main object).
-    /// </summary>
-    public static IObservable<UiControl?> ChatView(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-
-        // Node stream — used only for the observable title sub-view
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
-
-        // Static container — emits once, not rebuilt on every node update
-        var container = Controls.Stack
-            .WithWidth("100%")
-            .WithHeight("100%")
-            .WithStyle("display: flex; flex-direction: column;");
-
-        // 1. Title — observable sub-view bound to meshNode.Name
-        container = container.WithView(nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var title = GetThreadTitle(node);
-            return (UiControl?)Controls.Html(
-                $"<h2 style=\"margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>");
-        }));
-
-        // 2. Chat control — observable sub-view for context resolution from node data
-        container = container.WithView(nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var threadContent = node?.Content as MeshThread;
-
-            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? threadContent.ParentPath
-                : hubPath;
-            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? GetContextDisplayName(threadContent.ParentPath)
-                : GetThreadTitle(node);
-
-            return (UiControl?)new ThreadChatControl()
-                .WithThreadPath(hubPath)
-                .WithInitialContext(contextPath)
-                .WithInitialContextDisplayName(contextDisplayName)
-                .WithStyle("flex: 1; overflow: hidden;");
-        }));
-
-        return Observable.Return<UiControl?>(container);
-    }
-
     private static string GetContextDisplayName(string path)
     {
-        // Extract the last segment of the path as display name
         var segments = path.Split('/');
         return segments.Length > 0 ? segments[^1] : path;
     }
 
-    private static MeshNode? GetNodeFromWorkspace(LayoutAreaHost host, string path)
-    {
-        var nodes = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>());
-        // Note: This is a synchronous helper; for reactive updates, use the stream directly
-        return null; // Will be resolved by data binding in the view
-    }
-
     /// <summary>
     /// Renders the Create area for Thread nodes.
-    /// Confirms the transient node (created by the Create New form) and redirects to the default area (Chat).
+    /// Confirms the transient node and redirects to the default area.
     /// </summary>
     public static IObservable<UiControl?> CreateView(LayoutAreaHost host, RenderingContext _)
     {
@@ -191,7 +111,7 @@ public static class ThreadLayoutAreas
             try
             {
                 var createdNode = await meshCatalog.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
-                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ChatArea));
+                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ThreadArea));
             }
             catch (Exception ex)
             {
@@ -227,62 +147,54 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Renders the Thread area showing the conversation content.
-    /// Uses MeshSearchControl with reactive mode to observe ThreadMessage child nodes,
-    /// rendering each via its Overview area for live streaming updates.
+    /// Renders the Thread area — the default view for threads.
+    /// Shows the thread title (observable, bound to meshNode.Name) and a
+    /// ThreadChatControl that handles both message display and chat input.
     /// </summary>
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
-        // Node stream for the title sub-view — only this part is observable
+        // Node stream — drives the observable title and chat control context
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        // Static layout — emits once, not rebuilt on every node update
+        // Static container — emits once, not rebuilt on every node update
         var container = Controls.Stack
             .WithWidth("100%")
             .WithHeight("100%")
             .WithStyle("display: flex; flex-direction: column;");
 
-        // 1. Header — observable sub-view bound to node name (only title reacts to data)
+        // 1. Title — observable sub-view bound to meshNode.Name
         container = container.WithView(nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return (UiControl?)BuildThreadHeader(node, hubPath);
+            var title = GetThreadTitle(node);
+            return (UiControl?)Controls.Html(
+                $"<h2 style=\"margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>");
         }));
 
-        // 2. Messages — MeshSearchControl with reactive mode handles its own cell-path data binding
-        container = container.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{hubPath} nodeType:ThreadMessage sort:Order-asc")
-            .WithItemArea(ThreadMessageNodeType.OverviewArea)
-            .WithShowSearchBox(false)
-            .WithMaxColumns(1)
-            .WithGridBreakpoints(xs: 12)
-            .WithReactiveMode(true)
-            .WithDisableNavigation()
-            .WithShowLoadingIndicator(true)
-            .WithStyle("flex: 1; overflow-y: auto; padding: 16px; width: 100%;"));
+        // 2. ThreadChatControl — observable for context resolution, handles messages + input
+        container = container.WithView(nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var threadContent = node?.Content as MeshThread;
+
+            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? threadContent.ParentPath
+                : hubPath;
+            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? GetContextDisplayName(threadContent.ParentPath)
+                : GetThreadTitle(node);
+
+            return (UiControl?)new ThreadChatControl()
+                .WithThreadPath(hubPath)
+                .WithInitialContext(contextPath)
+                .WithInitialContextDisplayName(contextDisplayName)
+                .WithStyle("flex: 1; overflow: hidden;");
+        }));
 
         return Observable.Return<UiControl?>(container);
-    }
-
-    private static UiControl BuildThreadHeader(MeshNode? node, string threadPath)
-    {
-        var title = GetThreadTitle(node);
-        var content = node?.Content as MeshThread;
-        var parentPath = content?.ParentPath;
-        var backHref = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
-
-        return Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithWidth("100%")
-            .WithStyle("align-items: center; padding: 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
-            .WithView(Controls.Button("")
-                .WithIconStart(FluentIcons.ArrowLeft(IconSize.Size16))
-                .WithAppearance(Appearance.Stealth)
-                .WithNavigateToHref(backHref))
-            .WithView(Controls.Html($"<h2 style=\"margin: 0 16px; flex: 1;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>"));
     }
 
     /// <summary>
@@ -472,7 +384,7 @@ public static class ThreadLayoutAreas
             .WithView(!string.IsNullOrEmpty(preview)
                 ? Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{System.Web.HttpUtility.HtmlEncode(preview)}</p>")
                 : Controls.Html($"<p style=\"margin: 8px 0 0 0; font-size: 0.9rem; color: var(--neutral-foreground-hint);\">{messageCount} messages</p>"))
-            .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ChatArea}"));
+            .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ThreadArea}"));
     }
 
     /// <summary>

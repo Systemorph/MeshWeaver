@@ -104,34 +104,38 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Builds a readonly view for ExecutedInput (user) messages.
-    /// Styled with accent background for user messages.
+    /// Outer flex container right-aligns; inner bubble has max-width and accent background.
     /// </summary>
     private static UiControl BuildUserMessageView(ThreadMessage message)
     {
         var authorName = message.AuthorName ?? "You";
 
-        var container = Controls.Stack
-            .WithStyle("padding: 12px 16px; margin-left: 48px; margin-bottom: 12px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: white;")
+        var bubble = Controls.Stack
+            .WithStyle("max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; background: var(--accent-fill-rest); color: var(--neutral-foreground-on-accent);")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
-            .WithView(new MarkdownControl(message.Text).WithStyle("color: white;"))
+            .WithView(new MarkdownControl(message.Text).WithStyle("background: transparent; color: inherit;"))
             .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
-            container = container.WithView(Controls.Stack
+            bubble = bubble.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.2);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
-        return container;
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("display: flex; justify-content: flex-end; margin-bottom: 12px;")
+            .WithView(bubble);
     }
 
     /// <summary>
     /// Builds a readonly view for AgentResponse (assistant) messages.
-    /// Styled with neutral background for assistant messages.
+    /// Outer flex container left-aligns; inner bubble has max-width and neutral background.
+    /// Shows animated dots when text is empty (agent generating).
     /// </summary>
     private static UiControl BuildAgentResponseView(ThreadMessage message)
     {
@@ -139,9 +143,9 @@ public static class ThreadMessageLayoutAreas
         var isSystem = message.Role.Equals("system", StringComparison.OrdinalIgnoreCase);
         var bgColor = isSystem ? "var(--neutral-layer-3)" : "var(--neutral-layer-2)";
 
-        // Build subtitle with model info (agent name is shown as authorName above)
+        // Build subtitle with model info
         var subtitle = !string.IsNullOrEmpty(message.ModelName)
-            ? $"<div style=\"font-size: 0.75rem; opacity: 0.6; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(message.ModelName)}</div>"
+            ? $"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(message.ModelName)}</div>"
             : "";
 
         // Show progress indicator when response text is empty (agent is generating)
@@ -150,7 +154,7 @@ public static class ThreadMessageLayoutAreas
         {
             contentView = Controls.Html(
                 "<div style=\"display: flex; align-items: center; gap: 8px; padding: 8px 0;\">" +
-                "<span class=\"agent-thinking-dots\" style=\"display: inline-flex; gap: 4px;\">" +
+                "<span style=\"display: inline-flex; gap: 4px;\">" +
                 "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0s;\"></span>" +
                 "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.2s;\"></span>" +
                 "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.4s;\"></span>" +
@@ -161,27 +165,30 @@ public static class ThreadMessageLayoutAreas
         }
         else
         {
-            contentView = new MarkdownControl(message.Text).WithStyle("width: 100%;");
+            contentView = new MarkdownControl(message.Text).WithStyle("background: transparent;");
         }
 
-        var container = Controls.Stack
-            .WithStyle($"padding: 12px 16px; margin-right: 48px; margin-bottom: 12px; border-radius: 12px; border-bottom-left-radius: 4px; background: var(--neutral-layer-floating); color: var(--neutral-foreground-rest);")
+        var bubble = Controls.Stack
+            .WithStyle($"max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-left-radius: 4px; background: {bgColor}; color: var(--neutral-foreground-rest);")
             .WithView(Controls.Html($"<div style=\"font-weight: 600; font-size: 0.85rem; margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(authorName)}</div>"))
             .WithView(Controls.Html(subtitle))
             .WithView(contentView)
-            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; opacity: 0.7; margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
+            .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
         // Add delegation link if present
         if (!string.IsNullOrEmpty(message.DelegationPath))
         {
-            container = container.WithView(Controls.Stack
+            bubble = bubble.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
                 .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
         }
 
-        return container;
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("display: flex; justify-content: flex-start; margin-bottom: 12px;")
+            .WithView(bubble);
     }
 
     /// <summary>
