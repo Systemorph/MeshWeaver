@@ -22,6 +22,8 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
     private static readonly HashSet<string> ExcludedPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
         "/onboarding",
+        "/welcome",
+        "/login",
         "/auth/",
         "/dev/",
         "/_framework",

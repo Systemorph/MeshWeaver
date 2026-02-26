@@ -35,9 +35,15 @@ public class AuthenticationOptions
     public string ReturnUrlParameterName { get; set; } = "returnUrl";
 
     /// <summary>
+    /// Whether to enable developer login (shows user list for quick sign-in).
+    /// When true, the /login page includes a "Developer Login" option.
+    /// Can be used alongside external providers.
+    /// </summary>
+    public bool EnableDevLogin { get; set; }
+
+    /// <summary>
     /// List of external authentication providers (Microsoft, Google, LinkedIn, Apple).
     /// When configured, the /login page shows buttons for each provider.
-    /// When empty and Provider == "Dev", dev login works as before.
     /// </summary>
     public List<ExternalProviderConfig> Providers { get; set; } = new();
 }

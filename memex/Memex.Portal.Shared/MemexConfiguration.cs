@@ -120,11 +120,16 @@ public static class MemexConfiguration
         var externalProviders = authSection.GetSection("Providers").Get<List<ExternalProviderConfig>>()
                                 ?? new List<ExternalProviderConfig>();
 
+        // Dev login is enabled explicitly or when provider is Dev (backward compat)
+        var enableDevLogin = authSection.GetValue<bool?>("EnableDevLogin")
+                             ?? (provider == AuthenticationProviders.Dev);
+
         // Register authentication navigation service
         services.AddAuthenticationNavigation(options =>
         {
             options.Provider = provider;
             options.Providers = externalProviders;
+            options.EnableDevLogin = enableDevLogin;
 
             // Allow custom paths from config
             if (authSection["LoginPath"] is { } loginPath)
@@ -139,9 +144,18 @@ public static class MemexConfiguration
         services.AddDataProtection()
             .SetApplicationName("MemexPortal");
 
-        if (externalProviders.Count > 0)
+        if (provider == AuthenticationProviders.MicrosoftIdentity && externalProviders.Count == 0)
         {
-            // Multi-provider mode: cookie is always the primary scheme
+            // Legacy single-provider MicrosoftIdentity mode (OIDC via EntraId section)
+            JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
+            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+                .AddMicrosoftIdentityWebApp(entraIdConfig);
+            services.AddControllersWithViews()
+                .AddMicrosoftIdentityUI();
+        }
+        else
+        {
+            // Unified cookie-based auth: supports dev login, external providers, or both
             var authBuilder = services.AddAuthentication(options =>
             {
                 options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
@@ -150,7 +164,7 @@ public static class MemexConfiguration
             .AddCookie(options =>
             {
                 options.LoginPath = "/login";
-                options.LogoutPath = "/auth/logout";
+                options.LogoutPath = externalProviders.Count > 0 ? "/auth/logout" : "/dev/logout";
                 options.ExpireTimeSpan = TimeSpan.FromDays(14);
                 options.SlidingExpiration = true;
                 options.Cookie.Name = "MemexAuth";
@@ -230,31 +244,6 @@ public static class MemexConfiguration
                         break;
                 }
             }
-        }
-        else if (provider == AuthenticationProviders.MicrosoftIdentity)
-        {
-            // Legacy single-provider MicrosoftIdentity mode
-            JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-                .AddMicrosoftIdentityWebApp(entraIdConfig);
-            services.AddControllersWithViews()
-                .AddMicrosoftIdentityUI();
-        }
-        else
-        {
-            // Dev/Cookie-based authentication (backward compatible)
-            services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-                .AddCookie(options =>
-                {
-                    options.LoginPath = "/dev/login";
-                    options.LogoutPath = "/dev/logout";
-                    options.ExpireTimeSpan = TimeSpan.FromDays(7);
-                    options.SlidingExpiration = true;
-                    options.Cookie.Name = "MemexDevAuth";
-                    options.Cookie.HttpOnly = true;
-                    options.Cookie.IsEssential = true;
-                    options.Cookie.SameSite = SameSiteMode.Lax;
-                });
         }
 
         services.AddAuthorization();

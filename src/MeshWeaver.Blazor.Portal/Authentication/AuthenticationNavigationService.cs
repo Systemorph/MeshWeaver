@@ -16,17 +16,9 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     {
         _options = options.Value;
 
-        // When external providers are configured, route through the login chooser page
-        if (_options.Providers.Count > 0)
-        {
-            _loginPath = "/login";
-            _logoutPath = "/auth/logout";
-        }
-        else
-        {
-            // Determine paths based on provider or custom configuration
-            (_loginPath, _logoutPath) = GetProviderPaths(_options.Provider);
-        }
+        // Always route through the unified /login page
+        _loginPath = "/login";
+        _logoutPath = _options.Providers.Count > 0 ? "/auth/logout" : "/dev/logout";
 
         // Override with custom paths if specified
         if (!string.IsNullOrEmpty(_options.LoginPath))
@@ -43,10 +35,9 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
     public IReadOnlyList<ExternalProviderConfig> GetAvailableProviders() => _options.Providers;
 
     /// <summary>
-    /// Whether dev login should be shown (no external providers configured and using Dev provider).
+    /// Whether dev login should be shown on the login page.
     /// </summary>
-    public bool IsDevMode => _options.Providers.Count == 0 &&
-                             _options.Provider == AuthenticationProviders.Dev;
+    public bool IsDevMode => _options.EnableDevLogin;
 
     public string GetLoginUrl(string? returnUrl = null)
     {
@@ -67,15 +58,4 @@ public class AuthenticationNavigationService : IAuthenticationNavigationService
         return $"{path}{separator}{_options.ReturnUrlParameterName}={Uri.EscapeDataString(returnUrl)}";
     }
 
-    private static (string loginPath, string logoutPath) GetProviderPaths(string provider)
-    {
-        return provider switch
-        {
-            AuthenticationProviders.Dev => ("/dev/login", "/dev/logout"),
-            AuthenticationProviders.MicrosoftIdentity => ("/MicrosoftIdentity/Account/SignIn", "/MicrosoftIdentity/Account/SignOut"),
-            AuthenticationProviders.Google => ("/signin-google", "/signout"),
-            AuthenticationProviders.Custom => ("/login", "/logout"),
-            _ => ("/login", "/logout")
-        };
-    }
 }
