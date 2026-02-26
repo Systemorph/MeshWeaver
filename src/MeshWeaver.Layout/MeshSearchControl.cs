@@ -127,6 +127,12 @@ public record MeshSearchControl()
     public object? ShowEmptyMessage { get; init; }
 
     /// <summary>
+    /// Whether to show a loading indicator (skeleton cards) while results are loading (default true).
+    /// Set to false for secondary/embedded sections like Children, Comments, etc.
+    /// </summary>
+    public object? ShowLoadingIndicator { get; init; }
+
+    /// <summary>
     /// Pre-computed grouped search results. When set, the Blazor component
     /// uses these groups directly instead of computing them from lambdas.
     /// This is the serializable output of ProcessResults().
@@ -191,6 +197,9 @@ public record MeshSearchControl()
 
     // Show empty message
     public MeshSearchControl WithShowEmptyMessage(bool show) => this with { ShowEmptyMessage = show };
+
+    // Show loading indicator
+    public MeshSearchControl WithShowLoadingIndicator(bool show) => this with { ShowLoadingIndicator = show };
 
     // Reactive mode
     public MeshSearchControl WithReactiveMode(bool reactive) => this with { ReactiveMode = reactive };
