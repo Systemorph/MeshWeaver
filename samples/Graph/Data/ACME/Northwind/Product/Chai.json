@@ -1,6 +1,6 @@
 {
   "id": "Chai",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Chai",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

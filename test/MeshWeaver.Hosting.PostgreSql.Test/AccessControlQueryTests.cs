@@ -30,17 +30,17 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Seed nodes
-        await adapter.WriteAsync(new MeshNode("Story1", "Demos/ACME/Project")
+        await adapter.WriteAsync(new MeshNode("Story1", "ACME/Software/Project")
         {
             Name = "Story One",
             NodeType = "Story"
         }, _options);
-        await adapter.WriteAsync(new MeshNode("Story2", "Demos/ACME/Project")
+        await adapter.WriteAsync(new MeshNode("Story2", "ACME/Software/Project")
         {
             Name = "Story Two",
             NodeType = "Story"
         }, _options);
-        await adapter.WriteAsync(new MeshNode("Alice", "Demos/ACME/Team")
+        await adapter.WriteAsync(new MeshNode("Alice", "ACME/Software/Team")
         {
             Name = "Alice",
             NodeType = "Person"
@@ -56,7 +56,7 @@ public class AccessControlQueryTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
 
         // bob only has access to ACME/Project
-        await ac.GrantAsync("Demos/ACME/Project", "bob", "Read", isAllow: true);
+        await ac.GrantAsync("ACME/Software/Project", "bob", "Read", isAllow: true);
 
         // Public has access to Contoso
         await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true);
@@ -75,7 +75,7 @@ public class AccessControlQueryTests
 
         results.Should().HaveCount(3);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("Demos/ACME/Project/Story1", "Demos/ACME/Project/Story2", "Demos/ACME/Team/Alice");
+            .Should().BeEquivalentTo("ACME/Software/Project/Story1", "ACME/Software/Project/Story2", "ACME/Software/Team/Alice");
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class AccessControlQueryTests
         // but NOT ACME/Team/Alice
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("Demos/ACME/Project/Story1", "Demos/ACME/Project/Story2");
+            .Should().BeEquivalentTo("ACME/Software/Project/Story1", "ACME/Software/Project/Story2");
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Deny alice access to ACME/Team
-        await ac.GrantAsync("Demos/ACME/Team", "alice", "Read", isAllow: false);
+        await ac.GrantAsync("ACME/Software/Team", "alice", "Read", isAllow: false);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "alice");
@@ -129,7 +129,7 @@ public class AccessControlQueryTests
         // Alice should see Story1 and Story2 but NOT Alice (ACME/Team denied)
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("Demos/ACME/Project/Story1", "Demos/ACME/Project/Story2");
+            .Should().BeEquivalentTo("ACME/Software/Project/Story1", "ACME/Software/Project/Story2");
     }
 
     [Fact]
@@ -183,7 +183,7 @@ public class AccessControlQueryTests
 
         results.Should().HaveCount(4);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("Demos/ACME/Project/Story1", "Demos/ACME/Project/Story2", "Demos/ACME/Team/Alice", "Contoso/Project");
+            .Should().BeEquivalentTo("ACME/Software/Project/Story1", "ACME/Software/Project/Story2", "ACME/Software/Team/Alice", "Contoso/Project");
     }
 
     [Fact]
@@ -194,8 +194,8 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Seed nodes
-        await adapter.WriteAsync(new MeshNode("Doc1", "Demos/ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options);
-        await adapter.WriteAsync(new MeshNode("Doc2", "Demos/ACME/Docs") { Name = "Doc Two", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Software/Docs") { Name = "Doc One", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Doc2", "ACME/Software/Docs") { Name = "Doc Two", NodeType = "Document" }, _options);
 
         // Create nested groups: all-staff -> editors -> reviewers
         // reviewers contains dave
@@ -218,7 +218,7 @@ public class AccessControlQueryTests
 
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Path)
-            .Should().BeEquivalentTo("Demos/ACME/Docs/Doc1", "Demos/ACME/Docs/Doc2");
+            .Should().BeEquivalentTo("ACME/Software/Docs/Doc1", "ACME/Software/Docs/Doc2");
     }
 
     [Fact]
@@ -229,8 +229,8 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Seed nodes
-        await adapter.WriteAsync(new MeshNode("Public", "Demos/ACME/Docs") { Name = "Public Doc", NodeType = "Document" }, _options);
-        await adapter.WriteAsync(new MeshNode("Secret", "Demos/ACME/Secret") { Name = "Secret Doc", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Public", "ACME/Software/Docs") { Name = "Public Doc", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Secret", "ACME/Software/Secret") { Name = "Secret Doc", NodeType = "Document" }, _options);
 
         // Group: team contains eve
         await ac.AddGroupMemberAsync("team", "eve");
@@ -238,7 +238,7 @@ public class AccessControlQueryTests
         // Allow team Read on ACME
         await ac.GrantAsync("ACME", "team", "Read", isAllow: true);
         // Deny eve specifically on ACME/Secret
-        await ac.GrantAsync("Demos/ACME/Secret", "eve", "Read", isAllow: false);
+        await ac.GrantAsync("ACME/Software/Secret", "eve", "Read", isAllow: false);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "eve");
@@ -249,7 +249,7 @@ public class AccessControlQueryTests
 
         // eve sees ACME/Docs/Public but NOT ACME/Secret/Secret (denied)
         results.Should().HaveCount(1);
-        results.Cast<MeshNode>().Single().Path.Should().Be("Demos/ACME/Docs/Public");
+        results.Cast<MeshNode>().Single().Path.Should().Be("ACME/Software/Docs/Public");
     }
 
     [Fact]

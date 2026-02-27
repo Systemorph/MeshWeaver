@@ -1,6 +1,6 @@
 {
   "id": "Scottish_Longbreads",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Scottish Longbreads",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

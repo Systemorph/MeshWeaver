@@ -1,6 +1,6 @@
 {
   "id": "MORGK",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Morgenstern Gesundkost",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -5,13 +5,11 @@ Description: AI agents, MeshPlugin tools, and natural language interfaces for Me
 Icon: /static/storage/content/MeshWeaver/Documentation/AI/icon.svg
 ---
 
-# AI Integration
-
 MeshWeaver provides comprehensive AI capabilities through agents, tools, and natural language interfaces.
 
 ---
 
-## Featured Articles
+# Featured Articles
 
 | Article | Description |
 |---------|-------------|
@@ -20,20 +18,20 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 
 ---
 
-## What do you want to do?
+# What do you want to do?
 
 | I want to... | Go here |
 |--------------|---------|
 | Use mesh tools in agents | [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
 | Understand agent architecture | [Agentic AI](MeshWeaver/Documentation/Architecture/AgenticAI) - Multi-agent patterns |
 | Connect external AI via MCP | [MCP Integration](MeshWeaver/Documentation/Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
-| See AI in action | [ACME Case Studies](Demos/ACME/Documentation) - Practical examples |
+| See AI in action | [ACME Case Studies](ACME/Software/Documentation) - Practical examples |
 
 ---
 
-## Core Concepts
+# Core Concepts
 
-### MeshPlugin
+## MeshPlugin
 
 The MeshPlugin provides AI agents with tools to interact with the mesh:
 
@@ -56,7 +54,7 @@ Get supports **Unified Path prefixes** for accessing schemas and metadata:
 
 ---
 
-### Agent Definition
+## Agent Definition
 
 Agents are defined as markdown MeshNodes with `nodeType: Agent`:
 
@@ -79,7 +77,7 @@ This declarative approach allows agents to be:
 
 ---
 
-### Remote Control Philosophy
+## Remote Control Philosophy
 
 AI agents **remote control** applications rather than being embedded:
 
@@ -90,9 +88,9 @@ AI agents **remote control** applications rather than being embedded:
 
 ---
 
-## Key Patterns
+# Key Patterns
 
-### Prefer Visual Display
+## Prefer Visual Display
 
 When users ask to "show" or "display" data:
 
@@ -104,7 +102,7 @@ Agent: [Calls NavigateTo('@ACME/CustomerOnboarding')]
 
 Use `NavigateTo` instead of returning raw JSON.
 
-### Query Before Action
+## Query Before Action
 
 Before creating or modifying data:
 
@@ -112,7 +110,7 @@ Before creating or modifying data:
 2. Use `Get('@path/schema:')` to discover content schemas
 3. Use `Create` for new nodes, or `Get` → modify → `Update` for existing ones
 
-### Context-Aware Responses
+## Context-Aware Responses
 
 Agents maintain awareness of:
 - Current namespace/project context
@@ -121,11 +119,11 @@ Agents maintain awareness of:
 
 ---
 
-## Agent and Model References
+# Agent and Model References
 
 In chat interfaces, you can use unified reference syntax to select agents and models.
 
-### Agent References
+## Agent References
 
 Agent references allow you to select a specific AI agent for chat interactions:
 
@@ -151,7 +149,7 @@ Agents can also be selected automatically based on the current navigation contex
 
 ---
 
-### Model References
+## Model References
 
 Model references allow you to select a specific AI model for chat interactions:
 
@@ -169,7 +167,7 @@ Model names can contain letters, numbers, hyphens, and dots (e.g., `claude-3-5-s
 
 ---
 
-### Slash Commands
+## Slash Commands
 
 In addition to @ references, you can use slash commands for agent and model selection:
 

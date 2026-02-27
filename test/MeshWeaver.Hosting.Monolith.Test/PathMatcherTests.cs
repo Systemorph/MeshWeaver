@@ -12,28 +12,28 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_ExactScope_ExactMatch_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME/Project", QueryScope.Exact)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software/Project", QueryScope.Exact)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_ExactScope_CaseInsensitive_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("demos/acme/project", "Demos/ACME/Project", QueryScope.Exact)
+        PathMatcher.ShouldNotify("acme/software/project", "ACME/Software/Project", QueryScope.Exact)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_ExactScope_DifferentPath_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Other", "Demos/ACME/Project", QueryScope.Exact)
+        PathMatcher.ShouldNotify("ACME/Software/Other", "ACME/Software/Project", QueryScope.Exact)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_ExactScope_ChildPath_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME/Project", QueryScope.Exact)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software/Project", QueryScope.Exact)
             .Should().BeFalse();
     }
 
@@ -44,28 +44,28 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_ChildrenScope_DirectChild_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME", QueryScope.Children)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software", QueryScope.Children)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_ChildrenScope_GrandChild_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME", QueryScope.Children)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software", QueryScope.Children)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_ChildrenScope_Self_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "Demos/ACME", QueryScope.Children)
+        PathMatcher.ShouldNotify("ACME/Software", "ACME/Software", QueryScope.Children)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_ChildrenScope_RootChildren_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos", "", QueryScope.Children)
+        PathMatcher.ShouldNotify("ACME", "", QueryScope.Children)
             .Should().BeTrue();
     }
 
@@ -76,30 +76,30 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_DescendantsScope_DirectChild_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software", QueryScope.Descendants)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_DescendantsScope_GrandChild_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software", QueryScope.Descendants)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_DescendantsScope_Self_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "Demos/ACME", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("ACME/Software", "ACME/Software", QueryScope.Descendants)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_DescendantsScope_FromRoot_FindsAll()
     {
-        PathMatcher.ShouldNotify("Demos", "", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("ACME", "", QueryScope.Descendants)
             .Should().BeTrue();
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "", QueryScope.Descendants)
             .Should().BeTrue();
     }
 
@@ -110,35 +110,35 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_AncestorsScope_Parent_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "Demos/ACME/Project", QueryScope.Ancestors)
+        PathMatcher.ShouldNotify("ACME/Software", "ACME/Software/Project", QueryScope.Ancestors)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_AncestorsScope_Grandparent_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos", "Demos/ACME/Project/Task", QueryScope.Ancestors)
+        PathMatcher.ShouldNotify("ACME", "ACME/Software/Project/Task", QueryScope.Ancestors)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_AncestorsScope_Self_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME/Project", QueryScope.Ancestors)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software/Project", QueryScope.Ancestors)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_AncestorsScope_Root_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("", "Demos/ACME/Project", QueryScope.Ancestors)
+        PathMatcher.ShouldNotify("", "ACME/Software/Project", QueryScope.Ancestors)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_AncestorsScope_Child_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME/Project", QueryScope.Ancestors)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software/Project", QueryScope.Ancestors)
             .Should().BeFalse();
     }
 
@@ -149,21 +149,21 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_SubtreeScope_Self_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME/Project", QueryScope.Subtree)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software/Project", QueryScope.Subtree)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_SubtreeScope_Child_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME/Project", QueryScope.Subtree)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software/Project", QueryScope.Subtree)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_SubtreeScope_Parent_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "Demos/ACME/Project", QueryScope.Subtree)
+        PathMatcher.ShouldNotify("ACME/Software", "ACME/Software/Project", QueryScope.Subtree)
             .Should().BeFalse();
     }
 
@@ -174,21 +174,21 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_AncestorsAndSelfScope_Self_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME/Project", QueryScope.AncestorsAndSelf)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software/Project", QueryScope.AncestorsAndSelf)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_AncestorsAndSelfScope_Parent_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "Demos/ACME/Project", QueryScope.AncestorsAndSelf)
+        PathMatcher.ShouldNotify("ACME/Software", "ACME/Software/Project", QueryScope.AncestorsAndSelf)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_AncestorsAndSelfScope_Child_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME/Project", QueryScope.AncestorsAndSelf)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software/Project", QueryScope.AncestorsAndSelf)
             .Should().BeFalse();
     }
 
@@ -199,35 +199,35 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_HierarchyScope_Self_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project", "Demos/ACME/Project", QueryScope.Hierarchy)
+        PathMatcher.ShouldNotify("ACME/Software/Project", "ACME/Software/Project", QueryScope.Hierarchy)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_HierarchyScope_Parent_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "Demos/ACME/Project", QueryScope.Hierarchy)
+        PathMatcher.ShouldNotify("ACME/Software", "ACME/Software/Project", QueryScope.Hierarchy)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_HierarchyScope_Child_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Project/Task", "Demos/ACME/Project", QueryScope.Hierarchy)
+        PathMatcher.ShouldNotify("ACME/Software/Project/Task", "ACME/Software/Project", QueryScope.Hierarchy)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_HierarchyScope_Sibling_ReturnsFalse()
     {
-        PathMatcher.ShouldNotify("Demos/ACME/Other", "Demos/ACME/Project", QueryScope.Hierarchy)
+        PathMatcher.ShouldNotify("ACME/Software/Other", "ACME/Software/Project", QueryScope.Hierarchy)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_HierarchyScope_Root_ReturnsTrue()
     {
-        PathMatcher.ShouldNotify("", "Demos/ACME/Project", QueryScope.Hierarchy)
+        PathMatcher.ShouldNotify("", "ACME/Software/Project", QueryScope.Hierarchy)
             .Should().BeTrue();
     }
 
@@ -238,34 +238,34 @@ public class PathMatcherTests
     [Fact]
     public void ShouldNotify_EmptyChangedPath_HandlesCorrectly()
     {
-        PathMatcher.ShouldNotify("", "Demos/ACME", QueryScope.Ancestors)
+        PathMatcher.ShouldNotify("", "ACME/Software", QueryScope.Ancestors)
             .Should().BeTrue();
 
-        PathMatcher.ShouldNotify("", "Demos/ACME", QueryScope.Exact)
+        PathMatcher.ShouldNotify("", "ACME/Software", QueryScope.Exact)
             .Should().BeFalse();
     }
 
     [Fact]
     public void ShouldNotify_EmptyBasePath_HandlesCorrectly()
     {
-        PathMatcher.ShouldNotify("Demos/ACME", "", QueryScope.Exact)
+        PathMatcher.ShouldNotify("ACME/Software", "", QueryScope.Exact)
             .Should().BeFalse();
 
-        PathMatcher.ShouldNotify("Demos/ACME", "", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("ACME/Software", "", QueryScope.Descendants)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_PathsWithLeadingTrailingSlashes_NormalizesCorrectly()
     {
-        PathMatcher.ShouldNotify("/Demos/ACME/Project/", "/Demos/ACME/Project/", QueryScope.Exact)
+        PathMatcher.ShouldNotify("/ACME/Software/Project/", "/ACME/Software/Project/", QueryScope.Exact)
             .Should().BeTrue();
     }
 
     [Fact]
     public void ShouldNotify_PathsWithDifferentCasing_MatchesCaseInsensitively()
     {
-        PathMatcher.ShouldNotify("demos/acme/project/task", "Demos/ACME/Project", QueryScope.Descendants)
+        PathMatcher.ShouldNotify("acme/software/project/task", "ACME/Software/Project", QueryScope.Descendants)
             .Should().BeTrue();
     }
 

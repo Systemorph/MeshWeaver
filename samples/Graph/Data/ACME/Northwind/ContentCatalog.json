@@ -14,6 +14,6 @@
     "displayName": "Content Catalog",
     "iconName": "Document",
     "description": "A catalog of articles and documentation content",
-    "configuration": "config => config.AddDefaultLayoutAreas()"
+    "configuration": "config => config.AddDefaultLayoutAreas().AddMarkdownViews()"
   }
 }

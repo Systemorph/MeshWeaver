@@ -1,6 +1,6 @@
 {
   "id": "CreateClientRecord",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "name": "Create client record in CRM",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

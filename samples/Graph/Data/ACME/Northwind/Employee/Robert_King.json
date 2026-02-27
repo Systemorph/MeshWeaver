@@ -1,6 +1,6 @@
 {
   "id": "Robert_King",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Robert King",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

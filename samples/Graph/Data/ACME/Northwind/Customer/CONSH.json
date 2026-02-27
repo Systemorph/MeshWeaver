@@ -1,6 +1,6 @@
 {
   "id": "CONSH",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Consolidated Holdings",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

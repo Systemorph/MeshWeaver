@@ -1,6 +1,6 @@
 {
   "id": "ProductLaunch",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "TaskFlow Product Launch",
   "nodeType": "ACME/Software/Project",
   "description": "Launch campaign for TaskFlow - our new workflow automation platform",

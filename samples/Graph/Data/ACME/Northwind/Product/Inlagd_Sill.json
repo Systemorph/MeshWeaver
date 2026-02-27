@@ -1,6 +1,6 @@
 {
   "id": "Inlagd_Sill",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Inlagd Sill",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

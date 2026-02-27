@@ -1,6 +1,6 @@
 {
   "id": "Michael_Suyama",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Michael Suyama",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

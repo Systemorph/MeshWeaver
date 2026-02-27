@@ -6,11 +6,9 @@ Description: Reinsurance pricing demo showcasing property risk management, geogr
 Thumbnail: Insurance/icon.svg
 ---
 
-# ACME Insurance
-
 Welcome to ACME Insurance, a reinsurance pricing demo showcasing MeshWeaver's capabilities for managing complex insurance data. Explore property risk pricings, geographic visualizations, and document-based workflows for corporate insurance clients.
 
-## Quick Start
+# Quick Start
 
 | Resource | Description |
 |----------|-------------|
@@ -22,9 +20,9 @@ Welcome to ACME Insurance, a reinsurance pricing demo showcasing MeshWeaver's ca
 
 ---
 
-## What's Inside
+# What's Inside
 
-### Organization Structure
+## Organization Structure
 
 ACME Insurance demonstrates a hierarchical structure for insurance pricing:
 
@@ -38,7 +36,7 @@ Each insured company contains yearly pricing instances with property risks, rein
 
 ---
 
-### Sample Insureds
+## Sample Insureds
 
 | Insured | Sector | Status |
 |---------|--------|--------|
@@ -51,7 +49,7 @@ Each insured company contains yearly pricing instances with property risks, rein
 
 ---
 
-### Key Features Demonstrated
+## Key Features Demonstrated
 
 **Property Risk Management**
 Track individual property locations with values, construction types, and protection classes. Microsoft pricing includes 50+ property risks across multiple countries.
@@ -67,7 +65,7 @@ Model multi-layer reinsurance programs with sections, participation percentages,
 
 ---
 
-## Pricing Views
+# Pricing Views
 
 Each pricing includes multiple analysis perspectives:
 
@@ -82,7 +80,7 @@ Each pricing includes multiple analysis perspectives:
 
 ---
 
-## Dimensions
+# Dimensions
 
 Pricings use standardized dimensions for filtering and aggregation:
 
@@ -95,7 +93,7 @@ Pricings use standardized dimensions for filtering and aggregation:
 
 ---
 
-## Learn More
+# Learn More
 
 | Topic | Link |
 |-------|------|

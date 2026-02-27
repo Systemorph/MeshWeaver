@@ -43,6 +43,11 @@ public record MarkdownContent
     public string? Thumbnail { get; init; }
 
     /// <summary>
+    /// Abstract/summary text extracted from YAML front matter.
+    /// </summary>
+    public string? Abstract { get; init; }
+
+    /// <summary>
     /// Creates a MarkdownContent from raw content by parsing and rendering.
     /// </summary>
     /// <param name="content">The raw markdown content (without YAML front matter).</param>

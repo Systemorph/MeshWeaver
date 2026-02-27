@@ -1,6 +1,6 @@
 {
   "id": "Janet_Leverling",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Janet Leverling",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

@@ -1,6 +1,6 @@
 {
   "id": "Gorgonzola_Telino",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gorgonzola Telino",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

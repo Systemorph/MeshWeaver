@@ -1,6 +1,6 @@
 {
   "id": "PositioningDoc",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Create product positioning document",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

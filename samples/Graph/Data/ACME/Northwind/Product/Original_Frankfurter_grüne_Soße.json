@@ -1,6 +1,6 @@
 {
   "id": "Original_Frankfurter_gr\u00fcne_So\u00dfe",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Original Frankfurter gr\u00fcne So\u00dfe",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

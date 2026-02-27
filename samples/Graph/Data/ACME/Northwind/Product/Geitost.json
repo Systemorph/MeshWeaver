@@ -1,6 +1,6 @@
 {
   "id": "Geitost",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Geitost",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

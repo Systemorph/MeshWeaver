@@ -1,20 +1,39 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+  </style>
   <!-- Background -->
-  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
-  <!-- List items with checkboxes -->
-  <rect x="10" y="12" width="10" height="10" rx="2" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M12 17l2 2 4-4" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M26 17h28" stroke="#78716C" stroke-width="2" stroke-linecap="round"/>
+  <rect class="bg" width="140" height="79" rx="8"/>
 
-  <rect x="10" y="28" width="10" height="10" rx="2" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M12 33l2 2 4-4" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M26 33h28" stroke="#78716C" stroke-width="2" stroke-linecap="round"/>
+  <!-- Row 1: checkbox outline (rect x=14 y=12 w=10 h=10 rx=2 stroke-width=2) -->
+  <rect class="nf" x="13" y="11" width="12" height="12" rx="3"/>
+  <rect class="bg" x="15" y="13" width="8" height="8" rx="1"/>
+  <!-- Checkmark (stroke path "M16 17l2 2 4-4" sw=2 round) => filled polygon -->
+  <polygon class="af" points="16.6,17 18,18.4 21.4,15 22.8,16.4 18,21.2 15.2,18.4"/>
+  <!-- Text line (horizontal: x1=30 x2=126 y=17 sw=2 round) -->
+  <rect class="nf" x="30" y="16" width="96" height="2" rx="1"/>
 
-  <rect x="10" y="44" width="10" height="10" rx="2" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M26 49h20" stroke="#78716C" stroke-width="2" stroke-linecap="round"/>
+  <!-- Row 2: checkbox -->
+  <rect class="nf" x="13" y="29" width="12" height="12" rx="3"/>
+  <rect class="bg" x="15" y="31" width="8" height="8" rx="1"/>
+  <!-- Checkmark -->
+  <polygon class="af" points="16.6,35 18,36.4 21.4,33 22.8,34.4 18,39.2 15.2,36.4"/>
+  <!-- Text line -->
+  <rect class="nf" x="30" y="34" width="80" height="2" rx="1"/>
+
+  <!-- Row 3: checkbox (no checkmark) -->
+  <rect class="nf" x="13" y="47" width="12" height="12" rx="3"/>
+  <rect class="bg" x="15" y="49" width="8" height="8" rx="1"/>
+  <!-- Text line -->
+  <rect class="nf" x="30" y="52" width="60" height="2" rx="1"/>
+
   <!-- Wrench accent -->
-  <g transform="translate(48,48) rotate(-45)" opacity="0.4">
-    <rect x="-1.5" y="-8" width="3" height="12" rx="1" fill="#DC2626"/>
-    <circle cx="0" cy="-8" r="3" fill="none" stroke="#DC2626" stroke-width="1.5"/>
+  <g transform="translate(118,58) rotate(-45)" opacity="0.4">
+    <rect class="af" x="-1.5" y="-8" width="3" height="12" rx="1"/>
+    <!-- Wrench head circle: original cx=0 cy=-8 r=3 stroke-width=1.5 => outer r=3.75, inner r=2.25 -->
+    <circle class="af" cx="0" cy="-8" r="3.75"/>
+    <circle class="bg" cx="0" cy="-8" r="2.25"/>
   </g>
 </svg>

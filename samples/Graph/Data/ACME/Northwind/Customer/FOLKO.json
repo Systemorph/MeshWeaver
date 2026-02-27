@@ -1,6 +1,6 @@
 {
   "id": "FOLKO",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Folk och f\u00e4 HB",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

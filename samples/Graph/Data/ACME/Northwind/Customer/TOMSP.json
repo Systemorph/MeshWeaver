@@ -1,6 +1,6 @@
 {
   "id": "TOMSP",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Toms Spezialit\u00e4ten",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

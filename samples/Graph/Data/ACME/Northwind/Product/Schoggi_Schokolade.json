@@ -1,6 +1,6 @@
 {
   "id": "Schoggi_Schokolade",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Schoggi Schokolade",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

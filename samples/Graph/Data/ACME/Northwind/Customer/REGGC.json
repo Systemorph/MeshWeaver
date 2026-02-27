@@ -1,6 +1,6 @@
 {
   "id": "REGGC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Reggiani Caseifici",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

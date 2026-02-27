@@ -1,6 +1,6 @@
 {
   "id": "Leka_Trading",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Leka Trading",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

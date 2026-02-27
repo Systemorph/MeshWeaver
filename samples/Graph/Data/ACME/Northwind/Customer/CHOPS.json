@@ -1,6 +1,6 @@
 {
   "id": "CHOPS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Chop-suey Chinese",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

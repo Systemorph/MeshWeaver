@@ -1,6 +1,6 @@
 {
   "id": "OnboardingGuide",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Create customer onboarding guide",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

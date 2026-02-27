@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/YSO1I0uWvkm7aDRFlT05GQ",
+  "path": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/YSO1I0uWvkm7aDRFlT05GQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-26T12:41:47.703073+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "YSO1I0uWvkm7aDRFlT05GQ",
+    "role": "user",
+    "text": "which page are we on?",
+    "timestamp": "2026-02-26T12:41:47.700801Z",
+    "type": "ExecutedInput"
+  }
+}

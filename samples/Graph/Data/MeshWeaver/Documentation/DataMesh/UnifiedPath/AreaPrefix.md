@@ -5,18 +5,16 @@ Description: Embed layout areas like Thumbnail, Details, or Catalog
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix/icon.svg
 ---
 
-# Area Prefix
-
 The `area:` prefix (or no prefix) embeds layout areas from a node.
 
-## Syntax
+# Syntax
 
 ```
 @@{address}/area:{areaName}
 @@{address}/{areaName}          (shorthand)
 ```
 
-## Standard Areas
+# Standard Areas
 
 MeshNodes typically have these standard areas:
 
@@ -28,7 +26,7 @@ MeshNodes typically have these standard areas:
 | `Metadata` | Node properties display |
 | `Settings` | Configuration view |
 
-## Example: Thumbnail Area
+# Example: Thumbnail Area
 
 Embed the thumbnail card of this documentation:
 
@@ -41,7 +39,7 @@ Embed the thumbnail card of this documentation:
 
 @@MeshWeaver/Documentation/DataMesh/UnifiedPath/Thumbnail
 
-## Example: Catalog Area
+# Example: Catalog Area
 
 Embed the catalog (child nodes grid) of an organization:
 
@@ -54,7 +52,7 @@ Embed the catalog (child nodes grid) of an organization:
 
 @@Systemorph/Catalog
 
-## Hyperlinks to Areas
+# Hyperlinks to Areas
 
 Single `@` creates a navigation link:
 
@@ -67,7 +65,7 @@ Single `@` creates a navigation link:
 
 @Systemorph/Marketing/Details
 
-## Custom Areas
+# Custom Areas
 
 Nodes can register custom areas:
 

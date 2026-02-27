@@ -1,6 +1,6 @@
 {
   "id": "BONAP",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Bon app'",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

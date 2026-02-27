@@ -1,6 +1,6 @@
 {
   "id": "SalesDeck",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Build sales presentation deck",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

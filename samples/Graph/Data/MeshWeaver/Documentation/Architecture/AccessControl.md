@@ -1,17 +1,15 @@
 ---
-Name: Access Control
+Name: Access Control Architecture
 Category: Documentation
 Description: How MeshWeaver implements row-level security through AccessAssignment MeshNodes and hierarchical permission evaluation
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/AccessControl/icon.svg
 ---
 
-# Access Control Architecture
-
 MeshWeaver provides row-level security through **AccessAssignment MeshNodes** stored directly in the mesh node hierarchy. Permissions are evaluated by walking the node tree from root to target path, applying closest-wins semantics.
 
-## Core Concepts
+# Core Concepts
 
-### AccessAssignment MeshNodes
+## AccessAssignment MeshNodes
 
 Access control is managed through AccessAssignment nodes — first-class MeshNodes with `nodeType: "AccessAssignment"`. Each assignment grants (or denies) a role to a subject at a specific scope.
 
@@ -40,7 +38,7 @@ Each AccessAssignment node maps **one subject** (User or Group) to **multiple ro
 | `Roles[].Role` | Role to grant/deny (Admin, Editor, Viewer, Commenter, or custom) |
 | `Roles[].Denied` | If true, denies the role instead of granting it |
 
-### Built-in Roles
+## Built-in Roles
 
 | Role | Permissions | Flag Value |
 |------|------------|------------|
@@ -49,7 +47,7 @@ Each AccessAssignment node maps **one subject** (User or Group) to **multiple ro
 | Viewer | Read | 1 |
 | Commenter | Read, Comment | 17 |
 
-### Permission Flags
+## Permission Flags
 
 ```csharp
 [Flags]
@@ -65,11 +63,11 @@ public enum Permission
 }
 ```
 
-## Permission Evaluation
+# Permission Evaluation
 
 Permissions are evaluated by walking AccessAssignment nodes from the global scope through each ancestor down to the target path.
 
-### Scope Hierarchy
+## Scope Hierarchy
 
 For a target path `ACME/Project/Task1`, the evaluation order is:
 
@@ -79,7 +77,7 @@ For a target path `ACME/Project/Task1`, the evaluation order is:
 
 At each scope level, the system collects AccessAssignment MeshNodes and applies **closest-wins** semantics: a deeper assignment for the same role overrides a shallower one.
 
-### Evaluation Flow
+## Evaluation Flow
 
 ```mermaid
 sequenceDiagram
@@ -98,7 +96,7 @@ sequenceDiagram
     SecurityService-->>Client: Permission.Read | Permission.Create | Permission.Update | Permission.Comment
 ```
 
-### Closest-Wins Semantics
+## Closest-Wins Semantics
 
 When the same role is assigned at multiple levels, the deepest (closest to target) assignment wins:
 
@@ -110,7 +108,7 @@ When the same role is assigned at multiple levels, the deepest (closest to targe
 
 At `ACME/Project`, Alice has Editor permissions (Read + Create + Update + Comment) but not Admin.
 
-### Deny Override
+## Deny Override
 
 A deny assignment blocks an inherited grant for a specific role, but does not affect other roles. Each node's `Roles[]` array can mix grants and denies:
 
@@ -122,11 +120,11 @@ ACME/Secure: Alice_Access → roles: [{ role: "Admin", denied: true }]
 
 At `ACME/Secure`, Alice has Editor permissions (from ACME, inherited) but not Admin (denied at ACME/Secure).
 
-## Node Type Architecture
+# Node Type Architecture
 
 Access control uses these shipped node types:
 
-### AccessAssignment
+## AccessAssignment
 - **NodeType**: `"AccessAssignment"`
 - **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
 - **Path pattern**: `{scope}/{Subject}_Access`
@@ -134,18 +132,18 @@ Access control uses these shipped node types:
 - Created via `ISecurityService.AddUserRoleAsync()` or `IMeshCatalog.CreateNodeAsync()`
 - One node per subject per scope — multiple roles are stored in the `Roles` array
 
-### User
+## User
 - **NodeType**: `"User"`
 - **Content**: `AccessObject` record (Id, Name, Description, Icon)
 - Used as subjects in AccessAssignment nodes
 
-### Group
+## Group
 - **NodeType**: `"Group"`
 - **Content**: `AccessObject` record
 - Contains GroupMembership child nodes for members
 - Groups can be nested (a group member can be another group)
 
-### GroupMembership
+## GroupMembership
 - **NodeType**: `"GroupMembership"`
 - **Content**: `GroupMembership` record (`Member`, `DisplayName`, `Groups[]`)
 - **Path pattern**: `{Scope}/{Member}_Membership`
@@ -153,12 +151,12 @@ Access control uses these shipped node types:
 - Mirrors the AccessAssignment 1:1 pattern (one node per member per scope)
 - `Groups[]` contains `MembershipEntry` records with a `Group` property
 
-### Role
+## Role
 - **NodeType**: `"Role"`
 - **Content**: `Role` record (Id, DisplayName, Permissions, IsInheritable)
 - Custom roles extend the built-in set
 
-## ISecurityService API
+# ISecurityService API
 
 ```csharp
 public interface ISecurityService
@@ -180,7 +178,7 @@ public interface ISecurityService
 }
 ```
 
-## Anonymous (Public) Access
+# Anonymous (Public) Access
 
 The well-known user `"Public"` represents anonymous/unauthenticated users. When no user context is available (empty or null userId), permissions are evaluated for the Public user.
 
@@ -193,7 +191,7 @@ var canRead = await securityService.HasPermissionAsync("MeshWeaver/Docs", "", Pe
 // canRead == true
 ```
 
-## Hierarchical Access Pattern
+# Hierarchical Access Pattern
 
 ```mermaid
 flowchart TB
@@ -212,7 +210,7 @@ flowchart TB
 - Org Editor: `AddUserRoleAsync("Alice", "Editor", "ACME", ...)` → edit within ACME and descendants
 - Project Viewer: `AddUserRoleAsync("Bob", "Viewer", "ACME/ProjectX", ...)` → read-only at ProjectX
 
-## Access Control UI
+# Access Control UI
 
 The Access Control layout area (`AccessControlArea`) provides:
 
@@ -222,7 +220,7 @@ The Access Control layout area (`AccessControlArea`) provides:
 
 3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshQuery) and Role selection.
 
-## PostgreSQL Integration
+# PostgreSQL Integration
 
 For PostgreSQL deployments, a denormalized `user_effective_permissions` table enables fast query-time permission checks. A trigger on `mesh_nodes` automatically rebuilds this table when AccessAssignment or GroupMembership nodes change.
 
@@ -240,7 +238,7 @@ The rebuild function:
 4. Produces per-user, per-permission rows in a shadow table
 5. Atomically swaps the shadow table into the live table
 
-## Node Validation (INodeValidator)
+# Node Validation (INodeValidator)
 
 The `RlsNodeValidator` integrates with the mesh node CRUD pipeline to enforce permissions on Create, Update, and Delete operations:
 
@@ -273,7 +271,7 @@ public class RlsNodeValidator : INodeValidator
 
 Read operations are not validated by the node validator — read filtering is handled by `SecurePersistenceServiceDecorator` which wraps `GetChildrenAsync` and `GetNodeAsync` with permission checks.
 
-## Configuration
+# Configuration
 
 Enable row-level security in your mesh configuration:
 
@@ -284,7 +282,7 @@ var builder = new MeshBuilder()
     .AddRowLevelSecurity();  // Registers ISecurityService, RlsNodeValidator, etc.
 ```
 
-## Best Practices
+# Best Practices
 
 1. **Start with hierarchy** — assign roles at the organizational level and let inheritance handle descendants
 2. **Use deny sparingly** — deny overrides only the specific role, not all permissions

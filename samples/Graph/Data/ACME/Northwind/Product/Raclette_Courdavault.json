@@ -1,6 +1,6 @@
 {
   "id": "Raclette_Courdavault",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Raclette Courdavault",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

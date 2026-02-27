@@ -1,6 +1,6 @@
 {
   "id": "2024",
-  "namespace": "Cornerstone/EuropeanLogistics",
+  "namespace": "ACME/Insurance/EuropeanLogistics",
   "name": "European Logistics 2024",
   "nodeType": "ACME/Insurance/Pricing",
   "category": "Pricings",

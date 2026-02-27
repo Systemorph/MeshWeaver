@@ -1,6 +1,6 @@
 {
   "id": "ERNSH",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Ernst Handel",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

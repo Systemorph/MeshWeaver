@@ -1,6 +1,6 @@
 {
   "id": "Gnocchi_di_nonna_Alice",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gnocchi di nonna Alice",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

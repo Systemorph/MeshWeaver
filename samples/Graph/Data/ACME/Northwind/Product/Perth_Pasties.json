@@ -1,6 +1,6 @@
 {
   "id": "Perth_Pasties",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Perth Pasties",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

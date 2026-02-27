@@ -1,6 +1,6 @@
 {
   "id": "BacklogItem2",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "path": "ACME/Software/ProductLaunch/Todo/BacklogItem2",
   "name": "Create ROI calculator tool",
   "nodeType": "ACME/Software/Project/Todo",

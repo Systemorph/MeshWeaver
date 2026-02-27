@@ -4,8 +4,6 @@ Category: Documentation
 Description: Complete reference for MeshPlugin tools used by AI agents
 ---
 
-# MeshPlugin Tools
-
 MeshPlugin provides tools for interacting with the mesh data graph. All paths support the `@` prefix shorthand: `@graph/org1` resolves to `graph/org1`.
 
 ## Get

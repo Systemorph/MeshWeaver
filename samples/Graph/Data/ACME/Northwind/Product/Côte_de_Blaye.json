@@ -1,6 +1,6 @@
 {
   "id": "C\u00f4te_de_Blaye",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "C\u00f4te de Blaye",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

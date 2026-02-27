@@ -5,11 +5,9 @@ Description: Handle complex dialog logic with reactive programming patterns
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ReactiveDialogs/icon.svg
 ---
 
-# Reactive Dialogs
-
 In typical business applications, we often encounter dialogs which contain complex business logic. We need to react on user interaction, switch parts depending on certain settings, compute results and display them. Reactive design is a low-complexity way of achieving this.
 
-## Reactive Programming Concepts
+# Reactive Programming Concepts
 
 Reactive programming was made popular in the early 2010s by the [Reactive Manifesto](https://reactivemanifesto.org/) and libraries such as [Reactive Extensions](http://reactivex.io/) and [React](https://react.dev/).
 
@@ -22,7 +20,7 @@ The application reacts to these events by executing actions - updating the UI, c
 
 ---
 
-## Example: Distribution Statistics Dialog
+# Example: Distribution Statistics Dialog
 
 This example demonstrates a dialog for simulating statistical distributions:
 
@@ -34,7 +32,7 @@ LayoutArea(new ApplicationAddress("Documentation"), "DistributionStatistics")
 
 ---
 
-## Domain Model
+# Domain Model
 
 Define distributions as immutable records with sensible defaults:
 
@@ -59,7 +57,7 @@ Linking to Wiki articles for parameter definitions keeps documentation close to 
 
 ---
 
-## View Model
+# View Model
 
 The view model captures dialog-specific state (not persisted to database):
 
@@ -84,7 +82,7 @@ public record BasicInput
 
 ---
 
-## Layout Area Setup
+# Layout Area Setup
 
 The reactive dialog wires together inputs, distribution selection, and results:
 
@@ -119,9 +117,9 @@ public static object DistributionStatistics(LayoutAreaHost host, RenderingContex
 
 ---
 
-## Key Patterns
+# Key Patterns
 
-### LayoutAreaHost
+## LayoutAreaHost
 
 The host is an "island" where the layout area lives, synchronized with the view:
 
@@ -129,7 +127,7 @@ The host is an "island" where the layout area lives, synchronized with the view:
 2. **React to changes** - Subscribe to data streams with `GetDataStream<T>`
 3. **Use Subject for computation results** - Keeps large results server-side
 
-### Subject (Publish-Subscribe)
+## Subject (Publish-Subscribe)
 
 The `Subject<T>` implements the [Publish-Subscribe Pattern](https://en.wikipedia.org/wiki/Publish%E2%80%93subscribe_pattern):
 
@@ -137,7 +135,7 @@ The `Subject<T>` implements the [Publish-Subscribe Pattern](https://en.wikipedia
 - Only the rendered markdown table is synchronized to the UI
 - Avoids sending large data arrays to the client
 
-### Declarative Composition
+## Declarative Composition
 
 No imperative specification needed:
 1. Know what data you need
@@ -147,7 +145,7 @@ No imperative specification needed:
 
 ---
 
-## Interaction Flow
+# Interaction Flow
 
 ```mermaid
 sequenceDiagram
@@ -170,7 +168,7 @@ sequenceDiagram
 
 ---
 
-## Benefits
+# Benefits
 
 | Aspect | Reactive Approach |
 |--------|------------------|

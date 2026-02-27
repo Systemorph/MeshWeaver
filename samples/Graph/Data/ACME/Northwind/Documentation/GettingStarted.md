@@ -1,7 +1,7 @@
 ---
 NodeType: "ACME/Northwind/Article"
 Title: "Getting Started with Northwind"
-Abstract: "Explore the Northwind Traders analytics sample and learn MeshWeaver data visualization through practical examples"
+Abstract: "Explore the ACME Northwind analytics sample and learn MeshWeaver data visualization through practical examples"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
@@ -11,15 +11,13 @@ Tags:
   - "Getting Started"
 ---
 
-# Getting Started with Northwind
+The ACME Northwind sample demonstrates MeshWeaver's analytics capabilities through a realistic business scenario: a gourmet food distribution company with sales, customer, product, and employee analytics.
 
-The Northwind Traders sample demonstrates MeshWeaver's analytics capabilities through a realistic business scenario: a gourmet food distribution company with sales, customer, product, and employee analytics.
-
-## The Northwind Sample
+# The Northwind Sample
 
 Northwind demonstrates how MeshWeaver handles analytics workloads:
 
-### Data Overview
+## Data Overview
 
 | Entity | Count | Description |
 |--------|-------|-------------|
@@ -30,14 +28,14 @@ Northwind demonstrates how MeshWeaver handles analytics workloads:
 | Employees | 9 | Sales representatives and managers |
 | Suppliers | 29 | Suppliers from 16 countries |
 
-### Key Concepts Demonstrated
+## Key Concepts Demonstrated
 
 1. **CSV Data Loading**: Orders and order details loaded from CSV files
 2. **Virtual Data Cube**: `NorthwindDataCube` combines data for efficient analytics
 3. **View Organization**: 53 views across 8 categories (Dashboard, Sales, Orders, etc.)
 4. **Year Filtering**: Toolbar component for multi-year analysis
 
-### Product Categories
+## Product Categories
 
 Northwind specializes in gourmet foods across 8 categories:
 
@@ -52,9 +50,9 @@ Northwind specializes in gourmet foods across 8 categories:
 | Produce | 5 | Dried fruit and bean curd |
 | Seafood | 12 | Seaweed and fish |
 
-## Running the Sample
+# Running the Sample
 
-### Clone and Build
+## Clone and Build
 
 ```bash
 git clone https://github.com/MeshWeaver/MeshWeaver.git
@@ -62,7 +60,7 @@ cd MeshWeaver
 dotnet build
 ```
 
-### Start the Portal
+## Start the Portal
 
 ```bash
 cd memex/Memex.Portal.Monolith
@@ -71,15 +69,15 @@ dotnet run
 
 Navigate to `http://localhost:7122` in your browser.
 
-### Navigate to Northwind
+## Navigate to Northwind
 
 1. Navigate to **Northwind** organization
 2. Select **Analytics** catalog
 3. Explore views using the category tabs
 
-## Exploring the Dashboard
+# Exploring the Dashboard
 
-### Main Dashboard
+## Main Dashboard
 
 @@Northwind/Dashboard
 
@@ -89,16 +87,16 @@ The main dashboard provides a 4-panel overview:
 - **Supplier Summary**: Key supplier metrics
 - **Top Products**: Best-selling products by revenue
 
-### Year Filtering
+## Year Filtering
 
 Use the toolbar dropdown to filter analytics by year:
 - **All Years**: Complete data from 2024-2025
 - **2025**: Current year data only
 - **2024**: Previous year comparison
 
-## Working with Sales Analytics
+# Working with Sales Analytics
 
-### Sales by Category
+## Sales by Category
 
 @@Northwind/SalesByCategory
 
@@ -107,7 +105,7 @@ Shows total revenue for each product category. Key insights:
 - Seafood and Condiments are strong performers
 - Growth opportunities in Grains/Cereals and Produce
 
-### Year-over-Year Comparison
+## Year-over-Year Comparison
 
 @@Northwind/SalesByCategoryComparison
 
@@ -116,9 +114,9 @@ Compare category performance across years to identify:
 - Seasonal patterns
 - Market share shifts
 
-## Customer Insights
+# Customer Insights
 
-### Top Customers
+## Top Customers
 
 @@Northwind/TopClients
 
@@ -127,16 +125,16 @@ Identifies top 5 customers by revenue with metrics:
 - Order count
 - Average order size
 
-### Customer Segmentation
+## Customer Segmentation
 
 @@Northwind/CustomerSegmentation
 
 Segments customers into tiers based on purchase behavior:
 - VIP, High Value, Regular, Occasional, New
 
-## Product Analytics
+# Product Analytics
 
-### Product Overview
+## Product Overview
 
 @@Northwind/ProductOverview
 
@@ -145,7 +143,7 @@ Data grid showing all products with:
 - Discount amounts applied
 - Category classification
 
-### Top Products
+## Top Products
 
 @@Northwind/TopProducts
 
@@ -154,11 +152,11 @@ Charts showing best-performing products by:
 - Units sold
 - Revenue per unit
 
-## Using the Northwind Agent
+# Using the Northwind Agent
 
 The AI analytics agent helps query and visualize data using natural language.
 
-### Querying Sales Data
+## Querying Sales Data
 
 ```
 "Show me sales by category for 2025"
@@ -168,7 +166,7 @@ The AI analytics agent helps query and visualize data using natural language.
 → Shows SalesByCategoryComparison with both years
 ```
 
-### Customer Analysis
+## Customer Analysis
 
 ```
 "Who are our top customers?"
@@ -178,7 +176,7 @@ The AI analytics agent helps query and visualize data using natural language.
 → Displays CustomerGeographicDistribution map
 ```
 
-### Product Queries
+## Product Queries
 
 ```
 "What are our best-selling products?"
@@ -188,7 +186,7 @@ The AI analytics agent helps query and visualize data using natural language.
 → Displays ProductPerformanceTrends line chart
 ```
 
-### Context-Aware Operations
+## Context-Aware Operations
 
 The agent understands:
 - **Product Categories**: Maps queries to specific categories
@@ -196,9 +194,9 @@ The agent understands:
 - **Metrics**: Revenue, orders, quantities, discounts
 - **Entities**: Customers, products, employees, suppliers
 
-## Understanding the Code
+# Understanding the Code
 
-### Data Model (`Order.cs`)
+## Data Model (`Order.cs`)
 
 ```csharp
 public record Order
@@ -212,7 +210,7 @@ public record Order
 }
 ```
 
-### Virtual Data Cube (`NorthwindDataCube.cs`)
+## Virtual Data Cube (`NorthwindDataCube.cs`)
 
 ```csharp
 public record NorthwindDataCube
@@ -228,7 +226,7 @@ public record NorthwindDataCube
 }
 ```
 
-### View Example (`SalesViews.cs`)
+## View Example (`SalesViews.cs`)
 
 ```csharp
 public static IObservable<UiControl?> SalesByCategory(LayoutAreaHost host, RenderingContext _)
@@ -242,7 +240,7 @@ public static IObservable<UiControl?> SalesByCategory(LayoutAreaHost host, Rende
 }
 ```
 
-## Architecture Deep Dive
+# Architecture Deep Dive
 
 For detailed understanding of the Northwind architecture:
 
@@ -250,7 +248,7 @@ For detailed understanding of the Northwind architecture:
 - **[AI Agent Integration](Northwind/Documentation/AIAgentIntegration)**: NorthwindAgent capabilities
 - **[Unified References](Northwind/Documentation/UnifiedReferences)**: All addressable paths
 
-## Next Steps
+# Next Steps
 
 1. **Explore the Dashboard**: Navigate views and filter by year
 2. **Use the Agent**: Try natural language queries in the chat interface

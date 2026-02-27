@@ -1,6 +1,6 @@
 {
   "id": "Chang",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Chang",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

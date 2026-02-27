@@ -1,24 +1,22 @@
 ---
-Name: Data Modeling
+Name: Data Modeling Guide
 Category: Documentation
 Description: How to define data models using C# records, attributes, and reference data patterns
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/DataModeling/icon.svg
 ---
 
-# Data Modeling Guide
-
 This guide explains how to define data models in MeshWeaver using C# records, attributes, and reference data patterns.
 
-## Overview
+# Overview
 
 MeshWeaver data models are defined as C# records that combine:
 - **Properties** with standard CLR types (string, int, DateTime, etc.)
 - **Attributes** that control persistence, validation, and UI behavior
 - **Static instances** for reference data (lookups, categories, statuses)
 
-## Key Concepts
+# Key Concepts
 
-### C# Records
+## C# Records
 
 Records are a C# language feature for defining data types. Unlike regular classes, records:
 - Are **immutable by default** - properties can't be changed after creation
@@ -38,7 +36,7 @@ var bob = alice with { Name = "Bob" };
 
 Records are ideal for data models because they prevent accidental mutations and simplify change tracking.
 
-### Attributes
+## Attributes
 
 Attributes are metadata annotations applied to code elements using square brackets `[]`. They provide declarative information that MeshWeaver reads at runtime to determine how to handle properties.
 
@@ -51,7 +49,7 @@ public DateTime? DueDate { get; init; }
 
 Attributes don't change what the code does - they add information that frameworks can use to generate UI, validate data, or control persistence.
 
-### Standard CLR Types
+## Standard CLR Types
 
 CLR (Common Language Runtime) is .NET's execution engine. Standard CLR types are the built-in types available in any .NET application:
 
@@ -66,7 +64,7 @@ CLR (Common Language Runtime) is .NET's execution engine. Standard CLR types are
 
 Nullable versions (e.g., `int?`, `DateTime?`) allow the value to be absent.
 
-### Reference Data Pattern
+## Reference Data Pattern
 
 Reference data (also called lookup data or master data) represents predefined values that rarely change - like statuses, categories, or priorities. Instead of using simple enums, MeshWeaver uses rich data objects:
 
@@ -89,7 +87,7 @@ public record Priority
 
 This pattern provides display names, icons, descriptions, and ordering that enums cannot express.
 
-## Anatomy of a Data Model
+# Anatomy of a Data Model
 
 ```mermaid
 classDiagram
@@ -121,11 +119,11 @@ classDiagram
     Todo --> Priority : Dimension
 ```
 
-## Basic Record Structure
+# Basic Record Structure
 
 Data models are defined as C# records with properties and attributes.
 
-### Example: Simple Entity
+## Example: Simple Entity
 
 ```csharp
 public record Todo
@@ -157,9 +155,9 @@ public record Todo
 | Due Date | Date picker with "Due Date" label |
 | Status | Dropdown with enum values |
 
-## Key Attributes
+# Key Attributes
 
-### [Key]
+## [Key]
 
 Marks the primary key field. Required for all data models.
 
@@ -168,7 +166,7 @@ Marks the primary key field. Required for all data models.
 public string Id { get; init; } = string.Empty;
 ```
 
-### [Required]
+## [Required]
 
 Validates that the field has a non-empty value before saving.
 
@@ -179,7 +177,7 @@ public string Title { get; init; } = string.Empty;
 
 **Result:** Attempting to save without a Title shows validation error: "Title is required"
 
-### [Browsable(false)]
+## [Browsable(false)]
 
 Hides the field from editor forms and data grids.
 
@@ -193,7 +191,7 @@ public string Id { get; init; } = string.Empty;
 - Computed fields
 - System timestamps
 
-### [DisplayName]
+## [DisplayName]
 
 Sets a custom label in the UI instead of the property name.
 
@@ -207,7 +205,7 @@ public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 
 **Result:** Property `DueDate` displays as "Due Date" in forms and grids.
 
-### [Markdown]
+## [Markdown]
 
 Renders a markdown editor for rich text content.
 
@@ -220,7 +218,7 @@ public string? Description { get; init; }
 - `EditorHeight`: Height of the editor area (default: auto)
 - `ShowPreview`: Whether to show live preview pane (default: true)
 
-### [Dimension<T>]
+## [Dimension<T>]
 
 Links the field to a reference data type for dropdown selection.
 
@@ -234,11 +232,11 @@ public string Priority { get; init; } = "Medium";
 
 **Result:** The editor renders a dropdown populated with values from the `Category.All` and `Priority.All` arrays.
 
-## Reference Data Pattern
+# Reference Data Pattern
 
 Reference data (lookups, categories, statuses) follows a specific pattern with static instances.
 
-### Structure
+## Structure
 
 ```csharp
 public record Priority
@@ -310,7 +308,7 @@ public record Priority
 }
 ```
 
-### Key Components
+## Key Components
 
 | Component | Purpose |
 |-----------|---------|
@@ -319,7 +317,7 @@ public record Priority
 | `Order` property | Controls sort order in dropdowns and groupings |
 | `GetById` method | Safe lookup with fallback to default |
 
-### Configuring Reference Data
+## Configuring Reference Data
 
 Reference data is initialized when configuring the NodeType:
 
@@ -335,11 +333,11 @@ config => config
 
 **Result:** When a Project hub initializes, it populates its data store with all predefined Status, Category, and Priority values.
 
-## Enums vs Reference Data
+# Enums vs Reference Data
 
 MeshWeaver supports both enums and reference data records. Choose based on your requirements.
 
-### When to Use Enums
+## When to Use Enums
 
 ```csharp
 public enum TodoStatus
@@ -362,7 +360,7 @@ public enum TodoStatus
 - Requires recompilation to add values
 - Display name is the enum member name
 
-### When to Use Reference Data
+## When to Use Reference Data
 
 ```csharp
 public record Status
@@ -403,11 +401,11 @@ public record Status
 - Values are shared across hub boundaries
 - UI customization per value is needed
 
-## Content Initialization
+# Content Initialization
 
 Implement `IContentInitializable` to transform data when loaded from storage.
 
-### Example: Computing Dates
+## Example: Computing Dates
 
 ```csharp
 public record Todo : IContentInitializable
@@ -457,9 +455,9 @@ public record Todo : IContentInitializable
 }
 ```
 
-## Data Model Relationships
+# Data Model Relationships
 
-### One-to-Many via Dimension
+## One-to-Many via Dimension
 
 The `[Dimension<T>]` attribute creates a foreign key relationship:
 
@@ -485,7 +483,7 @@ graph LR
     T -.->|References| C
 ```
 
-### Parent-Child via Hub Hierarchy
+## Parent-Child via Hub Hierarchy
 
 Child hubs can access parent hub data using `AddHubSource`:
 
@@ -507,9 +505,9 @@ config => config
 - Parent at: `ACME/ProductLaunch`
 - Formula: Remove last 2 segments
 
-## Complete Example
+# Complete Example
 
-### Project Data Model
+## Project Data Model
 
 ```csharp
 public record Project
@@ -532,7 +530,7 @@ public record Project
 }
 ```
 
-### Project NodeType Configuration
+## Project NodeType Configuration
 
 ```json
 {
@@ -546,7 +544,7 @@ public record Project
 }
 ```
 
-### Todo Data Model
+## Todo Data Model
 
 ```csharp
 public record Todo : IContentInitializable
@@ -588,7 +586,7 @@ public record Todo : IContentInitializable
 }
 ```
 
-### Todo NodeType Configuration
+## Todo NodeType Configuration
 
 ```json
 {
@@ -602,7 +600,7 @@ public record Todo : IContentInitializable
 }
 ```
 
-## Best Practices
+# Best Practices
 
 1. **Use records, not classes**: Records provide immutability and value semantics ideal for data models
 

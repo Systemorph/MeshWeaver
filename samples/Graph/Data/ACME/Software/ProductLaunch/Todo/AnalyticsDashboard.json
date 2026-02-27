@@ -1,6 +1,6 @@
 {
   "id": "AnalyticsDashboard",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Configure analytics dashboard",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

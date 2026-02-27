@@ -1,16 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <!-- Background -->
-  <rect width="64" height="64" rx="8" fill="#F3F4F6"/>
-  <!-- Shield outline -->
-  <path d="M32 4 L56 16 V36 C56 48 44 58 32 62 C20 58 8 48 8 36 V16 Z" stroke="#4B5563" stroke-width="2.5" fill="none"/>
-  <!-- Inner shield -->
-  <path d="M32 12 L50 21 V36 C50 45 41 53 32 56 C23 53 14 45 14 36 V21 Z" stroke="#4B5563" stroke-width="1.5" fill="none"/>
-  <!-- Keystone / cornerstone block -->
-  <path d="M24 30 L28 22 H36 L40 30 V38 H24 Z" fill="#6B7280"/>
-  <!-- Cornerstone detail lines -->
-  <line x1="24" y1="34" x2="40" y2="34" stroke="#4B5563" stroke-width="1.5"/>
-  <line x1="32" y1="22" x2="32" y2="30" stroke="#4B5563" stroke-width="1.5"/>
-  <!-- Foundation lines below keystone -->
-  <line x1="20" y1="42" x2="44" y2="42" stroke="#4B5563" stroke-width="1.5"/>
-  <line x1="22" y1="46" x2="42" y2="46" stroke="#4B5563" stroke-width="1.5"/>
+  <style>
+    .bg { fill: #f5f5f5; }
+    .fg { fill: #616161; }
+    .accent { fill: #424242; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="64" height="64" rx="8"/>
+  <!-- Open book -->
+  <rect class="wh" x="8" y="14" width="48" height="36" rx="3"/>
+  <rect class="accent" x="31" y="14" width="2" height="36"/>
+  <!-- Left page lines -->
+  <rect class="fg" x="13" y="22" width="14" height="2" rx="1" opacity="0.5"/>
+  <rect class="fg" x="13" y="28" width="11" height="2" rx="1" opacity="0.35"/>
+  <rect class="fg" x="13" y="34" width="14" height="2" rx="1" opacity="0.25"/>
+  <!-- Right page lines -->
+  <rect class="fg" x="37" y="22" width="14" height="2" rx="1" opacity="0.5"/>
+  <rect class="fg" x="37" y="28" width="11" height="2" rx="1" opacity="0.35"/>
+  <rect class="fg" x="37" y="34" width="14" height="2" rx="1" opacity="0.25"/>
+  <!-- Small shield accent -->
+  <path class="accent" d="M48 6 L54 9 V14 C54 17 51 19 48 20 C45 19 42 17 42 14 V9 Z" opacity="0.7"/>
 </svg>

@@ -1,6 +1,6 @@
 {
   "id": "FRANR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "France restauration",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

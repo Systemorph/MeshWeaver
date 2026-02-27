@@ -1,6 +1,6 @@
 {
   "id": "BOTTM",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Bottom-Dollar Markets",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "CustomerOnboarding",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "Apex Manufacturing Onboarding",
   "nodeType": "ACME/Software/Project",
   "description": "Commercial insurance onboarding for Apex Manufacturing Inc.",

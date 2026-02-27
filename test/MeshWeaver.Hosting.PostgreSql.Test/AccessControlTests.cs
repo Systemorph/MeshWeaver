@@ -47,10 +47,10 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
 
         // Child path should be allowed via hierarchical promotion
-        var hasRead = await ac.HasPermissionAsync("alice", "Demos/ACME/Project", "Read");
+        var hasRead = await ac.HasPermissionAsync("alice", "ACME/Software/Project", "Read");
         hasRead.Should().BeTrue();
 
-        var hasReadDeep = await ac.HasPermissionAsync("alice", "Demos/ACME/Project/Story1", "Read");
+        var hasReadDeep = await ac.HasPermissionAsync("alice", "ACME/Software/Project/Story1", "Read");
         hasReadDeep.Should().BeTrue();
     }
 
@@ -62,19 +62,19 @@ public class AccessControlTests
 
         // Allow on ACME, deny on ACME/Project
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
-        await ac.GrantAsync("Demos/ACME/Project", "alice", "Read", isAllow: false);
+        await ac.GrantAsync("ACME/Software/Project", "alice", "Read", isAllow: false);
 
         // ACME itself still allowed
         (await ac.HasPermissionAsync("alice", "ACME", "Read")).Should().BeTrue();
 
         // ACME/Project blocked (deny is more specific)
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project", "Read")).Should().BeFalse();
 
         // ACME/Project/Story1 also blocked (inherits from ACME/Project deny)
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project/Story1", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project/Story1", "Read")).Should().BeFalse();
 
         // ACME/Team still allowed (sibling not affected by ACME/Project deny)
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Team", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Team", "Read")).Should().BeTrue();
     }
 
     [Fact]
@@ -84,13 +84,13 @@ public class AccessControlTests
         var ac = _fixture.AccessControl;
 
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true);
-        await ac.GrantAsync("Demos/ACME/Project/Story2", "alice", "Update", isAllow: false);
+        await ac.GrantAsync("ACME/Software/Project/Story2", "alice", "Update", isAllow: false);
 
         // ACME/Project/Story1 allowed (inherits from ACME)
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project/Story1", "Update")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project/Story1", "Update")).Should().BeTrue();
 
         // ACME/Project/Story2 denied (specific deny)
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project/Story2", "Update")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project/Story2", "Update")).Should().BeFalse();
     }
 
     [Fact]
@@ -104,14 +104,14 @@ public class AccessControlTests
         await ac.AddGroupMemberAsync("acme-editors", "bob");
 
         // Grant to group
-        await ac.GrantAsync("Demos/ACME/Project", "acme-editors", "Read", isAllow: true);
+        await ac.GrantAsync("ACME/Software/Project", "acme-editors", "Read", isAllow: true);
 
         // Both members should have access
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project", "Read")).Should().BeTrue();
-        (await ac.HasPermissionAsync("bob", "Demos/ACME/Project", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("bob", "ACME/Software/Project", "Read")).Should().BeTrue();
 
         // Non-member should not
-        (await ac.HasPermissionAsync("charlie", "Demos/ACME/Project", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("charlie", "ACME/Software/Project", "Read")).Should().BeFalse();
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true);
         await ac.GrantAsync("ACME", "alice", "Delete", isAllow: false);
 
-        var perms = await ac.GetEffectivePermissionsAsync("alice", "Demos/ACME/Project");
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Software/Project");
         perms.Should().Contain("Read");
         perms.Should().Contain("Create");
         perms.Should().Contain("Update");
@@ -178,12 +178,12 @@ public class AccessControlTests
         var ac = _fixture.AccessControl;
 
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project", "Read")).Should().BeTrue();
 
         // Manual rebuild
         await ac.RebuildDenormalizedTableAsync();
 
         // Should still work
-        (await ac.HasPermissionAsync("alice", "Demos/ACME/Project", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Software/Project", "Read")).Should().BeTrue();
     }
 }

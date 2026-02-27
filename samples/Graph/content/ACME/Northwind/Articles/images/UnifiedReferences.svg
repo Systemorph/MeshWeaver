@@ -1,54 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
-  <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#16213e;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="centerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#00f2fe;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="dataGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#764ba2;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="contentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#f093fb;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#f5576c;stop-opacity:1" />
-    </linearGradient>
-    <linearGradient id="areaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#00f2fe;stop-opacity:1" />
-    </linearGradient>
-  </defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none">
+  <style>
+    .diagram-bg { fill: #fafafa; }
+    .conn-line { fill: #d1d1d1; }
+    .center-node { fill: #0f6cbd; }
+    .center-text { fill: #ffffff; }
+    .area-node { fill: #0f6cbd; }
+    .area-text { fill: #ffffff; }
+    .content-node { fill: #d13438; }
+    .content-text { fill: #ffffff; }
+    .data-node { fill: #5c2d91; }
+    .data-text { fill: #ffffff; }
+    .title-text { fill: #242424; }
+  </style>
 
   <!-- Background -->
-  <rect width="400" height="300" fill="url(#bgGrad)"/>
+  <rect class="diagram-bg" width="400" height="300"/>
 
-  <!-- Connection lines -->
-  <line x1="200" y1="150" x2="70" y2="80" stroke="#4facfe" stroke-width="2" opacity="0.6"/>
-  <line x1="200" y1="150" x2="330" y2="80" stroke="#f093fb" stroke-width="2" opacity="0.6"/>
-  <line x1="200" y1="150" x2="200" y2="250" stroke="#667eea" stroke-width="2" opacity="0.6"/>
+  <!-- Connection lines (filled polygons replacing stroked lines) -->
+  <!-- Line from (200,150) to (70,80): dir (-130,-70)/147.65, perp (0.474,-0.880), offset 1 -->
+  <polygon class="conn-line" points="200.5,149.1 70.5,79.1 69.5,80.9 199.5,150.9" opacity="0.6"/>
+  <!-- Line from (200,150) to (330,80): dir (130,-70)/147.65, perp (0.474,0.880), offset 1 -->
+  <polygon class="conn-line" points="199.5,149.1 329.5,79.1 330.5,80.9 200.5,150.9" opacity="0.6"/>
+  <!-- Line from (200,150) to (200,250): vertical, simple rect -->
+  <rect class="conn-line" x="199" y="150" width="2" height="100" opacity="0.6"/>
 
   <!-- Center node - @ symbol -->
-  <circle cx="200" cy="150" r="35" fill="url(#centerGrad)" opacity="0.9"/>
-  <text x="200" y="160" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#1a1a2e" text-anchor="middle">@</text>
+  <circle class="center-node" cx="200" cy="150" r="35" opacity="0.9"/>
+  <text class="center-text" x="200" y="160" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="32" font-weight="bold" text-anchor="middle">@</text>
 
   <!-- Data node (bottom) -->
-  <rect x="160" y="220" width="80" height="50" rx="8" fill="url(#dataGrad)" opacity="0.9"/>
-  <text x="200" y="240" font-family="Arial, sans-serif" font-size="11" fill="white" text-anchor="middle">data:</text>
-  <text x="200" y="255" font-family="Arial, sans-serif" font-size="9" fill="white" text-anchor="middle" opacity="0.8">{ JSON }</text>
+  <rect class="data-node" x="160" y="220" width="80" height="50" rx="8" opacity="0.9"/>
+  <text class="data-text" x="200" y="240" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="11" text-anchor="middle">data:</text>
+  <text class="data-text" x="200" y="255" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="9" text-anchor="middle" opacity="0.8">{ JSON }</text>
 
   <!-- Content node (top right) -->
-  <rect x="290" y="50" width="80" height="50" rx="8" fill="url(#contentGrad)" opacity="0.9"/>
-  <text x="330" y="70" font-family="Arial, sans-serif" font-size="11" fill="white" text-anchor="middle">content:</text>
-  <text x="330" y="85" font-family="Arial, sans-serif" font-size="9" fill="white" text-anchor="middle" opacity="0.8">files</text>
+  <rect class="content-node" x="290" y="50" width="80" height="50" rx="8" opacity="0.9"/>
+  <text class="content-text" x="330" y="70" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="11" text-anchor="middle">content:</text>
+  <text class="content-text" x="330" y="85" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="9" text-anchor="middle" opacity="0.8">files</text>
 
   <!-- Area node (top left) -->
-  <rect x="30" y="50" width="80" height="50" rx="8" fill="url(#areaGrad)" opacity="0.9"/>
-  <text x="70" y="70" font-family="Arial, sans-serif" font-size="11" fill="#1a1a2e" text-anchor="middle">area:</text>
-  <text x="70" y="85" font-family="Arial, sans-serif" font-size="9" fill="#1a1a2e" text-anchor="middle" opacity="0.8">layouts</text>
+  <rect class="area-node" x="30" y="50" width="80" height="50" rx="8" opacity="0.9"/>
+  <text class="area-text" x="70" y="70" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="11" text-anchor="middle">area:</text>
+  <text class="area-text" x="70" y="85" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="9" text-anchor="middle" opacity="0.8">layouts</text>
 
   <!-- Title -->
-  <text x="200" y="25" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">Unified Content References</text>
+  <text class="title-text" x="200" y="25" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="14" font-weight="bold" text-anchor="middle">Unified Content References</text>
 </svg>

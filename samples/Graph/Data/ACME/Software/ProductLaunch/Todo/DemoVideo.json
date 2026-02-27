@@ -1,6 +1,6 @@
 {
   "id": "DemoVideo",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "path": "ACME/Software/ProductLaunch/Todo/DemoVideo",
   "name": "Record product demo video",
   "nodeType": "ACME/Software/Project/Todo",

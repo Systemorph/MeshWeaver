@@ -1,6 +1,6 @@
 {
   "id": "LEHMS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Lehmanns Marktstand",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

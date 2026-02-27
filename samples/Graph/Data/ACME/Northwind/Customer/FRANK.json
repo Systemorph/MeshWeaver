@@ -1,6 +1,6 @@
 {
   "id": "FRANK",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Frankenversand",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

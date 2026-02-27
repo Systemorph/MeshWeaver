@@ -1,6 +1,6 @@
 {
   "id": "Carnarvon_Tigers",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Carnarvon Tigers",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

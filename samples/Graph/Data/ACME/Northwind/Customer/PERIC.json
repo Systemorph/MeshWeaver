@@ -1,6 +1,6 @@
 {
   "id": "PERIC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Pericles Comidas cl\u00e1sicas",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "LINOD",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "LINO-Delicateses",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

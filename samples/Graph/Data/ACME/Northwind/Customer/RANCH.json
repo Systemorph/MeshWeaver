@@ -1,6 +1,6 @@
 {
   "id": "RANCH",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Rancho grande",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

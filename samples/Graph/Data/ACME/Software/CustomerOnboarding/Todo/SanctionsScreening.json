@@ -1,6 +1,6 @@
 {
   "id": "SanctionsScreening",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "name": "Run sanctions screening",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

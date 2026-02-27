@@ -19,7 +19,7 @@ using MeshWeaver.Mesh.Services;
 public static class InsuranceViews
 {
     /// <summary>
-    /// Registers all Cornerstone views with the layout definition.
+    /// Registers all ACME Insurance views with the layout definition.
     /// </summary>
     public static LayoutDefinition AddInsuranceViews(this LayoutDefinition layout) =>
         layout.WithView("PricingCatalog", PricingCatalog);

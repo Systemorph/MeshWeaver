@@ -1,6 +1,6 @@
 {
   "id": "2024",
-  "namespace": "Cornerstone/TechIndustries",
+  "namespace": "ACME/Insurance/TechIndustries",
   "name": "Tech Industries 2024",
   "nodeType": "ACME/Insurance/Pricing",
   "category": "Pricings",

@@ -1,6 +1,6 @@
 {
   "id": "PICCO",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Piccolo und mehr",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

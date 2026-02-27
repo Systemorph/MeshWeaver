@@ -1,6 +1,6 @@
 {
   "id": "PricingStrategy",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Develop pricing tiers",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

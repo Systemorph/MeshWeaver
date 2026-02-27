@@ -5,13 +5,11 @@ Description: Display collections of data with sortable, resizable columns
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataGrid/icon.svg
 ---
 
-# Displaying Data in a UI
-
 The DataGrid control displays collections of data in a tabular format with sortable, resizable columns and optional virtualization for large datasets.
 
-## Basic Usage
+# Basic Usage
 
-### Simple DataGrid
+## Simple DataGrid
 
 ```csharp --render DataGridSimple --show-code
 record Product(string Name, decimal Price, int Stock);  // Define data record
@@ -37,7 +35,7 @@ new DataGridControl(products)                           // Create grid with data
 
 ---
 
-### With Pagination
+## With Pagination
 
 ```csharp --render DataGridPagination --show-code
 record Item(int Id, string Name, string Category);      // Define data record
@@ -59,7 +57,7 @@ new DataGridControl(items)                              // Create grid with data
 
 ---
 
-### With Action Buttons
+## With Action Buttons
 
 ```csharp --render DataGridActions --show-code
 record User(string Name, string Email);                 // Define data record
@@ -88,7 +86,7 @@ new DataGridControl(users)                              // Create grid with data
 
 ---
 
-### Virtualized Large Dataset
+## Virtualized Large Dataset
 
 ```csharp --render DataGridVirtualized --show-code
 record DataRow(int Id, string Value);                   // Define data record
@@ -108,9 +106,9 @@ new DataGridControl(largeDataset)                       // Create grid with data
 
 ---
 
-## Column Types
+# Column Types
 
-### PropertyColumnControl
+## PropertyColumnControl
 
 Displays a property value from each row. Configure columns with these methods:
 
@@ -124,7 +122,7 @@ new PropertyColumnControl<string>                       // Column for string pro
     .WithAlign("start")                                 // Cell alignment: start, center, end
 ```
 
-### TemplateColumnControl
+## TemplateColumnControl
 
 Custom content for each cell - useful for action buttons:
 
@@ -135,7 +133,7 @@ new TemplateColumnControl(Controls.Button("View"))      // Control to render in 
     .WithWidth("100px")                                 // Fixed width
 ```
 
-## DataGrid Configuration
+# DataGrid Configuration
 
 | Method | Purpose | Default |
 |--------|---------|---------|
@@ -150,7 +148,7 @@ new TemplateColumnControl(Controls.Button("View"))      // Control to render in 
 | `WithEmptyContent(control)` | Content when data is empty | - |
 | `WithLoading(bool)` | Show loading state | false |
 
-## Column Configuration
+# Column Configuration
 
 | Method | Purpose | Default |
 |--------|---------|---------|
@@ -164,9 +162,9 @@ new TemplateColumnControl(Controls.Button("View"))      // Control to render in 
 | `WithVisible(bool)` | Show/hide column | true |
 | `WithFrozen(bool)` | Freeze column | false |
 
-## Common Patterns
+# Common Patterns
 
-### Data Table with Actions
+## Data Table with Actions
 
 ```csharp --render PatternActions --show-code
 record Employee(string Name, string Email, string Dept); // Define data record
@@ -194,7 +192,7 @@ new DataGridControl(employees)                          // Create grid with data
 
 ---
 
-### Read-Only Report Grid
+## Read-Only Report Grid
 
 ```csharp --render PatternReport --show-code
 record Report(string Category, decimal Amount);         // Define data record
@@ -220,7 +218,7 @@ new DataGridControl(reportData)                         // Create grid with data
 
 ---
 
-## See Also
+# See Also
 
 - [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - Form generation
 - [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - Layout container

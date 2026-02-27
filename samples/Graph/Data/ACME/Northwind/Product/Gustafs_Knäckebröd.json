@@ -1,6 +1,6 @@
 {
   "id": "Gustafs_Kn\u00e4ckebr\u00f6d",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gustaf's Kn\u00e4ckebr\u00f6d",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

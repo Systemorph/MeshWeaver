@@ -3,154 +3,154 @@
 // DisplayName: Product Node Views
 // </meshweaver>
 
-using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
-using MeshWeaver.Charting;
-using MeshWeaver.Charting.Enums;
-using MeshWeaver.Charting.Models.Options;
-using MeshWeaver.Charting.Pivot;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
-using MeshWeaver.Pivot.Builder;
 
 /// <summary>
 /// Instance-level views for individual Product MeshNodes.
-/// Shows sales history, inventory status, and order details for a single product.
+/// Displays product information, pricing, and inventory status.
 /// </summary>
 public static class ProductNodeViews
 {
     public static LayoutDefinition AddProductNodeViews(this LayoutDefinition layout) =>
         layout
-            .WithView("Overview", Overview)
-            .WithView("SalesHistory", SalesHistory)
-            .WithView("InventoryStatus", InventoryStatus)
-            .WithView("OrderDetails", OrderDetails);
+            .WithDefaultArea("ProductOverview")
+            .WithView("ProductOverview", ProductOverview)
+            .WithView("InventoryStatus", InventoryStatus);
 
-    private static int GetProductId(LayoutAreaHost host)
+    private static ProductContent? ExtractProductContent(MeshNode? node)
     {
-        var content = host.Hub.Configuration.GetContent();
-        if (content is JsonElement json && json.TryGetProperty("productId", out var pid))
-            return pid.GetInt32();
-        if (content is ProductContent pc)
-            return pc.ProductId;
-        return 0;
+        if (node?.Content == null)
+            return null;
+
+        if (node.Content is ProductContent pc)
+            return pc;
+
+        if (node.Content is JsonElement json)
+        {
+            return new ProductContent
+            {
+                ProductId = json.TryGetProperty("productId", out var pid) ? pid.GetInt32() : 0,
+                ProductName = json.TryGetProperty("productName", out var pn) ? pn.GetString() ?? "" : "",
+                SupplierId = json.TryGetProperty("supplierId", out var sid) ? sid.GetInt32() : 0,
+                CategoryId = json.TryGetProperty("categoryId", out var cid) ? cid.GetInt32() : 0,
+                QuantityPerUnit = json.TryGetProperty("quantityPerUnit", out var qpu) ? qpu.GetString() ?? "" : "",
+                UnitPrice = json.TryGetProperty("unitPrice", out var up) ? up.GetDouble() : 0,
+                UnitsInStock = json.TryGetProperty("unitsInStock", out var uis) ? uis.GetInt16() : (short)0,
+                UnitsOnOrder = json.TryGetProperty("unitsOnOrder", out var uoo) ? uoo.GetInt16() : (short)0,
+                ReorderLevel = json.TryGetProperty("reorderLevel", out var rl) ? rl.GetInt16() : (short)0,
+                Discontinued = json.TryGetProperty("discontinued", out var disc) && disc.GetBoolean()
+            };
+        }
+        return null;
     }
 
-    /// <summary>Product overview with key metrics.</summary>
+    /// <summary>Product overview with details.</summary>
     [Display(GroupName = "Overview", Order = 0)]
-    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext ctx)
+    public static IObservable<UiControl?> ProductOverview(LayoutAreaHost host, RenderingContext ctx)
     {
-        var productId = GetProductId(host);
-        return host.Workspace.GetObservable<NorthwindDataCube>()
-            .Select(cubes =>
-            {
-                var productData = cubes.Where(c => c.ProductId == productId).ToList();
-                var totalRevenue = productData.Sum(c => c.Amount);
-                var totalOrders = productData.Select(c => c.OrderId).Distinct().Count();
-                var totalUnits = productData.Sum(c => c.Quantity);
-                var avgDiscount = productData.Any() ? productData.Average(c => c.Discount) : 0;
+        var hubPath = host.Hub.Address.ToString();
 
-                return (UiControl?)Controls.Stack
-                    .WithView(Controls.Markdown($"## Product Sales Summary"))
-                    .WithView(Controls.Html($@"
-                        <div style='display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin: 16px 0;'>
-                            <div style='padding: 16px; border-radius: 8px; background: var(--mud-palette-surface);'>
-                                <div style='font-size: 24px; font-weight: bold;'>${totalRevenue:N2}</div>
-                                <div style='color: var(--mud-palette-text-secondary);'>Total Revenue</div>
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var product = ExtractProductContent(node);
+
+            if (product == null)
+                return (UiControl?)Controls.Markdown("*Product data not available*");
+
+            var statusBadge = product.Discontinued
+                ? "<span style='padding: 4px 12px; border-radius: 16px; background: var(--mud-palette-error); color: white; font-size: 12px;'>Discontinued</span>"
+                : "<span style='padding: 4px 12px; border-radius: 16px; background: var(--mud-palette-success); color: white; font-size: 12px;'>Active</span>";
+
+            return (UiControl?)Controls.Stack
+                .WithView(Controls.Markdown($"## {product.ProductName}"))
+                .WithView(Controls.Html($@"
+                    <div style='margin-bottom: 16px;'>{statusBadge}</div>
+                    <div style='display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin: 16px 0;'>
+                        <div style='padding: 20px; border-radius: 8px; background: var(--mud-palette-surface);'>
+                            <h3 style='margin: 0 0 16px 0; color: var(--mud-palette-primary);'>Product Details</h3>
+                            <div style='margin-bottom: 12px;'>
+                                <div style='font-size: 12px; color: var(--mud-palette-text-secondary);'>Product ID</div>
+                                <div style='font-size: 16px; font-weight: 500;'>{product.ProductId}</div>
                             </div>
-                            <div style='padding: 16px; border-radius: 8px; background: var(--mud-palette-surface);'>
-                                <div style='font-size: 24px; font-weight: bold;'>{totalOrders}</div>
-                                <div style='color: var(--mud-palette-text-secondary);'>Orders</div>
+                            <div style='margin-bottom: 12px;'>
+                                <div style='font-size: 12px; color: var(--mud-palette-text-secondary);'>Quantity Per Unit</div>
+                                <div style='font-size: 16px;'>{(string.IsNullOrWhiteSpace(product.QuantityPerUnit) ? "—" : product.QuantityPerUnit)}</div>
                             </div>
-                            <div style='padding: 16px; border-radius: 8px; background: var(--mud-palette-surface);'>
-                                <div style='font-size: 24px; font-weight: bold;'>{totalUnits}</div>
-                                <div style='color: var(--mud-palette-text-secondary);'>Units Sold</div>
-                            </div>
-                            <div style='padding: 16px; border-radius: 8px; background: var(--mud-palette-surface);'>
-                                <div style='font-size: 24px; font-weight: bold;'>{avgDiscount:P1}</div>
-                                <div style='color: var(--mud-palette-text-secondary);'>Avg Discount</div>
+                            <div>
+                                <div style='font-size: 12px; color: var(--mud-palette-text-secondary);'>Category ID</div>
+                                <div style='font-size: 16px;'>{product.CategoryId}</div>
                             </div>
                         </div>
-                    "));
-            });
+                        <div style='padding: 20px; border-radius: 8px; background: var(--mud-palette-surface);'>
+                            <h3 style='margin: 0 0 16px 0; color: var(--mud-palette-primary);'>Pricing</h3>
+                            <div style='margin-bottom: 12px;'>
+                                <div style='font-size: 12px; color: var(--mud-palette-text-secondary);'>Unit Price</div>
+                                <div style='font-size: 24px; font-weight: bold; color: var(--mud-palette-primary);'>${product.UnitPrice:N2}</div>
+                            </div>
+                            <div>
+                                <div style='font-size: 12px; color: var(--mud-palette-text-secondary);'>Supplier ID</div>
+                                <div style='font-size: 16px;'>{product.SupplierId}</div>
+                            </div>
+                        </div>
+                    </div>
+                "));
+        });
     }
 
-    /// <summary>Monthly sales trend for this product.</summary>
-    [Display(GroupName = "Analytics", Order = 0)]
-    public static IObservable<UiControl?> SalesHistory(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var productId = GetProductId(host);
-        return host.Workspace.GetObservable<NorthwindDataCube>()
-            .Select(cubes =>
-            {
-                var productData = cubes.Where(c => c.ProductId == productId).ToList();
-                return (UiControl?)productData.AsQueryable()
-                    .ToPivotBuilder()
-                    .SliceColumnsBy(nameof(NorthwindDataCube.OrderYear))
-                    .WithAggregation(a => a.Sum(nameof(NorthwindDataCube.Amount)))
-                    .ToBarChart()
-                    .WithOptions(o => o.WithTitle("Annual Sales"));
-            });
-    }
-
-    /// <summary>Current inventory status.</summary>
+    /// <summary>Product inventory status.</summary>
     [Display(GroupName = "Inventory", Order = 0)]
     public static IObservable<UiControl?> InventoryStatus(LayoutAreaHost host, RenderingContext ctx)
     {
-        var content = host.Hub.Configuration.GetContent();
-        if (content is not JsonElement json)
-            return Observable.Return<UiControl?>(Controls.Markdown("*No inventory data available*"));
+        var hubPath = host.Hub.Address.ToString();
 
-        var unitsInStock = json.TryGetProperty("unitsInStock", out var stock) ? stock.GetInt16() : (short)0;
-        var unitsOnOrder = json.TryGetProperty("unitsOnOrder", out var onOrder) ? onOrder.GetInt16() : (short)0;
-        var reorderLevel = json.TryGetProperty("reorderLevel", out var reorder) ? reorder.GetInt16() : (short)0;
-        var discontinued = json.TryGetProperty("discontinued", out var disc) && disc.GetBoolean();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
 
-        var statusColor = discontinued ? "error" : (unitsInStock <= reorderLevel ? "warning" : "success");
-        var statusText = discontinued ? "Discontinued" : (unitsInStock <= reorderLevel ? "Low Stock" : "In Stock");
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var product = ExtractProductContent(node);
 
-        return Observable.Return<UiControl?>(Controls.Html($@"
-            <div style='padding: 16px;'>
-                <div style='display: flex; align-items: center; gap: 8px; margin-bottom: 16px;'>
-                    <span style='font-size: 14px; padding: 4px 12px; border-radius: 16px; background: var(--mud-palette-{statusColor}); color: white;'>{statusText}</span>
-                </div>
-                <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;'>
-                    <div>
-                        <div style='font-size: 32px; font-weight: bold;'>{unitsInStock}</div>
-                        <div style='color: var(--mud-palette-text-secondary);'>Units in Stock</div>
+            if (product == null)
+                return (UiControl?)Controls.Markdown("*Product data not available*");
+
+            var stockStatus = product.Discontinued ? "Discontinued"
+                : product.UnitsInStock <= product.ReorderLevel ? "Low Stock"
+                : "In Stock";
+            var statusColor = product.Discontinued ? "error"
+                : product.UnitsInStock <= product.ReorderLevel ? "warning"
+                : "success";
+
+            return (UiControl?)Controls.Stack
+                .WithView(Controls.Markdown("## Inventory Status"))
+                .WithView(Controls.Html($@"
+                    <div style='padding: 20px; border-radius: 8px; background: var(--mud-palette-surface);'>
+                        <div style='margin-bottom: 20px;'>
+                            <span style='padding: 6px 16px; border-radius: 20px; background: var(--mud-palette-{statusColor}); color: white; font-size: 14px;'>{stockStatus}</span>
+                        </div>
+                        <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px;'>
+                            <div>
+                                <div style='font-size: 36px; font-weight: bold;'>{product.UnitsInStock}</div>
+                                <div style='color: var(--mud-palette-text-secondary);'>Units in Stock</div>
+                            </div>
+                            <div>
+                                <div style='font-size: 36px; font-weight: bold;'>{product.UnitsOnOrder}</div>
+                                <div style='color: var(--mud-palette-text-secondary);'>Units on Order</div>
+                            </div>
+                            <div>
+                                <div style='font-size: 36px; font-weight: bold;'>{product.ReorderLevel}</div>
+                                <div style='color: var(--mud-palette-text-secondary);'>Reorder Level</div>
+                            </div>
+                        </div>
                     </div>
-                    <div>
-                        <div style='font-size: 32px; font-weight: bold;'>{unitsOnOrder}</div>
-                        <div style='color: var(--mud-palette-text-secondary);'>Units on Order</div>
-                    </div>
-                    <div>
-                        <div style='font-size: 32px; font-weight: bold;'>{reorderLevel}</div>
-                        <div style='color: var(--mud-palette-text-secondary);'>Reorder Level</div>
-                    </div>
-                </div>
-            </div>
-        "));
-    }
-
-    /// <summary>Recent orders containing this product.</summary>
-    [Display(GroupName = "Analytics", Order = 1)]
-    public static IObservable<UiControl?> OrderDetails(LayoutAreaHost host, RenderingContext ctx)
-    {
-        var productId = GetProductId(host);
-        return host.Workspace.GetObservable<NorthwindDataCube>()
-            .Select(cubes =>
-            {
-                var productData = cubes.Where(c => c.ProductId == productId)
-                    .OrderByDescending(c => c.OrderDate)
-                    .Take(20)
-                    .ToList();
-                return (UiControl?)productData.AsQueryable()
-                    .ToDataGrid()
-                    .WithColumn(c => c.OrderId)
-                    .WithColumn(c => c.CustomerName)
-                    .WithColumn(c => c.OrderDate)
-                    .WithColumn(c => c.Quantity)
-                    .WithColumn(c => c.Amount)
-                    .WithColumn(c => c.Discount);
-            });
+                "));
+        });
     }
 }

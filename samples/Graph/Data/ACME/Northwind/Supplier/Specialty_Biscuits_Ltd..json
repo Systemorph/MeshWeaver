@@ -1,6 +1,6 @@
 {
   "id": "Specialty_Biscuits_Ltd.",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Specialty Biscuits, Ltd.",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

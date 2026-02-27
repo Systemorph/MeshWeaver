@@ -1,6 +1,6 @@
 {
   "id": "Jacks_New_England_Clam_Chowder",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Jack's New England Clam Chowder",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

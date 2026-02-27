@@ -11,11 +11,9 @@ Tags:
   - "Architecture"
 ---
 
-# Northwind Architecture
-
 Understanding the architectural patterns in the Northwind sample helps you build scalable analytics applications with MeshWeaver. This document covers data loading, virtual data cubes, and view organization patterns.
 
-## Node Structure
+# Node Structure
 
 Northwind uses an AnalyticsCatalog NodeType to organize analytics views and data sources:
 
@@ -54,18 +52,18 @@ Northwind/                           # Root namespace
     └── InventoryViews.cs            # Inventory trends (3 views)
 ```
 
-### NodeType vs Instance
+## NodeType vs Instance
 
 | Node | Type | Purpose |
 |------|------|---------|
 | `Northwind/AnalyticsCatalog` | NodeType | Defines data sources, views, and behavior |
 | `Northwind/Analytics` | Instance | Actual database with data |
 
-## Data Loading Pattern
+# Data Loading Pattern
 
 Northwind demonstrates CSV-based data loading with reactive updates.
 
-### Data Source Configuration
+## Data Source Configuration
 
 The AnalyticsCatalog NodeType configures multiple data sources:
 
@@ -87,7 +85,7 @@ config.AddData(data => data
     .WithVirtualDataSource("NorthwindDataCube", ...))
 ```
 
-### CSV Loading (`NorthwindDataLoader.cs`)
+## CSV Loading (`NorthwindDataLoader.cs`)
 
 ```csharp
 public static IEnumerable<Order> LoadOrders(string csvPath)
@@ -107,7 +105,7 @@ public static IEnumerable<Order> LoadOrders(string csvPath)
 }
 ```
 
-### Reference Data (CSV-based)
+## Reference Data (CSV-based)
 
 All reference data is loaded from CSV files via `NorthwindDataLoader.cs`, following the same pattern as transactional data:
 
@@ -125,11 +123,11 @@ public static Task<IEnumerable<Category>> LoadCategoriesAsync(CancellationToken 
 }
 ```
 
-## Virtual Data Cube
+# Virtual Data Cube
 
 The `NorthwindDataCube` is the key analytics pattern - a denormalized fact table combining Orders, OrderDetails, and Products.
 
-### Cube Definition (`NorthwindDataCube.cs`)
+## Cube Definition (`NorthwindDataCube.cs`)
 
 ```csharp
 public record NorthwindDataCube
@@ -156,7 +154,7 @@ public record NorthwindDataCube
 }
 ```
 
-### Cube Population
+## Cube Population
 
 The cube is populated reactively from source data:
 
@@ -194,18 +192,18 @@ public static IObservable<IEnumerable<NorthwindDataCube>> GetDataCube(
 }
 ```
 
-### Benefits of Virtual Data Cubes
+## Benefits of Virtual Data Cubes
 
 1. **Single Source of Truth**: All views query the same cube
 2. **Consistent Calculations**: Revenue, discount calculations centralized
 3. **Efficient Queries**: Pre-joined data reduces query complexity
 4. **Reactive Updates**: Changes propagate automatically
 
-## View Organization
+# View Organization
 
 Views are organized into 8 categories with 53 total views.
 
-### View Groups
+## View Groups
 
 | Group | Order | Views | Purpose |
 |-------|-------|-------|---------|
@@ -219,7 +217,7 @@ Views are organized into 8 categories with 53 total views.
 | Financial | 700 | 8 | Financial metrics |
 | Inventory | 800 | 3 | Inventory trends |
 
-### View Registration
+## View Registration
 
 Views are registered in the AnalyticsCatalog NodeType:
 
@@ -236,7 +234,7 @@ config.AddLayout(layout => layout
     .AddInventoryViews())
 ```
 
-### View Implementation Pattern
+## View Implementation Pattern
 
 Each view follows a reactive pattern using the data cube:
 
@@ -266,11 +264,11 @@ public static IObservable<UiControl?> SalesByCategory(LayoutAreaHost host, Rende
 }
 ```
 
-## Year Filtering Architecture
+# Year Filtering Architecture
 
 Northwind supports multi-year analysis through a toolbar component.
 
-### Toolbar Component (`NorthwindYearToolbar.cs`)
+## Toolbar Component (`NorthwindYearToolbar.cs`)
 
 ```csharp
 public static UiControl YearToolbar(LayoutAreaHost host)
@@ -286,7 +284,7 @@ public static UiControl YearToolbar(LayoutAreaHost host)
 }
 ```
 
-### Year Filter Observable
+## Year Filter Observable
 
 Views subscribe to the year filter:
 
@@ -298,7 +296,7 @@ public static IObservable<int?> GetYearFilter(this LayoutAreaHost host)
 }
 ```
 
-### Filter Application
+## Filter Application
 
 Views apply the filter to their data cube queries:
 
@@ -310,11 +308,11 @@ var filteredData = cube
             : data);
 ```
 
-## View Types
+# View Types
 
 Northwind uses several view patterns for different analytics needs.
 
-### Chart Views
+## Chart Views
 
 ```csharp
 // Bar chart for category comparison
@@ -344,7 +342,7 @@ public static UiControl CategoryDistribution(data) => new PieChart
 };
 ```
 
-### Data Grid Views
+## Data Grid Views
 
 ```csharp
 public static UiControl ProductOverview(data) => new DataGrid
@@ -361,7 +359,7 @@ public static UiControl ProductOverview(data) => new DataGrid
 };
 ```
 
-### Markdown Report Views
+## Markdown Report Views
 
 ```csharp
 public static UiControl OrdersSummaryReport(data) => new MarkdownControl
@@ -382,7 +380,7 @@ public static UiControl OrdersSummaryReport(data) => new MarkdownControl
 };
 ```
 
-## Cross-References
+# Cross-References
 
 For related MeshWeaver architecture concepts:
 
@@ -391,7 +389,7 @@ For related MeshWeaver architecture concepts:
 - **[Data Mesh](MeshWeaver/Documentation/DataMesh)**: Data source patterns
 - **[AI Agent Integration](Northwind/Documentation/AIAgentIntegration)**: NorthwindAgent usage
 
-## Conclusion
+# Conclusion
 
 The Northwind architecture demonstrates key patterns for analytics applications:
 

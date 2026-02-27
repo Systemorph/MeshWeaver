@@ -1,6 +1,6 @@
 {
   "id": "Mascarpone_Fabioli",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Mascarpone Fabioli",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

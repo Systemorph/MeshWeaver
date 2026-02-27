@@ -1,6 +1,6 @@
 {
   "id": "Mishi_Kobe_Niku",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Mishi Kobe Niku",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -54,10 +54,10 @@ public class ObserveQueryTests : IAsyncLifetime
     public async Task ObserveQuery_EmitsInitialResults()
     {
         // Arrange: seed data before subscribing
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         // Act
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
@@ -76,10 +76,10 @@ public class ObserveQueryTests : IAsyncLifetime
     public async Task ObserveQuery_DetectsAddedNode()
     {
         // Arrange: seed initial data, subscribe, wait for initial emission
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -88,7 +88,7 @@ public class ObserveQueryTests : IAsyncLifetime
         changes.Should().ContainSingle(c => c.ChangeType == QueryChangeType.Initial);
 
         // Act: add a new node that matches the query
-        await WriteNode("Story2", "Demos/ACME/Project", "Story");
+        await WriteNode("Story2", "ACME/Software/Project", "Story");
 
         await WaitForChanges(changes, 2, timeout: 5000);
 
@@ -102,10 +102,10 @@ public class ObserveQueryTests : IAsyncLifetime
     public async Task ObserveQuery_DetectsUpdatedNode()
     {
         // Arrange
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -113,7 +113,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WaitForChanges(changes, 1); // Initial
 
         // Act: update the node
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
 
         await WaitForChanges(changes, 2, timeout: 5000);
 
@@ -127,11 +127,11 @@ public class ObserveQueryTests : IAsyncLifetime
     public async Task ObserveQuery_DetectsDeletedNode()
     {
         // Arrange
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
-        await WriteNode("Story2", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
+        await WriteNode("Story2", "ACME/Software/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -140,7 +140,7 @@ public class ObserveQueryTests : IAsyncLifetime
         changes[0].Items.Should().HaveCount(2);
 
         // Act: delete one node
-        await _fixture.StorageAdapter.DeleteAsync("Demos/ACME/Project/Story1");
+        await _fixture.StorageAdapter.DeleteAsync("ACME/Software/Project/Story1");
 
         await WaitForChanges(changes, 2, timeout: 5000);
 
@@ -154,10 +154,10 @@ public class ObserveQueryTests : IAsyncLifetime
     public async Task ObserveQuery_IgnoresChangesOutsideScope()
     {
         // Arrange
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -180,7 +180,7 @@ public class ObserveQueryTests : IAsyncLifetime
     {
         // Arrange
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -188,10 +188,10 @@ public class ObserveQueryTests : IAsyncLifetime
         await WaitForChanges(changes, 1); // Initial (empty)
 
         // Act: add multiple nodes to generate multiple change notifications
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
         await WaitForChanges(changes, 2, timeout: 5000);
 
-        await WriteNode("Story2", "Demos/ACME/Project", "Story");
+        await WriteNode("Story2", "ACME/Software/Project", "Story");
         await WaitForChanges(changes, 3, timeout: 5000);
 
         // Assert: versions should be strictly increasing
@@ -207,7 +207,7 @@ public class ObserveQueryTests : IAsyncLifetime
     {
         // Arrange
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Demos/ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Software/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -215,9 +215,9 @@ public class ObserveQueryTests : IAsyncLifetime
         await WaitForChanges(changes, 1); // Initial (empty)
 
         // Act: add 3 nodes in rapid succession (within the 100ms debounce window)
-        await WriteNode("Story1", "Demos/ACME/Project", "Story");
-        await WriteNode("Story2", "Demos/ACME/Project", "Story");
-        await WriteNode("Story3", "Demos/ACME/Project", "Story");
+        await WriteNode("Story1", "ACME/Software/Project", "Story");
+        await WriteNode("Story2", "ACME/Software/Project", "Story");
+        await WriteNode("Story3", "ACME/Software/Project", "Story");
 
         // Wait for debounce + processing
         await Task.Delay(2000);

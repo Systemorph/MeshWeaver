@@ -1,6 +1,6 @@
 {
   "id": "Sir_Rodneys_Marmalade",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Sir Rodney's Marmalade",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -1,6 +1,6 @@
 {
   "id": "2024",
-  "namespace": "Cornerstone/GlobalManufacturing",
+  "namespace": "ACME/Insurance/GlobalManufacturing",
   "name": "Global Manufacturing 2024",
   "nodeType": "ACME/Insurance/Pricing",
   "category": "Pricings",

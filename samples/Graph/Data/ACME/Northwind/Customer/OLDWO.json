@@ -1,6 +1,6 @@
 {
   "id": "OLDWO",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Old World Delicatessen",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

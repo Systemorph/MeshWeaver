@@ -1,6 +1,6 @@
 {
   "id": "QUEEN",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Queen Cozinha",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

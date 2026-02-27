@@ -1,21 +1,19 @@
 ---
 NodeType: "ACME/Insurance/Article"
-Title: "Cornerstone Architecture"
+Title: "ACME Insurance Architecture"
 Abstract: "Deep dive into MeshWeaver's architecture with ACME Insurance examples"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "Cornerstone"
+  - "ACME Insurance"
   - "Architecture"
 ---
 
-# Cornerstone Architecture
-
 Understanding the architectural principles behind MeshWeaver applications through the lens of the ACME Insurance sample. This document explores how reinsurance pricing, property risks, and file management are organized in a distributed, message-driven architecture.
 
-## Core Architectural Principles
+# Core Architectural Principles
 
 MeshWeaver applications are built with three fundamental principles in mind:
 
@@ -23,7 +21,7 @@ MeshWeaver applications are built with three fundamental principles in mind:
 2. **Distributed Systems**: The application architecture embraces distribution as a core concept, with components communicating through well-defined message protocols
 3. **Asynchronous Interaction Patterns**: User interactions, especially those involving AI chat agents, are designed to handle long-running operations that may take hours or even days to complete
 
-### Architecture Patterns
+## Architecture Patterns
 
 MeshWeaver applications can be organized using various architectural patterns:
 
@@ -31,16 +29,16 @@ MeshWeaver applications can be organized using various architectural patterns:
 - **[Modular Monolith](https://medium.com/design-microservices-architecture-with-patterns/microservices-killer-modular-monolithic-architecture-ac83814f6862)**: Different modules are deployed together but maintain logical separation through message hubs
 - **[Vertical Slice Architecture](https://en.wikipedia.org/wiki/Hexagonal_architecture_(software))**: Each feature is implemented as a complete vertical slice from UI to data
 
-The Cornerstone sample demonstrates a modular approach where the Pricing functionality is encapsulated in a reusable NodeType with clear message-based interfaces.
+The ACME Insurance sample demonstrates a modular approach where the Pricing functionality is encapsulated in a reusable NodeType with clear message-based interfaces.
 
-## The MeshNode and Namespace Hierarchy
+# The MeshNode and Namespace Hierarchy
 
 MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](MeshWeaver/Documentation/Architecture/MeshGraph).
 
-### Cornerstone Namespace Hierarchy
+## ACME Insurance Namespace Hierarchy
 
 ```
-Cornerstone/                           # Reinsurance company namespace
+ACME/Insurance/                           # Reinsurance company namespace
 ├── Insured.json                       # Insured NodeType definition
 ├── Pricing.json                       # Pricing NodeType definition
 ├── Pricing/                           # Pricing-related assets
@@ -73,22 +71,22 @@ Cornerstone/                           # Reinsurance company namespace
     └── 2026/                          # Pricing instance
 ```
 
-### Path Examples
+## Path Examples
 
 | Node | Full Path |
 |------|-----------|
-| Microsoft insured | `Cornerstone/Microsoft` |
-| Microsoft 2026 pricing | `Cornerstone/Microsoft/2026` |
-| Pricing NodeType | `Cornerstone/Pricing` |
-| Insured NodeType | `Cornerstone/Insured` |
+| Microsoft insured | `ACME/Insurance/Microsoft` |
+| Microsoft 2026 pricing | `ACME/Insurance/Microsoft/2026` |
+| Pricing NodeType | `ACME/Insurance/Pricing` |
+| Insured NodeType | `ACME/Insurance/Insured` |
 
-## NodeType Configuration
+# NodeType Configuration
 
-NodeTypes define the behavior for instances. The Cornerstone sample uses two primary NodeTypes.
+NodeTypes define the behavior for instances. The ACME Insurance sample uses two primary NodeTypes.
 
-### Insured NodeType
+## Insured NodeType
 
-The Insured NodeType (`Cornerstone/Insured`) defines client organizations:
+The Insured NodeType (`ACME/Insurance/Insured`) defines client organizations:
 
 ```json
 {
@@ -115,9 +113,9 @@ This configuration:
 - Provides PricingStatus dimension data for filtering pricings
 - Registers views for the pricing catalog
 
-### Pricing NodeType
+## Pricing NodeType
 
-The Pricing NodeType (`Cornerstone/Pricing`) defines individual pricings:
+The Pricing NodeType (`ACME/Insurance/Pricing`) defines individual pricings:
 
 ```json
 {
@@ -165,9 +163,9 @@ This configuration:
 - Registers business entities (PropertyRisk, ReinsuranceAcceptance, ReinsuranceSection)
 - Sets Overview as the default view
 
-## Data Model
+# Data Model
 
-### Dimensions
+## Dimensions
 
 Dimensions provide reference data for filtering and classification:
 
@@ -177,9 +175,9 @@ Dimensions provide reference data for filtering and classification:
 | **Country** | US, GB, DE, FR, JP, CN, AU, CA, CH, SG | Geographic classification |
 | **Currency** | USD, EUR, GBP, JPY, CHF, AUD, CAD | Monetary values |
 | **PricingStatus** | Draft, Quoted, Bound, Declined, Expired | Workflow status |
-| **LegalEntity** | CS-US, CS-UK, CS-EU, CS-ASIA | Cornerstone legal entities |
+| **LegalEntity** | CS-US, CS-UK, CS-EU, CS-ASIA | ACME Insurance legal entities |
 
-### Business Entities
+## Business Entities
 
 Business entities store pricing-specific data:
 
@@ -190,23 +188,23 @@ Business entities store pricing-specific data:
 | **ReinsuranceSection** | Layer sections | Section name, Coverage type, Rate |
 | **ExcelImportConfiguration** | Import settings | Column mappings, Sheet name |
 
-## Message Hub Architecture
+# Message Hub Architecture
 
-### Hub Addressing and Partitioning
+## Hub Addressing and Partitioning
 
-Cornerstone uses namespace paths for hub partitioning:
+ACME Insurance uses namespace paths for hub partitioning:
 
-- `Cornerstone/Microsoft` - Microsoft insured hub
-- `Cornerstone/Microsoft/2026` - Microsoft 2026 pricing hub
-- `Cornerstone/GlobalManufacturing` - GlobalManufacturing insured hub
-- `Cornerstone/GlobalManufacturing/2024` - GlobalManufacturing 2024 pricing hub
+- `ACME/Insurance/Microsoft` - Microsoft insured hub
+- `ACME/Insurance/Microsoft/2026` - Microsoft 2026 pricing hub
+- `ACME/Insurance/GlobalManufacturing` - GlobalManufacturing insured hub
+- `ACME/Insurance/GlobalManufacturing/2024` - GlobalManufacturing 2024 pricing hub
 
 Each pricing gets its own hub context, enabling:
 - Independent scaling of busy pricings
 - Data isolation between clients
 - Separate file storage per pricing
 
-### Portal Architecture
+## Portal Architecture
 
 The `portal/[id]` address pattern creates individual hub instances for each browser session:
 
@@ -214,14 +212,14 @@ The `portal/[id]` address pattern creates individual hub instances for each brow
 - **Personalized Experience**: User-specific state and preferences
 - **Scalable Connections**: Portal instances distribute across servers
 
-## Interaction Flow
+# Interaction Flow
 
 The following diagram illustrates how components interact when a user views property risks:
 
 ```mermaid
 sequenceDiagram
     participant Portal as Portal Hub<br/>(portal/[session-id])
-    participant PricingHub as Pricing Hub<br/>(Cornerstone/Microsoft/2026)
+    participant PricingHub as Pricing Hub<br/>(ACME/Insurance/Microsoft/2026)
     participant UI as User Interface
     participant LayoutArea as PropertyRisks View
 
@@ -241,7 +239,7 @@ sequenceDiagram
     Portal->>UI: Refresh with new property risks
 ```
 
-### Step-by-Step Breakdown
+## Step-by-Step Breakdown
 
 1. **Subscription Phase**: The portal subscribes to views in the pricing hub
 2. **User Action**: User uploads an Excel file with property data
@@ -251,11 +249,11 @@ sequenceDiagram
 6. **Stream Update**: The updated DataGrid is streamed to all subscribed portals
 7. **UI Refresh**: The portal receives the update and refreshes the table
 
-## Views
+# Views
 
 MeshWeaver follows the MVVM pattern. Views are registered through NodeType configuration and executed reactively.
 
-### Pricing Views
+## Pricing Views
 
 | View | Description | Content |
 |------|-------------|---------|
@@ -266,7 +264,7 @@ MeshWeaver follows the MVVM pattern. Views are registered through NodeType confi
 | **Submission** | File management | File browser for uploads |
 | **Import Configs** | Import settings | Excel column mappings |
 
-### View Registration
+## View Registration
 
 Views are defined in `PricingViews.cs` and registered via the NodeType:
 
@@ -281,7 +279,7 @@ public static LayoutDefinition AddPricingViews(this LayoutDefinition layout) =>
         .WithView("ImportConfigs", ImportConfigs);
 ```
 
-### Reactive View Updates
+## Reactive View Updates
 
 Views return `IObservable<UiControl?>`, enabling reactive updates:
 
@@ -303,7 +301,7 @@ public static IObservable<UiControl?> PropertyRisks(LayoutAreaHost host, Renderi
 
 When property risks change, the observable emits new values and the view automatically updates.
 
-## Content Collections
+# Content Collections
 
 Pricings use ContentCollections for file management:
 
@@ -325,9 +323,9 @@ This enables:
 - **Version Tracking**: Track file changes over time
 - **Excel Import**: Import property risks from spreadsheets
 
-## Conclusion
+# Conclusion
 
-MeshWeaver's architecture provides a robust foundation for insurance applications. The Cornerstone sample demonstrates:
+MeshWeaver's architecture provides a robust foundation for insurance applications. The ACME Insurance sample demonstrates:
 
 - **Hierarchical Organization**: Insured → Pricing hierarchy with natural data partitioning
 - **Shared NodeTypes**: Pricing NodeType reused across all insureds

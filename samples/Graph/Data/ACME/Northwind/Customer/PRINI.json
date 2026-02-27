@@ -1,6 +1,6 @@
 {
   "id": "PRINI",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Princesa Isabel Vinhos",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

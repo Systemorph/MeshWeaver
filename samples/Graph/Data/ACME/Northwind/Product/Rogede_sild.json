@@ -1,6 +1,6 @@
 {
   "id": "Rogede_sild",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Rogede sild",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

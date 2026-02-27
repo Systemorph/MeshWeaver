@@ -1,6 +1,6 @@
 {
   "id": "Bigfoot_Breweries",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Bigfoot Breweries",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

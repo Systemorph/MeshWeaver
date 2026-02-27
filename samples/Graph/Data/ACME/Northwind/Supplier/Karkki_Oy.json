@@ -1,6 +1,6 @@
 {
   "id": "Karkki_Oy",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Karkki Oy",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

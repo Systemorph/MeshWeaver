@@ -1,6 +1,6 @@
 {
   "id": "GROSR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "GROSELLA-Restaurante",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

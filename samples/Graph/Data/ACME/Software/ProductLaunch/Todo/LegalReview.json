@@ -1,6 +1,6 @@
 {
   "id": "LegalReview",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Review legal compliance",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

@@ -1,6 +1,6 @@
 {
   "id": "BLAUS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Blauer See Delikatessen",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

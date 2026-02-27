@@ -5,8 +5,6 @@ Description: Interactive markdown is the future of software engineering. With th
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/InteractiveMarkdown/icon.svg
 ---
 
-# Interactive Markdown
-
 There is a tradition including executable code in markdown, for instance: [R Markdown](https://rmarkdown.rstudio.com/). This is a normal Markdown dialect that allows specifying executable code. This is very close to the [Literate Programming](https://en.wikipedia.org/wiki/Literate_programming) approach promoted by [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth).
 
 We decided to build on this and develop our own dialect of interactive markdown. The basic idea is very simple: additional flags can be specified in the heading of the fenced code blocks, analogous to command line arguments. Should the output be rendered, we specify:

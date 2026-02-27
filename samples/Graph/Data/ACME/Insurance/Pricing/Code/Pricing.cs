@@ -1,6 +1,6 @@
 // <meshweaver>
 // Id: Pricing
-// DisplayName: Cornerstone Pricing Data Model
+// DisplayName: ACME Insurance Pricing Data Model
 // </meshweaver>
 
 using System.ComponentModel;
@@ -108,7 +108,7 @@ public record Pricing : IContentInitializable
     [Dimension<LegalEntity>]
     [DisplayName("Legal Entity")]
     [UiControl(Style = "width: 200px;")]
-    [Description("The Cornerstone legal entity that will underwrite this risk")]
+    [Description("The ACME Insurance legal entity that will underwrite this risk")]
     public string? LegalEntity { get; init; }
 
     /// <summary>

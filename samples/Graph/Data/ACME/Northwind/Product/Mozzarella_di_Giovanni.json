@@ -1,6 +1,6 @@
 {
   "id": "Mozzarella_di_Giovanni",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Mozzarella di Giovanni",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

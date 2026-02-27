@@ -1,6 +1,6 @@
 {
   "id": "DemoEnvironment",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "path": "ACME/Software/ProductLaunch/Todo/DemoEnvironment",
   "name": "Set up demo environment",
   "nodeType": "ACME/Software/Project/Todo",

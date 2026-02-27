@@ -29,9 +29,10 @@
                          @onmousedown="() => NavigateToSuggestion(suggestion)"
                          @onmousedown:preventDefault>
                         <div class="search-dropdown-icon">
-                            @if (!string.IsNullOrEmpty(suggestion.Icon))
+                            @{ var iconUrl = MeshWeaver.Graph.MeshNodeImageHelper.GetIconAsImageUrl(suggestion.Icon); }
+                            @if (iconUrl != null)
                             {
-                                <img src="@suggestion.Icon" alt="" />
+                                <img src="@iconUrl" alt="" />
                             }
                             else
                             {

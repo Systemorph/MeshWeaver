@@ -5,13 +5,11 @@ Description: Build responsive layouts that adapt beautifully to any screen size
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/LayoutGrid/icon.svg
 ---
 
-# Adapting to Different Screens With Layout Grid
-
 The LayoutGrid control creates responsive layouts that automatically adapt to different screen sizes - from smartphones to large desktop monitors.
 
 ---
 
-## Why Responsive Design Matters
+# Why Responsive Design Matters
 
 Users access your application on many different devices:
 
@@ -25,7 +23,7 @@ A responsive layout ensures your UI looks good and works well on all of them - w
 
 ---
 
-## The 12-Column System
+# The 12-Column System
 
 LayoutGrid divides the screen into **12 equal columns**. Each item specifies how many columns it spans:
 
@@ -49,7 +47,7 @@ Controls.LayoutGrid
 
 ---
 
-## Breakpoints: Adapting to Screen Size
+# Breakpoints: Adapting to Screen Size
 
 The key to responsive design is **breakpoints** - screen widths where your layout changes. LayoutGrid provides five breakpoints:
 
@@ -65,7 +63,7 @@ The key to responsive design is **breakpoints** - screen widths where your layou
 
 ---
 
-## Designing for Small Screens (Smartphones)
+# Designing for Small Screens (Smartphones)
 
 On smartphones, screen space is precious. Best practices:
 
@@ -86,7 +84,7 @@ Controls.LayoutGrid
 
 ---
 
-## Designing for Medium Screens (Tablets)
+# Designing for Medium Screens (Tablets)
 
 Tablets offer more space but are often used in both portrait and landscape orientations:
 
@@ -107,7 +105,7 @@ Controls.LayoutGrid
 
 ---
 
-## Designing for Large Screens (Desktops)
+# Designing for Large Screens (Desktops)
 
 Desktop users have plenty of space - use it wisely:
 
@@ -130,9 +128,9 @@ Controls.LayoutGrid
 
 ---
 
-## Common Responsive Patterns
+# Common Responsive Patterns
 
-### Dashboard Cards
+## Dashboard Cards
 
 ```csharp
 Controls.LayoutGrid
@@ -143,7 +141,7 @@ Controls.LayoutGrid
     .WithView(metricCard4, s => s.WithXs(12).WithSm(6).WithLg(3))
 ```
 
-### Sidebar + Content
+## Sidebar + Content
 
 ```csharp
 Controls.LayoutGrid
@@ -151,7 +149,7 @@ Controls.LayoutGrid
     .WithView(content, s => s.WithXs(12).WithMd(9))   // Full width then main
 ```
 
-### Equal Thirds
+## Equal Thirds
 
 ```csharp
 Controls.LayoutGrid
@@ -162,7 +160,7 @@ Controls.LayoutGrid
 
 ---
 
-## Grid Configuration
+# Grid Configuration
 
 Configure the grid container via `.WithSkin()`:
 
@@ -173,7 +171,7 @@ Configure the grid container via `.WithSkin()`:
 
 ---
 
-## Item Configuration
+# Item Configuration
 
 Configure individual items via the skin function parameter:
 
@@ -187,7 +185,7 @@ Configure individual items via the skin function parameter:
 
 ---
 
-## See Also
+# See Also
 
 - [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Stack, Tabs, Toolbar
 - [DataGrid](MeshWeaver/Documentation/UserInterface/DataGrid) - Tabular data display

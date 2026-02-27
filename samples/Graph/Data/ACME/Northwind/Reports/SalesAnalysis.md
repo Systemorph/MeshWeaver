@@ -1,6 +1,6 @@
 ---
 NodeType: "ACME/Northwind/Article"
-Title: "Financial Report Comparing Sales by Category of Products in 2024 and 2025"
+Title: "Sales Analysis by Category of Products"
 Abstract: "This document provides a comprehensive financial report comparing sales by category of products for the years 2024 and 2025. It highlights the growth in sales across various categories, showcasing overall performance and market trends. The financial analysis underscores the leading categories, such as beverages and dairy products, which together account for nearly 40% of total sales. It also identifies opportunities for growth in grains/cereals and produce through strategic initiatives."
 Icon: "Document"
 Thumbnail: "images/SalesAnalysis.png"
@@ -17,8 +17,6 @@ Tags:
   - "Revenue Growth"
   - "Business Insights"
 ---
-
-# Sales Analysis by Category of Products
 
 This report provides a detailed comparison of sales across various product categories between the years 2024 and 2025. The analysis highlights the growth in sales for each category, showcasing the overall performance and trends within the market. The data reveals significant increases in sales across all categories, with some experiencing remarkable growth rates.
 
@@ -39,7 +37,7 @@ Click the year above the chart to select which information to display.
 
 @@("ACME/Northwind/Analytics/SalesByCategoryComparison")
 
-### Category Performance Insights
+## Category Performance Insights
 
 The financial analysis reveals that the leading categories such as beverages and dairy products are the market leaders, together accounting for nearly **40%** of total sales. These categories have demonstrated consistent performance and customer demand throughout the analyzed period.
 

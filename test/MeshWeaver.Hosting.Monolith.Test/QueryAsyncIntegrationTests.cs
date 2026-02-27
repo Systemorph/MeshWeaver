@@ -295,7 +295,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     /// Tests the scenario from samples/Graph/Data:
     /// - ACME/Project is a NodeType
     /// - ACME/Project/TodoAgent is an Agent defined under that NodeType
-    /// - ACME/ProductLaunch has nodeType="Demos/ACME/Project"
+    /// - ACME/ProductLaunch has nodeType="ACME/Software/Project"
     ///
     /// When querying for agents at ACME/ProductLaunch, we should:
     /// 1. Get the node's NodeType (ACME/Project)
@@ -307,33 +307,33 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     {
         // Arrange - Set up the sample data structure
         // NodeType definition at ACME/Project
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
         });
 
         // Agent defined as a child of the NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project/TodoAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
         });
 
         // Instance of the NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/ProductLaunch") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
-            NodeType = "Demos/ACME/Project"  // This points to the NodeType
+            NodeType = "ACME/Software/Project"  // This points to the NodeType
         });
 
         // Act - Simulate the agent discovery flow
         // Step 1: Get the ProductLaunch node to find its NodeType
-        var nodeQuery = "path:Demos/ACME/ProductLaunch scope:self";
+        var nodeQuery = "path:ACME/Software/ProductLaunch scope:self";
         var nodeResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(nodeQuery)).ToListAsync();
         nodeResults.Should().HaveCount(1);
         var productLaunchNode = nodeResults.First() as MeshNode;
-        productLaunchNode!.NodeType.Should().Be("Demos/ACME/Project");
+        productLaunchNode!.NodeType.Should().Be("ACME/Software/Project");
 
         // Step 2: Query for agents under the NodeType with scope:hierarchy
         var nodeTypePath = productLaunchNode.NodeType;
@@ -344,40 +344,40 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         agentResults.Should().HaveCount(1);
         var todoAgent = agentResults.First() as MeshNode;
         todoAgent!.Name.Should().Be("Project Task Agent");
-        todoAgent.Path.Should().Be("Demos/ACME/Project/TodoAgent");
+        todoAgent.Path.Should().Be("ACME/Software/Project/TodoAgent");
     }
 
     [Fact]
     public async Task QueryAsync_ScopeHierarchy_FindsMultipleAgentsUnderNodeType()
     {
         // Arrange - Multiple agents under a NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project/TodoAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project/ReportAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project/ReportAgent") with
         {
             Name = "Project Report Agent",
             NodeType = "Agent"
         });
 
         // A non-agent child should not be included
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project/Todo") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project/Todo") with
         {
             Name = "Todo NodeType",
             NodeType = "NodeType"
         });
 
         // Act
-        var agentQuery = "path:Demos/ACME/Project nodeType:Agent scope:hierarchy";
+        var agentQuery = "path:ACME/Software/Project nodeType:Agent scope:hierarchy";
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find both agents but not the Todo NodeType
@@ -392,20 +392,20 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_IncludesSelfIfMatchesFilter()
     {
         // Arrange - The NodeType path itself could also be an agent
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project") with
         {
             Name = "Project Agent",
             NodeType = "Agent"  // The path itself is an Agent
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project/TodoAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
         });
 
         // Act
-        var agentQuery = "path:Demos/ACME/Project nodeType:Agent scope:hierarchy";
+        var agentQuery = "path:ACME/Software/Project nodeType:Agent scope:hierarchy";
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find both the path itself (if it's an agent) and its children
@@ -438,21 +438,21 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             NodeType = "Organization"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/ACMEAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/ACMEAgent") with
         {
             Name = "ACME Agent",
             NodeType = "Agent"
         });
 
         // NodeType at ACME/Project
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
         });
 
         // Agent under the NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/Project/TodoAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
@@ -460,7 +460,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
 
         // Act - Query with hierarchy scope from ACME/Project
         // Should find: Navigator (root), ACME/ACMEAgent (ancestor's child via hierarchy), ACME/Project/TodoAgent (descendant)
-        var agentQuery = "path:Demos/ACME/Project nodeType:Agent scope:hierarchy";
+        var agentQuery = "path:ACME/Software/Project nodeType:Agent scope:hierarchy";
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find agents both above and below ACME/Project
@@ -487,7 +487,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             NodeType = "Agent"  // The ACME node itself is an Agent
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/ProductLaunch") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "Project"
@@ -495,7 +495,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
 
         // Act - Query for agents looking up the tree from ProductLaunch
         // This checks: ACME/ProductLaunch (self), ACME (parent)
-        var agentQuery = "path:Demos/ACME/ProductLaunch nodeType:Agent scope:selfAndAncestors";
+        var agentQuery = "path:ACME/Software/ProductLaunch nodeType:Agent scope:selfAndAncestors";
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find the ACME root agent because it's at the exact parent path
@@ -519,13 +519,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
 
         // GlobalAgent is a CHILD of ACME - should be found when searching from ACME/ProductLaunch
         // because ACME is an ancestor, and we search children of ancestors
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/GlobalAgent") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/GlobalAgent") with
         {
             Name = "Global Agent",
             NodeType = "Agent"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Demos/ACME/ProductLaunch") with
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Software/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "Project"
@@ -534,7 +534,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         // Act - Query for agents looking up the tree
         // This checks children of: ACME/ProductLaunch (self), ACME (parent), and root
         // GlobalAgent is a child of ACME, so it should be found
-        var agentQuery = "path:Demos/ACME/ProductLaunch nodeType:Agent scope:selfAndAncestors";
+        var agentQuery = "path:ACME/Software/ProductLaunch nodeType:Agent scope:selfAndAncestors";
         var agentResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(agentQuery)).ToListAsync();
 
         // Assert - Should find GlobalAgent because we search children of ancestors

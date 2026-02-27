@@ -1,6 +1,6 @@
 {
   "id": "R\u00f6ssle_Sauerkraut",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "R\u00f6ssle Sauerkraut",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

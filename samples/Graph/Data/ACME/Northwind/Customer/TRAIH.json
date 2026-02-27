@@ -1,6 +1,6 @@
 {
   "id": "TRAIH",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Trail's Head Gourmet Provisioners",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

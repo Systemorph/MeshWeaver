@@ -1,6 +1,6 @@
 {
   "id": "Oliver_Access",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind",
   "name": "Oliver Access",
   "nodeType": "AccessAssignment",
   "content": {

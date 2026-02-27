@@ -1,6 +1,6 @@
 {
   "id": "R\u00f6d_Kaviar",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "R\u00f6d Kaviar",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",
