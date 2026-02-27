@@ -108,6 +108,9 @@ public static class MemexConfiguration
         services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
 
+        // Register API token service for MCP bearer auth
+        services.AddSingleton<ApiTokenService>();
+
         // Configure authentication
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
         var entraIdConfig = builder.Configuration.GetSection("EntraId");
@@ -148,8 +151,12 @@ public static class MemexConfiguration
         {
             // Legacy single-provider MicrosoftIdentity mode (OIDC via EntraId section)
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+            var legacyAuthBuilder = services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
+            // Add API token auth scheme (must use the underlying services, not the MSAL builder)
+            services.AddAuthentication()
+                .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
+                    ApiTokenAuthenticationHandler.SchemeName, _ => { });
             services.AddControllersWithViews()
                 .AddMicrosoftIdentityUI();
         }
@@ -244,9 +251,21 @@ public static class MemexConfiguration
                         break;
                 }
             }
+
+            // Add API token auth scheme for MCP bearer authentication
+            authBuilder.AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
+                ApiTokenAuthenticationHandler.SchemeName, _ => { });
         }
 
-        services.AddAuthorization();
+        // Add authorization with McpAuth policy (ApiToken scheme only — no cookie redirects for API clients)
+        services.AddAuthorization(options =>
+        {
+            options.AddPolicy("McpAuth", policy =>
+            {
+                policy.AddAuthenticationSchemes(ApiTokenAuthenticationHandler.SchemeName);
+                policy.RequireAuthenticatedUser();
+            });
+        });
     }
 
     extension<TBuilder>(TBuilder builder) where TBuilder : MeshBuilder

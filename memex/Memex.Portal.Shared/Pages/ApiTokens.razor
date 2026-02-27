@@ -1,0 +1,320 @@
+@page "/settings/api-tokens"
+@using Memex.Portal.Shared.Authentication
+@using System.Text.Json
+@using Microsoft.AspNetCore.Authorization
+@attribute [Authorize]
+@inject NavigationManager Navigation
+@inject IHttpClientFactory HttpClientFactory
+
+<PageTitle>API Tokens - Memex Portal</PageTitle>
+
+<div class="api-tokens-container">
+    <div class="api-tokens-card">
+        <div class="api-tokens-header">
+            <FluentIcon Value="@(new Icons.Regular.Size24.Key())" />
+            <h1>API Tokens</h1>
+            <p class="api-tokens-subtitle">Manage personal access tokens for API and MCP access</p>
+        </div>
+
+        @if (!string.IsNullOrEmpty(successMessage))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Success" Style="margin-bottom: 1rem;">
+                @successMessage
+            </FluentMessageBar>
+        }
+
+        @if (!string.IsNullOrEmpty(error))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
+                @error
+            </FluentMessageBar>
+        }
+
+        @* Show newly created token (only once) *@
+        @if (!string.IsNullOrEmpty(newlyCreatedToken))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Warning" Style="margin-bottom: 1rem;">
+                <div>
+                    <strong>Copy your token now — it won't be shown again!</strong>
+                    <div style="margin-top: 8px; font-family: monospace; background: var(--neutral-layer-4); padding: 8px 12px; border-radius: 4px; word-break: break-all; user-select: all;">
+                        @newlyCreatedToken
+                    </div>
+                </div>
+            </FluentMessageBar>
+        }
+
+        @* Create new token form *@
+        <div class="create-token-section">
+            <h3>Create New Token</h3>
+            <FluentStack Orientation="Orientation.Horizontal" HorizontalGap="12" VerticalAlignment="VerticalAlignment.Bottom" Wrap="true">
+                <FluentTextField @bind-Value="newTokenLabel" Label="Label" Placeholder="e.g. Claude Code" Style="min-width: 200px;" />
+                <FluentNumberField @bind-Value="newTokenExpiryDays" Label="Expires in (days)" Min="0" Max="365" Placeholder="0 = never" Style="min-width: 140px;" />
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent" OnClick="CreateToken" Disabled="@isCreating">
+                    @if (isCreating)
+                    {
+                        <FluentProgressRing Style="width: 16px; height: 16px;" />
+                    }
+                    else
+                    {
+                        <span>Generate Token</span>
+                    }
+                </FluentButton>
+            </FluentStack>
+        </div>
+
+        @* Token list *@
+        <div class="token-list-section">
+            <h3>Your Tokens</h3>
+            @if (isLoading)
+            {
+                <FluentProgressRing />
+            }
+            else if (tokens.Count == 0)
+            {
+                <p style="color: var(--neutral-foreground-hint);">No tokens yet. Create one above to get started.</p>
+            }
+            else
+            {
+                <FluentDataGrid Items="@tokens.AsQueryable()" Style="width: 100%;">
+                    <PropertyColumn Property="@(t => t.Label)" Title="Label" />
+                    <PropertyColumn Property="@(t => t.HashPrefix)" Title="Token ID" />
+                    <PropertyColumn Property="@(t => t.CreatedAt.ToString("yyyy-MM-dd"))" Title="Created" />
+                    <TemplateColumn Title="Expires">
+                        @if (context.ExpiresAt.HasValue)
+                        {
+                            <span style="@(context.ExpiresAt.Value < DateTimeOffset.UtcNow ? "color: var(--error);" : "")">
+                                @context.ExpiresAt.Value.ToString("yyyy-MM-dd")
+                            </span>
+                        }
+                        else
+                        {
+                            <span style="color: var(--neutral-foreground-hint);">Never</span>
+                        }
+                    </TemplateColumn>
+                    <TemplateColumn Title="Last Used">
+                        @if (context.LastUsedAt.HasValue)
+                        {
+                            @context.LastUsedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                        }
+                        else
+                        {
+                            <span style="color: var(--neutral-foreground-hint);">Never</span>
+                        }
+                    </TemplateColumn>
+                    <TemplateColumn Title="Status">
+                        @if (context.IsRevoked)
+                        {
+                            <FluentBadge Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Lightweight" Color="Color.Error">Revoked</FluentBadge>
+                        }
+                        else if (context.ExpiresAt.HasValue && context.ExpiresAt.Value < DateTimeOffset.UtcNow)
+                        {
+                            <FluentBadge Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Lightweight" Color="Color.Warning">Expired</FluentBadge>
+                        }
+                        else
+                        {
+                            <FluentBadge Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Lightweight" Color="Color.Success">Active</FluentBadge>
+                        }
+                    </TemplateColumn>
+                    <TemplateColumn Title="Actions">
+                        @if (!context.IsRevoked)
+                        {
+                            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Outline" OnClick="@(() => RevokeToken(context))" title="Revoke this token">
+                                Revoke
+                            </FluentButton>
+                        }
+                    </TemplateColumn>
+                </FluentDataGrid>
+            }
+        </div>
+
+        <div style="margin-top: 24px;">
+            <FluentAnchor Href="/" Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Hypertext">Back to home</FluentAnchor>
+        </div>
+    </div>
+</div>
+
+<style>
+    .api-tokens-container {
+        display: flex;
+        justify-content: center;
+        padding: 32px 16px;
+    }
+
+    .api-tokens-card {
+        max-width: 960px;
+        width: 100%;
+    }
+
+    .api-tokens-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+    }
+
+    .api-tokens-header h1 {
+        margin: 0;
+        font-size: 1.5rem;
+    }
+
+    .api-tokens-subtitle {
+        width: 100%;
+        margin: 4px 0 0 36px;
+        color: var(--neutral-foreground-hint);
+        font-size: 0.9rem;
+    }
+
+    .create-token-section {
+        margin-bottom: 32px;
+        padding: 16px;
+        background: var(--neutral-layer-2);
+        border-radius: 8px;
+    }
+
+    .create-token-section h3 {
+        margin: 0 0 12px 0;
+        font-size: 1rem;
+    }
+
+    .token-list-section h3 {
+        margin: 0 0 12px 0;
+        font-size: 1rem;
+    }
+</style>
+
+@code {
+    private List<ApiTokenInfo> tokens = new();
+    private bool isLoading = true;
+    private bool isCreating;
+    private string? error;
+    private string? successMessage;
+    private string? newlyCreatedToken;
+    private string newTokenLabel = "";
+    private int newTokenExpiryDays;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTokens();
+    }
+
+    private async Task LoadTokens()
+    {
+        try
+        {
+            isLoading = true;
+            error = null;
+            var client = CreateClient();
+            var response = await client.GetAsync("/api/tokens");
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                tokens = JsonSerializer.Deserialize<List<ApiTokenInfo>>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            }
+            else
+            {
+                error = $"Failed to load tokens: {response.StatusCode}";
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"Error loading tokens: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task CreateToken()
+    {
+        if (string.IsNullOrWhiteSpace(newTokenLabel))
+        {
+            error = "Please enter a label for the token.";
+            return;
+        }
+
+        try
+        {
+            isCreating = true;
+            error = null;
+            successMessage = null;
+            newlyCreatedToken = null;
+
+            var client = CreateClient();
+            var request = new { label = newTokenLabel, expiresInDays = newTokenExpiryDays > 0 ? newTokenExpiryDays : (int?)null };
+            var response = await client.PostAsJsonAsync("/api/tokens", request);
+
+            if (response.IsSuccessStatusCode)
+            {
+                var json = await response.Content.ReadAsStringAsync();
+                var result = JsonSerializer.Deserialize<CreateTokenResponse>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                newlyCreatedToken = result?.RawToken;
+                successMessage = $"Token '{newTokenLabel}' created successfully.";
+                newTokenLabel = "";
+                newTokenExpiryDays = 0;
+                await LoadTokens();
+            }
+            else
+            {
+                error = $"Failed to create token: {response.StatusCode}";
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"Error creating token: {ex.Message}";
+        }
+        finally
+        {
+            isCreating = false;
+        }
+    }
+
+    private async Task RevokeToken(ApiTokenInfo token)
+    {
+        try
+        {
+            error = null;
+            successMessage = null;
+            newlyCreatedToken = null;
+
+            var client = CreateClient();
+            var response = await client.DeleteAsync($"/api/tokens/{token.NodePath}");
+
+            if (response.IsSuccessStatusCode)
+            {
+                successMessage = $"Token '{token.Label}' has been revoked.";
+                await LoadTokens();
+            }
+            else
+            {
+                error = $"Failed to revoke token: {response.StatusCode}";
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"Error revoking token: {ex.Message}";
+        }
+    }
+
+    private HttpClient CreateClient()
+    {
+        var client = HttpClientFactory.CreateClient();
+        client.BaseAddress = new Uri(Navigation.BaseUri);
+        return client;
+    }
+
+    private static class Icons
+    {
+        public static class Regular
+        {
+            public static class Size24
+            {
+                public class Key : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.Key { }
+            }
+        }
+    }
+}

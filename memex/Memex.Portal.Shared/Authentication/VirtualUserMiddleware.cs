@@ -23,6 +23,13 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 
     public async Task InvokeAsync(HttpContext context)
     {
+        // Skip virtual user assignment for MCP requests — they should get 401, not a virtual identity
+        if (context.Request.Path.StartsWithSegments("/mcp"))
+        {
+            await next(context);
+            return;
+        }
+
         if (context.User?.Identity?.IsAuthenticated != true)
         {
             var virtualUserId = GetOrCreateVirtualUserId(context);
