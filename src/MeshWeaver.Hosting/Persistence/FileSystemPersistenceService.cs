@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// File system persistence service with in-memory caching.
 /// Reads from file system on cache miss, with 10-minute sliding expiration.
 /// </summary>
-public class FileSystemPersistenceService : IPersistenceServiceCore
+public class FileSystemPersistenceService : IPersistenceServiceCore, IDisposable
 {
     private readonly IStorageAdapter _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -20,6 +20,7 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
     {
         SlidingExpiration = TimeSpan.FromMinutes(15)
     };
+    private readonly IDisposable? _changeSubscription;
 
     public FileSystemPersistenceService(
         IStorageAdapter storageAdapter,
@@ -27,6 +28,23 @@ public class FileSystemPersistenceService : IPersistenceServiceCore
     {
         _storageAdapter = storageAdapter;
         _changeNotifier = changeNotifier;
+
+        // Subscribe to external change notifications to invalidate cache
+        _changeSubscription = _changeNotifier?.Subscribe(OnExternalChange);
+    }
+
+    private void OnExternalChange(DataChangeNotification notification)
+    {
+        if (notification.Kind == DataChangeKind.Deleted)
+        {
+            _cache.Remove(NormalizePath(notification.Path));
+        }
+    }
+
+    public void Dispose()
+    {
+        _changeSubscription?.Dispose();
+        _cache.Dispose();
     }
 
     private static string NormalizePath(string? path) =>

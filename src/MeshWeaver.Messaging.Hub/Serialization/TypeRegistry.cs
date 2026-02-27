@@ -174,7 +174,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
                 }
             }
             typeName =
-                $"{FormatType(genericTypeDefinition)}[{string.Join(',', genericTypeArguments)}]";
+                $"{GetOrAddType(genericTypeDefinition)}[{string.Join(',', genericTypeArguments)}]";
             return true;
         }
 
