@@ -135,8 +135,10 @@ flowchart LR
     subgraph Tools["MeshPlugin"]
         G[Get]
         S[Search]
-        N[NavigateTo]
+        C[Create]
         U[Update]
+        D[Delete]
+        N[NavigateTo]
     end
     A[AI Agent] --> Tools
     Tools --> M[Mesh]
@@ -144,20 +146,21 @@ flowchart LR
 
 ### Read Operations
 
-**Get** - Retrieve data by path:
+**Get** — Retrieve data by path:
 ```
 Get("@Insurance/Claims/CLM-2024-001")     -> Returns claim JSON
-Get("@Insurance/Claims/*")                -> Returns all claims
-Get("@Insurance/Underwriting/SUB-5678")   -> Returns submission data
+Get("@Insurance/Claims/*")                -> Returns all claims (children)
 ```
 
-**Get Content** - Retrieve attachments and documents:
+**Get with Unified Path prefixes** — Access schemas and metadata:
 ```
-Get("@Insurance/Claims/CLM-2024-001/content:LossReport.pdf")
-Get("@MeshWeaver/Documentation/Architecture/content:diagram.svg")
+Get("@ACME/Insurance/schema:")             -> JSON Schema for content type
+Get("@ACME/Insurance/schema:Pricing")      -> Schema for a specific named type
+Get("@ACME/Insurance/model:")              -> Full data model with all types
+Get("@ACME/Insurance/metadata:")           -> MeshNode without content
 ```
 
-**Search** - Query with GitHub-style syntax:
+**Search** — Query with GitHub-style syntax:
 ```
 Search("nodeType:Claim status:Open")        -> All open claims
 Search("name:*property*")                   -> Name contains 'property'
@@ -166,31 +169,47 @@ Search("lob:Commercial", "@Insurance")      -> Commercial LOB under Insurance
 
 ### Write Operations
 
-**Update** - Create or modify nodes:
+**Create** — Create new nodes:
 ```
-Update("@Insurance/Claims/CLM-2024-002", {
-  "name": "Property Damage Claim",
-  "nodeType": "Claim",
-  "status": "Open"
-})
+Create('{"id": "CLM-2024-002", "namespace": "Insurance/Claims",
+  "name": "Property Damage Claim", "nodeType": "Claim",
+  "content": {"status": "Open"}}')
+```
+
+**Update** — Modify existing nodes (Get → modify → Update):
+```
+// 1. Get existing: result = Get("@Insurance/Claims/CLM-2024-001")
+// 2. Modify the JSON
+// 3. Pass as array:
+Update('[{"id": "CLM-2024-001", "namespace": "Insurance/Claims",
+  "name": "Updated Claim", "nodeType": "Claim",
+  "content": {"status": "Closed"}}]')
+```
+
+**Delete** — Remove nodes by path:
+```
+Delete('["Insurance/Claims/CLM-2024-002"]')
 ```
 
 ### Navigation
 
-**NavigateTo** - Display a node's view in the UI:
+**NavigateTo** — Display a node's view in the UI:
 ```
 NavigateTo("@Insurance/Claims/CLM-2024-001")  -> Shows claim detail view
 ```
 
-## Path Shorthand
+## Path Shorthand & Unified Path
 
-The `@` prefix provides convenient shorthand:
+The `@` prefix provides convenient shorthand. Unified Path prefixes access specific resource types:
 
-| Shorthand | Full Path |
-|-----------|----------|
-| `@Insurance/Claims/CLM-001` | `Insurance/Claims/CLM-001` |
-| `@NodeType/*` | `NodeType/*` |
-| `@Insurance/Claims/CLM-001/content:doc.pdf` | Content attachment |
+| Syntax | Returns |
+|--------|---------|
+| `@Insurance/Claims/CLM-001` | Full node JSON |
+| `@Insurance/Claims/*` | Direct children |
+| `@ACME/Insurance/schema:` | Content type JSON Schema |
+| `@ACME/Insurance/schema:TypeName` | Schema for a specific named type |
+| `@ACME/Insurance/model:` | Full data model |
+| `@ACME/Insurance/metadata:` | Node without content |
 
 ## Include External MCP Servers
 
@@ -242,6 +261,29 @@ flowchart RL
 - **Microsoft Copilot**: Query business data when composing Word documents or emails
 - **Snowflake Agents**: Access organizational context and workflows
 - **Custom Integrations**: Any MCP-compatible AI system
+
+### MCP Server Tools
+
+The MCP server exposes the same mesh operations as the internal MeshPlugin, so external AI systems get full access:
+
+| Tool | Description |
+|------|-------------|
+| **Get** | Retrieve nodes by path. Supports `@` shorthand, `/*` for children, and Unified Path prefixes (`schema:`, `model:`, `metadata:`) |
+| **Search** | Query nodes using GitHub-style syntax with optional base path scoping |
+| **Create** | Create new nodes from JSON MeshNode objects |
+| **Update** | Update existing nodes (pass JSON array of complete MeshNode objects) |
+| **Delete** | Delete nodes by path (pass JSON array of path strings) |
+| **NavigateTo** | Returns a URL to view a node in the MeshWeaver UI |
+
+**Key difference from internal MeshPlugin:** `NavigateTo` returns a browser URL (e.g., `https://app.example.com/node/Insurance%2FClaims`) rather than rendering inline, since external consumers operate outside the MeshWeaver UI.
+
+**Example — Claude Code using MeshWeaver MCP:**
+```
+Get("@ACME/Insurance/Claims/*")           -> List all claims
+Get("@ACME/Insurance/schema:")             -> Get content type schema
+Search("nodeType:Claim status:Open")       -> Find open claims
+Create('{"id": "CLM-NEW", ...}')           -> Create a claim
+```
 
 ## Alternative AI APIs
 

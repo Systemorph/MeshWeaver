@@ -24,8 +24,9 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 
 | I want to... | Go here |
 |--------------|---------|
-| Use mesh tools in agents | [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin) - Get, Search, Update, NavigateTo |
+| Use mesh tools in agents | [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
 | Understand agent architecture | [Agentic AI](MeshWeaver/Documentation/Architecture/AgenticAI) - Multi-agent patterns |
+| Connect external AI via MCP | [MCP Integration](MeshWeaver/Documentation/Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
 | See AI in action | [ACME Case Studies](Demos/ACME/Documentation) - Practical examples |
 
 ---
@@ -38,10 +39,18 @@ The MeshPlugin provides AI agents with tools to interact with the mesh:
 
 | Tool | Purpose |
 |------|---------|
-| **Get** | Retrieve nodes by path (`@path` or `@path/*` for children) |
+| **Get** | Retrieve nodes by path (`@path`, `@path/*` for children, `@path/schema:` for schemas) |
 | **Search** | Query nodes using GitHub-style syntax |
+| **Create** | Create new nodes with validated MeshNode JSON |
+| **Update** | Update existing nodes (Get → modify → Update workflow) |
+| **Delete** | Delete nodes by path |
 | **NavigateTo** | Display a node's visual representation |
-| **Update** | Create or modify nodes |
+
+Get supports **Unified Path prefixes** for accessing schemas and metadata:
+- `Get('@path/schema:')` — JSON Schema for the node's content type
+- `Get('@path/schema:TypeName')` — Schema for a specific type (nodes with multiple data types)
+- `Get('@path/model:')` — Full data model
+- `Get('@path/metadata:')` — MeshNode without content
 
 [Read more: MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin)
 
@@ -100,8 +109,8 @@ Use `NavigateTo` instead of returning raw JSON.
 Before creating or modifying data:
 
 1. Use `Search` to find existing items
-2. Use `Get` to retrieve schemas and context
-3. Then use `Update` with properly structured data
+2. Use `Get('@path/schema:')` to discover content schemas
+3. Use `Create` for new nodes, or `Get` → modify → `Update` for existing ones
 
 ### Context-Aware Responses
 
