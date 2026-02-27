@@ -1,43 +1,41 @@
 ---
-Name: Query Syntax
+Name: Query Syntax Reference
 Category: Documentation
 Description: Documentation for the GitHub-style query syntax
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/QuerySyntax/icon.svg
 ---
 
-# Query Syntax Reference
-
 MeshWeaver uses a GitHub-style query syntax for searching and filtering nodes. This document describes all available query features.
 
-## Basic Syntax
+# Basic Syntax
 
 Queries consist of space-separated terms. Each term can be:
 - **Field filter**: `field:value` - matches nodes where field equals value
 - **Negation**: `-field:value` - excludes nodes where field equals value
 - **Text search**: `keyword` - searches in name and description
 
-## Field Filters
+# Field Filters
 
-### Equality
+## Equality
 ```
 nodeType:Organization
 name:Acme
 status:Active
 ```
 
-### Negation
+## Negation
 ```
 -status:Archived
 ```
 
-### Wildcard Patterns
+## Wildcard Patterns
 ```
 name:*claims*     # Contains 'claims'
 name:Acme*        # Starts with 'Acme'
 name:*Corp        # Ends with 'Corp'
 ```
 
-### Comparison Operators
+## Comparison Operators
 ```
 price:>100        # Greater than 100
 price:<50         # Less than 50
@@ -45,20 +43,20 @@ price:>=100       # Greater than or equal
 price:<=50        # Less than or equal
 ```
 
-### List Values (OR)
+## List Values (OR)
 ```
 status:(Active OR Pending OR Draft)
 nodeType:(Organization OR Project)
 ```
 
-### Empty Values
+## Empty Values
 ```
 description:       # Matches nodes with no description
 ```
 
-## Reserved Qualifiers
+# Reserved Qualifiers
 
-### namespace
+## namespace
 Sets the search location (like a folder). Default scope is `children` (immediate children only):
 ```
 namespace:Systemorph          # Immediate children of Systemorph
@@ -70,7 +68,7 @@ Use `scope:descendants` for recursive search:
 namespace:Systemorph scope:descendants  # All items under Systemorph (recursive)
 ```
 
-### scope
+## scope
 Controls the search scope relative to namespace or path:
 ```
 scope:exact           # Only the exact path (default for path:)
@@ -82,14 +80,14 @@ scope:subtree         # Self + all descendants
 scope:ancestorsandself # Self + all ancestors
 ```
 
-### path
+## path
 Sets the base path for search (default scope is `exact`):
 ```
 path:Systemorph                # The exact Systemorph node
 path:Systemorph scope:children # Immediate children of Systemorph
 ```
 
-### sort
+## sort
 Specifies sort order:
 ```
 sort:name          # Sort by name ascending
@@ -97,14 +95,14 @@ sort:name-desc     # Sort by name descending
 sort:lastModified-desc  # Most recently modified first
 ```
 
-### limit
+## limit
 Limits the number of results:
 ```
 limit:10           # Return at most 10 results
 limit:50           # Return at most 50 results
 ```
 
-### source
+## source
 Specifies the data source:
 ```
 source:activity    # Results ordered by user's last access time
@@ -120,7 +118,7 @@ source:activity nodeType:Thread namespace:ACME scope:descendants  # Recently acc
 source:activity nodeType:Document limit:10                        # Last 10 accessed documents
 ```
 
-### context
+## context
 Filters results by visibility context. Nodes (or their NodeType definitions) can declare contexts from which they should be excluded via the `ExcludeFromContext` property. This enables different views of the same data:
 ```
 context:search         # Exclude nodes hidden from search
@@ -135,7 +133,7 @@ namespace:ACME scope:descendants context:search  # Searchable nodes under ACME
 
 Nodes are **inclusive by default** — a node without `ExcludeFromContext` is visible in all contexts. A node with `ExcludeFromContext: ["search"]` is excluded only from `context:search` queries but visible everywhere else.
 
-### select
+## select
 Projects results to include only the specified properties. Returns lightweight dictionaries instead of full nodes:
 ```
 select:name                          # Single property
@@ -148,7 +146,7 @@ namespace:Systemorph select:name,nodeType
 nodeType:Story select:path,name sort:name limit:10
 ```
 
-## Complex Queries
+# Complex Queries
 
 Combine multiple filters:
 ```
@@ -159,23 +157,23 @@ nodeType:Story name:*claims* sort:lastModified-desc limit:20
 namespace:ACME/ProductLaunch nodeType:Todo scope:descendants
 ```
 
-## Query in Context
+# Query in Context
 
-### NodeType Catalog
+## NodeType Catalog
 When viewing a NodeType (e.g., Organization), the default query is:
 ```
 nodeType:Organization
 ```
 This finds all instances of Organization.
 
-### Instance Catalog
+## Instance Catalog
 When viewing an instance (e.g., Systemorph), the default query is:
 ```
 namespace:Systemorph
 ```
 This finds immediate children of Systemorph. Use `scope:descendants` for recursive search.
 
-## Select (Property Lookup)
+# Select (Property Lookup)
 
 The `SelectAsync` API provides an efficient way to retrieve a single property value from a node at a given path, without loading the full content blob.
 
@@ -194,7 +192,7 @@ This is useful when you only need one property and want to avoid the overhead of
 
 Available properties include any property on `MeshNode`: `Name`, `NodeType`, `Path`, `Icon`, `Description`, etc.
 
-## Tips
+# Tips
 
 1. **Case insensitive**: All comparisons are case-insensitive
 2. **Namespace = folder**: `namespace:X` is like searching in folder X (immediate children)

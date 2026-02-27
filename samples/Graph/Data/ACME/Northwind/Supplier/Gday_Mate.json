@@ -1,6 +1,6 @@
 {
   "id": "Gday_Mate",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "G'day, Mate",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

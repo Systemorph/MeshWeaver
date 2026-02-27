@@ -1,11 +1,9 @@
 ---
-Name: Data Binding
+Name: Data Binding in MeshWeaver Layout
 Category: Documentation
 Description: How reactive two-way data binding works in MeshWeaver Layout using JSON Pointers
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/DataBinding/icon.svg
 ---
-
-# Data Binding in MeshWeaver Layout
 
 Data binding connects your data objects to UI controls. You bind an object to the UI, the user edits it, and changes sync back to the server. The binding is **two-way**: the server can push updates to the UI, and user input flows back to the server.
 
@@ -21,7 +19,7 @@ flowchart LR
     UI -->|"User edits sync back"| D
 ```
 
-## Layout Area Structure
+# Layout Area Structure
 
 A layout area consists of two parts: **areas** (the UI controls) and **data** (the bound objects). Controls reference data locations using `JsonPointerReference`.
 
@@ -42,7 +40,7 @@ flowchart TB
 
 When the user types in the TextFieldControl, the value at `/data/person/name` updates. When server code updates the data, the TextFieldControl displays the new value.
 
-## DataContext
+# DataContext
 
 The `DataContext` property sets the base path for data binding. All `JsonPointerReference` values are resolved relative to this path.
 
@@ -53,7 +51,7 @@ new EditorControl { DataContext = "/data/person" }
 
 When you call `Edit(instance, "person")`, the data is stored at `/data/person` and the generated controls have `DataContext = "/data/person"`.
 
-## JsonPointerReference
+# JsonPointerReference
 
 `JsonPointerReference` points a control's value to a location in the data section. The pointer is **relative to DataContext**:
 
@@ -82,7 +80,7 @@ flowchart LR
     Ref --> Path
 ```
 
-## Updating Data
+# Updating Data
 
 To update the bound data from server code, use `UpdateData`:
 
@@ -93,7 +91,7 @@ host.UpdateData("person", new Person { Name = "Bob", Age = 25 });
 
 This updates `/data/person` and all bound controls automatically reflect the change.
 
-## The Edit Macro
+# The Edit Macro
 
 The `Edit` method is the easiest way to create a data-bound editor. It generates controls for each property automatically:
 
@@ -102,7 +100,7 @@ The `Edit` method is the easiest way to create a data-bound editor. It generates
 host.Hub.Edit(new Calculator(), "calc");
 ```
 
-### Property Type Mapping
+## Property Type Mapping
 
 | Property Type | Generated Control |
 |---------------|-------------------|
@@ -113,7 +111,7 @@ host.Hub.Edit(new Calculator(), "calc");
 | `[Dimension<T>]` | `SelectControl` |
 | `[UiControl<T>]` | Custom control |
 
-### Example
+## Example
 
 ```csharp
 public record Calculator
@@ -130,7 +128,7 @@ public record Calculator
 host.Hub.Edit(new Calculator(), "calc");
 ```
 
-## Edit with Result Callback
+# Edit with Result Callback
 
 Add a result callback to compute derived values from user input:
 
@@ -156,7 +154,7 @@ sequenceDiagram
     Client->>User: Display "Result: 5"
 ```
 
-## Two-Way Sync Details
+# Two-Way Sync Details
 
 Changes are synchronized using JSON Patch (RFC 6902) for efficient delta updates:
 
@@ -167,9 +165,9 @@ Changes are synchronized using JSON Patch (RFC 6902) for efficient delta updates
 - **Client → Server**: User edits create patches sent to the server
 - **Server → Client**: Server updates create patches sent to clients
 
-## Control-Specific Bindings
+# Control-Specific Bindings
 
-### Dimension Attribute
+## Dimension Attribute
 
 Properties with `[Dimension]` create select controls with options loaded from the workspace:
 
@@ -181,7 +179,7 @@ public record MyForm
 }
 ```
 
-### Custom Control Attribute
+## Custom Control Attribute
 
 Use `[UiControl<T>]` to specify which control type to generate:
 
@@ -196,7 +194,7 @@ public record MyForm
 }
 ```
 
-## Best Practices
+# Best Practices
 
 1. **Use Records**: Immutable records with `init` properties work best for data binding
 2. **Add Metadata**: Use `[Description]` and `[Display]` attributes for better generated UIs

@@ -1,6 +1,6 @@
 {
   "id": "LandingPageDesign",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "path": "ACME/Software/ProductLaunch/Todo/LandingPageDesign",
   "name": "Design landing page wireframes",
   "nodeType": "ACME/Software/Project/Todo",

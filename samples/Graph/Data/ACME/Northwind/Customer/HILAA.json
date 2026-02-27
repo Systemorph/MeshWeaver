@@ -1,6 +1,6 @@
 {
   "id": "HILAA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "HILARION-Abastos",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

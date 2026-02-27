@@ -1,6 +1,6 @@
 {
   "id": "Exotic_Liquids",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Exotic Liquids",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

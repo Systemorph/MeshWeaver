@@ -1,6 +1,6 @@
 {
   "id": "Ravioli_Angelo",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Ravioli Angelo",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

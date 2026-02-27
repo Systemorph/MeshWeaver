@@ -1,6 +1,6 @@
 {
   "id": "Manjimup_Dried_Apples",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Manjimup Dried Apples",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

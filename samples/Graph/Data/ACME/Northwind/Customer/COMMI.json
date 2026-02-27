@@ -1,6 +1,6 @@
 {
   "id": "COMMI",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Com\u00e9rcio Mineiro",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

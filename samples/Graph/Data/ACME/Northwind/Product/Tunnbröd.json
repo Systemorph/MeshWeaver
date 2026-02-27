@@ -1,6 +1,6 @@
 {
   "id": "Tunnbr\u00f6d",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Tunnbr\u00f6d",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

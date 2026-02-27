@@ -1,6 +1,6 @@
 {
   "id": "Valkoinen_suklaa",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Valkoinen suklaa",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -1,6 +1,6 @@
 {
   "id": "RICAR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Ricardo Adocicados",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

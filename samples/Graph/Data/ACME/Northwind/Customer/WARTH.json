@@ -1,6 +1,6 @@
 {
   "id": "WARTH",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Wartian Herkku",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "Alice_Mutton",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Alice Mutton",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

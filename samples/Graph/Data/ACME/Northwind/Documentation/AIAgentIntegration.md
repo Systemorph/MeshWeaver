@@ -12,17 +12,15 @@ Tags:
   - "Agents"
 ---
 
-# AI Agent Integration in Northwind
-
 The Northwind sample includes a specialized AI agent for analytics queries. The NorthwindAgent demonstrates how domain-specific agents can provide intelligent data access and visualization through natural language.
 
-## Remote Control Philosophy
+# Remote Control Philosophy
 
 AI agents **remote control** MeshWeaver applications rather than being embedded within them. This ensures clean separation of concerns and allows agents to interact through the same message-based interfaces as human users.
 
 For the design philosophy and benefits of this approach, see [Agentic AI Architecture](MeshWeaver/Documentation/Architecture/AgenticAI).
 
-## NorthwindAgent Overview
+# NorthwindAgent Overview
 
 The NorthwindAgent is specialized for gourmet food distribution analytics:
 
@@ -30,7 +28,7 @@ The NorthwindAgent is specialized for gourmet food distribution analytics:
 ---
 nodeType: Agent
 name: Northwind Agent
-description: Analytics agent for Northwind Traders - gourmet food sales, orders, products, customers, employees, and suppliers.
+description: Analytics agent for ACME Northwind - gourmet food sales, orders, products, customers, employees, and suppliers.
 icon: ChartMultiple
 category: Agents
 groupName: Analytics
@@ -38,14 +36,14 @@ isDefault: true
 ---
 ```
 
-### Agent Capabilities
+## Agent Capabilities
 
 - Query and analyze orders, products, customers, employees, and suppliers
 - Display charts and reports for sales performance and product analytics
 - Compare year-over-year trends and identify patterns
 - Provide customer insights and segmentation
 
-### Business Context
+## Business Context
 
 The agent understands the Northwind business domain:
 
@@ -57,7 +55,7 @@ The agent understands the Northwind business domain:
 | Suppliers | 29 | From 16 countries |
 | Orders | 830 | With 2,155 line items (2024-2025) |
 
-## MeshPlugin Integration
+# MeshPlugin Integration
 
 The NorthwindAgent uses the `MeshPlugin` for data access. For the complete API reference, see [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin).
 
@@ -69,7 +67,7 @@ The NorthwindAgent uses the `MeshPlugin` for data access. For the complete API r
 | **GetLayoutAreas** | Discover available views for a node |
 | **DisplayLayoutArea** | Render charts and reports |
 
-### Layout Area Priority
+## Layout Area Priority
 
 The agent prioritizes visual output over raw data:
 
@@ -83,9 +81,9 @@ CRITICAL: When users ask to view, show, list, or display analytics:
   3. DO NOT also output the raw data as text
 ```
 
-## Natural Language Examples
+# Natural Language Examples
 
-### Sales Queries
+## Sales Queries
 
 **Category Analysis**:
 ```
@@ -108,7 +106,7 @@ Agent: [Displays RegionalAnalysis chart]
 "Displayed regional analysis. The Western region leads in sales volume."
 ```
 
-### Customer Analysis
+## Customer Analysis
 
 **Top Customers**:
 ```
@@ -131,7 +129,7 @@ Agent: [Displays CustomerGeographicDistribution view]
 "Displayed geographic distribution across 21 countries."
 ```
 
-### Product Analytics
+## Product Analytics
 
 **Top Products**:
 ```
@@ -154,7 +152,7 @@ Agent: [Displays ProductPerformanceTrends line chart]
 "Displayed monthly trends for top 5 products."
 ```
 
-### Financial Queries
+## Financial Queries
 
 **Financial Summary**:
 ```
@@ -177,7 +175,7 @@ Agent: [Displays MonthlyBreakdownTable]
 "Displayed monthly breakdown with revenue, orders, averages, and freight costs."
 ```
 
-### Employee Performance
+## Employee Performance
 
 **Top Performers**:
 ```
@@ -193,14 +191,14 @@ Agent: [Displays TopEmployeesReport]
 "Displayed performance insights with key metrics and observations."
 ```
 
-## Available Layout Areas
+# Available Layout Areas
 
 The agent can display any of the 53 available views:
 
-### Dashboard
+## Dashboard
 - **Dashboard**: Main overview with 4-panel grid
 
-### Sales Analytics
+## Sales Analytics
 - **SalesByCategory**: Revenue by product category
 - **SalesGrowthSummary**: Growth metrics and indicators
 - **SalesByCategoryComparison**: Multi-year comparison
@@ -208,7 +206,7 @@ The agent can display any of the 53 available views:
 - **CountrySalesComparison**: Top countries by sales
 - **RegionalAnalysis**: Sales by region
 
-### Orders
+## Orders
 - **OrderSummary**: Top 5 orders by value
 - **OrdersCount**: Monthly order counts
 - **AvgOrderValue**: Average order value trend
@@ -216,7 +214,7 @@ The agent can display any of the 53 available views:
 - **OrderDetailsReport**: Detailed statistics
 - **OrdersSummaryReport**: Comprehensive report
 
-### Products
+## Products
 - **ProductOverview**: Product performance grid
 - **TopProducts**: Top 5 products chart
 - **TopProductsByCategory**: Top 10 by category
@@ -225,7 +223,7 @@ The agent can display any of the 53 available views:
 - **ProductDiscountImpact**: Discount impact analysis
 - **ProductSalesVelocity**: Turnover metrics
 
-### Customers
+## Customers
 - **CustomerSummary**: Customer metrics grid
 - **TopClients**: Top 5 customers chart
 - **CustomerOrderFrequency**: Frequency distribution
@@ -235,7 +233,7 @@ The agent can display any of the 53 available views:
 - **CustomerRetentionAnalysis**: Retention metrics
 - **CustomerPurchaseBehavior**: Purchase patterns
 
-### Financial
+## Financial
 - **FinancialSummary**: Key financial metrics
 - **RevenueSummary**: Monthly revenue trend
 - **DiscountSummary**: Discount by category
@@ -244,9 +242,9 @@ The agent can display any of the 53 available views:
 - **DiscountPercentage**: Discount distribution
 - **DiscountAnalysisReport**: Performance overview
 
-## Architecture Benefits
+# Architecture Benefits
 
-### Domain Expertise
+## Domain Expertise
 
 The NorthwindAgent provides context that generic agents lack:
 - **Product Categories**: Understands Beverages, Dairy Products, Seafood, etc.
@@ -254,7 +252,7 @@ The NorthwindAgent provides context that generic agents lack:
 - **Time Periods**: Handles year filtering and comparisons
 - **Key Entities**: Recognizes customers, employees, suppliers
 
-### View Selection
+## View Selection
 
 The agent intelligently selects appropriate views:
 - Sales queries → SalesByCategory, SalesGrowthSummary
@@ -262,14 +260,14 @@ The agent intelligently selects appropriate views:
 - Product queries → ProductOverview, TopProducts
 - Financial queries → FinancialSummary, DiscountAnalysisReport
 
-### Consistent Experience
+## Consistent Experience
 
 Users get visual output instead of raw data:
 - Charts for comparisons and trends
 - Data grids for detailed exploration
 - Markdown reports for summaries
 
-## Cross-References
+# Cross-References
 
 For related documentation:
 
@@ -278,7 +276,7 @@ For related documentation:
 - **[Northwind Architecture](Northwind/Documentation/Architecture)**: Data model and views
 - **[Unified References](Northwind/Documentation/UnifiedReferences)**: All addressable paths
 
-## Conclusion
+# Conclusion
 
 The NorthwindAgent demonstrates how domain-specific AI agents can enhance analytics applications:
 

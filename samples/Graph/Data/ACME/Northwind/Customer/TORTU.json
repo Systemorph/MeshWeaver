@@ -1,6 +1,6 @@
 {
   "id": "TORTU",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Tortuga Restaurante",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

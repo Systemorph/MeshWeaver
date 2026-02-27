@@ -1,6 +1,6 @@
 {
   "id": "OTTIK",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Ottilies K\u00e4seladen",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

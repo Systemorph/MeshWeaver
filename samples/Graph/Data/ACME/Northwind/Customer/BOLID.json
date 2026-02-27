@@ -1,6 +1,6 @@
 {
   "id": "BOLID",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "B\u00f3lido Comidas preparadas",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

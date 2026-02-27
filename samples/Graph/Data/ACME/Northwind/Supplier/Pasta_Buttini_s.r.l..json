@@ -1,6 +1,6 @@
 {
   "id": "Pasta_Buttini_s.r.l.",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Pasta Buttini s.r.l.",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

@@ -1,6 +1,6 @@
 {
   "id": "CRMSetup",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Configure CRM pipeline",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

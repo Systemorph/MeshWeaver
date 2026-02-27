@@ -1,17 +1,15 @@
 ---
-Name: Mesh Graph
+Name: Mesh Graph Architecture
 Category: Documentation
 Description: How data types define hubs, hierarchical namespaces enable organization, and semantic versioning supports evolution
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/MeshGraph/icon.svg
 ---
 
-# Mesh Graph Architecture
-
 The mesh graph is a hierarchical structure where **data types are data elements**. Types define hubs, namespaces organize content, and the hierarchy enables semantic versioning.
 
-## Core Concepts
+# Core Concepts
 
-### MeshNode Structure
+## MeshNode Structure
 
 Every element in the mesh is a `MeshNode`:
 
@@ -31,7 +29,7 @@ public record MeshNode(
 - `Id: "Submissions"`, `Namespace: "Insurance/Underwriting"` → Path: `Insurance/Underwriting/Submissions`
 - `Id: "CLM-2024-001"`, `Namespace: "Insurance/Claims"` → Path: `Insurance/Claims/CLM-2024-001`
 
-## Namespace Hierarchy
+# Namespace Hierarchy
 
 Namespaces follow a path pattern `a/b/c/d`, forming a tree. Here's an insurance company example:
 
@@ -49,7 +47,7 @@ flowchart TB
     Finance --> Planning[Planning]
 ```
 
-### Path Navigation
+## Path Navigation
 
 | Path | Namespace | Id |
 |------|-----------|---|
@@ -58,7 +56,7 @@ flowchart TB
 | `Claims/CLM-2024-001` | `Claims` | `CLM-2024-001` |
 | `Finance/Close` | `Finance` | `Close` |
 
-## Types Define Hubs
+# Types Define Hubs
 
 In MeshWeaver, **data types are themselves data elements** stored in the mesh. When you define a type like `Claim`, it becomes a node that configures how instances behave:
 
@@ -74,7 +72,7 @@ flowchart LR
     end
 ```
 
-### NodeType Configuration
+## NodeType Configuration
 
 Each NodeType node contains:
 - **Data Model**: Field definitions, validation rules
@@ -90,7 +88,7 @@ Type/
       views.json        <- UI layouts (ClaimDetail, ClaimSummary, ClaimEdit)
 ```
 
-### Type Attachment
+## Type Attachment
 
 Any node can reference a type via `nodeType`:
 
@@ -114,7 +112,7 @@ The type determines:
 - How the node renders
 - What operations are available
 
-## Semantic Versioning
+# Semantic Versioning
 
 The hierarchical namespace naturally supports semantic versioning:
 
@@ -130,14 +128,14 @@ Insurance/
       Subrogation        <- New in V2
 ```
 
-### Version Benefits
+## Version Benefits
 
 1. **Parallel Serving**: Run V1 and V2 simultaneously
 2. **Migration Path**: Gradually move clients to new version
 3. **Type Evolution**: New fields, renamed entities
 4. **API Stability**: Old references continue working
 
-### Version Pattern
+## Version Pattern
 
 ```
 {Vendor}/{Domain}/V{Major}/
@@ -148,7 +146,7 @@ Insurance/
 - `Insurance/Underwriting/V2`
 - `MeshWeaver/Core/V3`
 
-## Hub Instantiation
+# Hub Instantiation
 
 When accessing a path, MeshWeaver:
 
@@ -160,7 +158,7 @@ When accessing a path, MeshWeaver:
    - View definitions
    - Child hub configuration
 
-### Template Nodes
+## Template Nodes
 
 Nodes can act as templates for virtual instances:
 
@@ -178,7 +176,7 @@ This template matches paths like:
 
 Virtual nodes inherit the template's configuration.
 
-## Query Patterns
+# Query Patterns
 
 Navigate the hierarchy with queries. See [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath) for complete syntax.
 
@@ -198,7 +196,7 @@ namespace:Insurance/Claims nodeType:Type/Claim status:Open
 
 See also: [Query Syntax Reference](MeshWeaver/Documentation/DataMesh/QuerySyntax)
 
-## Benefits
+# Benefits
 
 1. **Self-Describing**: Types are data you can query
 2. **Flexible Organization**: Any hierarchy depth

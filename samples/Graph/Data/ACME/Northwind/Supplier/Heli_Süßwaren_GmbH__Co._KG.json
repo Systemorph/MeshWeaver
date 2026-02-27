@@ -1,6 +1,6 @@
 {
   "id": "Heli_S\u00fc\u00dfwaren_GmbH__Co._KG",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Heli S\u00fc\u00dfwaren GmbH & Co. KG",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

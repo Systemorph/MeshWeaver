@@ -1,6 +1,6 @@
 {
   "id": "Aux_joyeux_eccl\u00e9siastiques",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Aux joyeux eccl\u00e9siastiques",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

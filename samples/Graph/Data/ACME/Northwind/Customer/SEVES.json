@@ -1,6 +1,6 @@
 {
   "id": "SEVES",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Seven Seas Imports",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

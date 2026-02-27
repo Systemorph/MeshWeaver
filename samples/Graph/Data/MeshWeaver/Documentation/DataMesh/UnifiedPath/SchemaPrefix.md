@@ -5,18 +5,16 @@ Description: Embed type schemas and data models
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix/icon.svg
 ---
 
-# Schema Prefix
-
 The `schema:` prefix embeds type schema definitions from a node as JSON schema.
 
-## Syntax
+# Syntax
 
 ```
 @@{address}/schema:{typeName}
 @@{address}/schema:         (current node's schema)
 ```
 
-## Use Cases
+# Use Cases
 
 | Reference | Description |
 |-----------|-------------|
@@ -24,7 +22,7 @@ The `schema:` prefix embeds type schema definitions from a node as JSON schema.
 | `schema:MeshNode` | Built-in MeshNode schema |
 | `schema:CustomType` | Custom type schema |
 
-## Example: Node Schema
+# Example: Node Schema
 
 Embed the schema definition of MeshNode:
 
@@ -37,7 +35,7 @@ Embed the schema definition of MeshNode:
 
 @@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema:MeshNode
 
-## Example: Self Schema
+# Example: Self Schema
 
 Show the schema of this node (empty path means self-reference):
 
@@ -50,7 +48,7 @@ Show the schema of this node (empty path means self-reference):
 
 @@MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix/schema:
 
-## Schema Rendering
+# Schema Rendering
 
 Schemas are rendered as JSON Schema:
 - Property table with types

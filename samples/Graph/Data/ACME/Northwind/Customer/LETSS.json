@@ -1,6 +1,6 @@
 {
   "id": "LETSS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Let's Stop N Shop",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

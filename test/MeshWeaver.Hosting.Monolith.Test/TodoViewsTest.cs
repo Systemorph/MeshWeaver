@@ -79,7 +79,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task Details_ShouldRenderTodoItem()
     {
         var client = GetClient();
-        var todoAddress = new Address("Demos/ACME/ProductLaunch/Todo/DefinePersona");
+        var todoAddress = new Address("ACME/Software/ProductLaunch/Todo/DefinePersona");
 
         // Initialize the hub first - required for proper routing
         await client.AwaitResponse(
@@ -109,7 +109,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task Thumbnail_ShouldRenderTodoItem()
     {
         var client = GetClient();
-        var todoAddress = new Address("Demos/ACME/ProductLaunch/Todo/LaunchEvent");
+        var todoAddress = new Address("ACME/Software/ProductLaunch/Todo/LaunchEvent");
 
         // Initialize the hub first - required for proper routing
         await client.AwaitResponse(
@@ -139,7 +139,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task Details_ShouldRenderAsStackControl()
     {
         var client = GetClient();
-        var todoAddress = new Address("Demos/ACME/ProductLaunch/Todo/DefinePersona");
+        var todoAddress = new Address("ACME/Software/ProductLaunch/Todo/DefinePersona");
 
         // Initialize the hub first - required for proper routing
         await client.AwaitResponse(
@@ -174,9 +174,9 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
 
         var todoAddresses = new[]
         {
-            new Address("Demos/ACME/ProductLaunch/Todo/DefinePersona"),
-            new Address("Demos/ACME/ProductLaunch/Todo/LaunchEvent"),
-            new Address("Demos/ACME/ProductLaunch/Todo/PressRelease")
+            new Address("ACME/Software/ProductLaunch/Todo/DefinePersona"),
+            new Address("ACME/Software/ProductLaunch/Todo/LaunchEvent"),
+            new Address("ACME/Software/ProductLaunch/Todo/PressRelease")
         };
 
         foreach (var todoAddress in todoAddresses)
@@ -231,7 +231,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task Trace_LayoutAreaRendering()
     {
         var client = GetClient();
-        var parentAddress = new Address("Demos/ACME/ProductLaunch");
+        var parentAddress = new Address("ACME/Software/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         await client.AwaitResponse(
@@ -274,7 +274,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task ProductLaunch_Overview_ShouldRender()
     {
         var client = GetClient();
-        var parentAddress = new Address("Demos/ACME/ProductLaunch");
+        var parentAddress = new Address("ACME/Software/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         await client.AwaitResponse(
@@ -308,7 +308,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     public async Task CreateArea_WithTypeParam_ShouldRenderCreateForm()
     {
         var client = GetClient();
-        var parentAddress = new Address("Demos/ACME/ProductLaunch");
+        var parentAddress = new Address("ACME/Software/ProductLaunch");
 
         Output.WriteLine("Initializing hub for ACME/ProductLaunch...");
         // Initialize the hub first

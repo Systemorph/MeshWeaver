@@ -1,6 +1,6 @@
 {
   "id": "Vegie-spread",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Vegie-spread",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

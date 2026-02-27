@@ -143,10 +143,22 @@ public class ContentReferenceIntegrityTest
             if (!icon.Contains('/'))
                 continue;
 
-            // Path-based icon must start with /static/ to be resolvable at runtime
+            // Relative path — resolve using node namespace (same as GetImageUrlForNode at runtime)
             if (!icon.StartsWith("/static/", StringComparison.OrdinalIgnoreCase))
             {
-                broken.Add($"{relativePath} → Icon: \"{icon}\"\n  (relative path will not resolve at runtime; add an explicit Icon field or use an absolute /static/ path)");
+                var ns = node!.Namespace;
+                if (!string.IsNullOrEmpty(ns))
+                {
+                    var diskPath = Path.GetFullPath(Path.Combine(contentDir, ns, icon));
+                    if (!File.Exists(diskPath))
+                    {
+                        broken.Add($"{relativePath} → Icon: \"{icon}\"\n  (resolved to content/{ns}/{icon} but file not found)");
+                    }
+                }
+                else
+                {
+                    broken.Add($"{relativePath} → Icon: \"{icon}\"\n  (relative path with no namespace cannot be resolved)");
+                }
                 continue;
             }
 

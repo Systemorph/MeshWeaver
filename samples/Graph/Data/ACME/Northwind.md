@@ -6,11 +6,9 @@ Description: Gourmet food distribution analytics demonstrating MeshWeaver's data
 Thumbnail: Northwind/icon.svg
 ---
 
-# ACME Northwind
-
 Welcome to ACME Northwind, a comprehensive analytics demo showcasing MeshWeaver's capabilities through a realistic business scenario: a gourmet food distribution company with sales, customer, product, and employee analytics.
 
-## Quick Start
+# Quick Start
 
 | Resource | Description |
 |----------|-------------|
@@ -21,9 +19,9 @@ Welcome to ACME Northwind, a comprehensive analytics demo showcasing MeshWeaver'
 
 ---
 
-## What's Inside
+# What's Inside
 
-### Analytics Platform
+## Analytics Platform
 
 Explore **53 views** organized across 8 categories:
 
@@ -40,7 +38,7 @@ Explore **53 views** organized across 8 categories:
 
 ---
 
-### Sample Data
+## Sample Data
 
 | Entity | Count | Description |
 |--------|-------|-------------|
@@ -53,7 +51,7 @@ Explore **53 views** organized across 8 categories:
 
 ---
 
-### Key Features Demonstrated
+## Key Features Demonstrated
 
 **Virtual Data Cube**
 The `NorthwindDataCube` combines Orders, OrderDetails, and Products into a unified analytics layer for efficient aggregation and flexible filtering.
@@ -69,7 +67,7 @@ Use natural language queries to explore data:
 
 ---
 
-## Product Categories
+# Product Categories
 
 ACME Northwind specializes in gourmet foods:
 
@@ -86,7 +84,7 @@ ACME Northwind specializes in gourmet foods:
 
 ---
 
-## Learn More
+# Learn More
 
 | Topic | Link |
 |-------|------|

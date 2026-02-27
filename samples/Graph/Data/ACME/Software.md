@@ -6,11 +6,9 @@ Description: Project and task management demo showcasing MeshWeaver's collaborat
 Thumbnail: Software/icon.svg
 ---
 
-# ACME Software
-
 Welcome to ACME Software, a task management demo showcasing MeshWeaver's collaborative project workflows. Explore how organizations can manage projects with nested tasks, team assignments, and AI-assisted task handling.
 
-## Quick Start
+# Quick Start
 
 | Resource | Description |
 |----------|-------------|
@@ -21,9 +19,9 @@ Welcome to ACME Software, a task management demo showcasing MeshWeaver's collabo
 
 ---
 
-## What's Inside
+# What's Inside
 
-### Organization Structure
+## Organization Structure
 
 ACME demonstrates a hierarchical namespace pattern:
 
@@ -37,7 +35,7 @@ ACME (Organization)
 
 ---
 
-### Sample Projects
+## Sample Projects
 
 | Project | Focus | Tasks |
 |---------|-------|-------|
@@ -46,7 +44,7 @@ ACME (Organization)
 
 ---
 
-### Key Features Demonstrated
+## Key Features Demonstrated
 
 **AI Agent Integration**
 Each project includes a `TodoAgent` that can assist with task management, status updates, and workflow automation through natural language.
@@ -59,7 +57,7 @@ Tasks support assignees, due dates, priorities, and status tracking with reactiv
 
 ---
 
-## Project Views
+# Project Views
 
 Projects include multiple perspectives for task management:
 
@@ -73,7 +71,7 @@ Projects include multiple perspectives for task management:
 
 ---
 
-## Team Members
+# Team Members
 
 | Member | Role |
 |--------|------|
@@ -88,7 +86,7 @@ Projects include multiple perspectives for task management:
 
 ---
 
-## Learn More
+# Learn More
 
 | Topic | Link |
 |-------|------|

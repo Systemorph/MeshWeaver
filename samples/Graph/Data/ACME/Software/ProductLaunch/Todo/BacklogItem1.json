@@ -1,6 +1,6 @@
 {
   "id": "BacklogItem1",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Research competitor pricing models",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

@@ -1,6 +1,6 @@
 {
   "id": "Ma_Maison",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Ma Maison",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

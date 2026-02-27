@@ -1,6 +1,6 @@
 {
   "id": "Maxilaku",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Maxilaku",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

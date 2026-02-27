@@ -1,6 +1,6 @@
 {
   "id": "HANAR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Hanari Carnes",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "VINET",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Vins et alcools Chevalier",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

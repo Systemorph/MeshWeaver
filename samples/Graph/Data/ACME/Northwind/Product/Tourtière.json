@@ -1,6 +1,6 @@
 {
   "id": "Tourti\u00e8re",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Tourti\u00e8re",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

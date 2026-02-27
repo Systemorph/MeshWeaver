@@ -1,6 +1,6 @@
 {
   "id": "Singaporean_Hokkien_Fried_Mee",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Singaporean Hokkien Fried Mee",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

@@ -1,6 +1,6 @@
 {
   "id": "New_Orleans_Cajun_Delights",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "New Orleans Cajun Delights",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

@@ -1,6 +1,6 @@
 {
   "id": "Tofu",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Tofu",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

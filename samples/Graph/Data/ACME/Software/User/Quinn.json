@@ -1,9 +1,9 @@
 {
   "id": "Quinn",
-  "namespace": "ACME",
+  "namespace": "ACME/Software/User",
   "name": "Quinn Johnson",
   "nodeType": "User",
-  "description": "Customer Support Lead at ACME",
+  "description": "Customer Support Lead at ACME Software",
   "iconName": "Person",
   "isPersistent": true,
   "content": {

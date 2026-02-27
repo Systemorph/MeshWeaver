@@ -1,6 +1,6 @@
 {
   "id": "Escargots_Nouveaux",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Escargots Nouveaux",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/FqRly-CgXk2VKVD4EhtZag",
+  "path": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/FqRly-CgXk2VKVD4EhtZag",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-26T10:39:47.026119+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "FqRly-CgXk2VKVD4EhtZag",
+    "role": "user",
+    "text": "What can you tell me about ACME insurance?",
+    "timestamp": "2026-02-26T10:39:47.025548Z",
+    "type": "ExecutedInput"
+  }
+}

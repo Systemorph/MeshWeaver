@@ -1,6 +1,6 @@
 {
   "id": "Paul_Access",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind",
   "name": "Paul Access",
   "nodeType": "AccessAssignment",
   "content": {

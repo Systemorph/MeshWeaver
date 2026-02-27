@@ -1,6 +1,6 @@
 {
   "id": "VerifyOwnership",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "name": "Verify beneficial ownership",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

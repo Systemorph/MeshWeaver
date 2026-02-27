@@ -1,6 +1,6 @@
 {
   "id": "ReviewKYC",
-  "namespace": "ACME/CustomerOnboarding/Todo",
+  "namespace": "ACME/Software/CustomerOnboarding/Todo",
   "name": "Review KYC documentation",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

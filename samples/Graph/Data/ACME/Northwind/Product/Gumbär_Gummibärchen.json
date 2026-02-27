@@ -1,6 +1,6 @@
 {
   "id": "Gumb\u00e4r_Gummib\u00e4rchen",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gumb\u00e4r Gummib\u00e4rchen",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

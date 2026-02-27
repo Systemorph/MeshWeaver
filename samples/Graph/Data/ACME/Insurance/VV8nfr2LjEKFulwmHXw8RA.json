@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "VV8nfr2LjEKFulwmHXw8RA",
+  "namespace": "ACME/Insurance",
+  "path": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA",
+  "name": "Hello, who\u0027s this?",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-26T12:42:13.406449+00:00",
+  "version": 5,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "ACME/Insurance",
+    "primaryNodePath": "ACME/Insurance"
+  }
+}

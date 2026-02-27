@@ -15,7 +15,7 @@ using System.Threading.Tasks;
 /// </summary>
 public static class NorthwindDataLoader
 {
-    private static readonly string BasePath = Path.Combine("../../samples/Graph/content/ACME/Northwind/Data");
+    private static readonly string BasePath = Path.Combine("../../samples/Graph/attachments/ACME/Northwind/Data");
 
     public static Task<IEnumerable<Order>> LoadOrdersAsync(CancellationToken ct)
     {

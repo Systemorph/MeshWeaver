@@ -1,6 +1,6 @@
 {
   "id": "Alice_Access",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind",
   "name": "Alice Access",
   "nodeType": "AccessAssignment",
   "content": {

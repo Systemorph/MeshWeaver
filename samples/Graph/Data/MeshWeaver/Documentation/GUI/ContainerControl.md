@@ -5,11 +5,9 @@ Description: How to add controls to containers and make them update automaticall
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/icon.svg
 ---
 
-# Adding Controls to a UI
-
 When building a UI, you combine small pieces (buttons, labels, inputs) into larger structures called containers. The `WithView` method is how you add content to these containers.
 
-## Container Types
+# Container Types
 
 | Container | Purpose | Use when... |
 |-----------|---------|-------------|
@@ -22,7 +20,7 @@ For responsive grid layouts, see [Layout Grid](MeshWeaver/Documentation/UserInte
 
 ---
 
-## Adding Content with WithView
+# Adding Content with WithView
 
 Use `WithView` to add controls to any container:
 
@@ -35,7 +33,7 @@ Controls.Stack                                              // Create a containe
 
 ---
 
-## WithView Patterns
+# WithView Patterns
 
 | I want to... | Use this |
 |--------------|----------|
@@ -48,7 +46,7 @@ See [Static vs Dynamic Views](MeshWeaver/Documentation/UserInterface/Observables
 
 ---
 
-## Example: Dashboard with Tabs
+# Example: Dashboard with Tabs
 
 ```csharp --render DashboardTabs --show-code
 Controls.Tabs                                                               // Tabbed dashboard
@@ -63,7 +61,7 @@ Controls.Tabs                                                               // T
 
 ---
 
-## See Also
+# See Also
 
 - [Static vs Dynamic Views](MeshWeaver/Documentation/UserInterface/Observables) - When and how content updates
 - [Data Binding](MeshWeaver/Documentation/UserInterface/DataBinding) - How data flows through the UI

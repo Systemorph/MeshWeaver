@@ -1,6 +1,6 @@
 {
   "id": "WELLI",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Wellington Importadora",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

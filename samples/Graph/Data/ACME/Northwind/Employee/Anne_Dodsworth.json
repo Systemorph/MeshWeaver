@@ -1,6 +1,6 @@
 {
   "id": "Anne_Dodsworth",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Anne Dodsworth",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

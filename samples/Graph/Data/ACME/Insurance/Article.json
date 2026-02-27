@@ -4,7 +4,7 @@
   "name": "Article",
   "nodeType": "NodeType",
   "category": "Types",
-  "description": "A Cornerstone content article with metadata",
+  "description": "An ACME Insurance content article with metadata",
   "iconName": "DocumentText",
   "isPersistent": true,
   "content": {
@@ -13,7 +13,7 @@
     "namespace": "ACME/Insurance",
     "displayName": "Article",
     "iconName": "DocumentText",
-    "description": "A Cornerstone content article with metadata",
+    "description": "An ACME Insurance content article with metadata",
     "configuration": "config => config.WithContentType<Article>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddArticleViews())"
   }
 }

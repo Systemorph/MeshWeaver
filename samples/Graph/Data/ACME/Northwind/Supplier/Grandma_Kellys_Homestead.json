@@ -1,6 +1,6 @@
 {
   "id": "Grandma_Kellys_Homestead",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Grandma Kelly's Homestead",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

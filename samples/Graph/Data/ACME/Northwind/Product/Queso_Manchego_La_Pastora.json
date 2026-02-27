@@ -1,6 +1,6 @@
 {
   "id": "Queso_Manchego_La_Pastora",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Queso Manchego La Pastora",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

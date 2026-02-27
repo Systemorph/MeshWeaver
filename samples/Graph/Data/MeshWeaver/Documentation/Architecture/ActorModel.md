@@ -1,15 +1,13 @@
 ---
-Name: Actor Model
+Name: Actor Model Architecture
 Category: Architecture
 Description: Understanding single-threaded message processing and avoiding deadlocks with AwaitResponse vs callbacks
 Icon: Lock
 ---
 
-# Actor Model in MeshWeaver
-
 MeshWeaver's MessageHub architecture follows the **Actor Model** pattern, where each hub processes messages single-threaded through a queue. This design provides important benefits but also requires understanding potential deadlock scenarios.
 
-## Single-Threaded Processing
+# Single-Threaded Processing
 
 Each MessageHub processes messages **one at a time** through its internal queue:
 
@@ -31,9 +29,9 @@ flowchart LR
 - Simplified state management
 - No need for locks on hub-local state
 
-## The Deadlock Problem
+# The Deadlock Problem
 
-### Understanding AwaitResponse
+## Understanding AwaitResponse
 
 `AwaitResponse` is a convenient method that sends a request and waits for the response:
 
@@ -48,7 +46,7 @@ var response = await hub.AwaitResponse(
 2. Current thread blocks waiting for the response
 3. When response arrives, the await completes
 
-### When Deadlock Occurs
+## When Deadlock Occurs
 
 A deadlock occurs when a hub sends a message **to itself** using `AwaitResponse`:
 
@@ -73,7 +71,7 @@ sequenceDiagram
 5. But the processor is blocked by Handler A
 6. **Deadlock**: Both are waiting for each other
 
-### Real-World Example
+## Real-World Example
 
 Consider a Create button click handler that confirms a transient node:
 
@@ -90,7 +88,7 @@ Consider a Create button click handler that confirms a transient node:
 });
 ```
 
-## The Solution: Callbacks
+# The Solution: Callbacks
 
 Use `Post` + `RegisterCallback` instead of `AwaitResponse`:
 
@@ -142,23 +140,23 @@ sequenceDiagram
     Callback->>Callback: Navigate or show error
 ```
 
-## When to Use Each Approach
+# When to Use Each Approach
 
-### Use `AwaitResponse` when:
+## Use `AwaitResponse` when:
 - Targeting a **different** hub (different address)
 - The target hub won't need to call back to the source
 - During initialization (before the hub starts processing messages)
 - In test code where simplicity is more important
 
-### Use `Post` + `RegisterCallback` when:
+## Use `Post` + `RegisterCallback` when:
 - Targeting the **same** hub
 - In UI event handlers (clicks, input changes)
 - Any time you're unsure about potential circular dependencies
 - Performance is critical (non-blocking is faster)
 
-## Best Practices
+# Best Practices
 
-### 1. Always Add Exception Logging in Callbacks
+## 1. Always Add Exception Logging in Callbacks
 
 ```csharp
 host.Hub.RegisterCallback(delivery, d =>
@@ -176,7 +174,7 @@ host.Hub.RegisterCallback(delivery, d =>
 });
 ```
 
-### 2. Consider Using Reactive Streams
+## 2. Consider Using Reactive Streams
 
 For data that will be updated through the workspace, use reactive queries instead:
 
@@ -191,7 +189,7 @@ await workspace.GetStream<MeshNode>()
     .FirstAsync();
 ```
 
-### 3. Use InvokeAsync for Exception Safety
+## 3. Use InvokeAsync for Exception Safety
 
 For operations that need proper exception handling on the hub thread:
 
@@ -204,14 +202,14 @@ hub.InvokeAsync(
     });
 ```
 
-## Debugging Deadlocks
+# Debugging Deadlocks
 
-### Symptoms
+## Symptoms
 - Application hangs on a specific action
 - No error messages (the code simply stops)
 - Typically occurs on button clicks or form submissions
 
-### Finding the Cause
+## Finding the Cause
 1. Look for `AwaitResponse` calls in event handlers
 2. Check if the target address is the same hub (`host.Hub.Address`)
 3. Search for patterns like:
@@ -219,12 +217,12 @@ hub.InvokeAsync(
    await hub.AwaitResponse(..., o => o.WithTarget(hub.Address))
    ```
 
-### Prevention
+## Prevention
 - Code review for `AwaitResponse` targeting same hub
 - Use static analysis to flag potential deadlock patterns
 - Default to callbacks in UI handlers
 
-## Summary
+# Summary
 
 | Aspect | AwaitResponse | Post + RegisterCallback |
 |--------|---------------|------------------------|

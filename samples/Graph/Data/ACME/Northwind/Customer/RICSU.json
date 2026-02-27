@@ -1,6 +1,6 @@
 {
   "id": "RICSU",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Richter Supermarkt",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "BERGS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Berglunds snabbk\u00f6p",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

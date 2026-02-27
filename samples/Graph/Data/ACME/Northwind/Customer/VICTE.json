@@ -1,6 +1,6 @@
 {
   "id": "VICTE",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Victuailles en stock",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

@@ -1,6 +1,6 @@
 {
   "id": "ANATR",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Ana Trujillo Emparedados y helados",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

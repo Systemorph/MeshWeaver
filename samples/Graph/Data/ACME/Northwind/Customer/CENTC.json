@@ -1,6 +1,6 @@
 {
   "id": "CENTC",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Centro comercial Moctezuma",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

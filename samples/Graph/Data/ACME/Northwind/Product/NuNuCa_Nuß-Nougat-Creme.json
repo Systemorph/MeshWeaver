@@ -1,6 +1,6 @@
 {
   "id": "NuNuCa_Nu\u00df-Nougat-Creme",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "NuNuCa Nu\u00df-Nougat-Creme",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

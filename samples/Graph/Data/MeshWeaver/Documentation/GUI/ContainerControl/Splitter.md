@@ -5,11 +5,9 @@ Description: Divide the UI into resizable, collapsible panes
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Splitter/icon.svg
 ---
 
-# Creating Resizable Panels With Splitter
-
 The Splitter control divides the UI into multiple resizable panes. Users can drag the divider between panes to resize them interactively.
 
-## Basic Usage
+# Basic Usage
 
 ```csharp --render SplitterBasic --show-code
 Controls.Splitter                                           // Create a splitter
@@ -19,7 +17,7 @@ Controls.Splitter                                           // Create a splitter
 
 ---
 
-## Vertical Splitter
+# Vertical Splitter
 
 ```csharp --render SplitterVertical --show-code
 Controls.Splitter                                           // Create a splitter
@@ -30,7 +28,7 @@ Controls.Splitter                                           // Create a splitter
 
 ---
 
-## Setting Pane Sizes
+# Setting Pane Sizes
 
 Control the initial size of each pane:
 
@@ -42,7 +40,7 @@ Controls.Splitter                                                       // Creat
 
 ---
 
-## Size Constraints
+# Size Constraints
 
 Limit how small or large a pane can be resized:
 
@@ -57,7 +55,7 @@ Controls.Splitter                                                       // Creat
 
 ---
 
-## Collapsible Panes
+# Collapsible Panes
 
 Allow users to collapse a pane completely:
 
@@ -71,7 +69,7 @@ Controls.Splitter                                                       // Creat
 
 ---
 
-## Initially Collapsed Pane
+# Initially Collapsed Pane
 
 Start with a pane already collapsed:
 
@@ -85,7 +83,7 @@ Controls.Splitter                                                       // Creat
 
 ---
 
-## Non-Resizable Pane
+# Non-Resizable Pane
 
 Fix a pane's size so it cannot be resized:
 
@@ -99,7 +97,7 @@ Controls.Splitter                                                       // Creat
 
 ---
 
-## Three-Pane Layout
+# Three-Pane Layout
 
 Create layouts with multiple panes:
 
@@ -112,9 +110,9 @@ Controls.Splitter                                                       // Creat
 
 ---
 
-## Common Patterns
+# Common Patterns
 
-### IDE-Style Layout
+## IDE-Style Layout
 
 ```csharp
 Controls.Splitter                                                       // Outer horizontal splitter
@@ -131,7 +129,7 @@ Controls.Splitter                                                       // Outer
                 .WithCollapsible(true)))                                // Bottom panel
 ```
 
-### Sidebar + Content
+## Sidebar + Content
 
 ```csharp
 Controls.Splitter
@@ -145,9 +143,9 @@ Controls.Splitter
 
 ---
 
-## Configuration Methods
+# Configuration Methods
 
-### Splitter Container
+## Splitter Container
 
 | Method | Purpose | Example |
 |--------|---------|---------|
@@ -155,7 +153,7 @@ Controls.Splitter
 | `.WithWidth(width)` | Container width | `"100%"`, `"800px"` |
 | `.WithHeight(height)` | Container height | `"100%"`, `"600px"` |
 
-### Pane Configuration
+## Pane Configuration
 
 | Method | Purpose | Example |
 |--------|---------|---------|
@@ -168,9 +166,9 @@ Controls.Splitter
 
 ---
 
-## Skin Properties
+# Skin Properties
 
-### SplitterSkin
+## SplitterSkin
 
 | Property | Type | Default |
 |----------|------|---------|
@@ -178,7 +176,7 @@ Controls.Splitter
 | `Width` | `object?` | null |
 | `Height` | `object?` | null |
 
-### SplitterPaneSkin
+## SplitterPaneSkin
 
 | Property | Type | Default |
 |----------|------|---------|
@@ -191,7 +189,7 @@ Controls.Splitter
 
 ---
 
-## See Also
+# See Also
 
 - [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
 - [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - Simple vertical/horizontal layouts

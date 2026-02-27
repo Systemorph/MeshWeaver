@@ -1,6 +1,6 @@
 {
   "id": "Longlife_Tofu",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Longlife Tofu",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

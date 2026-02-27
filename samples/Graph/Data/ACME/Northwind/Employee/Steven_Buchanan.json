@@ -1,6 +1,6 @@
 {
   "id": "Steven_Buchanan",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Steven Buchanan",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

@@ -1,6 +1,6 @@
 {
   "id": "LaunchEvent",
-  "namespace": "ACME/ProductLaunch/Todo",
+  "namespace": "ACME/Software/ProductLaunch/Todo",
   "name": "Plan virtual launch event",
   "nodeType": "ACME/Software/Project/Todo",
   "category": "Tasks",

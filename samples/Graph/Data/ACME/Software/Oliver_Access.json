@@ -1,6 +1,6 @@
 {
   "id": "Oliver_Access",
-  "namespace": "ACME",
+  "namespace": "ACME/Software",
   "name": "Oliver Access",
   "nodeType": "AccessAssignment",
   "content": {

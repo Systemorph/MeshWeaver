@@ -1,6 +1,6 @@
 {
   "id": "GALED",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Galer\u00eda del gastr\u00f3nomo",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

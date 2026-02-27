@@ -1,6 +1,6 @@
 {
   "id": "Gravad_lax",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gravad lax",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

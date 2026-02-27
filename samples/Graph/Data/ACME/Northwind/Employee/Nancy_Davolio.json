@@ -1,6 +1,6 @@
 {
   "id": "Nancy_Davolio",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Employee",
   "name": "Nancy Davolio",
   "nodeType": "ACME/Northwind/Employee",
   "category": "Employees",

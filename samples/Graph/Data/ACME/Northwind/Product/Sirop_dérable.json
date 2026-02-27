@@ -1,6 +1,6 @@
 {
   "id": "Sirop_d\u00e9rable",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Sirop d'\u00e9rable",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

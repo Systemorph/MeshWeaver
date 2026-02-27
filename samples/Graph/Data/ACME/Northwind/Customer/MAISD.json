@@ -1,6 +1,6 @@
 {
   "id": "MAISD",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Maison Dewey",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

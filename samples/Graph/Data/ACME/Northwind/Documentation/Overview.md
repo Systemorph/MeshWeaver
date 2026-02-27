@@ -1,7 +1,7 @@
 ---
 NodeType: "ACME/Northwind/Article"
 Title: "Northwind Case Studies"
-Abstract: "Learn MeshWeaver through the Northwind Traders gourmet food analytics sample"
+Abstract: "Learn MeshWeaver through the ACME Northwind gourmet food analytics sample"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
@@ -11,13 +11,11 @@ Tags:
   - "Getting Started"
 ---
 
-# Northwind Case Studies
-
-The Northwind Traders sample demonstrates MeshWeaver capabilities through a realistic gourmet food distribution analytics scenario.
+The ACME Northwind sample demonstrates MeshWeaver capabilities through a realistic gourmet food distribution analytics scenario.
 
 ---
 
-## What do you want to learn?
+# What do you want to learn?
 
 | Topic | Go here |
 |-------|---------|
@@ -28,9 +26,9 @@ The Northwind Traders sample demonstrates MeshWeaver capabilities through a real
 
 ---
 
-## The Northwind Organization
+# The Northwind Organization
 
-Northwind Traders is a gourmet food distribution company with analytics views for sales, customers, products, and employees:
+ACME Northwind is a gourmet food distribution company with analytics views for sales, customers, products, and employees:
 
 ```
 Northwind/                           # Analytics platform
@@ -53,23 +51,23 @@ Northwind/                           # Analytics platform
 
 ---
 
-## Key Concepts Demonstrated
+# Key Concepts Demonstrated
 
-### Virtual Data Cube
+## Virtual Data Cube
 
 The `NorthwindDataCube` combines Orders, OrderDetails, and Products into a unified analytics layer:
 - Enriched dimension names for charts
 - Efficient aggregation across years
 - Flexible filtering and grouping
 
-### Multi-Year Analytics
+## Multi-Year Analytics
 
 Data covers 2024-2025 with year-over-year comparison:
 - Year filtering via toolbar component
 - Growth metrics and trend analysis
 - Seasonal pattern identification
 
-### Layout Area Organization
+## Layout Area Organization
 
 53 views organized into 8 categories:
 - Dashboard, Sales, Orders, Products
@@ -77,9 +75,9 @@ Data covers 2024-2025 with year-over-year comparison:
 
 ---
 
-## Sample Data
+# Sample Data
 
-### Data Volume
+## Data Volume
 
 | Entity | Count | Description |
 |--------|-------|-------------|
@@ -91,7 +89,7 @@ Data covers 2024-2025 with year-over-year comparison:
 | Employees | 9 | Sales representatives and managers |
 | Suppliers | 29 | Suppliers from 16 countries |
 
-### Product Categories
+## Product Categories
 
 | Category | Description |
 |----------|-------------|
@@ -106,7 +104,7 @@ Data covers 2024-2025 with year-over-year comparison:
 
 ---
 
-## Explore Further
+# Explore Further
 
 Navigate to `Northwind` in the portal to explore:
 - The main Dashboard with sales overview

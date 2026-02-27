@@ -1,6 +1,6 @@
 {
   "id": "Boston_Crab_Meat",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Boston Crab Meat",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

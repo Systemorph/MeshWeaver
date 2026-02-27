@@ -1,6 +1,6 @@
 {
   "id": "SAVEA",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Save-a-lot Markets",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

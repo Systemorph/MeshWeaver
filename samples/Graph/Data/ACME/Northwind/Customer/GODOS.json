@@ -1,6 +1,6 @@
 {
   "id": "GODOS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Godos Cocina T\u00edpica",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

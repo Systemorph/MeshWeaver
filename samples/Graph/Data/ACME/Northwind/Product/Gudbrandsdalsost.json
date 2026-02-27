@@ -1,6 +1,6 @@
 {
   "id": "Gudbrandsdalsost",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Gudbrandsdalsost",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

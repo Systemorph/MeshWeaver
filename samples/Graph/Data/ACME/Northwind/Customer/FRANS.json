@@ -1,6 +1,6 @@
 {
   "id": "FRANS",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Customer",
   "name": "Franchi S.p.A.",
   "nodeType": "ACME/Northwind/Customer",
   "category": "Customers",

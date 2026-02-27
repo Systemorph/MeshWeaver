@@ -1,6 +1,6 @@
 {
   "id": "Formaggi_Fortini_s.r.l.",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Supplier",
   "name": "Formaggi Fortini s.r.l.",
   "nodeType": "ACME/Northwind/Supplier",
   "category": "Suppliers",

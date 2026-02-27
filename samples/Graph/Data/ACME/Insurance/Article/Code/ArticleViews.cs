@@ -1,6 +1,6 @@
 // <meshweaver>
 // Id: ArticleViews
-// DisplayName: Cornerstone Article Views
+// DisplayName: ACME Insurance Article Views
 // </meshweaver>
 
 using System.Reactive.Linq;
@@ -11,7 +11,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 /// <summary>
-/// Views for Cornerstone Article nodes.
+/// Views for ACME Insurance Article nodes.
 /// </summary>
 public static class ArticleViews
 {

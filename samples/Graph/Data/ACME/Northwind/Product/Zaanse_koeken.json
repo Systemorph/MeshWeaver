@@ -1,6 +1,6 @@
 {
   "id": "Zaanse_koeken",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "Zaanse koeken",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",

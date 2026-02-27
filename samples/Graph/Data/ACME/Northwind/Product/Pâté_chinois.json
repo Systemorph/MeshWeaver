@@ -1,6 +1,6 @@
 {
   "id": "P\u00e2t\u00e9_chinois",
-  "namespace": "Northwind",
+  "namespace": "ACME/Northwind/Product",
   "name": "P\u00e2t\u00e9 chinois",
   "nodeType": "ACME/Northwind/Product",
   "category": "Products",
