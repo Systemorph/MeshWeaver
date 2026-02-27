@@ -129,6 +129,7 @@
     <Project Path="test/MeshWeaver.StorageImport.Test/MeshWeaver.StorageImport.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Cosmos.Test/MeshWeaver.Hosting.Cosmos.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
+    <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />
