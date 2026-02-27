@@ -5,13 +5,11 @@ Description: Build reactive UIs with controls, layout areas, and data binding
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/icon.svg
 ---
 
-# Graphical User Interface
-
 MeshWeaver provides a control-based GUI system that renders reactive user interfaces from C# code.
 
 ---
 
-## What do you want to do?
+# What do you want to do?
 
 | I want to... | Go here |
 |--------------|---------|
@@ -26,9 +24,9 @@ MeshWeaver provides a control-based GUI system that renders reactive user interf
 
 ---
 
-## How it works
+# How it works
 
-### Immutable Controls
+## Immutable Controls
 
 Every control is a C# record. When you call a `With*` method, you get a **new instance** - the original is unchanged:
 
@@ -43,7 +41,7 @@ var button2 = button1.WithId("myButton");  // button1 is unchanged
 
 ---
 
-### Fluent API
+## Fluent API
 
 Chain methods for readable configuration:
 
@@ -59,7 +57,7 @@ Controls.Stack
 
 ---
 
-### Declarative Rendering
+## Declarative Rendering
 
 Define *what* to show, not *how* to update it:
 
@@ -76,7 +74,7 @@ Controls.Stack
 
 ---
 
-### Area-based Updates
+## Area-based Updates
 
 The UI is divided into named areas. Only the affected area re-renders, not the whole UI:
 
@@ -91,7 +89,7 @@ Controls.Stack
 
 ---
 
-### Observable-driven Reactivity
+## Observable-driven Reactivity
 
 Pass an `IObservable<T>` to make content update automatically:
 

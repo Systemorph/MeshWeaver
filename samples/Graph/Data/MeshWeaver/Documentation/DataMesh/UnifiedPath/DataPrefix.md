@@ -5,18 +5,16 @@ Description: Embed data collections and entities
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix/icon.svg
 ---
 
-# Data Prefix
-
 The `data:` prefix embeds data collections or individual entities from a node's data store.
 
-## Syntax
+# Syntax
 
 ```
 @@{address}/data:{collection}[/{entityId}]
 @@{address}/data:
 ```
 
-## Components
+# Components
 
 | Component | Description | Example |
 |-----------|-------------|---------|
@@ -24,7 +22,7 @@ The `data:` prefix embeds data collections or individual entities from a node's 
 | `entityId` | (Optional) Specific entity ID | `post-123`, `user-456` |
 | (empty) | Self-reference to node's data | |
 
-## Example: Self-Reference
+# Example: Self-Reference
 
 Embed the data collections of this node:
 
@@ -39,7 +37,7 @@ Empty path after `data:` means self-reference - shows available data collections
 
 @@MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix/data:
 
-## Example: Collection Reference
+# Example: Collection Reference
 
 Reference a specific data collection:
 
@@ -52,7 +50,7 @@ Reference a specific data collection:
 
 @Systemorph/Marketing/data:Posts
 
-## Rendering
+# Rendering
 
 | Reference Type | Renders As |
 |----------------|------------|
@@ -60,7 +58,7 @@ Reference a specific data collection:
 | Single entity | Entity detail view |
 | (empty) | List of available collections |
 
-## Notes
+# Notes
 
 - Data is fetched from the node's workspace
 - Collections use the registered data providers

@@ -5,11 +5,9 @@ Description: Group action buttons horizontally or vertically
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Toolbar/icon.svg
 ---
 
-# Organizing Buttons in a Toolbar
-
 The Toolbar control groups action buttons in a horizontal (default) or vertical layout, typically used for page headers and action bars.
 
-## Basic Usage
+# Basic Usage
 
 ```csharp --render ToolbarBasic --show-code
 Controls.Toolbar                            // Create a toolbar
@@ -20,7 +18,7 @@ Controls.Toolbar                            // Create a toolbar
 
 ---
 
-## Vertical Toolbar
+# Vertical Toolbar
 
 ```csharp --render ToolbarVertical --show-code
 Controls.Toolbar                                    // Create a toolbar
@@ -32,7 +30,7 @@ Controls.Toolbar                                    // Create a toolbar
 
 ---
 
-## Toolbar with Icons
+# Toolbar with Icons
 
 ```csharp --render ToolbarIcons --show-code
 Controls.Toolbar                                                    // Create a toolbar
@@ -43,9 +41,9 @@ Controls.Toolbar                                                    // Create a 
 
 ---
 
-## Common Patterns
+# Common Patterns
 
-### Page Header Toolbar
+## Page Header Toolbar
 
 ```csharp --render ToolbarPageHeader --show-code
 Controls.Stack                                          // Outer container
@@ -61,7 +59,7 @@ Controls.Stack                                          // Outer container
 
 ---
 
-### Form Action Bar
+## Form Action Bar
 
 ```csharp --render ToolbarFormActions --show-code
 Controls.Stack                                          // Form container
@@ -76,7 +74,7 @@ Controls.Stack                                          // Form container
 
 ---
 
-## Configuration Methods
+# Configuration Methods
 
 | Method | Purpose | Example |
 |--------|---------|---------|
@@ -84,7 +82,7 @@ Controls.Stack                                          // Form container
 
 ---
 
-## Skin Properties
+# Skin Properties
 
 The `ToolbarSkin` defines:
 
@@ -94,7 +92,7 @@ The `ToolbarSkin` defines:
 
 ---
 
-## See Also
+# See Also
 
 - [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
 - [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - General-purpose layout container

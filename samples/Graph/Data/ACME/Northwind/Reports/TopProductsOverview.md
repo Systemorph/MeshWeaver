@@ -1,6 +1,6 @@
 ---
 NodeType: "ACME/Northwind/Article"
-Title: "Product Overview 2025"
+Title: "Top Product Overview"
 Abstract: "This comprehensive financial report provides an in-depth analysis of the top sales by category for the year 2025. It highlights the highest-grossing products and offers a detailed breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. The report presents all financial amounts in USD ($)."
 Icon: "Document"
 Thumbnail: "images/TopProducts.png"
@@ -53,8 +53,6 @@ Tags:
 
 </style>
 
-# Top Products Overview 2025
-
 This financial report provides an analysis of the top sales by category based on the provided data. The report highlights the highest-grossing products and offers a breakdown of sales across various categories, including Meat and Seafood, Dairy Products, Beverages, Confectionery, and Bakery Products. All amounts are presented in USD ($).
 
 <div class="product-overview-table">
@@ -63,13 +61,13 @@ This financial report provides an analysis of the top sales by category based on
 
 </div>
 
-## Top Products by Category - Interactive View
+# Top Products by Category - Interactive View
 
 The following interactive chart shows the top-performing products within each category. Use the category filter to explore specific product categories:
 
 @@("ACME/Northwind/Analytics/TopProductsByCategory")
 
-### Conclusion: Sales Analysis
+## Conclusion: Sales Analysis
 
 Based on the data provided, we can draw several key insights and conclusions about the sales performance across different product categories:
 
@@ -93,7 +91,7 @@ Based on the data provided, we can draw several key insights and conclusions abo
    - **Produce** and **Condiments** categories, while having lower total revenues compared to top-performing categories, still show strong average revenues per product and significant sales volumes. This indicates a steady demand and potential for growth with targeted marketing and promotional efforts.
    - **Grains/Cereals** category, despite having the lowest total revenue (\$58,670.07), shows a healthy average revenue per product and substantial total units sold, suggesting a consistent consumer base.
 
-### Recommendations:
+## Recommendations:
 - **Focus on High-Value Categories**: Continue to invest in and promote high-performing categories like Beverages, Dairy Products, and Meat/Poultry to maximize revenue.
 - **Enhance Promotional Strategies**: Leverage discounts and promotional offers in categories like Meat/Poultry and Dairy Products to maintain and boost sales volumes.
 - **Targeted Marketing**: Develop targeted marketing campaigns for categories with growth potential, such as Produce and Condiments, to increase market share.

@@ -1,19 +1,17 @@
 ---
-Name: Available Controls
+Name: Available Controls Reference
 Category: Documentation
 Description: Complete reference for MeshWeaver UI controls including layout, input, display, and navigation components
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/UserInterface/AvailableControls/icon.svg
 ---
 
-# Available Controls Reference
-
 MeshWeaver provides a comprehensive library of UI controls defined server-side and rendered in the browser. All controls are created using the `Controls` factory class.
 
-## Layout Controls
+# Layout Controls
 
 Controls for organizing and structuring UI content.
 
-### StackControl
+## StackControl
 
 Arranges children vertically or horizontally.
 
@@ -32,7 +30,7 @@ Controls.Stack()
 | `Spacing` | `string` | Gap between children (CSS value) |
 | `Children` | `IEnumerable<UiControl>` | Child controls |
 
-### GridControl
+## GridControl
 
 CSS Grid-based layout for complex arrangements.
 
@@ -53,7 +51,7 @@ Controls.Grid()
 | `Rows` | `string` | CSS grid-template-rows |
 | `Gap` | `string` | Gap between grid cells |
 
-### LayoutAreaControl
+## LayoutAreaControl
 
 Defines a named region that can be updated independently.
 
@@ -67,11 +65,11 @@ Controls.LayoutArea("detail-panel")
 | `Area` | `string` | Unique area identifier |
 | `View` | `Func<LayoutAreaContext, UiControl>` | View rendering function |
 
-## Input Controls
+# Input Controls
 
 Controls for user data entry.
 
-### TextFieldControl
+## TextFieldControl
 
 Single-line text input with validation.
 
@@ -92,7 +90,7 @@ Controls.TextField("username")
 | `MaxLength` | `int?` | Maximum character length |
 | `Disabled` | `bool` | Disable input |
 
-### NumberFieldControl
+## NumberFieldControl
 
 Numeric input with formatting and validation.
 
@@ -112,7 +110,7 @@ Controls.NumberField("amount")
 | `Step` | `double?` | Increment step |
 | `Format` | `string` | Number format string |
 
-### SelectControl
+## SelectControl
 
 Dropdown selection from a list of options.
 
@@ -132,7 +130,7 @@ Controls.Select("status")
 | `Multiple` | `bool` | Allow multiple selection |
 | `Searchable` | `bool` | Enable search filtering |
 
-### CheckboxControl
+## CheckboxControl
 
 Boolean toggle input.
 
@@ -141,7 +139,7 @@ Controls.Checkbox("agreed")
     .WithLabel("I agree to the terms")
 ```
 
-### DatePickerControl
+## DatePickerControl
 
 Date selection with calendar popup.
 
@@ -158,11 +156,11 @@ Controls.DatePicker("startDate")
 | `MaxDate` | `DateTime?` | Latest selectable date |
 | `Format` | `string` | Date display format |
 
-## Display Controls
+# Display Controls
 
 Controls for presenting data.
 
-### TextControl
+## TextControl
 
 Text display with optional styling.
 
@@ -178,7 +176,7 @@ Controls.Text("Welcome to MeshWeaver")
 | `Typography` | `Typography` | Text style (H1-H6, Body, Caption) |
 | `Color` | `string` | Text color |
 
-### DataGridControl
+## DataGridControl
 
 Tabular data display with sorting, filtering, and pagination.
 
@@ -202,7 +200,7 @@ Controls.DataGrid(claimsData)
 | `Sortable` | `bool` | Enable column sorting |
 | `Filterable` | `bool` | Enable column filtering |
 
-### CardControl
+## CardControl
 
 Content container with optional header and actions.
 
@@ -218,7 +216,7 @@ Controls.Card()
     )
 ```
 
-### ChartControl
+## ChartControl
 
 Data visualization with various chart types.
 
@@ -237,11 +235,11 @@ Controls.Chart()
 | `XAxis` | `string` | X-axis data field |
 | `YAxis` | `string` | Y-axis data field |
 
-## Action Controls
+# Action Controls
 
 Controls for user interactions.
 
-### ButtonControl
+## ButtonControl
 
 Clickable button with action handler.
 
@@ -262,7 +260,7 @@ Controls.Button("Submit")
 | `Disabled` | `bool` | Disable button |
 | `ClickAction` | `Func<ClickContext, Task>` | Click handler |
 
-### IconButtonControl
+## IconButtonControl
 
 Icon-only button for compact actions.
 
@@ -273,7 +271,7 @@ Controls.IconButton("Delete")
     .WithClickAction(OnDelete)
 ```
 
-### MenuControl
+## MenuControl
 
 Dropdown menu with action items.
 
@@ -288,11 +286,11 @@ Controls.Menu()
     )
 ```
 
-## Navigation Controls
+# Navigation Controls
 
 Controls for navigation and structure.
 
-### TabsControl
+## TabsControl
 
 Tabbed content navigation.
 
@@ -305,7 +303,7 @@ Controls.Tabs()
     )
 ```
 
-### BreadcrumbControl
+## BreadcrumbControl
 
 Navigation breadcrumb trail.
 
@@ -318,7 +316,7 @@ Controls.Breadcrumb()
     )
 ```
 
-### LinkControl
+## LinkControl
 
 Navigation link within the mesh.
 
@@ -327,11 +325,11 @@ Controls.Link("View Claim")
     .WithPath("Insurance/Claims/CLM-2024-001")
 ```
 
-## Container Controls
+# Container Controls
 
 Controls for grouping and organization.
 
-### DialogControl
+## DialogControl
 
 Modal dialog with content and actions.
 
@@ -345,7 +343,7 @@ Controls.Dialog()
     )
 ```
 
-### EditFormControl
+## EditFormControl
 
 Form container with validation and submission.
 
@@ -365,7 +363,7 @@ Controls.EditForm(claimData)
 | `Children` | `IEnumerable<UiControl>` | Form field controls |
 | `SubmitAction` | `Func<SubmitContext, Task>` | Form submission handler |
 
-### ExpansionPanelControl
+## ExpansionPanelControl
 
 Collapsible content section.
 
@@ -376,9 +374,9 @@ Controls.ExpansionPanel()
     .WithExpanded(false)
 ```
 
-## Utility Controls
+# Utility Controls
 
-### SpinnerControl
+## SpinnerControl
 
 Loading indicator.
 
@@ -388,7 +386,7 @@ Controls.Spinner()
     .WithLabel("Loading...")
 ```
 
-### AlertControl
+## AlertControl
 
 Informational message display.
 
@@ -405,7 +403,7 @@ Controls.Alert()
 | `Title` | `string` | Alert title |
 | `Message` | `string` | Alert message |
 
-### DividerControl
+## DividerControl
 
 Visual separator.
 
@@ -414,7 +412,7 @@ Controls.Divider()
     .WithOrientation(Orientation.Horizontal)
 ```
 
-## Control Composition
+# Control Composition
 
 Controls can be composed to build complex UIs:
 

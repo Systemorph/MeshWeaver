@@ -7,15 +7,13 @@ Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "ACME"
+  - "ACME Software"
   - "Architecture"
 ---
 
-# Understanding MeshWeaver Architecture
+Understanding the architectural principles behind MeshWeaver applications is crucial for building scalable and resilient systems. The ACME Software sample organization exemplifies these principles through its distributed design and cloud-native approach.
 
-Understanding the architectural principles behind MeshWeaver applications is crucial for building scalable and resilient systems. The ACME sample organization exemplifies these principles through its distributed design and cloud-native approach.
-
-## Core Architectural Principles
+# Core Architectural Principles
 
 MeshWeaver applications are built with three fundamental principles in mind:
 
@@ -25,7 +23,7 @@ MeshWeaver applications are built with three fundamental principles in mind:
 
 This distributed nature means that when you interact with the chat interface, your request might trigger a chain of operations across multiple services, with responses arriving asynchronously as the system processes your request.
 
-### Architecture Patterns
+## Architecture Patterns
 
 MeshWeaver applications can be organized using various architectural patterns depending on your specific requirements:
 
@@ -33,13 +31,13 @@ MeshWeaver applications can be organized using various architectural patterns de
 - **[Modular Monolith](https://medium.com/design-microservices-architecture-with-patterns/microservices-killer-modular-monolithic-architecture-ac83814f6862)**: Applications can start as modular monoliths where different modules are deployed together but maintain logical separation through message hubs and distinct namespace paths
 - **[Vertical Slice Architecture](https://en.wikipedia.org/wiki/Hexagonal_architecture_(software))**: Each feature or business capability can be implemented as a complete vertical slice, from UI layout areas down to data persistence, organized around namespace paths
 
-The ACME sample demonstrates a modular approach where the Todo functionality is encapsulated in a reusable NodeType (`ACME/Software/Project/Todo`) with clear message-based interfaces, making it easy to share across multiple projects within the organization.
+The ACME Software sample demonstrates a modular approach where the Todo functionality is encapsulated in a reusable NodeType (`ACME/Software/Project/Todo`) with clear message-based interfaces, making it easy to share across multiple projects within the organization.
 
-## The MeshNode and Namespace Hierarchy
+# The MeshNode and Namespace Hierarchy
 
 MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](MeshWeaver/Documentation/Architecture/MeshGraph).
 
-### ACME Namespace Hierarchy
+## ACME Software Namespace Hierarchy
 
 ```
 ACME/                                    # Organization
@@ -61,7 +59,7 @@ ACME/                                    # Organization
         └── DemoEnvironment.json
 ```
 
-### Path Examples
+## Path Examples
 
 | Node | Full Path |
 |------|-----------|
@@ -72,21 +70,21 @@ ACME/                                    # Organization
 
 This addressing scheme naturally creates namespaces that improve scalability and isolation.
 
-## Message Hub Architecture
+# Message Hub Architecture
 
 The heart of MeshWeaver's distributed architecture lies in its message hub system. Each hub represents a logical location in the cloud that becomes active when interactions begin.
 
-### Hub Addressing and Partitioning
+## Hub Addressing and Partitioning
 
-- **Namespace Paths**: Primary hubs handle core business logic. In ACME, projects like `ACME/CustomerOnboarding` and `ACME/ProductLaunch` each get their own hub context
+- **Namespace Paths**: Primary hubs handle core business logic. In ACME Software, projects like `ACME/CustomerOnboarding` and `ACME/ProductLaunch` each get their own hub context
 - **Sub-Hubs**: Smaller, specialized hubs handle specific tasks like maintaining data streams and layout synchronization
 - **Partitioning Strategy**: Namespace paths serve a dual purpose - they define logical boundaries and control data partitioning
 
-For example, the ACME organization uses:
+For example, the ACME Software organization uses:
 - `ACME/CustomerOnboarding` - Insurance client onboarding workflows
 - `ACME/ProductLaunch` - Product marketing campaign management
 
-### NodeType Configuration
+## NodeType Configuration
 
 NodeTypes define the behavior for instances. See [Mesh Graph](MeshWeaver/Documentation/Architecture/MeshGraph) for NodeType configuration patterns.
 
@@ -114,7 +112,7 @@ This configuration:
 - Configures data sources for Status, Category, and Priority dimensions
 - Registers views including the Thumbnail view for catalog listings
 
-### Portal Architecture
+## Portal Architecture
 
 The second key address pattern is `portal/[id]`, which creates individual hub instances for each browser connection and user session. This design ensures:
 
@@ -122,7 +120,7 @@ The second key address pattern is `portal/[id]`, which creates individual hub in
 - **Personalized Experience**: User-specific state and preferences are maintained
 - **Scalable Connections**: Portal instances can be distributed across multiple servers
 
-## Interaction Flow
+# Interaction Flow
 
 The following diagram illustrates how distributed components interact when a user performs an action:
 
@@ -148,7 +146,7 @@ sequenceDiagram
     Portal->>UI: Refresh display with updated task
 ```
 
-### Step-by-Step Breakdown
+## Step-by-Step Breakdown
 
 1. **Subscription Phase**: The portal hub subscribes to layout areas hosted in the project hub, establishing a reactive stream of UI updates
 2. **User Action**: When a user clicks a button (like "Complete Task"), the portal captures this interaction
@@ -160,21 +158,21 @@ sequenceDiagram
 
 This reactive architecture ensures that all connected users see changes in real-time, while maintaining loose coupling between the presentation layer (portal) and business logic (project hub).
 
-## Message-based Communication
+# Message-based Communication
 
 At the core of MeshWeaver's architecture lies a fundamental principle: **every interaction is a message**. For details on message-based communication patterns, see [Message-Based Communication](MeshWeaver/Documentation/Architecture/MessageBasedCommunication).
 
-In the ACME sample, messages flow through the system as follows:
+In the ACME Software sample, messages flow through the system as follows:
 
 - **UI Interactions**: Clicking "Start" on a task generates a `ClickedEvent` message
 - **Data Changes**: The hub processes the event and creates a `DataChangeRequest` to update the task status
 - **Layout Updates**: The `DataChangedEvent` triggers the TodaysFocus view to refresh automatically
 
-## Views and Layout Areas
+# Views and Layout Areas
 
 MeshWeaver follows the **Model-View-ViewModel (MVVM)** pattern. Views are registered through NodeType configuration and executed reactively.
 
-### View Registration
+## View Registration
 
 Views are defined in code files (e.g., `TodoViews.cs`, `ProjectViews.cs`) and registered via the NodeType configuration:
 
@@ -188,9 +186,9 @@ public static LayoutDefinition AddProjectViews(this LayoutDefinition layout) =>
         .WithView("MyTasks", MyTasks);
 ```
 
-### ACME Project Views
+## ACME Software Project Views
 
-The ACME sample includes these catalog views (defined in `ProjectViews.cs`):
+The ACME Software sample includes these catalog views (defined in `ProjectViews.cs`):
 
 | View | Description | Grouping |
 |------|-------------|----------|
@@ -200,7 +198,7 @@ The ACME sample includes these catalog views (defined in `ProjectViews.cs`):
 | **Backlog** | Unassigned tasks | By priority |
 | **MyTasks** | Current user's tasks | By urgency |
 
-### Reactive View Updates
+## Reactive View Updates
 
 Views return `IObservable<UiControl?>`, enabling reactive updates:
 
@@ -220,7 +218,7 @@ public static IObservable<UiControl?> TodaysFocus(LayoutAreaHost host, Rendering
 
 When data changes, the observable emits new values, and the view automatically updates.
 
-## Conclusion
+# Conclusion
 
 MeshWeaver's architecture provides a robust foundation for building modern, distributed applications. The combination of message-driven communication, reactive design patterns, and the namespace hierarchy creates applications that are:
 
@@ -230,4 +228,4 @@ MeshWeaver's architecture provides a robust foundation for building modern, dist
 - **Maintainable**: Generic message patterns and loose coupling reduce complexity
 - **Real-time**: Reactive streams ensure all users see updates immediately
 
-The ACME sample demonstrates these principles in practice with its organization → project → task hierarchy, showing how MeshWeaver applications can handle complex business scenarios while maintaining clean architecture and excellent performance.
+The ACME Software sample demonstrates these principles in practice with its organization → project → task hierarchy, showing how MeshWeaver applications can handle complex business scenarios while maintaining clean architecture and excellent performance.

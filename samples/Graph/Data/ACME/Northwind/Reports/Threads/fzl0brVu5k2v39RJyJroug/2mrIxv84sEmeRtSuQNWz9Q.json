@@ -11,7 +11,7 @@
     "id": "2mrIxv84sEmeRtSuQNWz9Q",
     "role": "NorthwindAgent",
     "authorName": "NorthwindAgent",
-    "text": "Hi \u2014 I\u0027m the Northwind Analytics Agent. I analyze Northwind Traders sales data (orders, products, customers, employees, suppliers) and create charts/reports like dashboards, sales-by-category, top products, customer segmentation, and year\u2011over\u2011year comparisons for 2024\u20132025.\n\nHow can I help right now? Examples:\n- \u0022Show the Dashboard for 2025\u0022\n- \u0022Top 10 customers by revenue this year\u0022\n- \u0022Compare sales by category 2024 vs 2025\u0022\n\nTell me which view or year you\u0027d like to see.",
+    "text": "Hi \u2014 I\u0027m the Northwind Analytics Agent. I analyze ACME Northwind sales data (orders, products, customers, employees, suppliers) and create charts/reports like dashboards, sales-by-category, top products, customer segmentation, and year\u2011over\u2011year comparisons for 2024\u20132025.\n\nHow can I help right now? Examples:\n- \u0022Show the Dashboard for 2025\u0022\n- \u0022Top 10 customers by revenue this year\u0022\n- \u0022Compare sales by category 2024 vs 2025\u0022\n\nTell me which view or year you\u0027d like to see.",
     "timestamp": "2026-02-16T18:51:01.288631Z",
     "type": "AgentResponse"
   }

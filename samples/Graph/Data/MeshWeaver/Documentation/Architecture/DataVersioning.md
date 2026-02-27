@@ -1,15 +1,13 @@
 ---
-Name: Data Versioning
+Name: Data Versioning Strategies
 Category: Documentation
 Description: Technology-specific approaches to data versioning across Snowflake, SQL Server, Cosmos DB, and file storage
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/DataVersioning/icon.svg
 ---
 
-# Data Versioning Strategies
-
 MeshWeaver supports data versioning through technology-specific mechanisms. The approach depends on the underlying data store, leveraging native capabilities where available.
 
-## Strategy Selection
+# Strategy Selection
 
 ```mermaid
 flowchart TB
@@ -20,11 +18,11 @@ flowchart TB
     Q -->|File/Blob| FB[Manual Versioning<br/>path@V1, V2]
 ```
 
-## Snowflake: Time Travel
+# Snowflake: Time Travel
 
 Snowflake provides built-in temporal versioning through **Time Travel**:
 
-### Capabilities
+## Capabilities
 
 | Feature | Description |
 |---------|-------------|
@@ -33,7 +31,7 @@ Snowflake provides built-in temporal versioning through **Time Travel**:
 | **Zero-Copy Cloning** | Instant snapshots without data duplication |
 | **Retention** | Configurable 1-90 days per table |
 
-### Query Historical Data
+## Query Historical Data
 
 ```sql
 -- Query data from 1 hour ago
@@ -49,7 +47,7 @@ SELECT * FROM pricing
 BEFORE(STATEMENT => '01234567-89ab-cdef-0123-456789abcdef');
 ```
 
-### Clone for Snapshots
+## Clone for Snapshots
 
 ```sql
 -- Create instant snapshot
@@ -58,7 +56,7 @@ CLONE pricing
 AT(TIMESTAMP => '2024-12-31 23:59:59');
 ```
 
-### MeshWeaver Integration
+## MeshWeaver Integration
 
 Access historical data through versioned entity references:
 
@@ -76,11 +74,11 @@ var historicalClaim = await hub.AwaitResponse(
 );
 ```
 
-## SQL Server: Temporal Tables
+# SQL Server: Temporal Tables
 
 SQL Server offers **system-versioned temporal tables** for automatic history tracking:
 
-### Setup
+## Setup
 
 ```sql
 CREATE TABLE Contracts
@@ -95,7 +93,7 @@ CREATE TABLE Contracts
 WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.ContractsHistory));
 ```
 
-### Query Historical Data
+## Query Historical Data
 
 ```sql
 -- Current data
@@ -114,14 +112,14 @@ SELECT * FROM Contracts
 FOR SYSTEM_TIME ALL;
 ```
 
-### Benefits
+## Benefits
 
 - Automatic history capture on UPDATE/DELETE
 - No application code changes required
 - Query optimizer aware of temporal predicates
 - History table can be partitioned separately
 
-## Manual Versioning: Path Pattern
+# Manual Versioning: Path Pattern
 
 For stores without built-in versioning (Cosmos DB, Blob Storage), use path-based versioning:
 
@@ -136,7 +134,7 @@ flowchart LR
     style VN fill:#c8e6c9
 ```
 
-### Version Path Format
+## Version Path Format
 
 ```
 @{path}@V{version}
@@ -148,7 +146,7 @@ flowchart LR
 - `@pricing/MS-2024@V2` → Version 2
 - `@contracts/deal-123@V5` → Version 5
 
-### Implementation Pattern
+## Implementation Pattern
 
 ```csharp
 // Save new version
@@ -172,7 +170,7 @@ public async Task<T> GetVersionAsync<T>(string path, int version)
 }
 ```
 
-### Cosmos DB Implementation
+## Cosmos DB Implementation
 
 In Cosmos DB, include version in the partition key or document:
 
@@ -186,7 +184,7 @@ In Cosmos DB, include version in the partition key or document:
 }
 ```
 
-### Blob Storage Implementation
+## Blob Storage Implementation
 
 For file/blob storage, use folder structure:
 
@@ -201,7 +199,7 @@ pricing/
 
 Or enable **blob versioning** in Azure Storage for automatic version tracking.
 
-## Version Metadata
+# Version Metadata
 
 Regardless of storage technology, track version metadata:
 
@@ -215,7 +213,7 @@ Regardless of storage technology, track version metadata:
 }
 ```
 
-## Comparison
+# Comparison
 
 | Technology | Method | Retention | Query Syntax |
 |------------|--------|-----------|---------------|
@@ -224,7 +222,7 @@ Regardless of storage technology, track version metadata:
 | Cosmos DB | Manual | Unlimited | `path@V{n}` |
 | Blob Storage | Manual/Native | Configurable | Folder or blob versioning |
 
-## Best Practices
+# Best Practices
 
 1. **Use native features** when available (Snowflake, SQL Server)
 2. **Consistent naming** for manual versioning (`@V{n}` suffix)

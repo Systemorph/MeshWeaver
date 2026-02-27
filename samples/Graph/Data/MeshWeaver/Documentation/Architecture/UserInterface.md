@@ -1,21 +1,19 @@
 ---
-Name: User Interface
+Name: User Interface Architecture
 Category: Documentation
 Description: How UI components are generated where data lives and streamed to browsers with two-way binding
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/UserInterface/icon.svg
 ---
 
-# User Interface Architecture
-
 MeshWeaver generates UI where the data lives. Instead of transferring large datasets to clients, we compute visualizations server-side and stream only the rendered components. This dramatically reduces network traffic and enables real-time interactivity.
 
-## The Data Compression Principle
+# The Data Compression Principle
 
 Consider displaying a million-row dataset as a 10x10 summary table. Rather than transferring all rows to create a 10x10 grid, we want to transfer only 100 numbers:
 
 @@MeshWeaver/Documentation/Architecture/UserInterface/content:data-compression.svg
 
-## Controls Language
+# Controls Language
 
 In MessageHubs, we define UI using a **Controls Language** - an immutable, declarative API that serializes to JSON:
 
@@ -29,7 +27,7 @@ Controls.Stack
 
 This serializes to JSON and streams to the Portal, which renders it as HTML for the browser.
 
-## Two-Way Data Binding
+# Two-Way Data Binding
 
 The synchronization uses a "walkie-talkie" pattern where both sides hold an `ISynchronizationStream`:
 
@@ -63,7 +61,7 @@ flowchart TB
 - Browser is a thin display layer showing HTML and forwarding user events
 - Two-way binding: UI changes stream back to hubs as events
 
-## Control Lifecycle
+# Control Lifecycle
 
 ```mermaid
 sequenceDiagram
@@ -79,7 +77,7 @@ sequenceDiagram
     Hub->>Hub: Execute ClickAction
 ```
 
-### Incremental Updates
+## Incremental Updates
 
 After initial load, only changes are transmitted using **JSON Patch** (RFC 6902):
 
@@ -89,7 +87,7 @@ After initial load, only changes are transmitted using **JSON Patch** (RFC 6902)
 
 This minimizes bandwidth for real-time updates.
 
-## Available Controls
+# Available Controls
 
 MeshWeaver provides a rich control library. See the [complete controls reference](MeshWeaver/Documentation/Architecture/UserInterface/AvailableControls) for details.
 
@@ -105,7 +103,7 @@ MeshWeaver provides a rich control library. See the [complete controls reference
 | `EditFormControl` | Form containers |
 | `LayoutAreaControl` | Nested layout regions |
 
-## Interaction Handling
+# Interaction Handling
 
 User interactions become messages:
 
@@ -123,7 +121,7 @@ Controls.Button("Save")
 
 When clicked, the browser sends an `OnClick` to the Portal, which forwards a `ClickedEvent` message to the hub, invoking the registered action.
 
-## Benefits
+# Benefits
 
 1. **Bandwidth Efficiency**: Transfer summaries, not raw data
 2. **Real-time Updates**: JSON Patch for incremental changes

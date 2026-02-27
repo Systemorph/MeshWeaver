@@ -5,13 +5,11 @@ Description: Arrange controls vertically or horizontally with configurable spaci
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Stack/icon.svg
 ---
 
-# Arranging UI Controls in a Stack
-
 The Stack control arranges child controls in a vertical or horizontal layout with configurable spacing and alignment.
 
-## Basic Usage
+# Basic Usage
 
-### Vertical Stack (Default)
+## Vertical Stack (Default)
 
 ```csharp --render StackVertical --show-code
 Controls.Stack                                  // Create a vertical container
@@ -22,7 +20,7 @@ Controls.Stack                                  // Create a vertical container
 
 ---
 
-### Horizontal Stack
+## Horizontal Stack
 
 ```csharp --render StackHorizontal --show-code
 Controls.Stack                                      // Create a container
@@ -34,7 +32,7 @@ Controls.Stack                                      // Create a container
 
 ---
 
-### Right-Aligned Button Group
+## Right-Aligned Button Group
 
 ```csharp
 Controls.Stack                                      // Create a container
@@ -45,7 +43,7 @@ Controls.Stack                                      // Create a container
     .WithView(Controls.Button("Save"))              // Right button
 ```
 
-### Form Layout
+## Form Layout
 
 ```csharp
 Controls.Stack                                      // Outer vertical stack
@@ -63,7 +61,7 @@ Controls.Stack                                      // Outer vertical stack
 
 ---
 
-## Configuration Methods
+# Configuration Methods
 
 All methods return a new `StackControl` instance (immutable pattern).
 
@@ -80,7 +78,7 @@ All methods return a new `StackControl` instance (immutable pattern).
 
 ---
 
-## Adding Child Controls
+# Adding Child Controls
 
 Use `WithView` to add controls:
 
@@ -100,7 +98,7 @@ Use `WithView` to add controls:
 
 ---
 
-## Nesting Stacks
+# Nesting Stacks
 
 Stacks can contain other stacks for complex layouts:
 
@@ -119,7 +117,7 @@ Controls.Stack                                      // Outer vertical stack
 
 ---
 
-## Skin Properties
+# Skin Properties
 
 The `LayoutStackSkin` defines visual properties:
 
@@ -136,7 +134,7 @@ The `LayoutStackSkin` defines visual properties:
 
 ---
 
-## See Also
+# See Also
 
 - [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
 - [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - Form generation

@@ -4,7 +4,7 @@
   "name": "Analytics",
   "nodeType": "ACME/Northwind/AnalyticsCatalog",
   "category": "Analytics",
-  "description": "Dashboards and analytics views for Northwind Traders data",
+  "description": "Dashboards and analytics views for ACME Northwind data",
   "icon": "/static/storage/content/ACME/Northwind/icons/analytics.svg",
   "order": 3,
   "isPersistent": true,
@@ -12,6 +12,6 @@
     "$type": "CatalogContent",
     "id": "Analytics",
     "name": "Analytics",
-    "description": "Interactive dashboards and analytics views exploring sales, orders, products, customers, and employees of Northwind Traders."
+    "description": "Interactive dashboards and analytics views exploring sales, orders, products, customers, and employees of ACME Northwind."
   }
 }

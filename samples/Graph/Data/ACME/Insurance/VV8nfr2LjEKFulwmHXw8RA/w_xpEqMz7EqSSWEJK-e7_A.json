@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/w_xpEqMz7EqSSWEJK-e7_A",
+  "path": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/w_xpEqMz7EqSSWEJK-e7_A",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-26T10:39:06.160758+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "w_xpEqMz7EqSSWEJK-e7_A",
+    "role": "TodoAgent",
+    "authorName": "TodoAgent",
+    "text": "This is **Antonio Moreno Taquer\u00EDa**, a customer record from the ACME/Northwind system. Here\u0027s a quick summary:\n\n| Field | Details |\n|-------|---------|\n| **Contact** | Antonio Moreno |\n| **Title** | Owner |\n| **Company** | Antonio Moreno Taquer\u00EDa |\n| **City** | M\u00E9xico D.F., Mexico |\n| **Postal Code** | 05023 |\n| **Phone** | (5) 555-3932 |\n| **Status** | Active |\n\nIs there anything you\u0027d like to do with this customer record \u2014 for example, create a task related to them?",
+    "timestamp": "2026-02-26T10:39:06.160494Z",
+    "type": "AgentResponse"
+  }
+}

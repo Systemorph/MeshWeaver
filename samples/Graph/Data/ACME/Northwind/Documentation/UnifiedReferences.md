@@ -11,13 +11,11 @@ Tags:
   - "References"
 ---
 
-# Unified References in Northwind
-
 This document demonstrates unified references in the Northwind analytics sample. For the complete Unified Path syntax reference, see [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath).
 
 It covers namespace hierarchy, data queries, and layout areas specific to the Northwind sample.
 
-## Organization Structure
+# Organization Structure
 
 The Northwind sample follows this hierarchy:
 
@@ -37,9 +35,9 @@ Northwind/                           # Root namespace
     └── ...
 ```
 
-## Namespace Paths
+# Namespace Paths
 
-### Root Level
+## Root Level
 
 | Path | Description |
 |------|-------------|
@@ -47,17 +45,17 @@ Northwind/                           # Root namespace
 | `Northwind/AnalyticsCatalog` | AnalyticsCatalog NodeType definition |
 | `Northwind/Analytics` | Database instance |
 
-### NodeType Definition
+## NodeType Definition
 
 | Path | Description |
 |------|-------------|
 | `Northwind/AnalyticsCatalog` | AnalyticsCatalog NodeType with 53 views |
 
-## Data References
+# Data References
 
 See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
-### Data Types
+## Data Types
 
 Northwind exposes these data types through the AnalyticsCatalog:
 
@@ -72,7 +70,7 @@ Northwind exposes these data types through the AnalyticsCatalog:
 | `@Northwind/data:Category` | Product categories |
 | `@Northwind/data:NorthwindDataCube` | Virtual analytics cube |
 
-### Specific Entity References
+## Specific Entity References
 
 **Orders**:
 
@@ -95,11 +93,11 @@ Northwind exposes these data types through the AnalyticsCatalog:
 | `@Northwind/data:Customer/ALFKI` | Alfreds Futterkiste |
 | `@Northwind/data:Customer/QUICK` | QUICK-Stop |
 
-## Layout Area References
+# Layout Area References
 
 See [Area Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
 
-### Dashboard
+## Dashboard
 
 Main overview dashboard:
 
@@ -111,7 +109,7 @@ Main overview dashboard:
 
 ---
 
-### Sales Analytics
+## Sales Analytics
 
 Revenue and sales performance views:
 
@@ -153,7 +151,7 @@ Revenue and sales performance views:
 
 ---
 
-### Orders
+## Orders
 
 Order analysis and reports:
 
@@ -207,7 +205,7 @@ Order analysis and reports:
 
 ---
 
-### Products
+## Products
 
 Product analytics and performance:
 
@@ -267,7 +265,7 @@ Product analytics and performance:
 
 ---
 
-### Customers
+## Customers
 
 Customer analytics and segmentation:
 
@@ -339,7 +337,7 @@ Customer analytics and segmentation:
 
 ---
 
-### Employees
+## Employees
 
 Employee performance metrics:
 
@@ -375,7 +373,7 @@ Employee performance metrics:
 
 ---
 
-### Suppliers
+## Suppliers
 
 Supplier analysis:
 
@@ -393,7 +391,7 @@ Supplier analysis:
 
 ---
 
-### Financial
+## Financial
 
 Financial metrics and reports:
 
@@ -447,7 +445,7 @@ Financial metrics and reports:
 
 ---
 
-### Inventory
+## Inventory
 
 Inventory and trend analysis:
 
@@ -471,9 +469,9 @@ Inventory and trend analysis:
 
 ---
 
-## Reference Data
+# Reference Data
 
-### Product Categories
+## Product Categories
 
 | ID | Category |
 |----|----------|
@@ -486,7 +484,7 @@ Inventory and trend analysis:
 | 7 | Produce |
 | 8 | Seafood |
 
-### Regions
+## Regions
 
 | ID | Region |
 |----|--------|
@@ -495,7 +493,7 @@ Inventory and trend analysis:
 | 3 | Northern |
 | 4 | Southern |
 
-### Sample Customers
+## Sample Customers
 
 | ID | Company |
 |----|---------|
@@ -505,7 +503,7 @@ Inventory and trend analysis:
 | SAVEA | Save-a-lot Markets |
 | RATTC | Rattlesnake Canyon Grocery |
 
-### Sample Products
+## Sample Products
 
 | ID | Product | Category |
 |----|---------|----------|
@@ -515,15 +513,15 @@ Inventory and trend analysis:
 | 38 | Côte de Blaye | Beverages |
 | 56 | Gnocchi di nonna Alice | Grains/Cereals |
 
-## Navigation Links
+# Navigation Links
 
-### Link to Database
+## Link to Database
 
 ```markdown
 [Northwind Analytics](/Northwind/Analytics)
 ```
 
-### Link to Specific View
+## Link to Specific View
 
 ```markdown
 [Dashboard](/Northwind/Dashboard)
@@ -531,7 +529,7 @@ Inventory and trend analysis:
 [Top Customers](/Northwind/TopClients)
 ```
 
-## Summary
+# Summary
 
 The Northwind sample demonstrates MeshWeaver's unified path system for analytics:
 

@@ -1,6 +1,6 @@
 ---
 NodeType: "ACME/Northwind/Article"
-Title: "Discounts vs Revenue"
+Title: "Discounts vs. Revenue Analysis"
 Abstract: "The report meticulously compiles data to offer insights into the financial performance of the business, highlighting key trends and significant variations in both revenue and discounts over the months. It aims to assist in understanding the financial health and operational efficiency during the specified period. This detailed analysis provides valuable insights into the effectiveness of discount strategies and their influence on sales performance."
 Icon: "Document"
 Thumbnail: "images/DiscountOverview.png"
@@ -24,8 +24,6 @@ Tags:
   - "Profitability"
 ---
 
-# Discounts vs Revenue Analysis
-
 This financial report provides a detailed analysis of the revenue and discounts given throughout the year 2025. The data has been meticulously compiled to offer insights into the financial performance, highlighting key trends and significant variations in both revenue and discounts over the months. This report aims to assist in understanding the financial health and operational efficiency of the business during the specified period.
 
 @@("ACME/Northwind/Analytics/DiscountAnalysisReport")
@@ -34,7 +32,7 @@ This financial report provides a detailed analysis of the revenue and discounts 
 
 @@("ACME/Northwind/Analytics/MonthlyBreakdownTable")
 
-### Analysis
+## Analysis
 - **Revenue Trends:** The analysis shows clear patterns in revenue generation throughout the year, with seasonal variations affecting overall performance.
 - **Discount Trends:** Strategic use of discounts has proven effective in driving sales volume while maintaining healthy margins.
 
@@ -42,7 +40,7 @@ This financial report provides a detailed analysis of the revenue and discounts 
 
 This comprehensive analysis examines the sales amounts versus the discounts given over the past year. By examining the total sales, total discounts given, and the average discount percentage across different discount tiers, this report aims to offer valuable insights into the effectiveness of discount strategies and their influence on sales performance.
 
-## Discount Strategy Performance
+# Discount Strategy Performance
 
 The analysis reveals that the majority of sales were made without any discount, demonstrating strong brand value and customer willingness to pay full price. However, strategic discounting has proven effective in driving additional volume and reaching price-sensitive customer segments.
 
@@ -51,13 +49,13 @@ The analysis reveals that the majority of sales were made without any discount, 
 - **Customer Segmentation**: Different discount levels attract different customer segments, enabling broader market reach
 - **Revenue Optimization**: Strategic discounting contributes to overall revenue growth without significantly impacting margins
 
-### Discount Effectiveness Table
+## Discount Effectiveness Table
 
 @@("ACME/Northwind/Analytics/DiscountPercentage")
 
 @@("ACME/Northwind/Analytics/DiscountEffectivenessReport")
 
-### Strategic Recommendations
+## Strategic Recommendations
 
 - **Continue Monitoring**: Regularly analyze discount effectiveness to maximize both volume and profitability
 - **Targeted Campaigns**: Consider targeted discount strategies based on customer behavior and purchase patterns

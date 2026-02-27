@@ -1,25 +1,23 @@
 ---
 NodeType: "ACME/Software/Article"
-Title: "Unified References in ACME"
-Abstract: "Reference guide for namespace paths, data queries, and layout areas in the ACME sample"
+Title: "Unified References in ACME Software"
+Abstract: "Reference guide for namespace paths, data queries, and layout areas in the ACME Software sample"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "ACME"
+  - "ACME Software"
   - "References"
 ---
 
-# Unified References in ACME
+This document demonstrates unified references in the ACME Software sample organization. For the complete Unified Path syntax reference, see [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath).
 
-This document demonstrates unified references in the ACME sample organization. For the complete Unified Path syntax reference, see [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath).
+It covers namespace hierarchy, data queries, content paths, and layout areas specific to the ACME Software sample.
 
-It covers namespace hierarchy, data queries, content paths, and layout areas specific to the ACME sample.
+# Organization Structure
 
-## Organization Structure
-
-The ACME sample follows this hierarchy:
+The ACME Software sample follows this hierarchy:
 
 ```
 ACME/                                # Organization
@@ -36,30 +34,30 @@ ACME/                                # Organization
     └── Todo/                        # Tasks for launch
 ```
 
-## Namespace Paths
+# Namespace Paths
 
-### Organization Level
+## Organization Level
 
 | Path | Description |
 |------|-------------|
 | `ACME` | The organization namespace |
 | `ACME/Software/Project` | Shared NodeType definitions |
 
-### Project Level
+## Project Level
 
 | Path | Description |
 |------|-------------|
 | `ACME/CustomerOnboarding` | CustomerOnboarding project |
 | `ACME/ProductLaunch` | ProductLaunch project |
 
-### NodeType Definitions
+## NodeType Definitions
 
 | Path | Description |
 |------|-------------|
 | `ACME/Software/Project/Todo` | Todo NodeType (shared) |
 | `ACME/Software/Project/TodoAgent` | AI agent definition |
 
-### Task Instances
+## Task Instances
 
 **CustomerOnboarding Tasks:**
 
@@ -81,11 +79,11 @@ ACME/                                # Organization
 | `ACME/ProductLaunch/Todo/LandingPageDesign` | Landing page design |
 | `ACME/ProductLaunch/Todo/CompetitiveAnalysis` | Competitive analysis |
 
-## Query Syntax
+# Query Syntax
 
 MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](MeshWeaver/Documentation/DataMesh/QuerySyntax).
 
-### ACME Query Examples
+## ACME Software Query Examples
 
 **All Tasks in a Project:**
 
@@ -115,11 +113,11 @@ nodeType:ACME/Software/Project/Todo assignee:Oliver
 nodeType:ACME/Software/Project/Todo
 ```
 
-## Data References
+# Data References
 
 See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
-### Display All Tasks in CustomerOnboarding
+## Display All Tasks in CustomerOnboarding
 
 ```
 @ACME/CustomerOnboarding/Todo
@@ -127,7 +125,7 @@ See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for 
 
 @ACME/CustomerOnboarding/Todo
 
-### Display Specific Task
+## Display Specific Task
 
 ```
 @ACME/CustomerOnboarding/Todo/ReviewKYC
@@ -135,7 +133,7 @@ See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for 
 
 @ACME/CustomerOnboarding/Todo/ReviewKYC
 
-### Display All Tasks in ProductLaunch
+## Display All Tasks in ProductLaunch
 
 ```
 @ACME/ProductLaunch/Todo
@@ -143,11 +141,11 @@ See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for 
 
 @ACME/ProductLaunch/Todo
 
-## Dimension References
+# Dimension References
 
 Dimensions are shared across all projects using the same NodeType.
 
-### Status Dimension
+## Status Dimension
 
 Defined in `ACME/Software/Project/Code/Status.cs`:
 
@@ -159,7 +157,7 @@ Defined in `ACME/Software/Project/Code/Status.cs`:
 | Blocked | Task is blocked by dependencies | 🚫 |
 | Completed | Task has been completed | ✅ |
 
-### Priority Dimension
+## Priority Dimension
 
 Defined in `ACME/Software/Project/Todo/Code/Priority.cs`:
 
@@ -171,7 +169,7 @@ Defined in `ACME/Software/Project/Todo/Code/Priority.cs`:
 | Low | 4 | Gray |
 | Unset | 5 | (none) |
 
-### Category Dimension
+## Category Dimension
 
 Defined in `ACME/Software/Project/Todo/Code/Category.cs`:
 
@@ -192,26 +190,26 @@ Defined in `ACME/Software/Project/Todo/Code/Category.cs`:
 | Operations | 🔧 |
 | General | 📁 |
 
-## Content References
+# Content References
 
-### Static Content Paths
+## Static Content Paths
 
 | Content | Path |
 |---------|------|
 | Todo icon | `/static/storage/content/ACME/Software/Project/Todo/icon.svg` |
 | Project thumbnails | `/static/storage/content/ACME/Software/Project/thumbnails/` |
 
-### Embedding Todo Icon
+## Embedding Todo Icon
 
 ```markdown
 ![Todo Icon](/static/storage/content/ACME/Software/Project/Todo/icon.svg)
 ```
 
-## Layout Area References
+# Layout Area References
 
 Layout areas are defined in `ProjectViews.cs` and available for all projects. See [Area Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
 
-### TodaysFocus - Urgent Tasks
+## TodaysFocus - Urgent Tasks
 
 Shows overdue, due today, and in-progress tasks:
 
@@ -221,7 +219,7 @@ Shows overdue, due today, and in-progress tasks:
 
 @ACME/CustomerOnboarding/TodaysFocus
 
-### AllTasks - Tasks by Status
+## AllTasks - Tasks by Status
 
 Complete task list grouped by status:
 
@@ -231,7 +229,7 @@ Complete task list grouped by status:
 
 @ACME/CustomerOnboarding/AllTasks
 
-### TodosByCategory - Tasks by Category
+## TodosByCategory - Tasks by Category
 
 Tasks grouped by category:
 
@@ -241,7 +239,7 @@ Tasks grouped by category:
 
 @ACME/ProductLaunch/TodosByCategory
 
-### MyTasks - Current User's Tasks
+## MyTasks - Current User's Tasks
 
 Tasks assigned to the current user:
 
@@ -251,7 +249,7 @@ Tasks assigned to the current user:
 
 @ACME/CustomerOnboarding/MyTasks
 
-### Backlog - Unassigned Tasks
+## Backlog - Unassigned Tasks
 
 Unassigned tasks organized by priority:
 
@@ -261,11 +259,11 @@ Unassigned tasks organized by priority:
 
 @ACME/ProductLaunch/Backlog
 
-## Task Detail Views
+# Task Detail Views
 
 Individual task views:
 
-### Details View
+## Details View
 
 The default view showing full task information:
 
@@ -273,7 +271,7 @@ The default view showing full task information:
 @ACME/CustomerOnboarding/Todo/ReviewKYC/Details
 ```
 
-### Edit View
+## Edit View
 
 Opens the task editor:
 
@@ -281,7 +279,7 @@ Opens the task editor:
 @ACME/CustomerOnboarding/Todo/ReviewKYC/Edit
 ```
 
-### Thumbnail View
+## Thumbnail View
 
 Compact card view for catalog listings:
 
@@ -289,32 +287,32 @@ Compact card view for catalog listings:
 @ACME/CustomerOnboarding/Todo/ReviewKYC/Thumbnail
 ```
 
-## Navigation Links
+# Navigation Links
 
-### Link to Project
+## Link to Project
 
 ```markdown
 [CustomerOnboarding](/ACME/CustomerOnboarding)
 [ProductLaunch](/ACME/ProductLaunch)
 ```
 
-### Link to Specific Task
+## Link to Specific Task
 
 ```markdown
 [Review KYC](/ACME/CustomerOnboarding/Todo/ReviewKYC)
 [Pricing Strategy](/ACME/ProductLaunch/Todo/PricingStrategy)
 ```
 
-### Link to Layout Area
+## Link to Layout Area
 
 ```markdown
 [Today's Focus](/ACME/CustomerOnboarding/TodaysFocus)
 [All Tasks](/ACME/ProductLaunch/AllTasks)
 ```
 
-## Team Members
+# Team Members
 
-### ACME Employees
+## ACME Software Employees
 
 | Name | Role | Typical Categories |
 |------|------|-------------------|
@@ -322,7 +320,7 @@ Compact card view for catalog listings:
 | Paul | Risk Management | Risk, Operations |
 | Quinn | Customer Support | Support, Operations |
 
-### Platform Team
+## Platform Team
 
 | Name | Role |
 |------|------|
@@ -334,9 +332,9 @@ Compact card view for catalog listings:
 | Roland | Architecture |
 | Samuel | DevOps |
 
-## Summary
+# Summary
 
-The ACME sample demonstrates MeshWeaver's unified path system:
+The ACME Software sample demonstrates MeshWeaver's unified path system:
 
 - **Namespace paths** define the hierarchical structure
 - **NodeType references** enable shared definitions across projects

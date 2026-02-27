@@ -1,6 +1,6 @@
 // <meshweaver>
 // Id: PricingViews
-// DisplayName: Cornerstone Pricing Views
+// DisplayName: ACME Insurance Pricing Views
 // </meshweaver>
 
 using System.Collections.Immutable;
@@ -20,7 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using static MeshWeaver.ContentCollections.ContentCollectionsExtensions;
 
 /// <summary>
-/// Views for Cornerstone Pricing nodes.
+/// Views for ACME Insurance Pricing nodes.
 /// </summary>
 public static class PricingViews
 {

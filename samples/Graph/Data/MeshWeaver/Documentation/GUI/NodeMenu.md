@@ -4,11 +4,9 @@ Category: Documentation
 Description: How node types register custom menu items in the portal's context menu
 ---
 
-# Node Menu Items
-
 The portal's node context menu (cube icon) is fully data-driven. Menu items are registered in the node's `HubConfiguration` via `IAsyncEnumerable` providers and rendered during the layout pipeline. A predicate-based renderer evaluates all providers and stores results at `$Menu` in the entity store (same pattern as `$Dialog`). The portal reads `$Menu` from the layout stream — no separate RPC needed.
 
-## Default Menu Items
+# Default Menu Items
 
 `AddDefaultMeshMenu()` (called automatically by `AddDefaultLayoutAreas()`) registers these items for all node types:
 
@@ -25,7 +23,7 @@ The node-name item only appears when the MeshNode has a `NodeType` set. It uses 
 
 Items with a required permission are checked inline within the provider. Only visible items are yielded. Only visible items reach the portal.
 
-## Server-Side Permission Filtering
+# Server-Side Permission Filtering
 
 Permission checks happen inside `NodeMenuItemProvider` delegates evaluated during layout rendering on the node hub. The portal receives only items the user is allowed to see — no client-side filtering needed.
 
@@ -49,7 +47,7 @@ Portal (LayoutAreaView)
    |  PortalLayoutBase renders items in menu
 ```
 
-## Adding Custom Menu Items
+# Adding Custom Menu Items
 
 Use `AddNodeMenuItems()` in your node type's `HubConfiguration` to add items beyond the defaults:
 
@@ -69,7 +67,7 @@ config => config
 
 Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Order`.
 
-### NodeMenuItemDefinition
+## NodeMenuItemDefinition
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -80,7 +78,7 @@ Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Orde
 | `Order` | `int` | Sort order within the menu (lower = earlier) |
 | `Href` | `string?` | Optional absolute href — when set, navigates directly instead of using Area |
 
-### NodeMenuItemProvider
+## NodeMenuItemProvider
 
 For advanced scenarios, register a provider delegate that yields items conditionally:
 
@@ -94,17 +92,17 @@ config.AddNodeMenuItems(
     }))
 ```
 
-## Generic Navigation
+# Generic Navigation
 
 Menu items navigate to their declared `Area` by appending it to the current path (e.g., `/TestOrg/Project/Settings`). When `Href` is set, the portal navigates to that absolute URL instead — used for cross-node navigation like the node-name → NodeType link.
 
-## MenuControl
+# MenuControl
 
 `MenuControl` is stored at `$Menu` in the entity store (same pattern as `DialogControl` at `$Dialog`). It wraps an `IReadOnlyList<NodeMenuItemDefinition>`.
 
 The `LayoutAreaView` component monitors the `$Menu` slot and publishes items to `IMenuItemsProvider`, which `PortalLayoutBase` subscribes to for rendering.
 
-## Built-in Registrations
+# Built-in Registrations
 
 **All nodes** (via `AddDefaultMeshMenu`):
 - Create, Import, *node.Name* → NodeType, Threads, Settings, Delete
@@ -112,7 +110,7 @@ The `LayoutAreaView` component monitors the `$Menu` slot and publishes items to 
 **Markdown** nodes additionally register:
 - **Suggest** (area: `Suggest`, permission: `Update`, order: 11) — editor with track changes
 
-## See Also
+# See Also
 
 - [DataBinding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows through controls
 - [Editor](MeshWeaver/Documentation/GUI/Editor) - The editor control for form rendering

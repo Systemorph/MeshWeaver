@@ -5,11 +5,9 @@ Description: Create, Read, Update, and Delete operations in MeshWeaver
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/CRUD/icon.svg
 ---
 
-# CRUD Operations in MeshWeaver
-
 MeshWeaver provides a reactive, type-safe approach to data operations. This guide explains how Create, Read, Update, and Delete (CRUD) operations work in the DataMesh.
 
-## Overview
+# Overview
 
 CRUD operations in MeshWeaver are built on three core concepts:
 
@@ -17,9 +15,9 @@ CRUD operations in MeshWeaver are built on three core concepts:
 - **Workspace**: The reactive data context that manages entity state
 - **Unified References**: A path-based system for addressing data (`data:Collection/EntityId`)
 
-## Data Model
+# Data Model
 
-### EntityStore
+## EntityStore
 
 The root container holding all collections of entities:
 
@@ -32,15 +30,15 @@ EntityStore
 │   ├── Instances["proj-1"] = Project { Id: "proj-1", Name: "Alpha" }
 ```
 
-### InstanceCollection
+## InstanceCollection
 
 A container for instances of a specific entity type, mapping IDs to objects.
 
 ---
 
-## Create Operations
+# Create Operations
 
-### Using DataChangeRequest
+## Using DataChangeRequest
 
 Create new entities by sending a `DataChangeRequest` with the `Creations` collection:
 
@@ -56,7 +54,7 @@ var request = DataChangeRequest.Create([newTodo], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
 ```
 
-### Via Unified Reference API
+## Via Unified Reference API
 
 Create entities using the unified reference path format:
 
@@ -68,7 +66,7 @@ var request = new UpdateUnifiedReferenceRequest(
 await hub.InvokeAsync(request);
 ```
 
-### Create Flow
+## Create Flow
 
 ```mermaid
 sequenceDiagram
@@ -90,11 +88,11 @@ sequenceDiagram
 
 ---
 
-## Read Operations
+# Read Operations
 
 MeshWeaver provides multiple ways to read data, supporting both one-time queries and real-time subscriptions.
 
-### Subscription-based Reading
+## Subscription-based Reading
 
 Get a reactive stream that updates automatically when data changes:
 
@@ -109,7 +107,7 @@ workspace.GetObservable<TodoItem>()
     });
 ```
 
-### One-time Data Retrieval
+## One-time Data Retrieval
 
 Fetch data once without subscribing to updates:
 
@@ -119,7 +117,7 @@ var response = await hub.InvokeAsync<GetDataResponse>(request);
 var todos = response.Data as IEnumerable<TodoItem>;
 ```
 
-### Reference Types
+## Reference Types
 
 Different reference types support various query patterns:
 
@@ -129,7 +127,7 @@ Different reference types support various query patterns:
 | `CollectionReference` | All entities in collection | `new CollectionReference("TodoItems")` |
 | `CollectionsReference` | Multiple collections | `new CollectionsReference("TodoItems", "Projects")` |
 
-### Using Unified References
+## Using Unified References
 
 Query data using path-based references:
 
@@ -147,7 +145,7 @@ var fileRef = "content:uploads/document.pdf";
 var schemaRef = "schema:TodoItem";
 ```
 
-### Virtual Paths
+## Virtual Paths
 
 Define computed data sources that combine or transform data:
 
@@ -167,9 +165,9 @@ Define computed data sources that combine or transform data:
 
 ---
 
-## Update Operations
+# Update Operations
 
-### Using DataChangeRequest
+## Using DataChangeRequest
 
 Update existing entities:
 
@@ -184,7 +182,7 @@ var request = DataChangeRequest.Update([updatedTodo], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
 ```
 
-### Update Options
+## Update Options
 
 Control how updates are applied:
 
@@ -202,7 +200,7 @@ var snapshotRequest = DataChangeRequest.Update(
 );
 ```
 
-### Via Unified Reference API
+## Via Unified Reference API
 
 ```csharp
 var request = new UpdateUnifiedReferenceRequest(
@@ -212,7 +210,7 @@ var request = new UpdateUnifiedReferenceRequest(
 await hub.InvokeAsync(request);
 ```
 
-### Workspace Extension Methods
+## Workspace Extension Methods
 
 Convenient methods for common operations:
 
@@ -226,9 +224,9 @@ workspace.Update([todo1, todo2, todo3], activity, delivery);
 
 ---
 
-## Delete Operations
+# Delete Operations
 
-### Using DataChangeRequest
+## Using DataChangeRequest
 
 Delete entities by passing the full entity object:
 
@@ -237,14 +235,14 @@ var request = DataChangeRequest.Delete([todoToDelete], changedBy: "user-123");
 workspace.RequestChange(request, activity, delivery);
 ```
 
-### Via Unified Reference API
+## Via Unified Reference API
 
 ```csharp
 var request = new DeleteUnifiedReferenceRequest("data:TodoItems/todo-1");
 await hub.InvokeAsync(request);
 ```
 
-### Workspace Extension Methods
+## Workspace Extension Methods
 
 ```csharp
 // Delete single entity
@@ -256,7 +254,7 @@ workspace.Delete([todo1, todo2], activity, delivery);
 
 ---
 
-## Data Validation
+# Data Validation
 
 Configure validators to enforce business rules:
 
@@ -289,7 +287,7 @@ Register validators in configuration:
 )
 ```
 
-## Access Control
+# Access Control
 
 Restrict CRUD operations based on user context:
 
@@ -327,7 +325,7 @@ Type-specific restrictions:
 )
 ```
 
-## Configuration Example
+# Configuration Example
 
 Complete data configuration with CRUD support:
 
@@ -349,7 +347,7 @@ Complete data configuration with CRUD support:
 )
 ```
 
-## Real-time Synchronization
+# Real-time Synchronization
 
 All CRUD operations automatically propagate to subscribers:
 
@@ -372,7 +370,7 @@ sequenceDiagram
     Workspace-->>ClientA: Update: [todo-1*, todo-3]
 ```
 
-## Best Practices
+# Best Practices
 
 1. **Use typed references**: Prefer `GetObservable<T>()` over raw streams for type safety
 2. **Handle errors**: Check `DataChangeResponse.Error` for validation failures
@@ -381,7 +379,7 @@ sequenceDiagram
 5. **Use access restrictions**: Protect sensitive operations
 6. **Leverage subscriptions**: Use reactive streams for real-time UIs instead of polling
 
-## Message Types Reference
+# Message Types Reference
 
 | Message | Purpose |
 |---------|---------|
@@ -393,7 +391,7 @@ sequenceDiagram
 | `UpdateUnifiedReferenceRequest` | Create/update via unified reference |
 | `DeleteUnifiedReferenceRequest` | Delete via unified reference |
 
-## See Also
+# See Also
 
 - [Query Syntax](MeshWeaver/Documentation/DataMesh/QuerySyntax) - Search and filter nodes
 - [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath) - Path-based data addressing

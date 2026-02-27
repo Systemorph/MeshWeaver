@@ -1,39 +1,37 @@
 ---
 NodeType: "ACME/Insurance/Article"
-Title: "Cornerstone Case Studies"
-Abstract: "Learn MeshWeaver through practical examples with the Cornerstone reinsurance pricing sample"
+Title: "ACME Insurance Case Studies"
+Abstract: "Learn MeshWeaver through practical examples with the ACME Insurance reinsurance pricing sample"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "Cornerstone"
+  - "ACME Insurance"
   - "Getting Started"
 ---
 
-# Cornerstone Case Studies
-
-The Cornerstone sample organization demonstrates MeshWeaver capabilities through a realistic reinsurance pricing scenario, including property risk management, geographic visualization, and document-based workflows.
+The ACME Insurance sample organization demonstrates MeshWeaver capabilities through a realistic reinsurance pricing scenario, including property risk management, geographic visualization, and document-based workflows.
 
 ---
 
-## What do you want to learn?
+# What do you want to learn?
 
 | Topic | Go here |
 |-------|---------|
-| Get up and running | [Getting Started](Cornerstone/Documentation/GettingStarted) - Setup, navigation, first steps |
-| Understand the architecture | [Architecture](Cornerstone/Documentation/Architecture) - Data model, NodeTypes, pricing pipeline |
-| Add AI to your app | [AI Agent Integration](Cornerstone/Documentation/AIAgentIntegration) - Pricing assistant, risk queries |
-| Reference paths and queries | [Unified References](Cornerstone/Documentation/UnifiedReferences) - Paths, queries, layout areas |
+| Get up and running | [Getting Started](ACME/Insurance/Documentation/GettingStarted) - Setup, navigation, first steps |
+| Understand the architecture | [Architecture](ACME/Insurance/Documentation/Architecture) - Data model, NodeTypes, pricing pipeline |
+| Add AI to your app | [AI Agent Integration](ACME/Insurance/Documentation/AIAgentIntegration) - Pricing assistant, risk queries |
+| Reference paths and queries | [Unified References](ACME/Insurance/Documentation/UnifiedReferences) - Paths, queries, layout areas |
 
 ---
 
-## The Cornerstone Organization
+# The ACME Insurance Organization
 
-Cornerstone is a reinsurance company with corporate clients organized by underwriting year:
+ACME Insurance is a reinsurance company with corporate clients organized by underwriting year:
 
 ```
-Cornerstone/                          # Organization
+ACME/Insurance/                          # Organization
 ├── Insured/                          # NodeType definition
 │   └── Code/
 │       ├── Insured.cs                # Insured data model
@@ -59,9 +57,9 @@ Cornerstone/                          # Organization
 
 ---
 
-## Key Concepts Demonstrated
+# Key Concepts Demonstrated
 
-### Hierarchical NodeTypes
+## Hierarchical NodeTypes
 
 The `Insured` → `Pricing` hierarchy models the natural structure of reinsurance:
 - **Insured**: Corporate clients with multiple underwriting years
@@ -76,7 +74,7 @@ Insured (NodeType)
         └── ReinsuranceSection (data)
 ```
 
-### Property Risk Data Model
+## Property Risk Data Model
 
 The `PropertyRisk` entity captures insurance-specific property details:
 
@@ -91,13 +89,13 @@ The `PropertyRisk` entity captures insurance-specific property details:
 | OccupancyCode, ConstructionCode | Classification codes |
 | BuildYear, NumberOfStories, Sprinklers | Physical attributes |
 
-### Reinsurance Structure
+## Reinsurance Structure
 
 Multi-layer programs are modeled with:
 - **ReinsuranceAcceptance**: Layer definitions with EPI, rate, brokerage
 - **ReinsuranceSection**: Sections within layers with attachment/limit points
 
-### Content Collections
+## Content Collections
 
 File uploads are managed via content collections:
 - Excel submissions for property schedules
@@ -106,7 +104,7 @@ File uploads are managed via content collections:
 
 ---
 
-## Views Architecture
+# Views Architecture
 
 Each pricing includes 7 views for different perspectives:
 
@@ -120,7 +118,7 @@ Each pricing includes 7 views for different perspectives:
 | ImportConfigs | Import mappings | Excel column configurations |
 | Thumbnail | Catalog card | Styled card for catalog display |
 
-### View Implementation Pattern
+## View Implementation Pattern
 
 Views follow a reactive pattern using `IObservable`:
 
@@ -134,9 +132,9 @@ public static IObservable<UiControl?> PropertyRisks(LayoutAreaHost host, Renderi
 
 ---
 
-## Sample Data
+# Sample Data
 
-### Microsoft Pricing (Full Sample)
+## Microsoft Pricing (Full Sample)
 
 The Microsoft 2026 pricing includes complete sample data:
 
@@ -147,7 +145,7 @@ The Microsoft 2026 pricing includes complete sample data:
 | ReinsuranceSection | 8 | Sections per layer |
 | Submission Files | 4 | Excel schedules, email chains |
 
-### Other Insureds
+## Other Insureds
 
 | Insured | Year | Status |
 |---------|------|--------|
@@ -159,7 +157,7 @@ The Microsoft 2026 pricing includes complete sample data:
 
 ---
 
-## Dimension System
+# Dimension System
 
 Pricings use standardized dimensions for filtering:
 
@@ -178,9 +176,9 @@ Dimensions enable:
 
 ---
 
-## Explore Further
+# Explore Further
 
-Navigate to `Cornerstone` in the portal to explore:
+Navigate to `ACME Insurance` in the portal to explore:
 - The Microsoft pricing with full sample data
 - Property risk visualization on the RiskMap
 - Reinsurance structure in the Structure view

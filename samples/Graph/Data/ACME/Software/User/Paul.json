@@ -3,7 +3,7 @@
   "namespace": "ACME/Software/User",
   "name": "Paul Martinez",
   "nodeType": "User",
-  "description": "Risk Manager at ACME",
+  "description": "Risk Manager at ACME Software",
   "iconName": "Person",
   "isPersistent": true,
   "content": {

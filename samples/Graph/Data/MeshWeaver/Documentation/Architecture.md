@@ -1,15 +1,13 @@
 ---
-Name: Architecture
+Name: MeshWeaver Architecture
 Category: Documentation
 Description: "Overview of MeshWeaver's distributed architecture: message-based communication, UI streaming, AI agents, and data management"
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/icon.svg
 ---
 
-# MeshWeaver Architecture
-
 MeshWeaver is a distributed platform for building data-driven applications with AI capabilities. This documentation covers the core architectural concepts.
 
-## Featured Articles
+# Featured Articles
 
 | Article | Description |
 |---------|-------------|
@@ -18,7 +16,7 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 
 ---
 
-## What MeshWeaver Does
+# What MeshWeaver Does
 
 - Build Blazor Server portals with reactive layout areas (addressable UI surfaces that embed data + business logic)
 - Route commands/events through the Message Hub for concurrency, activity tracking, and request/response
@@ -26,20 +24,20 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 - Integrate AI: chat/command agents, autocomplete, and provider abstraction for Azure OpenAI/Foundry/Claude
 - Deploy flexibly: single-process portal or Orleans-based distributed setup via .NET Aspire
 
-## What MeshWeaver Is Not
+# What MeshWeaver Is Not
 
 - Not a static-site CMS; it assumes live hubs and services
 - Not a mobile/native UI toolkit; primary UI is Blazor Server
 - Cloud targets are flexible, but samples assume Azure services (Blob, OpenAI/Foundry, PostgreSQL/Cosmos options)
 - No out-of-the-box multi-tenant SaaS provisioning; security hardening guidance is minimal today
 
-## Architecture Overview
+# Architecture Overview
 
 @@MeshWeaver/Documentation/Architecture/content:platform-overview.svg
 
-## Core Concepts
+# Core Concepts
 
-### 1. Message-Based Communication
+## 1. Message-Based Communication
 
 **MessageHubs** are the foundation of MeshWeaver. They:
 - Manage concurrency through the actor model
@@ -51,7 +49,7 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 
 ---
 
-### 2. User Interface
+## 2. User Interface
 
 UI is generated **where data lives**:
 - Controls defined server-side in a declarative language
@@ -63,7 +61,7 @@ UI is generated **where data lives**:
 
 ---
 
-### 3. Agentic AI
+## 3. Agentic AI
 
 AI agents are **first-class citizens** in the mesh:
 - Minimal system prompts - agents query for context
@@ -75,7 +73,7 @@ AI agents are **first-class citizens** in the mesh:
 
 ---
 
-### 4. Mesh Graph
+## 4. Mesh Graph
 
 **Data types are data elements**:
 - Hierarchical namespaces (a/b/c/d pattern)
@@ -87,7 +85,7 @@ AI agents are **first-class citizens** in the mesh:
 
 ---
 
-### 5. Data Versioning
+## 5. Data Versioning
 
 Technology-specific versioning strategies:
 - Snowflake: Time Travel (up to 90 days)
@@ -98,7 +96,7 @@ Technology-specific versioning strategies:
 
 ---
 
-### 6. Access Control
+## 6. Access Control
 
 Flexible security through `IDataValidator`:
 - Hierarchical: businessArea/department/deal
@@ -109,7 +107,7 @@ Flexible security through `IDataValidator`:
 
 ---
 
-## Key Principles
+# Key Principles
 
 | Principle | Description |
 |-----------|-------------|
@@ -119,13 +117,13 @@ Flexible security through `IDataValidator`:
 | **Agent-Ready** | AI agents access everything through unified APIs |
 | **Security-First** | Validation at every operation |
 
-## Getting Started
+# Getting Started
 
 Explore each architecture topic in depth through the linked articles above, or browse the `MeshWeaver/Documentation/Architecture` namespace.
 
 ---
 
-## Tech Stack
+# Tech Stack
 
 | Layer | Technologies |
 |-------|--------------|
@@ -137,7 +135,7 @@ Explore each architecture topic in depth through the linked articles above, or b
 
 ---
 
-## Folder Structure
+# Folder Structure
 
 | Path | Description |
 |------|-------------|
@@ -151,7 +149,7 @@ Explore each architecture topic in depth through the linked articles above, or b
 
 ---
 
-## Feature-to-Component Matrix
+# Feature-to-Component Matrix
 
 | Feature | Components |
 |---------|------------|
@@ -164,7 +162,7 @@ Explore each architecture topic in depth through the linked articles above, or b
 
 ---
 
-## Extending MeshWeaver
+# Extending MeshWeaver
 
 | Extension Type | How To |
 |---------------|--------|
@@ -175,7 +173,7 @@ Explore each architecture topic in depth through the linked articles above, or b
 
 ---
 
-## Known Documentation Gaps
+# Known Documentation Gaps
 
 As of version 3.0:
 

@@ -1,23 +1,21 @@
 ---
 NodeType: "ACME/Insurance/Article"
-Title: "Getting Started with Cornerstone"
+Title: "Getting Started with ACME Insurance"
 Abstract: "Run the sample and explore the pricing interface"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "Cornerstone"
+  - "ACME Insurance"
   - "Getting Started"
 ---
 
-# Getting Started with Cornerstone
+This guide walks you through running the ACME Insurance sample and exploring the pricing interface.
 
-This guide walks you through running the Cornerstone sample and exploring the pricing interface.
+# Running the Sample
 
-## Running the Sample
-
-### Clone and Build
+## Clone and Build
 
 ```bash
 git clone https://github.com/MeshWeaver/MeshWeaver.git
@@ -25,7 +23,7 @@ cd MeshWeaver
 dotnet build
 ```
 
-### Start the Portal
+## Start the Portal
 
 ```bash
 cd memex/Memex.Portal.Monolith
@@ -34,15 +32,15 @@ dotnet run
 
 Navigate to `http://localhost:7122` in your browser.
 
-### Navigate to Cornerstone
+## Navigate to ACME Insurance
 
-1. Navigate to **Cornerstone** namespace
+1. Navigate to **ACME Insurance** namespace
 2. Explore **Microsoft**, **GlobalManufacturing**, **Tesla**, **Nestle**, or other insureds
 3. Select a pricing (e.g., 2026) to view details
 
-## Exploring the Pricing Interface
+# Exploring the Pricing Interface
 
-### Insured Views
+## Insured Views
 
 Each insured (Microsoft, GlobalManufacturing, etc.) has these views:
 
@@ -50,7 +48,7 @@ Each insured (Microsoft, GlobalManufacturing, etc.) has these views:
 |------|-------------|
 | **PricingCatalog** | All pricings grouped by status (Draft, Quoted, Bound, etc.) |
 
-### Pricing Views
+## Pricing Views
 
 Each pricing instance has these views:
 
@@ -64,7 +62,7 @@ Each pricing instance has these views:
 | **Submission** | File browser for uploaded submission documents |
 | **Import Configs** | Excel import configuration settings |
 
-### Pricing Details View
+## Pricing Details View
 
 The Overview displays:
 - Insured name and description
@@ -73,7 +71,7 @@ The Overview displays:
 - Broker and primary insurer information
 - Current pricing status with promotion options
 
-### Property Risks DataGrid
+## Property Risks DataGrid
 
 The Property Risks view shows:
 - Location details (address, city, state, country, ZIP)
@@ -81,18 +79,18 @@ The Property Risks view shows:
 - Construction details (build year, occupancy type)
 - Geocoded coordinates for mapping
 
-### Reinsurance Structure
+## Reinsurance Structure
 
 The Structure view visualizes:
 - Multiple coverage layers with attachment points and limits
 - Financial terms (EPI, rates, commissions)
 - Sections per layer (Fire, Natural Catastrophe, Business Interruption)
 
-## Using the AI Agent
+# Using the AI Agent
 
 The AI chat agent understands natural language and can help manage pricings.
 
-### Querying Pricings
+## Querying Pricings
 
 ```
 "Show me the Microsoft 2026 pricing"
@@ -105,7 +103,7 @@ The AI chat agent understands natural language and can help manage pricings.
 → Displays the Structure view
 ```
 
-### Creating Pricings
+## Creating Pricings
 
 ```
 "Create a new pricing for Microsoft with inception January 1, 2027"
@@ -115,7 +113,7 @@ The AI chat agent understands natural language and can help manage pricings.
 → Creates new pricing in GlobalManufacturing namespace
 ```
 
-### Navigating Views
+## Navigating Views
 
 ```
 "Show the risk map for Microsoft 2026"
@@ -125,7 +123,7 @@ The AI chat agent understands natural language and can help manage pricings.
 → Shows the file browser for uploaded documents
 ```
 
-### Understanding Insurance Data
+## Understanding Insurance Data
 
 ```
 "What lines of business are available?"
@@ -138,9 +136,9 @@ The AI chat agent understands natural language and can help manage pricings.
 → Lists supported country codes with regions
 ```
 
-## Understanding the Code
+# Understanding the Code
 
-### Pricing Data Model (`Pricing.cs`)
+## Pricing Data Model (`Pricing.cs`)
 
 ```csharp
 public record Pricing : IContentInitializable
@@ -180,7 +178,7 @@ Key features:
 - `[Dimension<T>]` links to dimension types for filtering
 - `[Markdown]` enables markdown rendering for descriptions
 
-### NodeType Configuration (`Pricing.json`)
+## NodeType Configuration (`Pricing.json`)
 
 ```json
 {
@@ -200,12 +198,12 @@ Key features:
 }
 ```
 
-### Pricing Instance (`Microsoft/2026.json`)
+## Pricing Instance (`Microsoft/2026.json`)
 
 ```json
 {
   "id": "2026",
-  "namespace": "Cornerstone/Microsoft",
+  "namespace": "ACME/Insurance/Microsoft",
   "name": "Microsoft 2026",
   "nodeType": "ACME/Insurance/Pricing",
   "content": {
@@ -222,16 +220,16 @@ Key features:
 }
 ```
 
-## Working with Submissions
+# Working with Submissions
 
-### Uploading Files
+## Uploading Files
 
 Pricings support file uploads for submission documents:
-1. Navigate to a pricing (e.g., Cornerstone/Microsoft/2026)
+1. Navigate to a pricing (e.g., ACME/Insurance/Microsoft/2026)
 2. Select the **Submission** view
 3. Upload files such as slip documents, Excel data, or PDFs
 
-### Excel Import
+## Excel Import
 
 Property risk data can be imported from Excel:
 1. Upload an Excel file to Submissions
@@ -239,9 +237,9 @@ Property risk data can be imported from Excel:
 3. Map columns to PropertyRisk fields
 4. Execute import to populate the Property Risks DataGrid
 
-## Next Steps
+# Next Steps
 
-1. **Explore the Data**: Navigate through Cornerstone insureds and examine pricing data
+1. **Explore the Data**: Navigate through ACME Insurance insureds and examine pricing data
 2. **Use the Agent**: Try natural language commands in the chat interface
 3. **View Property Risks**: Explore the Property Risks and Risk Map views
 4. **Examine the Structure**: Review reinsurance layers in the Structure view

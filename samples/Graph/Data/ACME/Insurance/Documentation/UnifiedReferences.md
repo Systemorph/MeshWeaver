@@ -1,68 +1,66 @@
 ---
 NodeType: "ACME/Insurance/Article"
-Title: "Unified References in Cornerstone"
-Abstract: "Reference guide for namespace paths, data queries, and views in the Cornerstone sample"
+Title: "Unified References in ACME Insurance"
+Abstract: "Reference guide for namespace paths, data queries, and views in the ACME Insurance sample"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "Cornerstone"
+  - "ACME Insurance"
   - "References"
 ---
 
-# Unified References in Cornerstone
-
 This document demonstrates unified references in the ACME Insurance sample. For the complete Unified Path syntax reference, see [Unified Path](MeshWeaver/Documentation/DataMesh/UnifiedPath).
 
-It covers namespace hierarchy, data queries, content paths, and views specific to the Cornerstone reinsurance use case.
+It covers namespace hierarchy, data queries, content paths, and views specific to the ACME Insurance reinsurance use case.
 
-## Organization Structure
+# Organization Structure
 
-For the full namespace hierarchy, see [Cornerstone Architecture](Cornerstone/Documentation/Architecture).
+For the full namespace hierarchy, see [ACME Insurance Architecture](ACME/Insurance/Documentation/Architecture).
 
-## Namespace Paths
+# Namespace Paths
 
-### Root Level
-
-| Path | Description |
-|------|-------------|
-| `Cornerstone` | The reinsurance company namespace |
-
-### NodeType Definitions
+## Root Level
 
 | Path | Description |
 |------|-------------|
-| `Cornerstone/Insured` | Insured NodeType (client organizations) |
-| `Cornerstone/Pricing` | Pricing NodeType (reinsurance pricings) |
+| `ACME/Insurance` | The reinsurance company namespace |
 
-### Insured Instances
+## NodeType Definitions
+
+| Path | Description |
+|------|-------------|
+| `ACME/Insurance/Insured` | Insured NodeType (client organizations) |
+| `ACME/Insurance/Pricing` | Pricing NodeType (reinsurance pricings) |
+
+## Insured Instances
 
 | Path | Insured |
 |------|---------|
-| `Cornerstone/Microsoft` | Microsoft Corporation |
-| `Cornerstone/GlobalManufacturing` | Global Manufacturing Corp |
-| `Cornerstone/EuropeanLogistics` | European Logistics Ltd |
-| `Cornerstone/TechIndustries` | Tech Industries GmbH |
-| `Cornerstone/Tesla` | Tesla, Inc. |
-| `Cornerstone/Nestle` | Nestle S.A. |
+| `ACME/Insurance/Microsoft` | Microsoft Corporation |
+| `ACME/Insurance/GlobalManufacturing` | Global Manufacturing Corp |
+| `ACME/Insurance/EuropeanLogistics` | European Logistics Ltd |
+| `ACME/Insurance/TechIndustries` | Tech Industries GmbH |
+| `ACME/Insurance/Tesla` | Tesla, Inc. |
+| `ACME/Insurance/Nestle` | Nestle S.A. |
 
-### Pricing Instances
+## Pricing Instances
 
 | Path | Pricing |
 |------|---------|
-| `Cornerstone/Microsoft/2026` | Microsoft 2026 Property Reinsurance |
-| `Cornerstone/GlobalManufacturing/2024` | Global Manufacturing 2024 Pricing |
-| `Cornerstone/EuropeanLogistics/2024` | European Logistics 2024 Pricing |
-| `Cornerstone/TechIndustries/2024` | Tech Industries 2024 Pricing |
-| `Cornerstone/Tesla/2026` | Tesla 2026 Property Reinsurance |
-| `Cornerstone/Nestle/2026` | Nestle 2026 Property Reinsurance |
+| `ACME/Insurance/Microsoft/2026` | Microsoft 2026 Property Reinsurance |
+| `ACME/Insurance/GlobalManufacturing/2024` | Global Manufacturing 2024 Pricing |
+| `ACME/Insurance/EuropeanLogistics/2024` | European Logistics 2024 Pricing |
+| `ACME/Insurance/TechIndustries/2024` | Tech Industries 2024 Pricing |
+| `ACME/Insurance/Tesla/2026` | Tesla 2026 Property Reinsurance |
+| `ACME/Insurance/Nestle/2026` | Nestle 2026 Property Reinsurance |
 
-## Query Syntax
+# Query Syntax
 
 MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](MeshWeaver/Documentation/DataMesh/QuerySyntax).
 
-### Cornerstone Query Examples
+## ACME Insurance Query Examples
 
 **All Pricings**:
 ```
@@ -89,55 +87,55 @@ path:ACME/Insurance/Microsoft nodeType:ACME/Insurance/Pricing scope:subtree
 nodeType:ACME/Insurance/Insured
 ```
 
-## Data References
+# Data References
 
 See [Data Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
-### Display Insured
+## Display Insured
 
 ```
-@Cornerstone/Microsoft
+@ACME/Insurance/Microsoft
 ```
 
-@Cornerstone/Microsoft
+@ACME/Insurance/Microsoft
 
-### Display Pricing
-
-```
-@Cornerstone/Microsoft/2026
-```
-
-@Cornerstone/Microsoft/2026
-
-### Display Property Risks
+## Display Pricing
 
 ```
-@@Cornerstone/Microsoft/2026/data:PropertyRisk
+@ACME/Insurance/Microsoft/2026
 ```
 
-@@Cornerstone/Microsoft/2026/data:PropertyRisk
+@ACME/Insurance/Microsoft/2026
 
-### Display Reinsurance Acceptances
-
-```
-@@Cornerstone/Microsoft/2026/data:ReinsuranceAcceptance
-```
-
-@@Cornerstone/Microsoft/2026/data:ReinsuranceAcceptance
-
-### Display Reinsurance Sections
+## Display Property Risks
 
 ```
-@@Cornerstone/Microsoft/2026/data:ReinsuranceSection
+@@ACME/Insurance/Microsoft/2026/data:PropertyRisk
 ```
 
-@@Cornerstone/Microsoft/2026/data:ReinsuranceSection
+@@ACME/Insurance/Microsoft/2026/data:PropertyRisk
 
-## Dimension References
+## Display Reinsurance Acceptances
+
+```
+@@ACME/Insurance/Microsoft/2026/data:ReinsuranceAcceptance
+```
+
+@@ACME/Insurance/Microsoft/2026/data:ReinsuranceAcceptance
+
+## Display Reinsurance Sections
+
+```
+@@ACME/Insurance/Microsoft/2026/data:ReinsuranceSection
+```
+
+@@ACME/Insurance/Microsoft/2026/data:ReinsuranceSection
+
+# Dimension References
 
 Dimensions are shared across all pricings using the same NodeType.
 
-### PricingStatus Dimension
+## PricingStatus Dimension
 
 | Status | Description | Order |
 |--------|-------------|-------|
@@ -147,7 +145,7 @@ Dimensions are shared across all pricings using the same NodeType.
 | Declined | Pricing was declined by client or underwriter | 3 |
 | Expired | Quote or policy has expired | 4 |
 
-### LineOfBusiness Dimension
+## LineOfBusiness Dimension
 
 | Code | Name | Description |
 |------|------|-------------|
@@ -157,7 +155,7 @@ Dimensions are shared across all pricings using the same NodeType.
 | AVIATION | Aviation | Aviation and aerospace insurance |
 | ENERGY | Energy | Energy sector insurance including oil & gas |
 
-### Country Dimension
+## Country Dimension
 
 | Code | Name | Region |
 |------|------|--------|
@@ -172,7 +170,7 @@ Dimensions are shared across all pricings using the same NodeType.
 | CH | Switzerland | Europe |
 | SG | Singapore | Asia |
 
-### Currency Dimension
+## Currency Dimension
 
 | Code | Name | Symbol |
 |------|------|--------|
@@ -184,7 +182,7 @@ Dimensions are shared across all pricings using the same NodeType.
 | AUD | Australian Dollar | A$ |
 | CAD | Canadian Dollar | C$ |
 
-### LegalEntity Dimension
+## LegalEntity Dimension
 
 | Code | Name | Country |
 |------|------|---------|
@@ -193,128 +191,128 @@ Dimensions are shared across all pricings using the same NodeType.
 | CS-EU | ACME Insurance Europe AG | Switzerland |
 | CS-ASIA | ACME Insurance Asia Pte. Ltd. | Singapore |
 
-## Content References
+# Content References
 
-### Submission Files
+## Submission Files
 
 Content collections allow file references:
 
 ```
-@@Cornerstone/Microsoft/2026/content:Submissions/Slip.md
+@@ACME/Insurance/Microsoft/2026/content:Submissions/Slip.md
 ```
 
-@@Cornerstone/Microsoft/2026/content:Submissions/Slip.md
+@@ACME/Insurance/Microsoft/2026/content:Submissions/Slip.md
 
 ```
-@@Cornerstone/Microsoft/2026/content:Submissions/Microsoft.xlsx
+@@ACME/Insurance/Microsoft/2026/content:Submissions/Microsoft.xlsx
 ```
 
-## View References
+# View References
 
 Views are defined in `PricingViews.cs` and available for all pricings. See [Area Prefix](MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix) for view syntax.
 
-### Overview - Pricing Summary
+## Overview - Pricing Summary
 
 Shows pricing header with insured details, dates, and financial summary:
 
 ```
-@Cornerstone/Microsoft/2026/Overview
+@ACME/Insurance/Microsoft/2026/Overview
 ```
 
-@Cornerstone/Microsoft/2026/Overview
+@ACME/Insurance/Microsoft/2026/Overview
 
-### Property Risks - Risk Data Grid
+## Property Risks - Risk Data Grid
 
 DataGrid showing all property locations with TSI values:
 
 ```
-@Cornerstone/Microsoft/2026/PropertyRisks
+@ACME/Insurance/Microsoft/2026/PropertyRisks
 ```
 
-@Cornerstone/Microsoft/2026/PropertyRisks
+@ACME/Insurance/Microsoft/2026/PropertyRisks
 
-### Risk Map - Geographic Visualization
+## Risk Map - Geographic Visualization
 
 Google Maps visualization of geocoded property locations:
 
 ```
-@Cornerstone/Microsoft/2026/RiskMap
+@ACME/Insurance/Microsoft/2026/RiskMap
 ```
 
-@Cornerstone/Microsoft/2026/RiskMap
+@ACME/Insurance/Microsoft/2026/RiskMap
 
-### Structure - Reinsurance Layers
+## Structure - Reinsurance Layers
 
 DataGrids showing reinsurance layers and sections:
 
 ```
-@Cornerstone/Microsoft/2026/Structure
+@ACME/Insurance/Microsoft/2026/Structure
 ```
 
-@Cornerstone/Microsoft/2026/Structure
+@ACME/Insurance/Microsoft/2026/Structure
 
-### Submission - File Browser
+## Submission - File Browser
 
 File browser for uploaded submission documents:
 
 ```
-@Cornerstone/Microsoft/2026/Submission
+@ACME/Insurance/Microsoft/2026/Submission
 ```
 
-@Cornerstone/Microsoft/2026/Submission
+@ACME/Insurance/Microsoft/2026/Submission
 
-### Import Configs - Import Settings
+## Import Configs - Import Settings
 
 Excel import configuration settings:
 
 ```
-@Cornerstone/Microsoft/2026/ImportConfigs
+@ACME/Insurance/Microsoft/2026/ImportConfigs
 ```
 
-@Cornerstone/Microsoft/2026/ImportConfigs
+@ACME/Insurance/Microsoft/2026/ImportConfigs
 
-### PricingCatalog - Insured's Pricings
+## PricingCatalog - Insured's Pricings
 
 All pricings for an insured grouped by status:
 
 ```
-@Cornerstone/Microsoft/PricingCatalog
+@ACME/Insurance/Microsoft/PricingCatalog
 ```
 
-@Cornerstone/Microsoft/PricingCatalog
+@ACME/Insurance/Microsoft/PricingCatalog
 
-## Navigation Links
+# Navigation Links
 
-### Link to Insured
+## Link to Insured
 
 ```markdown
-[Microsoft Corporation](Cornerstone/Microsoft)
-[Global Manufacturing](Cornerstone/GlobalManufacturing)
-[European Logistics](Cornerstone/EuropeanLogistics)
-[Tech Industries](Cornerstone/TechIndustries)
-[Tesla](Cornerstone/Tesla)
-[Nestle](Cornerstone/Nestle)
+[Microsoft Corporation](ACME/Insurance/Microsoft)
+[Global Manufacturing](ACME/Insurance/GlobalManufacturing)
+[European Logistics](ACME/Insurance/EuropeanLogistics)
+[Tech Industries](ACME/Insurance/TechIndustries)
+[Tesla](ACME/Insurance/Tesla)
+[Nestle](ACME/Insurance/Nestle)
 ```
 
-### Link to Pricing
+## Link to Pricing
 
 ```markdown
-[Microsoft 2026](Cornerstone/Microsoft/2026)
-[Global Manufacturing 2024](Cornerstone/GlobalManufacturing/2024)
-[Tesla 2026](Cornerstone/Tesla/2026)
-[Nestle 2026](Cornerstone/Nestle/2026)
+[Microsoft 2026](ACME/Insurance/Microsoft/2026)
+[Global Manufacturing 2024](ACME/Insurance/GlobalManufacturing/2024)
+[Tesla 2026](ACME/Insurance/Tesla/2026)
+[Nestle 2026](ACME/Insurance/Nestle/2026)
 ```
 
-### Link to View
+## Link to View
 
 ```markdown
-[Overview](Cornerstone/Microsoft/2026/Overview)
-[Property Risks](Cornerstone/Microsoft/2026/PropertyRisks)
-[Risk Map](Cornerstone/Microsoft/2026/RiskMap)
-[Reinsurance Structure](Cornerstone/Microsoft/2026/Structure)
+[Overview](ACME/Insurance/Microsoft/2026/Overview)
+[Property Risks](ACME/Insurance/Microsoft/2026/PropertyRisks)
+[Risk Map](ACME/Insurance/Microsoft/2026/RiskMap)
+[Reinsurance Structure](ACME/Insurance/Microsoft/2026/Structure)
 ```
 
-## Sample Insureds
+# Sample Insureds
 
 | Insured | Industry | Location |
 |---------|----------|----------|
@@ -325,9 +323,9 @@ All pricings for an insured grouped by status:
 | Tesla, Inc. | Automotive & Energy | United States |
 | Nestle S.A. | Food & Beverage | Switzerland |
 
-## Summary
+# Summary
 
-The Cornerstone sample demonstrates MeshWeaver's unified path system for insurance:
+The ACME Insurance sample demonstrates MeshWeaver's unified path system for insurance:
 
 - **Namespace paths** define the hierarchical Insured → Pricing structure
 - **NodeType references** enable shared definitions across all insureds
@@ -336,4 +334,4 @@ The Cornerstone sample demonstrates MeshWeaver's unified path system for insuran
 - **Views** provide consistent displays (Overview, Property Risks, Risk Map, Structure)
 - **Content paths** reference submission files and imported documents
 
-All paths follow the pattern: `Cornerstone/[Insured]/[Pricing]/[View]`
+All paths follow the pattern: `ACME/Insurance/[Insured]/[Pricing]/[View]`

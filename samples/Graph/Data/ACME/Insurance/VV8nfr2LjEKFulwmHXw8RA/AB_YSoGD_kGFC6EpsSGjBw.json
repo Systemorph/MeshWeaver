@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/AB_YSoGD_kGFC6EpsSGjBw",
+  "path": "ACME/Insurance/VV8nfr2LjEKFulwmHXw8RA/AB_YSoGD_kGFC6EpsSGjBw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-02-26T12:42:05.592598+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "AB_YSoGD_kGFC6EpsSGjBw",
+    "role": "user",
+    "text": "https://localhost:7122/ACME/Northwind/Reports",
+    "timestamp": "2026-02-26T12:42:05.592041Z",
+    "type": "ExecutedInput"
+  }
+}

@@ -5,13 +5,11 @@ Description: Generate editable forms from C# records with automatic field render
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Editor/icon.svg
 ---
 
-# Adding Editable Forms to a UI
-
 The Editor control automatically generates editable forms from C# records, mapping property types to appropriate input controls.
 
-## Basic Usage
+# Basic Usage
 
-### Example 1: Simple Form
+## Example 1: Simple Form
 
 ```csharp
 public record Person
@@ -29,7 +27,7 @@ host.Edit(new Person { Name = "Alice", Age = 30, IsActive = true })
 - Number field for Age (int → NumberFieldControl)
 - Checkbox for IsActive (bool → CheckBoxControl)
 
-### Example 2: Form with Reactive Output
+## Example 2: Form with Reactive Output
 
 ```csharp
 public record Calculator
@@ -49,7 +47,7 @@ host.Edit(
 - A label below showing the sum
 - The label updates automatically when you change either field
 
-### Example 3: Form with Validation Attributes
+## Example 3: Form with Validation Attributes
 
 ```csharp
 public record UserProfile
@@ -77,7 +75,7 @@ host.Edit(new UserProfile { Age = 25 })
 - Age: Number field with range validation
 - InternalId: Not visible (Browsable=false)
 
-## Property Type Mapping
+# Property Type Mapping
 
 The editor automatically selects controls based on property type:
 
@@ -88,7 +86,7 @@ The editor automatically selects controls based on property type:
 | `bool` | Checkbox | `public bool Enabled { get; init; }` |
 | `DateTime` | Date/time picker | `public DateTime BirthDate { get; init; }` |
 
-## Supported Attributes
+# Supported Attributes
 
 Customize field behavior with attributes:
 
@@ -101,7 +99,7 @@ Customize field behavior with attributes:
 | `[Range(min, max)]` | Numeric range validation | `[Range(0, 100)]` |
 | `[Editable(false)]` | Read-only field | `[Editable(false)] public string Code` |
 
-## Control Override
+# Control Override
 
 Use `[UiControl<T>]` to override the default control:
 
@@ -122,7 +120,7 @@ host.Edit(new Settings { Theme = "System" })
 - Description: Multi-line text area
 - Theme: Radio button group with three options
 
-## Dimension Dropdowns
+# Dimension Dropdowns
 
 Use `[Dimension<T>]` to render a dropdown populated from a data source:
 
@@ -146,7 +144,7 @@ public record Address
 
 **Result:** CountryCode field renders as a dropdown populated with all Country records from the data context.
 
-## How It Works
+# How It Works
 
 The `Edit<T>()` method reflects over all properties:
 
@@ -158,7 +156,7 @@ typeof(T).GetProperties()                    // Get all public properties
 
 Each property becomes a named area in the `EditorControl`. The reactive variant wraps the editor in a `StackControl` and adds a view that subscribes to form changes via `GetDataStream<T>()`.
 
-## See Also
+# See Also
 
 - [Property Attributes](MeshWeaver/Documentation/UserInterface/Attributes) - All supported attributes in detail
 - [Data Binding](MeshWeaver/Documentation/UserInterface/DataBinding) - How form data flows

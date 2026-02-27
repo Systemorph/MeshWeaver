@@ -4,13 +4,11 @@ Category: Documentation
 Description: How to render collections of items using data-bound ItemTemplateControl with BindMany
 ---
 
-# Item Templates
-
 `ItemTemplateControl` repeats a view template for each item in a collection. It is the MeshWeaver equivalent of a "for-each" renderer, binding each element of an array to a template view.
 
-## Usage Patterns
+# Usage Patterns
 
-### 1. Static Collection
+## 1. Static Collection
 
 Use `BindMany` on an `IEnumerable<T>` to render a fixed list of items:
 
@@ -21,7 +19,7 @@ var control = items.BindMany(item => Controls.Label(item.Name));
 
 The expression tree `item => Controls.Label(item.Name)` is analyzed at build time: property accessors like `item.Name` are replaced with `JsonPointerReference("name")` bindings.
 
-### 2. Observable Stream
+## 2. Observable Stream
 
 Use `BindMany` on an `IObservable<IEnumerable<T>>` for reactive collections that update over time:
 
@@ -38,7 +36,7 @@ var control = assignmentStream.BindMany("assignments", a =>
 
 The `id` parameter (`"assignments"`) identifies the data stream. The observable pushes updates into the layout host's data store, and the client re-renders automatically.
 
-### 3. Nested in Template.Bind
+## 3. Nested in Template.Bind
 
 Combine `Template.Bind` with `Template.BindMany` to bind both a parent object and its child collection:
 
@@ -52,7 +50,7 @@ return Template.Bind(
 
 This creates an `ItemTemplateControl` whose `DataContext` points to the parent object's data stream, and whose `Data` property is a `JsonPointerReference` pointing to the `items` sub-path within that context.
 
-### 4. Workspace Stream
+## 4. Workspace Stream
 
 Use `GetStream<T>()` on a workspace to get a reactive stream of workspace-managed data, then bind it with `BindMany`:
 
@@ -70,7 +68,7 @@ Unlike the plain observable pattern (pattern 2), the data here is managed by the
 
 This pattern is useful when the data is already registered as a workspace type (e.g., via `WithTypeSource` on a `DataSource`), and you want the standard data binding pipeline to manage persistence and change tracking.
 
-## How Data Binding Works
+# How Data Binding Works
 
 When the expression tree is compiled, MeshWeaver's `TemplateBuilderVisitor` replaces each property accessor with a `JsonPointerReference`:
 
@@ -88,7 +86,7 @@ On the Blazor client, `ItemTemplate.razor` iterates over the bound collection an
 
 The template's `JsonPointerReference("displayLabel")` resolves relative to each item's DataContext, producing paths like `/data/"assignments"/0/displayLabel`.
 
-## Data Flow
+# Data Flow
 
 ```mermaid
 graph LR
@@ -103,7 +101,7 @@ graph LR
 3. `ItemTemplate.razor` subscribes to the data at `DataContext` via `DataBind`
 4. For each element in the array, a copy of `View` is rendered with item-scoped DataContext
 
-## Reference
+# Reference
 
 - `Template.BindMany` methods: `src/MeshWeaver.Layout/Template.cs`
 - `ItemTemplateControl` record: `src/MeshWeaver.Layout/ItemTemplateControl.cs`

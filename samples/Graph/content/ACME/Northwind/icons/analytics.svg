@@ -1,21 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
-  <defs>
-    <linearGradient id="analyticsGrad" x1="0%" y1="100%" x2="0%" y2="0%">
-      <stop offset="0%" stop-color="#1E40AF"/>
-      <stop offset="100%" stop-color="#60A5FA"/>
-    </linearGradient>
-  </defs>
-  <!-- Background -->
-  <rect width="24" height="24" rx="4" fill="#DBEAFE"/>
-  <!-- Bar chart -->
-  <rect x="3" y="14" width="4" height="7" rx="1" fill="url(#analyticsGrad)"/>
-  <rect x="10" y="8" width="4" height="13" rx="1" fill="url(#analyticsGrad)"/>
-  <rect x="17" y="11" width="4" height="10" rx="1" fill="url(#analyticsGrad)"/>
-  <!-- Compass needle as trend line -->
-  <path d="M4 12 L12 5 L19 8" stroke="#60A5FA" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  <!-- Compass needle point (N direction) -->
-  <polygon points="12,5 10.5,7.5 13.5,7.5" fill="#2563EB"/>
-  <!-- Small compass dots -->
-  <circle cx="4" cy="12" r="1.5" fill="#60A5FA"/>
-  <circle cx="19" cy="8" r="1.5" fill="#60A5FA"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .bg { fill: #ebf3fc; }
+    .fg { fill: #0f6cbd; }
+  </style>
+  <rect class="bg" width="24" height="24" rx="4"/>
+  <rect class="fg" x="3" y="14" width="4" height="7" rx="1"/>
+  <rect class="fg" x="10" y="8" width="4" height="13" rx="1"/>
+  <rect class="fg" x="17" y="11" width="4" height="10" rx="1"/>
 </svg>
