@@ -115,6 +115,11 @@ public class AgentFileParser : IFileFormatParser
                 AgentPath = d.AgentPath ?? "",
                 Instructions = d.Instructions
             }).ToList(),
+            Handoffs = frontMatter.Handoffs?.Select(h => new AgentHandoff
+            {
+                AgentPath = h.AgentPath ?? "",
+                Instructions = h.Instructions
+            }).ToList(),
             PreferredModel = frontMatter.PreferredModel,
             ContextMatchPattern = frontMatter.ContextMatchPattern,
             Order = frontMatter.Order
@@ -169,6 +174,11 @@ public class AgentFileParser : IFileFormatParser
             {
                 AgentPath = d.AgentPath,
                 Instructions = d.Instructions
+            }).ToList(),
+            Handoffs = agentConfig?.Handoffs?.Select(h => new HandoffFrontMatter
+            {
+                AgentPath = h.AgentPath,
+                Instructions = h.Instructions
             }).ToList()
         };
 
@@ -237,7 +247,8 @@ public class AgentFileParser : IFileFormatParser
                 PreferredModel = ExtractString(element, "preferredModel"),
                 ContextMatchPattern = ExtractString(element, "contextMatchPattern"),
                 Order = ExtractInt(element, "order"),
-                Delegations = ExtractDelegations(element)
+                Delegations = ExtractDelegations(element),
+                Handoffs = ExtractHandoffs(element)
             };
         }
         catch
@@ -286,6 +297,23 @@ public class AgentFileParser : IFileFormatParser
         }
 
         return delegations.Count > 0 ? delegations : null;
+    }
+
+    private static List<AgentHandoff>? ExtractHandoffs(System.Text.Json.JsonElement element)
+    {
+        if (!element.TryGetProperty("handoffs", out var handoffsProp) ||
+            handoffsProp.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return null;
+
+        var handoffs = new List<AgentHandoff>();
+        foreach (var item in handoffsProp.EnumerateArray())
+        {
+            var agentPath = ExtractString(item, "agentPath") ?? "";
+            var instructions = ExtractString(item, "instructions");
+            handoffs.Add(new AgentHandoff { AgentPath = agentPath, Instructions = instructions });
+        }
+
+        return handoffs.Count > 0 ? handoffs : null;
     }
 
     /// <summary>
@@ -360,12 +388,22 @@ public class AgentFileParser : IFileFormatParser
         public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
         public List<DelegationFrontMatter>? Delegations { get; set; }
+        public List<HandoffFrontMatter>? Handoffs { get; set; }
     }
 
     /// <summary>
     /// YAML model for delegation configuration.
     /// </summary>
     private class DelegationFrontMatter
+    {
+        public string? AgentPath { get; set; }
+        public string? Instructions { get; set; }
+    }
+
+    /// <summary>
+    /// YAML model for handoff configuration.
+    /// </summary>
+    private class HandoffFrontMatter
     {
         public string? AgentPath { get; set; }
         public string? Instructions { get; set; }

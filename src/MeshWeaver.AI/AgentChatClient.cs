@@ -18,9 +18,6 @@ namespace MeshWeaver.AI;
 
 public class AgentChatClient : IAgentChat
 {
-    // Pattern to match @@path references (e.g., @@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Get)
-    private static readonly Regex InlineReferencePattern =
-        new(@"@@([^\s#]+)(?:#(\w+))?", RegexOptions.Compiled);
     private readonly IMessageHub hub;
     private readonly ILogger<AgentChatClient> logger;
     private readonly IChatPersistenceService persistenceService;
@@ -28,6 +25,7 @@ public class AgentChatClient : IAgentChat
     private readonly IReadOnlyList<IChatClientFactory> chatClientFactories;
     private readonly Dictionary<string, ChatClientAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
+    private HandoffRequest? pendingHandoff;
     private List<AgentDisplayInfo> loadedAgents = [];
     private string? lastLoadedContextPath;
     private string currentThreadId = Guid.NewGuid().AsString();
@@ -297,7 +295,7 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
-    /// Loads tool documentation from the mesh.
+    /// Loads tool documentation from the mesh and resolves any @@ references within it.
     /// </summary>
     private async Task<string> LoadToolDocumentationAsync()
     {
@@ -313,7 +311,10 @@ public class AgentChatClient : IAgentChat
             var node = JsonSerializer.Deserialize<MeshNode>(docs, hub.JsonSerializerOptions);
             if (node?.Content is JsonElement contentElement && contentElement.ValueKind == JsonValueKind.String)
             {
-                return contentElement.GetString() ?? string.Empty;
+                var content = contentElement.GetString() ?? string.Empty;
+                // Resolve @@ references in tool documentation (e.g., @@QuerySyntax, @@UnifiedPath)
+                content = await InlineReferenceResolver.ResolveAsync(content, hub, this);
+                return content;
             }
             // If content is not a simple string, return empty
             return string.Empty;
@@ -325,50 +326,6 @@ public class AgentChatClient : IAgentChat
         }
     }
 
-    /// <summary>
-    /// Resolves @@path references in text and returns expanded content.
-    /// Uses MeshPlugin.Get to load referenced documents.
-    /// </summary>
-    private async Task<string> ResolveInlineReferencesAsync(string text)
-    {
-        var matches = InlineReferencePattern.Matches(text);
-        if (matches.Count == 0)
-            return text;
-
-        var result = text;
-        var meshPlugin = new MeshPlugin(hub, this);
-
-        foreach (Match match in matches)
-        {
-            var path = match.Groups[1].Value;
-            var section = match.Groups[2].Success ? match.Groups[2].Value : null;
-
-            // Load the document using Get
-            var content = await meshPlugin.Get($"@{path}");
-
-            // If section specified, extract just that section
-            if (!string.IsNullOrEmpty(section) && !content.StartsWith("Not found"))
-            {
-                content = ExtractSection(content, section);
-            }
-
-            // Replace the reference with the content
-            result = result.Replace(match.Value, content);
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Extracts a markdown section by heading name.
-    /// </summary>
-    private static string ExtractSection(string markdown, string sectionName)
-    {
-        // Find ## SectionName and extract until next ## or end
-        var pattern = $@"##\s+{Regex.Escape(sectionName)}[^\n]*\n([\s\S]*?)(?=\n##|\z)";
-        var match = Regex.Match(markdown, pattern, RegexOptions.IgnoreCase);
-        return match.Success ? match.Groups[1].Value.Trim() : markdown;
-    }
 
     public async IAsyncEnumerable<ChatMessage> GetResponseAsync(
         IReadOnlyCollection<ChatMessage> messages,
@@ -434,6 +391,56 @@ public class AgentChatClient : IAgentChat
                 AuthorName = currentAgentName ?? "Assistant"
             };
             yield return layoutAreaMessage;
+        }
+
+        // Handle handoff: target agent takes over the shared thread
+        while (pendingHandoff != null)
+        {
+            var handoff = pendingHandoff;
+            pendingHandoff = null;
+
+            // Emit handoff content for UI
+            var handoffMessage = new ChatMessage(ChatRole.Assistant, [
+                new ChatHandoffContent(handoff.SourceAgentName, handoff.TargetAgentName, handoff.Message)
+            ])
+            {
+                AuthorName = handoff.SourceAgentName
+            };
+            yield return handoffMessage;
+
+            // Resolve target agent
+            var targetId = handoff.TargetAgentName.Split('/').Last();
+            if (!agents.TryGetValue(targetId, out var targetAgent))
+            {
+                logger.LogWarning("Handoff target agent '{TargetAgent}' not found", handoff.TargetAgentName);
+                yield return new ChatMessage(ChatRole.Assistant, $"Handoff failed: agent '{handoff.TargetAgentName}' not found.");
+                break;
+            }
+
+            // Switch active agent
+            currentAgentName = targetId;
+            logger.LogInformation("Handoff: {Source} -> {Target}, running target agent on shared thread",
+                handoff.SourceAgentName, targetId);
+
+            // Run target agent on the same shared thread with the handoff message
+            var handoffResponse = await targetAgent.RunAsync(handoff.Message, thread, cancellationToken: cancellationToken);
+            await SaveThreadAsync(targetAgent, thread);
+
+            foreach (var msg in handoffResponse.Messages)
+            {
+                yield return msg;
+            }
+
+            // Yield any queued layout area content from the handoff target
+            while (queuedLayoutAreaContent.Count > 0)
+            {
+                var lac = queuedLayoutAreaContent.Dequeue();
+                yield return new ChatMessage(ChatRole.Assistant, [lac])
+                {
+                    AuthorName = currentAgentName ?? "Assistant"
+                };
+            }
+            // Loop continues if target agent also requested a handoff (chained handoffs)
         }
     }
 
@@ -513,6 +520,76 @@ public class AgentChatClient : IAgentChat
             {
                 AuthorName = currentAgentName ?? "Assistant"
             };
+        }
+
+        // Handle handoff: target agent takes over the shared thread (streaming)
+        while (pendingHandoff != null)
+        {
+            var handoff = pendingHandoff;
+            pendingHandoff = null;
+
+            // Emit handoff content for UI
+            yield return new ChatResponseUpdate(ChatRole.Assistant, [
+                new ChatHandoffContent(handoff.SourceAgentName, handoff.TargetAgentName, handoff.Message)
+            ])
+            {
+                AuthorName = handoff.SourceAgentName
+            };
+
+            // Resolve target agent
+            var targetId = handoff.TargetAgentName.Split('/').Last();
+            if (!agents.TryGetValue(targetId, out var targetAgent))
+            {
+                logger.LogWarning("Handoff target agent '{TargetAgent}' not found", handoff.TargetAgentName);
+                yield return new ChatResponseUpdate(ChatRole.Assistant, $"Handoff failed: agent '{handoff.TargetAgentName}' not found.");
+                break;
+            }
+
+            // Switch active agent
+            currentAgentName = targetId;
+            logger.LogInformation("Handoff (streaming): {Source} -> {Target}, running target agent on shared thread",
+                handoff.SourceAgentName, targetId);
+
+            // Run target agent streaming on the same shared thread
+            await foreach (var update in targetAgent.RunStreamingAsync(handoff.Message, thread, cancellationToken: cancellationToken))
+            {
+                if (update.Contents.Count > 0)
+                {
+                    foreach (var content in update.Contents)
+                    {
+                        if (content is FunctionCallContent functionCall)
+                        {
+                            logger.LogInformation("Agent {AgentName} calling tool: {FunctionName}",
+                                currentAgentName, functionCall.Name);
+                            yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                            {
+                                AuthorName = currentAgentName ?? "Assistant"
+                            };
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    yield return new ChatResponseUpdate(ChatRole.Assistant, update.Text)
+                    {
+                        AuthorName = currentAgentName ?? "Assistant"
+                    };
+                }
+            }
+
+            await SaveThreadAsync(targetAgent, thread);
+
+            // Yield any queued layout area content from the handoff target
+            while (queuedLayoutAreaContent.Count > 0)
+            {
+                var lac = queuedLayoutAreaContent.Dequeue();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [lac])
+                {
+                    AuthorName = currentAgentName ?? "Assistant"
+                };
+            }
+            // Loop continues if target agent also requested a handoff (chained handoffs)
         }
     }
 
@@ -900,6 +977,12 @@ public class AgentChatClient : IAgentChat
     {
         var layoutAreaContent = new ChatLayoutAreaContent(layoutAreaControl);
         queuedLayoutAreaContent.Enqueue(layoutAreaContent);
+    }
+
+    public void RequestHandoff(HandoffRequest request)
+    {
+        pendingHandoff = request;
+        logger.LogInformation("Handoff requested from {Source} to {Target}", request.SourceAgentName, request.TargetAgentName);
     }
 
     private bool IsAgentPath(string path)

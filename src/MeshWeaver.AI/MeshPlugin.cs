@@ -1,5 +1,6 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -11,9 +12,9 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Simplified plugin providing mesh operations for AI agents.
-/// Uses unified paths with GetDataRequest/DataChangeRequest.
+/// Plugin providing mesh operations for AI agents.
 /// Supports @ prefix shorthand (e.g., @graph/org1 -> graph/org1).
+/// Supports Unified Path prefixes (e.g., @path/schema:, @path/model:).
 /// </summary>
 public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
@@ -32,10 +33,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return path;
     }
 
-    [Description("Gets data from the mesh by path. " +
-                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Get")]
+    [Description("Retrieves a node from the mesh by path. Supports Unified Path prefixes (schema:, model:, data:, metadata:).")]
     public async Task<string> Get(
-        [Description("Path to data (e.g., @graph/org1, @pricing/MS-2024, @NodeType/*)")] string path)
+        [Description("Path to data (e.g., @graph/org1, @NodeType/*, @ACME/schema:, @ACME/model:)")] string path)
     {
         logger.LogInformation("Get called with path={Path}", path);
 
@@ -68,7 +68,12 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
                 return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
             }
 
-            // Get single node
+            // Check for Unified Path prefix (e.g., "ACME/schema:", "ACME/schema:TypeName", "ACME/model:")
+            var unifiedResult = await TryResolveUnifiedPathAsync(resolvedPath);
+            if (unifiedResult != null)
+                return unifiedResult;
+
+            // Get single node by path
             var meshNode = await persistence.GetNodeAsync(resolvedPath);
             if (meshNode == null)
                 return $"Not found: {resolvedPath}";
@@ -82,54 +87,53 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
     }
 
-    [Description("Creates or updates a node at a path. " +
-                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Update")]
-    public async Task<string> Update(
-        [Description("Path to update (e.g., @graph/neworg)")] string path,
-        [Description("JSON object with fields to update")] string json)
+    /// <summary>
+    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, data:, metadata:).
+    /// Uses meshCatalog.ResolvePathAsync to split into address and remainder,
+    /// then routes data request to the resolved address.
+    /// Returns null if the path is not a Unified Path.
+    /// </summary>
+    private async Task<string?> TryResolveUnifiedPathAsync(string resolvedPath)
     {
-        logger.LogInformation("Update called with path={Path}", path);
+        if (meshCatalog == null || !resolvedPath.Contains(':'))
+            return null;
 
-        if (persistence == null)
-            return "Persistence service not available.";
+        var resolution = await meshCatalog.ResolvePathAsync(resolvedPath);
+        if (resolution?.Remainder == null || !resolution.Remainder.Contains(':'))
+            return null;
 
-        var resolvedPath = ResolvePath(path);
+        var reference = new UnifiedReference(resolution.Remainder);
+        var address = new Address(resolution.Prefix);
+        logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
+            resolution.Prefix, resolution.Remainder);
+
+        var response = await hub.AwaitResponse(
+            new GetDataRequest(reference),
+            o => o.WithTarget(address));
+
+        if (response.Message.Error != null)
+            return $"Error: {response.Message.Error}";
+
+        return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+    }
+
+    [Description("Creates a new node in the mesh.")]
+    public async Task<string> Create(
+        [Description("JSON MeshNode object to create")] string node)
+    {
+        logger.LogInformation("Create called");
+
+        if (meshCatalog == null)
+            return "Mesh catalog service not available.";
 
         try
         {
-            // Parse the update JSON
-            var updates = JsonSerializer.Deserialize<JsonElement>(json, hub.JsonSerializerOptions);
+            var meshNode = JsonSerializer.Deserialize<MeshNode>(node, hub.JsonSerializerOptions);
+            if (meshNode == null)
+                return "Invalid node: deserialized to null.";
 
-            // Get existing node or create new one
-            var existingNode = await persistence.GetNodeAsync(resolvedPath);
-            var isCreate = existingNode == null;
-
-            // Build the node from updates
-            var node = MeshNode.FromPath(resolvedPath);
-
-            // Apply updates from JSON
-            string? name = null;
-            string? nodeType = null;
-            object? content = null;
-
-            if (updates.TryGetProperty("name", out var nameProp))
-                name = nameProp.GetString();
-            if (updates.TryGetProperty("nodeType", out var typeProp))
-                nodeType = typeProp.GetString();
-            if (updates.TryGetProperty("content", out var contentProp))
-                content = contentProp;
-
-            node = node with
-            {
-                Name = name ?? existingNode?.Name ?? node.Id,
-                NodeType = nodeType ?? existingNode?.NodeType,
-                Content = content ?? existingNode?.Content
-            };
-
-            await persistence.SaveNodeAsync(node);
-            return isCreate
-                ? $"Created: {resolvedPath}"
-                : $"Updated: {resolvedPath}";
+            var created = await meshCatalog.CreateNodeAsync(meshNode);
+            return $"Created: {created.Path}";
         }
         catch (JsonException ex)
         {
@@ -137,13 +141,83 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error updating data at path {Path}", resolvedPath);
+            logger.LogWarning(ex, "Error creating node");
             return $"Error: {ex.Message}";
         }
     }
 
-    [Description("Displays a node's view in the chat UI. " +
-                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#NavigateTo")]
+    [Description("Updates existing nodes in the mesh. Pass a JSON array of MeshNode objects.")]
+    public async Task<string> Update(
+        [Description("JSON array of MeshNode objects with updated fields")] string nodes)
+    {
+        logger.LogInformation("Update called");
+
+        if (persistence == null)
+            return "Persistence service not available.";
+
+        try
+        {
+            var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(nodes, hub.JsonSerializerOptions);
+            if (nodeList == null || nodeList.Count == 0)
+                return "No nodes provided.";
+
+            var results = new List<string>();
+            foreach (var node in nodeList)
+            {
+                var saved = await persistence.SaveNodeAsync(node);
+                results.Add($"Updated: {saved.Path}");
+            }
+
+            return string.Join("\n", results);
+        }
+        catch (JsonException ex)
+        {
+            return $"Invalid JSON: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error updating nodes");
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    [Description("Deletes nodes from the mesh by path.")]
+    public async Task<string> Delete(
+        [Description("JSON array of path strings to delete")] string paths)
+    {
+        logger.LogInformation("Delete called");
+
+        if (meshCatalog == null)
+            return "Mesh catalog service not available.";
+
+        try
+        {
+            var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
+            if (pathList == null || pathList.Count == 0)
+                return "No paths provided.";
+
+            var results = new List<string>();
+            foreach (var path in pathList)
+            {
+                var resolvedPath = ResolvePath(path);
+                await meshCatalog.DeleteNodeAsync(resolvedPath);
+                results.Add($"Deleted: {resolvedPath}");
+            }
+
+            return string.Join("\n", results);
+        }
+        catch (JsonException ex)
+        {
+            return $"Invalid JSON: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error deleting nodes");
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    [Description("Displays a node's visual layout in the chat UI.")]
     public string NavigateTo(
         [Description("Path to navigate to (e.g., @graph/org1)")] string path)
     {
@@ -157,72 +231,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return $"Navigating to: {resolvedPath}";
     }
 
-    [Description("Sets the name for the current conversation thread. " +
-                 "Call this to give the thread a meaningful name based on the conversation topic.")]
-    public async Task<string> SetThreadName(
-        [Description("Descriptive name for the thread (3-8 words)")] string name,
-        [Description("PascalCase identifier derived from the name (alphanumeric only). If omitted, auto-generated from name.")] string? id = null)
-    {
-        logger.LogInformation("SetThreadName called with name={Name}, id={Id}", name, id);
-
-        if (meshCatalog == null)
-            return "Mesh catalog not available.";
-
-        try
-        {
-            // Generate id from name if not provided
-            if (string.IsNullOrWhiteSpace(id))
-                id = GenerateIdFromName(name);
-
-            // Determine namespace from current context
-            var contextAddress = chat.Context?.Address?.ToString();
-            var ns = contextAddress?.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s)) ?? "";
-            var threadPath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
-
-            var threadContent = new Thread
-            {
-                ParentPath = string.IsNullOrEmpty(ns) ? null : ns
-            };
-
-            var newNode = new MeshNode(threadPath)
-            {
-                Name = name,
-                NodeType = ThreadNodeType.NodeType,
-                Content = threadContent
-            };
-
-            var createdNode = await meshCatalog.CreateNodeAsync(newNode);
-            chat.SetThreadId(createdNode.Path);
-
-            logger.LogInformation("SetThreadName created thread at path={Path}", createdNode.Path);
-            return $"Thread created: {createdNode.Path} (Name: {name})";
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Error in SetThreadName");
-            return $"Error: {ex.Message}";
-        }
-    }
-
-    private static string GenerateIdFromName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return "Thread" + DateTime.UtcNow.Ticks;
-
-        var words = System.Text.RegularExpressions.Regex.Split(name, @"[\s\-_]+")
-            .Where(w => !string.IsNullOrEmpty(w))
-            .Select(w => char.ToUpperInvariant(w[0]) + w[1..].ToLowerInvariant());
-
-        var pascalCase = string.Join("", words);
-        pascalCase = System.Text.RegularExpressions.Regex.Replace(pascalCase, @"[^a-zA-Z0-9]", "");
-
-        return string.IsNullOrEmpty(pascalCase) ? "Thread" + DateTime.UtcNow.Ticks : pascalCase;
-    }
-
-    [Description("Searches the mesh using query syntax. " +
-                 "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin#Search")]
+    [Description("Searches the mesh using GitHub-style query syntax.")]
     public async Task<string> Search(
-        [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:graph scope:descendants')")] string query,
+        [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
     {
         logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
@@ -264,7 +275,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     }
 
     /// <summary>
-    /// Creates the standard tools for this plugin (read-only operations + thread naming).
+    /// Creates the standard tools for this plugin (read-only operations).
     /// </summary>
     public IList<AITool> CreateTools()
     {
@@ -273,12 +284,11 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
-            AIFunctionFactory.Create(SetThreadName)
         ];
     }
 
     /// <summary>
-    /// Creates all tools including write operations (for Executor agent).
+    /// Creates all tools including write operations (Create, Update, Delete).
     /// </summary>
     public IList<AITool> CreateAllTools()
     {
@@ -287,8 +297,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(Get),
             AIFunctionFactory.Create(Search),
             AIFunctionFactory.Create(NavigateTo),
+            AIFunctionFactory.Create(Create),
             AIFunctionFactory.Create(Update),
-            AIFunctionFactory.Create(SetThreadName)
+            AIFunctionFactory.Create(Delete),
         ];
     }
 }

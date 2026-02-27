@@ -46,7 +46,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>
-    public Task<ChatClientAgent> CreateAgentAsync(
+    public async Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config,
         IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
@@ -57,7 +57,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         var name = config.Id;
         var description = config.Description ?? string.Empty;
-        var instructions = GetAgentInstructions(config, hierarchyAgents);
+        var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
 
         // Create a chat client for this agent using the derived class implementation
         var chatClient = CreateChatClient(config);
@@ -66,8 +66,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var tools = GetToolsForAgent(config, chat, existingAgents, hierarchyAgents).ToArray();
 
         // Add MeshPlugin tools for agents that need mesh operations
+        // Agents whose description mentions create/update/delete get write tools
         var meshPlugin = new MeshPlugin(Hub, chat);
-        tools = tools.Concat(meshPlugin.CreateTools()).ToArray();
+        var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
+            || description.Contains("update", StringComparison.OrdinalIgnoreCase)
+            || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
+        tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools()).ToArray();
 
         // Add LayoutAreaPlugin tools for displaying views/charts in chat
         var layoutAreaPlugin = new LayoutAreaPlugin(Hub, chat);
@@ -88,7 +92,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             services: null
         );
 
-        return Task.FromResult(agent);
+        return agent;
     }
 
     /// <summary>
@@ -127,7 +131,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     }
 
     /// <summary>
-    /// Creates delegation tools for agents that can delegate to other agents.
+    /// Creates delegation and handoff tools for agents.
     /// Uses a unified Delegate tool that includes all available agents in its description.
     /// </summary>
     protected virtual IEnumerable<AITool> GetAgentTools(
@@ -137,128 +141,179 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         IReadOnlyList<AgentConfiguration> hierarchyAgents)
     {
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
+        var hasHandoffs = agentConfig.Handoffs is { Count: > 0 };
         var hasHierarchyAgents = hierarchyAgents.Count > 1;
 
-        if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
+        if (!hasDelegations && !hasHandoffs && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
             yield break;
         }
 
-        var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
-            agentConfig,
-            hierarchyAgents,
-            executeAsync: async (agentName, task, cancellationToken) =>
-            {
-                // Resolve the target agent by name (strip path prefix if present)
-                var targetId = agentName.Split('/').Last();
-                if (!allAgents.TryGetValue(targetId, out var targetAgent))
+        if (hasDelegations || hasHierarchyAgents || agentConfig.IsDefault)
+        {
+            var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
+                agentConfig,
+                hierarchyAgents,
+                executeAsync: async (agentName, task, cancellationToken) =>
                 {
+                    // Resolve the target agent by name (strip path prefix if present)
+                    var targetId = agentName.Split('/').Last();
+                    if (!allAgents.TryGetValue(targetId, out var targetAgent))
+                    {
+                        return new DelegationResult
+                        {
+                            AgentName = agentName,
+                            Task = task,
+                            Result = $"Agent '{agentName}' not found",
+                            Success = false
+                        };
+                    }
+
+                    Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
+                        agentConfig.Id, targetId, task);
+
+                    // Create an isolated session for the target agent
+                    var session = await targetAgent.CreateSessionAsync();
+
+                    // Run the target agent to completion
+                    var response = await targetAgent.RunAsync(task, session, cancellationToken: cancellationToken);
+
+                    // Extract text from the response messages
+                    var resultText = string.Join("\n", response.Messages
+                        .Where(m => m.Role == ChatRole.Assistant)
+                        .SelectMany(m => m.Contents)
+                        .OfType<TextContent>()
+                        .Select(t => t.Text)
+                        .Where(t => !string.IsNullOrEmpty(t)));
+
+                    Logger.LogInformation("Delegation to {Target} completed, result length: {Length}",
+                        targetId, resultText.Length);
+
                     return new DelegationResult
                     {
-                        AgentName = agentName,
+                        AgentName = targetId,
                         Task = task,
-                        Result = $"Agent '{agentName}' not found",
-                        Success = false
+                        Result = resultText,
+                        Success = true
                     };
-                }
+                },
+                Logger);
 
-                Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
-                    agentConfig.Id, targetId, task);
+            Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
+                agentConfig.Id, hierarchyAgents.Count);
 
-                // Create an isolated session for the target agent
-                var session = await targetAgent.CreateSessionAsync();
+            yield return delegationTool;
+        }
 
-                // Run the target agent to completion
-                var response = await targetAgent.RunAsync(task, session, cancellationToken: cancellationToken);
+        // Create handoff tool when agent has explicit handoffs
+        if (hasHandoffs)
+        {
+            var handoffTool = HandoffTool.CreateUnifiedHandoffTool(
+                agentConfig,
+                hierarchyAgents,
+                requestHandoff: chat.RequestHandoff,
+                Logger);
 
-                // Extract text from the response messages
-                var resultText = string.Join("\n", response.Messages
-                    .Where(m => m.Role == ChatRole.Assistant)
-                    .SelectMany(m => m.Contents)
-                    .OfType<TextContent>()
-                    .Select(t => t.Text)
-                    .Where(t => !string.IsNullOrEmpty(t)));
+            Logger.LogInformation("Created handoff tool for agent {AgentName} with {HandoffCount} handoff targets",
+                agentConfig.Id, agentConfig.Handoffs!.Count);
 
-                Logger.LogInformation("Delegation to {Target} completed, result length: {Length}",
-                    targetId, resultText.Length);
-
-                return new DelegationResult
-                {
-                    AgentName = targetId,
-                    Task = task,
-                    Result = resultText,
-                    Success = true
-                };
-            },
-            Logger);
-
-        Logger.LogInformation("Created unified delegation tool for agent {AgentName} with {HierarchyCount} hierarchy agents",
-            agentConfig.Id, hierarchyAgents.Count);
-
-        yield return delegationTool;
+            yield return handoffTool;
+        }
     }
 
-    protected string GetAgentInstructions(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents)
+    protected async Task<string> GetAgentInstructionsAsync(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
 
+        // Resolve @@ references in agent instructions (e.g., @@MeshWeaver/Documentation/AI/Tools/MeshPlugin)
+        baseInstructions = await InlineReferenceResolver.ResolveAsync(baseInstructions, Hub, chat);
+
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
+        var hasHandoffs = agentConfig.Handoffs is { Count: > 0 };
         var hasHierarchyAgents = hierarchyAgents.Count > 1;
 
-        if (!hasDelegations && !hasHierarchyAgents && !agentConfig.IsDefault)
+        if (!hasDelegations && !hasHandoffs && !hasHierarchyAgents && !agentConfig.IsDefault)
         {
             return baseInstructions;
         }
 
-        var agentList = new List<string>();
+        var result = baseInstructions;
+
+        // Delegation guidelines
+        var delegationList = new List<string>();
 
         if (agentConfig.Delegations != null)
         {
             foreach (var d in agentConfig.Delegations)
             {
                 var agentId = d.AgentPath.Split('/').Last();
-                agentList.Add($"- {agentId}: {d.Instructions}");
+                delegationList.Add($"- {agentId}: {d.Instructions}");
             }
         }
 
         var listedIds = agentConfig.Delegations?.Select(d => d.AgentPath.Split('/').Last()).ToHashSet()
             ?? new HashSet<string>();
+        var handoffIds = agentConfig.Handoffs?.Select(h => h.AgentPath.Split('/').Last()).ToHashSet()
+            ?? new HashSet<string>();
 
-        foreach (var agent in hierarchyAgents.Where(a => a.Id != agentConfig.Id && !listedIds.Contains(a.Id)))
+        foreach (var agent in hierarchyAgents.Where(a => a.Id != agentConfig.Id && !listedIds.Contains(a.Id) && !handoffIds.Contains(a.Id)))
         {
-            agentList.Add($"- {agent.Id}: {agent.Description ?? "Agent in hierarchy"}");
+            delegationList.Add($"- {agent.Id}: {agent.Description ?? "Agent in hierarchy"}");
         }
 
-        if (agentList.Count == 0)
+        if (delegationList.Count > 0)
         {
-            return baseInstructions;
+            var agentListStr = string.Join('\n', delegationList);
+
+            result +=
+                $$$"""
+
+                   **Agent Delegation:**
+                   You have access to a delegate_to_agent tool to route requests to specialized agents.
+                   Use delegation when you need a result back — the delegated agent runs in isolation and returns its result to you.
+
+                   **Available Agents for Delegation:**
+                   {{{agentListStr}}}
+
+                   **How to delegate:**
+                   1. Identify which specialized agent can best handle the user's request
+                   2. Call the delegate_to_agent tool with the agent name and your task description
+                   3. The delegated agent will execute the task and return its result to you
+                   4. Relay or summarize the result to the user
+
+                   """;
         }
 
-        var agentListStr = string.Join('\n', agentList);
+        // Handoff guidelines
+        if (hasHandoffs)
+        {
+            var handoffList = new List<string>();
+            foreach (var h in agentConfig.Handoffs!)
+            {
+                var agentId = h.AgentPath.Split('/').Last();
+                handoffList.Add($"- {agentId}: {h.Instructions}");
+            }
 
-        var delegationGuidelines =
-            $$$"""
+            var handoffListStr = string.Join('\n', handoffList);
 
-               **Agent Delegation:**
-               You have access to a delegate_to_agent tool to route requests to specialized agents.
-               Use this when the request matches another agent's expertise or when you need to escalate.
+            result +=
+                $$$"""
 
-               **Available Agents:**
-               {{{agentListStr}}}
+                   **Agent Handoff:**
+                   You have access to a handoff_to_agent tool to transfer control to another agent.
+                   Use handoff when the target agent should take over the conversation directly and interact with the user.
+                   After a handoff, you stop responding — the target agent continues on the shared thread with full history.
 
-               **How to delegate:**
-               1. Identify which specialized agent can best handle the user's request
-               2. Call the delegate_to_agent tool with the agent name and your task description
-               3. The delegated agent will execute the task and return its result to you
-               4. Relay or summarize the result to the user
+                   **Available Agents for Handoff:**
+                   {{{handoffListStr}}}
 
-               **Important:**
-               - Choose the most appropriate agent based on their specialization
-               - For escalation (when you can't handle something), delegate to an agent higher in the hierarchy
-               - The delegation result will be returned to you as a tool result — use it to formulate your response
+                   **When to use handoff vs delegation:**
+                   - **Delegation**: You need information or a result back. The other agent works in isolation.
+                   - **Handoff**: The other agent should take over and interact with the user directly.
 
-               """;
+                   """;
+        }
 
-        return baseInstructions + delegationGuidelines;
+        return result;
     }
 }

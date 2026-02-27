@@ -189,6 +189,70 @@ public class AgentFileParserTest
         node.Should().BeNull();
     }
 
+    [Fact(Timeout = 10000)]
+    public async Task ParseAsync_WithHandoffs_ParsesHandoffsList()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Navigator
+            delegations:
+              - agentPath: Research
+                instructions: Look up information
+            handoffs:
+              - agentPath: Planner
+                instructions: Handle planning tasks
+              - agentPath: Executor
+                instructions: Execute actions directly
+            ---
+
+            You are Navigator.
+            """;
+
+        // Act
+        var node = await _parser.ParseAsync("/Navigator.md", content, "Navigator.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().HaveCount(1);
+        agentConfig.Delegations![0].AgentPath.Should().Be("Research");
+
+        agentConfig.Handoffs.Should().HaveCount(2);
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
+        agentConfig.Handoffs[0].Instructions.Should().Be("Handle planning tasks");
+        agentConfig.Handoffs[1].AgentPath.Should().Be("Executor");
+        agentConfig.Handoffs[1].Instructions.Should().Be("Execute actions directly");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task ParseAsync_WithHandoffsOnly_ParsesHandoffs()
+    {
+        // Arrange
+        var content = """
+            ---
+            nodeType: Agent
+            name: Planner
+            handoffs:
+              - agentPath: Executor
+                instructions: Execute the planned tasks
+            ---
+
+            You are Planner.
+            """;
+
+        // Act
+        var node = await _parser.ParseAsync("/Planner.md", content, "Planner.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().BeNull();
+        agentConfig.Handoffs.Should().HaveCount(1);
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Executor");
+    }
+
     #endregion
 
     #region Serialize Tests
@@ -263,6 +327,88 @@ public class AgentFileParserTest
         result.Should().Contain("instructions: Plan tasks");
         result.Should().Contain("agentPath: Executor");
         result.Should().Contain("instructions: Execute tasks");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task SerializeAsync_WithHandoffs_SerializesHandoffs()
+    {
+        // Arrange
+        var agentConfig = new AgentConfiguration
+        {
+            Id = "Navigator",
+            DisplayName = "Navigator",
+            Instructions = "Navigate requests.",
+            Delegations =
+            [
+                new AgentDelegation { AgentPath = "Research", Instructions = "Look up info" }
+            ],
+            Handoffs =
+            [
+                new AgentHandoff { AgentPath = "Planner", Instructions = "Plan tasks" },
+                new AgentHandoff { AgentPath = "Executor", Instructions = "Execute tasks" }
+            ]
+        };
+
+        var node = new MeshNode("Navigator")
+        {
+            NodeType = "Agent",
+            Name = "Navigator",
+            Content = agentConfig
+        };
+
+        // Act
+        var result = await _parser.SerializeAsync(node);
+
+        // Assert
+        result.Should().Contain("delegations:");
+        result.Should().Contain("agentPath: Research");
+        result.Should().Contain("handoffs:");
+        result.Should().Contain("agentPath: Planner");
+        result.Should().Contain("instructions: Plan tasks");
+        result.Should().Contain("agentPath: Executor");
+        result.Should().Contain("instructions: Execute tasks");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task RoundTrip_WithHandoffs_PreservesHandoffs()
+    {
+        // Arrange
+        var originalContent = """
+            ---
+            nodeType: Agent
+            name: Navigator
+            description: Routes requests
+            delegations:
+              - agentPath: Research
+                instructions: Look up info
+            handoffs:
+              - agentPath: Planner
+                instructions: Plan tasks
+              - agentPath: Executor
+                instructions: Execute tasks
+            ---
+
+            You are Navigator.
+            """;
+
+        // Act - Parse then serialize
+        var node = await _parser.ParseAsync("/Navigator.md", originalContent, "Navigator.md");
+        var serialized = await _parser.SerializeAsync(node!);
+
+        // Re-parse to verify
+        var reparsed = await _parser.ParseAsync("/Navigator.md", serialized, "Navigator.md");
+
+        // Assert
+        reparsed.Should().NotBeNull();
+        var agentConfig = reparsed!.Content.Should().BeOfType<AgentConfiguration>().Subject;
+        agentConfig.Delegations.Should().HaveCount(1);
+        agentConfig.Delegations![0].AgentPath.Should().Be("Research");
+
+        agentConfig.Handoffs.Should().HaveCount(2);
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
+        agentConfig.Handoffs[0].Instructions.Should().Be("Plan tasks");
+        agentConfig.Handoffs[1].AgentPath.Should().Be("Executor");
+        agentConfig.Handoffs[1].Instructions.Should().Be("Execute tasks");
     }
 
     #endregion

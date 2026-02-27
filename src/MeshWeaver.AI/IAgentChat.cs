@@ -61,5 +61,10 @@ public interface IAgentChat
     /// <param name="layoutAreaControl">The layout area control</param>
     void DisplayLayoutArea(LayoutAreaControl layoutAreaControl);
 
+    /// <summary>
+    /// Requests a handoff to a target agent. The target agent takes over the shared thread.
+    /// </summary>
+    void RequestHandoff(HandoffRequest request) { }
+
     AgentContext? Context { get; }
 }

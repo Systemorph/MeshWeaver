@@ -65,6 +65,13 @@ public record AgentConfiguration
     public List<AgentDelegation>? Delegations { get; init; }
 
     /// <summary>
+    /// List of agents this agent can hand off to.
+    /// Handoff transfers control entirely to the target agent on the shared thread.
+    /// Unlike delegation, the source agent stops and the target agent takes over.
+    /// </summary>
+    public List<AgentHandoff>? Handoffs { get; init; }
+
+    /// <summary>
     /// Preferred model name from available models.
     /// Null means use the factory default.
     /// </summary>
@@ -98,6 +105,22 @@ public record AgentDelegation
     /// <summary>
     /// Instructions for when to delegate to this agent.
     /// Used by the LLM to decide when to call this delegation.
+    /// </summary>
+    public string? Instructions { get; init; }
+}
+
+/// <summary>
+/// Describes a handoff target with routing instructions.
+/// </summary>
+public record AgentHandoff
+{
+    /// <summary>
+    /// Path to the target agent (relative or absolute).
+    /// </summary>
+    public required string AgentPath { get; init; }
+
+    /// <summary>
+    /// Instructions for when to hand off to this agent.
     /// </summary>
     public string? Instructions { get; init; }
 }
