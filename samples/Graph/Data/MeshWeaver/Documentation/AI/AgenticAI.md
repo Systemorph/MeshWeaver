@@ -176,6 +176,86 @@ The future isn't pure chat or pure traditional UI - it's an intelligent blend:
 This evolution represents not just new technology, but a fundamental rethinking of how humans and systems collaborate in business contexts.
 
 
+## Agent Communication Patterns
+
+MeshWeaver supports two patterns for agent-to-agent communication: **delegation** and **handoff**.
+
+### Delegation
+
+Delegation runs a target agent in an **isolated context**. The delegating agent sends a task, waits for a result, and continues its own response.
+
+```mermaid
+%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
+sequenceDiagram
+    participant User
+    participant AgentA as Navigator
+    participant AgentB as Research
+
+    User->>AgentA: "Find info about X"
+    AgentA->>AgentB: delegate_to_agent("Research", "Look up X")
+    Note over AgentB: Runs in isolated thread
+    AgentB-->>AgentA: Result: "X is..."
+    AgentA-->>User: "Based on research, X is..."
+```
+
+**Use delegation when:**
+- You need information back to continue your response
+- The target agent's work is a subtask within a larger response
+- You want to maintain control of the conversation
+
+**Configuration:**
+```yaml
+delegations:
+  - agentPath: Agent/Research
+    instructions: "Information lookup, web search"
+```
+
+### Handoff
+
+Handoff **transfers control entirely** to the target agent. The source agent stops, and the target agent takes over the shared conversation thread with full history.
+
+```mermaid
+%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
+sequenceDiagram
+    participant User
+    participant AgentA as Navigator
+    participant AgentB as Planner
+
+    User->>AgentA: "Plan a product launch"
+    AgentA->>AgentB: handoff_to_agent("Planner", "Plan product launch")
+    Note over AgentA: Stops responding
+    Note over AgentB: Takes over on shared thread
+    AgentB-->>User: "Here's my plan: 1. ..."
+```
+
+**Use handoff when:**
+- The target agent should interact with the user directly
+- The task is better handled entirely by a specialist
+- You don't need to process the result yourself
+
+**Chained handoffs** are supported (A hands off to B, B hands off to C):
+```yaml
+# Navigator.md
+handoffs:
+  - agentPath: Agent/Planner
+    instructions: Complex multi-step tasks
+
+# Planner.md
+handoffs:
+  - agentPath: Agent/Executor
+    instructions: Execute the planned tasks
+```
+
+### Choosing Between Delegation and Handoff
+
+| Scenario | Pattern | Why |
+|----------|---------|-----|
+| Need research results to formulate answer | Delegation | Navigator needs the data back |
+| Complex planning task | Handoff | Planner should own the conversation |
+| Quick data lookup | Delegation | Small subtask within larger response |
+| Execute a multi-step plan | Handoff | Executor should report progress directly |
+| Domain-specific question | Delegation | Route and relay the answer |
+
 ## The Future
 
 As agentic AI continues to evolve, we can expect to see increasingly sophisticated systems that can handle more complex tasks, collaborate more effectively with humans, and operate across broader domains. The key will be developing these capabilities responsibly while maintaining human oversight and control.
