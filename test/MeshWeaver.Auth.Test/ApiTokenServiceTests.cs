@@ -1,3 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Mesh;
@@ -184,7 +190,7 @@ public class ApiTokenServiceTests : IDisposable
 
         tokens.Should().HaveCount(1);
         var tokenInfo = tokens[0];
-        tokenInfo.HashPrefix.Length.Should().BeLessOrEqualTo(8);
+        tokenInfo.HashPrefix.Length.Should().BeLessThanOrEqualTo(8);
         // The full hash is at least 64 chars (SHA-256 hex)
         var fullHash = ApiTokenService.HashToken(rawToken);
         fullHash.Length.Should().Be(64);
