@@ -5,19 +5,17 @@ Description: How MessageHubs enable distributed, single-threaded message process
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/MessageBasedCommunication/icon.svg
 ---
 
-# Message-Based Communication
-
 MeshWeaver's architecture is built on message-based communication through **MessageHubs**. This design enables distributed processing, scalability, and clean separation of concerns.
 
-## Architecture Overview
+# Architecture Overview
 
 MessageHubs can be allocated across multiple cloud environments (Azure, AWS, on-premise) and communicate via a central message bus. Each hub processes messages single-threaded through a queue, ensuring predictable execution order.
 
 @@MeshWeaver/Documentation/Architecture/MessageBasedCommunication/content:message-flow.svg
 
-## How It Works
+# How It Works
 
-### 1. Hub Allocation
+## 1. Hub Allocation
 
 MessageHubs are allocated within cloud environments. Each hub:
 - Has a unique **Address** for routing
@@ -25,7 +23,7 @@ MessageHubs are allocated within cloud environments. Each hub:
 - Registers **Handlers** for different message types
 - Can host child hubs hierarchically
 
-### 2. Message Processing Pipeline
+## 2. Message Processing Pipeline
 
 Messages flow through a defined pipeline ensuring single-threaded execution:
 
@@ -47,7 +45,7 @@ flowchart LR
 - **Layout Handlers**: Generate UI components
 - **Workflow Handlers**: Orchestrate business processes
 
-### 3. Request/Response Pattern
+## 3. Request/Response Pattern
 
 MeshWeaver uses typed request/response messaging:
 
@@ -63,30 +61,30 @@ sequenceDiagram
     Hub-->>Client: GetDataResponse
 ```
 
-## Key Concepts
+# Key Concepts
 
-### Single-Threaded Processing
+## Single-Threaded Processing
 
 Each hub processes messages one at a time through its queue. This:
 - Eliminates race conditions within a hub
 - Simplifies state management
 - Makes execution order deterministic
 
-### Hierarchical Routing
+## Hierarchical Routing
 
 Hubs can host child hubs to offload tasks:
 - Synchronization with other hubs or data sources (async)
 - Execution of long-running jobs
 - Other background work
 
-### Data Source Integration
+## Data Source Integration
 
 Handlers connect to various data platforms:
 - **Data Platforms** (e.g., Snowflake, Databricks): Analytics and data warehousing
 - **Transactional Data Stores** (e.g., SQL Server, Cosmos DB): Transactional and document data
 - **Other Data Sources** (e.g., Blob Storage): Files and binary content
 
-## Message Types
+# Message Types
 
 Common message patterns include:
 
@@ -97,7 +95,7 @@ Common message patterns include:
 | `SubscribeRequest` | Stream data changes |
 | `ClickedEvent` | UI interaction |
 
-## Benefits
+# Benefits
 
 1. **Scalability**: Distribute hubs across clouds
 2. **Isolation**: Each hub manages its own state

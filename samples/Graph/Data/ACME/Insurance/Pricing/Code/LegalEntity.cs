@@ -41,7 +41,7 @@ public record LegalEntity : INamed
 
     string INamed.DisplayName => Name;
 
-    public static readonly LegalEntity CornerstoneUS = new()
+    public static readonly LegalEntity AcmeUS = new()
     {
         Id = "CS-US",
         Name = "ACME Insurance US Inc.",
@@ -50,7 +50,7 @@ public record LegalEntity : INamed
         Order = 0
     };
 
-    public static readonly LegalEntity CornerstoneUK = new()
+    public static readonly LegalEntity AcmeUK = new()
     {
         Id = "CS-UK",
         Name = "ACME Insurance UK Ltd.",
@@ -59,7 +59,7 @@ public record LegalEntity : INamed
         Order = 1
     };
 
-    public static readonly LegalEntity CornerstoneEU = new()
+    public static readonly LegalEntity AcmeEU = new()
     {
         Id = "CS-EU",
         Name = "ACME Insurance Europe AG",
@@ -68,7 +68,7 @@ public record LegalEntity : INamed
         Order = 2
     };
 
-    public static readonly LegalEntity CornerstoneAsia = new()
+    public static readonly LegalEntity AcmeAsia = new()
     {
         Id = "CS-ASIA",
         Name = "ACME Insurance Asia Pte. Ltd.",
@@ -104,8 +104,8 @@ public record LegalEntity : INamed
         Order = 6
     };
 
-    public static readonly LegalEntity[] All = [CornerstoneUS, CornerstoneUK, CornerstoneEU, CornerstoneAsia, MeshWeaverUS, MeshWeaverUK, MeshWeaverEU];
+    public static readonly LegalEntity[] All = [AcmeUS, AcmeUK, AcmeEU, AcmeAsia, MeshWeaverUS, MeshWeaverUK, MeshWeaverEU];
 
     public static LegalEntity GetById(string? id) =>
-        All.FirstOrDefault(e => e.Id == id) ?? CornerstoneUS;
+        All.FirstOrDefault(e => e.Id == id) ?? AcmeUS;
 }

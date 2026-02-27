@@ -72,7 +72,8 @@ public partial class MarkdownFileParser : IFileFormatParser
         {
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,
-            Thumbnail = frontMatter?.Thumbnail
+            Thumbnail = frontMatter?.Thumbnail,
+            Abstract = frontMatter?.Abstract ?? frontMatter?.Description
         };
 
         var node = new MeshNode(id, ns)
@@ -81,8 +82,8 @@ public partial class MarkdownFileParser : IFileFormatParser
             // Name: prefer Name, then Title (legacy), then id
             Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
             Category = frontMatter?.Category,
-            // Icon: prefer Icon, then Thumbnail (legacy)
-            Icon = frontMatter?.Icon ?? frontMatter?.Thumbnail ?? DefaultMarkdownIcon,
+            // Icon: prefer Icon, then Thumbnail (fallback), resolve relative paths
+            Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
             State = ParseState(frontMatter?.State),
             LastModified = lastModified,
             Content = markdownDocument,
@@ -105,11 +106,12 @@ public partial class MarkdownFileParser : IFileFormatParser
             NodeType = node.NodeType != "Markdown" ? node.NodeType : null,
             Name = node.Name != node.Id ? node.Name : null,
             Category = node.Category,
-            Icon = node.Icon != DefaultMarkdownIcon ? node.Icon : null,
+            Icon = node.Icon != null && node.Icon != DefaultMarkdownIcon && !node.Icon.StartsWith("/static/storage/content/") ? node.Icon : null,
             State = node.State != MeshNodeState.Active ? node.State.ToString() : null,
             Authors = mdContent?.Authors?.ToList(),
             Tags = mdContent?.Tags?.ToList(),
-            Thumbnail = mdContent?.Thumbnail
+            Thumbnail = mdContent?.Thumbnail,
+            Abstract = mdContent?.Abstract
         };
 
         // Only write YAML block if there's meaningful content
@@ -120,7 +122,8 @@ public partial class MarkdownFileParser : IFileFormatParser
                             frontMatter.State != null ||
                             frontMatter.Authors?.Count > 0 ||
                             frontMatter.Tags?.Count > 0 ||
-                            frontMatter.Thumbnail != null;
+                            frontMatter.Thumbnail != null ||
+                            frontMatter.Abstract != null;
 
         if (hasYamlContent)
         {
@@ -197,6 +200,24 @@ public partial class MarkdownFileParser : IFileFormatParser
             return true;
 
         return false;
+    }
+
+    /// <summary>
+    /// Resolves an icon value to a display-ready path: absolute URLs pass through,
+    /// relative paths are expanded to content URLs, and missing values fall back to the default icon.
+    /// </summary>
+    private static string ResolveIcon(string? iconValue, string? ns)
+    {
+        if (string.IsNullOrEmpty(iconValue))
+            return DefaultMarkdownIcon;
+        // Already absolute — use as-is
+        if (iconValue.StartsWith("/") || iconValue.StartsWith("http") || iconValue.StartsWith("data:"))
+            return iconValue;
+        // Relative file path (contains /) — resolve to content URL
+        if (iconValue.Contains('/') && !string.IsNullOrEmpty(ns))
+            return $"/static/storage/content/{ns}/{iconValue}";
+        // Fluent icon name or no namespace — use as-is
+        return iconValue;
     }
 
     private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath, string filePath)

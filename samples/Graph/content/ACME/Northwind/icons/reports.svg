@@ -1,27 +1,20 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
-  <defs>
-    <linearGradient id="reportsGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1E40AF"/>
-      <stop offset="100%" stop-color="#60A5FA"/>
-    </linearGradient>
-  </defs>
-  <!-- Background -->
-  <rect width="24" height="24" rx="4" fill="#DBEAFE"/>
-  <!-- Document background -->
-  <path d="M6 2h8l6 6v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" fill="#f1f5f9" stroke="url(#reportsGrad)" stroke-width="1.5"/>
-  <!-- Folded corner -->
-  <path d="M14 2v6h6" fill="#e2e8f0" stroke="url(#reportsGrad)" stroke-width="1.5" stroke-linejoin="round"/>
-  <!-- Ship wheel accent (small) -->
-  <circle cx="12" cy="15" r="4" fill="none" stroke="#1E40AF" stroke-width="1.2"/>
-  <circle cx="12" cy="15" r="1.5" fill="#2563EB"/>
-  <!-- Wheel spokes -->
-  <line x1="12" y1="11" x2="12" y2="12.5" stroke="#1E40AF" stroke-width="1" stroke-linecap="round"/>
-  <line x1="12" y1="17.5" x2="12" y2="19" stroke="#1E40AF" stroke-width="1" stroke-linecap="round"/>
-  <line x1="8" y1="15" x2="9.5" y2="15" stroke="#1E40AF" stroke-width="1" stroke-linecap="round"/>
-  <line x1="14.5" y1="15" x2="16" y2="15" stroke="#1E40AF" stroke-width="1" stroke-linecap="round"/>
-  <!-- Diagonal spokes -->
-  <line x1="9.2" y1="12.2" x2="10.3" y2="13.3" stroke="#1E40AF" stroke-width="0.8" stroke-linecap="round"/>
-  <line x1="13.7" y1="16.7" x2="14.8" y2="17.8" stroke="#1E40AF" stroke-width="0.8" stroke-linecap="round"/>
-  <line x1="14.8" y1="12.2" x2="13.7" y2="13.3" stroke="#1E40AF" stroke-width="0.8" stroke-linecap="round"/>
-  <line x1="10.3" y1="16.7" x2="9.2" y2="17.8" stroke="#1E40AF" stroke-width="0.8" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .bg { fill: #ebf3fc; }
+    .nf { fill: #0f6cbd; }
+    .accent { fill: #0e4775; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="24" height="24" rx="4"/>
+  <!-- Document border (outer) -->
+  <rect class="accent" x="3.25" y="1.25" width="17.5" height="21.5" rx="2.75"/>
+  <!-- Document fill (inner) -->
+  <rect class="wh" x="4.75" y="2.75" width="14.5" height="18.5" rx="1.25"/>
+  <!-- Title lines -->
+  <rect class="nf" x="7" y="5" width="10" height="1.5" rx="0.5" opacity="0.3"/>
+  <rect class="nf" x="7" y="8" width="7" height="1.5" rx="0.5" opacity="0.2"/>
+  <!-- Mini bar chart -->
+  <rect class="nf" x="7" y="14" width="3" height="5" rx="0.5"/>
+  <rect class="nf" x="11" y="11" width="3" height="8" rx="0.5" opacity="0.8"/>
+  <rect class="nf" x="15" y="13" width="3" height="6" rx="0.5" opacity="0.6"/>
 </svg>

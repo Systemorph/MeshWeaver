@@ -129,11 +129,11 @@ public static class MicrosoftDataLoader
     {
         var insuredName = hub.Address.Segments[2];
         var pricingYear = hub.Address.Segments[3];
-        var submissionsSubPath = Path.Combine("content", "ACME", "Insurance", insuredName, pricingYear, "Submissions");
+        var submissionsSubPath = Path.Combine("attachments", "ACME", "Insurance", insuredName, pricingYear, "Submissions");
 
         // Try production path first (relative to current working directory)
         var productionPath = Path.GetFullPath(Path.Combine(
-            "../../samples/Graph/content/ACME/Insurance",
+            "../../samples/Graph/attachments/ACME/Insurance",
             insuredName,
             pricingYear,
             "Submissions"

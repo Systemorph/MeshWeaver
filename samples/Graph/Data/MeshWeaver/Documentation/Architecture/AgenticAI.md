@@ -1,21 +1,19 @@
 ---
-Name: Agentic AI
+Name: Agentic AI Architecture
 Category: Documentation
 Description: How AI agents collaborate within the mesh, using MeshPlugin tools and integrating with external AI services
 Icon: /static/storage/content/MeshWeaver/Documentation/Architecture/AgenticAI/icon.svg
 ---
 
-# Agentic AI Architecture
-
 MeshWeaver integrates AI agents as first-class citizens in the mesh. Agents can query data, navigate structures, execute tasks, and collaborate with other agents - all through unified mesh references.
 
-## Design Philosophy
+# Design Philosophy
 
-### Self-Guided Discovery
+## Self-Guided Discovery
 
 Unlike traditional approaches with extensive system prompts, MeshWeaver agents **find documentation as they go**. Instead of encoding all knowledge upfront, agents dynamically discover context from the mesh itself.
 
-#### Example: Email Processing Workflow
+### Example: Email Processing Workflow
 
 ```mermaid
 flowchart TB
@@ -41,7 +39,7 @@ flowchart TB
 
 This keeps agents adaptable and reduces prompt maintenance.
 
-### Agents as Data Elements
+## Agents as Data Elements
 
 Agents are stored as nodes in the mesh hierarchy:
 
@@ -61,7 +59,7 @@ When a task is invoked, MeshWeaver selects the **lowest-most agent** in the hier
 - Generic fallback agents at higher levels
 - Override behavior without changing code
 
-## Multi-Agent Collaboration
+# Multi-Agent Collaboration
 
 ```mermaid
 flowchart TB
@@ -84,7 +82,7 @@ flowchart TB
     C <-->|Domain Ops| Mesh
 ```
 
-### Agent Roles
+## Agent Roles
 
 | Agent | Model Size | Purpose |
 |-------|------------|----------|
@@ -95,7 +93,7 @@ flowchart TB
 
 You can define **custom agents** for specific tasks by creating Agent nodes in the mesh. These agents inherit from base agents but add domain-specific instructions, tools, and behaviors.
 
-## Custom Commands
+# Custom Commands
 
 Define custom `/commands` to provide detailed instructions for specific contexts:
 
@@ -126,7 +124,7 @@ This command imports claims from external sources.
 
 Commands serve as detailed, context-aware instructions that agents can discover and follow.
 
-## MeshPlugin Tools
+# MeshPlugin Tools
 
 Agents interact with the mesh through `MeshPlugin`, which provides these operations:
 
@@ -142,7 +140,7 @@ flowchart LR
     Tools --> M[Mesh]
 ```
 
-### Read Operations
+## Read Operations
 
 **Get** - Retrieve data by path:
 ```
@@ -164,7 +162,7 @@ Search("name:*property*")                   -> Name contains 'property'
 Search("lob:Commercial", "@Insurance")      -> Commercial LOB under Insurance
 ```
 
-### Write Operations
+## Write Operations
 
 **Update** - Create or modify nodes:
 ```
@@ -175,14 +173,14 @@ Update("@Insurance/Claims/CLM-2024-002", {
 })
 ```
 
-### Navigation
+## Navigation
 
 **NavigateTo** - Display a node's view in the UI:
 ```
 NavigateTo("@Insurance/Claims/CLM-2024-001")  -> Shows claim detail view
 ```
 
-## Path Shorthand
+# Path Shorthand
 
 The `@` prefix provides convenient shorthand:
 
@@ -192,7 +190,7 @@ The `@` prefix provides convenient shorthand:
 | `@NodeType/*` | `NodeType/*` |
 | `@Insurance/Claims/CLM-001/content:doc.pdf` | Content attachment |
 
-## Include External MCP Servers
+# Include External MCP Servers
 
 MeshWeaver supports the **Model Context Protocol (MCP)** to include external AI tools:
 
@@ -219,7 +217,7 @@ flowchart LR
 
 Tools from external MCP servers appear automatically in agent context.
 
-## Exposing MeshWeaver as MCP Server
+# Exposing MeshWeaver as MCP Server
 
 MeshWeaver provides an MCP server that external systems can include:
 
@@ -243,7 +241,7 @@ flowchart RL
 - **Snowflake Agents**: Access organizational context and workflows
 - **Custom Integrations**: Any MCP-compatible AI system
 
-## Alternative AI APIs
+# Alternative AI APIs
 
 Some platforms provide dedicated APIs beyond MCP for AI access:
 
@@ -266,7 +264,7 @@ FROM claims
 WHERE status = 'Open'
 ```
 
-## Agent Context Discovery
+# Agent Context Discovery
 
 Agents discover their context from the mesh:
 
@@ -275,7 +273,7 @@ Agents discover their context from the mesh:
 3. **Custom Commands**: `/command` instructions for specific operations
 4. **Domain Knowledge**: Documentation throughout the hierarchy
 
-## Benefits
+# Benefits
 
 1. **Adaptability**: Agents learn from mesh, not hardcoded prompts
 2. **Hierarchy**: Override agents at any node level

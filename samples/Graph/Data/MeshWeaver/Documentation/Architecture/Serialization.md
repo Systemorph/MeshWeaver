@@ -5,11 +5,9 @@ Description: How MeshWeaver handles polymorphic JSON serialization with per-hub 
 Icon: code
 ---
 
-# JSON Serialization
-
 MeshWeaver uses **per-hub JsonSerializerOptions** to handle polymorphic JSON serialization. Each MessageHub has its own type registry, enabling type-safe serialization and deserialization across the persistence layer.
 
-## Architecture Overview
+# Architecture Overview
 
 Each MessageHub maintains its own `JsonSerializerOptions` instance with a dedicated `ITypeRegistry`. This design ensures that types registered with a hub are properly serialized with `$type` discriminators and deserialized back to their concrete types.
 
@@ -33,9 +31,9 @@ flowchart TB
     Hub2 --> P2[Persistence Layer]
 ```
 
-## How It Works
+# How It Works
 
-### 1. Per-Hub Type Registration
+## 1. Per-Hub Type Registration
 
 Types are registered with a hub during configuration:
 
@@ -49,7 +47,7 @@ services.AddMeshWeaver(meshWeaver => meshWeaver
 );
 ```
 
-### 2. Type Discriminators
+## 2. Type Discriminators
 
 When serializing objects, MeshWeaver adds a `$type` property to enable polymorphic deserialization:
 
@@ -62,7 +60,7 @@ When serializing objects, MeshWeaver adds a `$type` property to enable polymorph
 }
 ```
 
-### 3. Options Flow Through Persistence
+## 3. Options Flow Through Persistence
 
 The hub's `JsonSerializerOptions` flows through all persistence operations:
 
@@ -81,9 +79,9 @@ sequenceDiagram
     PS-->>Hub: MeshNode
 ```
 
-## Key Interfaces
+# Key Interfaces
 
-### IPersistenceService
+## IPersistenceService
 
 All persistence methods accept `JsonSerializerOptions`:
 
@@ -93,7 +91,7 @@ Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, Cance
 IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
 ```
 
-### IMeshQuery
+## IMeshQuery
 
 Query methods also require options for proper type resolution:
 
@@ -102,7 +100,7 @@ IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, JsonSerializerOpti
 IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(string basePath, string prefix, JsonSerializerOptions options, int limit, CancellationToken ct);
 ```
 
-### IStorageAdapter
+## IStorageAdapter
 
 Storage adapters use options for serialization/deserialization:
 
@@ -111,7 +109,7 @@ Task<MeshNode?> ReadAsync(string path, JsonSerializerOptions options, Cancellati
 Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct);
 ```
 
-## Configuration Options
+# Configuration Options
 
 MeshWeaver configures `JsonSerializerOptions` with these defaults:
 
@@ -122,9 +120,9 @@ MeshWeaver configures `JsonSerializerOptions` with these defaults:
 | `PropertyNameCaseInsensitive` | `true` | Flexible parsing |
 | `DefaultIgnoreCondition` | `WhenWritingNull` | Compact output |
 
-## Best Practices
+# Best Practices
 
-### 1. Always Pass Hub Options
+## 1. Always Pass Hub Options
 
 When calling persistence methods, use the hub's options:
 
@@ -136,7 +134,7 @@ await persistence.SaveNodeAsync(node, hub.JsonSerializerOptions);
 await persistence.SaveNodeAsync(node, new JsonSerializerOptions());
 ```
 
-### 2. Register All Types
+## 2. Register All Types
 
 Ensure all types that need polymorphic serialization are registered:
 
@@ -145,7 +143,7 @@ hub.WithTypes(typeof(Story), typeof(Task), typeof(Comment))
    .WithContentType<AgentConfiguration>()
 ```
 
-### 3. Use Typed Queries
+## 3. Use Typed Queries
 
 For type-safe queries, use the extension methods:
 
@@ -157,7 +155,7 @@ await foreach (var story in meshQuery.QueryAsync<Story>(query, hub.JsonSerialize
 }
 ```
 
-## Storage Adapters
+# Storage Adapters
 
 MeshWeaver supports multiple storage backends, all using the same serialization approach:
 
@@ -168,7 +166,7 @@ MeshWeaver supports multiple storage backends, all using the same serialization 
 | `AzureBlobStorageAdapter` | Azure Blob Storage |
 | `InMemoryPersistenceService` | In-memory storage for testing |
 
-## Related Topics
+# Related Topics
 
 - [Data Configuration](../DataConfiguration.md) - Setting up data sources
 - [Message-Based Communication](MessageBasedCommunication.md) - Hub architecture

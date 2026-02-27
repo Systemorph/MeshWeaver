@@ -129,7 +129,10 @@
       "Bash(do sed -i '' 's/\"\"namespace\"\": \"\"ACME\\\\/ProductLaunch\\\\/Todo\"\"/\"\"namespace\"\": \"\"ACME\\\\/Software\\\\/ProductLaunch\\\\/Todo\"\"/' \"$f\")",
       "Bash(do sed -i '' 's/\"\"namespace\"\": \"\"ACME\\\\/CustomerOnboarding\\\\/Todo\"\"/\"\"namespace\"\": \"\"ACME\\\\/Software\\\\/CustomerOnboarding\\\\/Todo\"\"/' \"$f\")",
       "Bash(do sed -i '' 's/\"\"namespace\"\": \"\"Northwind\"\"/\"\"namespace\"\": \"\"ACME\\\\/Northwind\"\"/' \"$f\")",
-      "Bash(git blame:*)"
+      "Bash(git blame:*)",
+      "WebFetch(domain:fluent2.microsoft.design)",
+      "Bash(sips:*)",
+      "Bash(bc:*)"
     ],
     "deny": []
   },

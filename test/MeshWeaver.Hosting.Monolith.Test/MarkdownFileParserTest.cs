@@ -60,6 +60,7 @@ public class MarkdownFileParserTest
         mdContent.Authors.Should().BeEquivalentTo(["John Doe", "Jane Smith"]);
         mdContent.Tags.Should().BeEquivalentTo(["tutorial", "beginner"]);
         mdContent.Thumbnail.Should().Be("/images/thumb.png");
+        mdContent.Abstract.Should().Be("A detailed article"); // Mapped from Description
         mdContent.Content.Should().Contain("# My Article");
     }
 
@@ -125,6 +126,9 @@ public class MarkdownFileParserTest
         // Assert
         node.Should().NotBeNull();
         node!.Name.Should().Be("Legacy Article"); // Mapped from Title
+
+        var mdContent = node.Content.Should().BeOfType<MarkdownContent>().Subject;
+        mdContent.Abstract.Should().Be("This is the legacy abstract"); // Mapped from Abstract
     }
 
     [Fact(Timeout = 10000)]
@@ -141,6 +145,69 @@ public class MarkdownFileParserTest
         node!.Id.Should().Be("doc");
         node.Namespace.Should().Be("folder/subfolder");
         node.Path.Should().Be("folder/subfolder/doc");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Parse_RelativeIconPath_ResolvesToAbsoluteUrl()
+    {
+        // Arrange
+        var content = """
+            ---
+            Name: Test Node
+            Icon: icons/custom.svg
+            ---
+
+            Content.
+            """;
+
+        // Act
+        var node = await _parser.ParseAsync("/root/ACME/Insurance/doc.md", content, "ACME/Insurance/doc.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Icon.Should().Be("/static/storage/content/ACME/Insurance/icons/custom.svg");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Parse_AbsoluteIconPath_PassesThroughUnchanged()
+    {
+        // Arrange
+        var content = """
+            ---
+            Name: Test Node
+            Icon: /static/storage/content/path/icon.svg
+            ---
+
+            Content.
+            """;
+
+        // Act
+        var node = await _parser.ParseAsync("/root/ns/doc.md", content, "ns/doc.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Icon.Should().Be("/static/storage/content/path/icon.svg");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Parse_HttpUrlIcon_PassesThroughUnchanged()
+    {
+        // Arrange
+        var content = """
+            ---
+            Name: Test Node
+            Icon: https://example.com/icon.svg
+            ---
+
+            Content.
+            """;
+
+        // Act
+        var node = await _parser.ParseAsync("/root/ns/doc.md", content, "ns/doc.md");
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.Icon.Should().Be("https://example.com/icon.svg");
     }
 
     #endregion
@@ -163,7 +230,8 @@ public class MarkdownFileParserTest
                 Content = "# Hello World\n\nContent here.",
                 Authors = ["Author 1", "Author 2"],
                 Tags = ["tag1", "tag2"],
-                Thumbnail = "/thumb.png"
+                Thumbnail = "/thumb.png",
+                Abstract = "A brief summary"
             }
         };
 
@@ -182,6 +250,7 @@ public class MarkdownFileParserTest
         result.Should().Contain("tag1");
         result.Should().Contain("tag2");
         result.Should().Contain("Thumbnail: /thumb.png");
+        result.Should().Contain("Abstract: A brief summary");
         result.Should().Contain("# Hello World");
         result.Should().Contain("Content here.");
     }
@@ -249,9 +318,58 @@ public class MarkdownFileParserTest
         // Should end after YAML block
     }
 
+    [Fact(Timeout = 10000)]
+    public async Task Serialize_ResolvedAbsoluteIconPath_IsOmittedFromYaml()
+    {
+        // Arrange - Icon starts with /static/storage/content/ (was resolved from relative path)
+        var node = new MeshNode("doc", "ns")
+        {
+            Name = "Test Node",
+            Icon = "/static/storage/content/ns/icons/custom.svg",
+            Content = new MarkdownContent { Content = "# Content" }
+        };
+
+        // Act
+        var result = await _parser.SerializeAsync(node);
+
+        // Assert - The serialization guard should strip resolved paths
+        result.Should().NotContain("Icon:");
+        result.Should().Contain("Name: Test Node");
+    }
+
     #endregion
 
     #region Round-Trip Tests
+
+    [Fact(Timeout = 10000)]
+    public async Task RoundTrip_RelativeIcon_ResolvesCorrectlyAfterReParse()
+    {
+        // Arrange - Markdown with a relative icon path
+        var originalContent = """
+            ---
+            Name: Icon Test
+            Thumbnail: icons/custom.svg
+            ---
+
+            # Icon Round-Trip Test
+            """;
+
+        // Act - Parse (resolves relative icon), serialize, re-parse
+        var node = await _parser.ParseAsync("/root/ACME/Insurance/doc.md", originalContent, "ACME/Insurance/doc.md");
+        node!.Icon.Should().Be("/static/storage/content/ACME/Insurance/icons/custom.svg");
+
+        var serialized = await _parser.SerializeAsync(node);
+
+        // The resolved absolute path should NOT appear in serialized YAML
+        serialized.Should().NotContain("/static/storage/content/");
+
+        // Re-parse — Thumbnail is still in YAML and should resolve again
+        var reparsed = await _parser.ParseAsync("/root/ACME/Insurance/doc.md", serialized, "ACME/Insurance/doc.md");
+
+        // Assert — icon resolves to the same absolute URL (no double-resolution)
+        reparsed.Should().NotBeNull();
+        reparsed!.Icon.Should().Be("/static/storage/content/ACME/Insurance/icons/custom.svg");
+    }
 
     [Fact(Timeout = 10000)]
     public async Task RoundTrip_PreservesAllData()
@@ -263,6 +381,7 @@ public class MarkdownFileParserTest
             Name: Complete Tutorial
             Category: Learning
             Description: A comprehensive tutorial
+            Abstract: A comprehensive tutorial
             Icon: School
             Authors:
               - Teacher One
@@ -293,6 +412,7 @@ public class MarkdownFileParserTest
         var mdContent = reparsed.Content.Should().BeOfType<MarkdownContent>().Subject;
         mdContent.Authors.Should().BeEquivalentTo(["Teacher One"]);
         mdContent.Tags.Should().BeEquivalentTo(["advanced"]);
+        mdContent.Abstract.Should().Be("A comprehensive tutorial");
         mdContent.Content.Should().Contain("# Tutorial Title");
         mdContent.Content.Should().Contain("Step 1: Do this.");
     }

@@ -5,13 +5,11 @@ Description: Attributes that control how properties are rendered and validated i
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Attributes/icon.svg
 ---
 
-# Controlling Form Fields Through Attributes
-
 Property attributes control how the Editor control renders and validates form fields. They provide metadata that influences field appearance, behavior, and validation.
 
-## Display Attributes
+# Display Attributes
 
-### [Description]
+## [Description]
 
 Adds help text below the field:
 
@@ -25,7 +23,7 @@ public record Person
 
 **Result:** Help text appears below the input field.
 
-### [DisplayName]
+## [DisplayName]
 
 Overrides the label derived from property name:
 
@@ -39,7 +37,7 @@ public record Settings
 
 **Result:** Field label shows "Enable Email Notifications" instead of "Notifications Enabled".
 
-### [Browsable(false)]
+## [Browsable(false)]
 
 Hides the property from the editor:
 
@@ -55,9 +53,9 @@ public record Entity
 
 **Result:** Only the Name field appears in the form.
 
-## Validation Attributes
+# Validation Attributes
 
-### [Required]
+## [Required]
 
 Makes the field mandatory:
 
@@ -71,7 +69,7 @@ public record User
 
 **Result:** Field shows validation error if empty.
 
-### [Range]
+## [Range]
 
 Restricts numeric range:
 
@@ -88,7 +86,7 @@ public record Product
 
 **Result:** Values outside the range show validation errors.
 
-### [Editable(false)]
+## [Editable(false)]
 
 Makes the field read-only:
 
@@ -104,9 +102,9 @@ public record Order
 
 **Result:** OrderNumber is displayed but cannot be edited.
 
-## Control Override Attributes
+# Control Override Attributes
 
-### [UiControl<T>]
+## [UiControl<T>]
 
 Overrides the default control type:
 
@@ -123,7 +121,7 @@ public record Preferences
 
 **Result:** Bio renders as a multi-line text area; Theme renders as radio buttons.
 
-### [Dimension<T>]
+## [Dimension<T>]
 
 Renders a dropdown populated from a data source:
 
@@ -146,7 +144,7 @@ public record Address
 
 **Result:** CountryCode renders as a dropdown populated with all Country records.
 
-## Property Type to Control Mapping
+# Property Type to Control Mapping
 
 Without attributes, the Editor maps types automatically:
 
@@ -157,7 +155,7 @@ Without attributes, the Editor maps types automatically:
 | `bool` | `CheckBoxControl` |
 | `DateTime` | `DateTimeControl` |
 
-## Combining Attributes
+# Combining Attributes
 
 Attributes can be combined for complex validation:
 
@@ -181,7 +179,7 @@ public record Employee
 }
 ```
 
-## See Also
+# See Also
 
 - [Editor Control](MeshWeaver/Documentation/UserInterface/Editor) - How attributes are used in forms
 - [DataBinding](MeshWeaver/Documentation/UserInterface/DataBinding) - How data flows through forms

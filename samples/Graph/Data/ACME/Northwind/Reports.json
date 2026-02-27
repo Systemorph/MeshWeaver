@@ -2,10 +2,10 @@
   "id": "Reports",
   "namespace": "ACME/Northwind",
   "name": "Reports",
-  "nodeType": "ACME/Northwind/ContentCatalog",
+  "nodeType": "ACME/Northwind/ReportsCatalog",
   "category": "Reports",
-  "description": "Data-driven analytical reports on Northwind Traders sales, orders, products, clients, and employees",
+  "description": "Data-driven analytical reports on ACME Northwind sales, orders, products, clients, and employees",
   "icon": "/static/storage/content/ACME/Northwind/icons/reports.svg",
-  "order": 2,
+  "displayOrder": 2,
   "isPersistent": true
 }

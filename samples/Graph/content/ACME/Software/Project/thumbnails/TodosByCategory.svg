@@ -1,22 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+  </style>
   <!-- Background -->
-  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
-  <!-- Category folders grid with todo checkmarks -->
-  <rect x="8" y="8" width="22" height="22" rx="3" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M12 14h6c1 0 1.5.5 2 1l1 1h7" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <rect x="12" y="22" width="4" height="4" rx="1" fill="#DC2626"/>
-  <path d="M18 22l1.5 1.5 3-3" stroke="#DC2626" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <rect class="bg" width="140" height="79" rx="8"/>
 
-  <rect x="34" y="8" width="22" height="22" rx="3" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M38 14h6c1 0 1.5.5 2 1l1 1h7" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <rect x="38" y="22" width="4" height="4" rx="1" fill="#DC2626" opacity="0.7"/>
-  <path d="M44 22l1.5 1.5 3-3" stroke="#DC2626" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity="0.7"/>
+  <!-- Folder 1 (top-left) -->
+  <rect class="nf" x="9" y="5" width="56" height="30" rx="4"/>
+  <rect class="bg" x="11" y="7" width="52" height="26" rx="2"/>
+  <path class="nf" d="M16 13.25h10c1.2 0 1.9.6 2.4 1.1l1 1h17.6v1.5H29c-.4 0-.7-.2-1-.5l-1.2-1.2c-.3-.3-.6-.4-.8-.4H16v-1.5z"/>
+  <rect class="af" x="16" y="24" width="6" height="5" rx="1"/>
+  <!-- Checkmark: "M26 24l2 2 4-4" sw=1.2 round => filled polygon -->
+  <polygon class="af" points="26.36,24 28,25.64 31.64,22 32.84,23.2 28,28.04 25.16,25.2"/>
 
-  <rect x="8" y="34" width="22" height="22" rx="3" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M12 40h6c1 0 1.5.5 2 1l1 1h7" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <rect x="12" y="48" width="4" height="4" rx="1" fill="#DC2626" opacity="0.5"/>
+  <!-- Folder 2 (top-right) -->
+  <rect class="nf" x="75" y="5" width="56" height="30" rx="4"/>
+  <rect class="bg" x="77" y="7" width="52" height="26" rx="2"/>
+  <path class="nf" d="M82 13.25h10c1.2 0 1.9.6 2.4 1.1l1 1h17.6v1.5H95c-.4 0-.7-.2-1-.5l-1.2-1.2c-.3-.3-.6-.4-.8-.4H82v-1.5z"/>
+  <rect class="af" x="82" y="24" width="6" height="5" rx="1" opacity="0.7"/>
+  <g opacity="0.7">
+    <polygon class="af" points="92.36,24 94,25.64 97.64,22 98.84,23.2 94,28.04 91.16,25.2"/>
+  </g>
 
-  <rect x="34" y="34" width="22" height="22" rx="3" stroke="#78716C" stroke-width="2" fill="none"/>
-  <path d="M38 40h6c1 0 1.5.5 2 1l1 1h7" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <rect x="38" y="48" width="4" height="4" rx="1" fill="#DC2626" opacity="0.3"/>
+  <!-- Folder 3 (bottom-left) -->
+  <rect class="nf" x="9" y="43" width="56" height="30" rx="4"/>
+  <rect class="bg" x="11" y="45" width="52" height="26" rx="2"/>
+  <path class="nf" d="M16 51.25h10c1.2 0 1.9.6 2.4 1.1l1 1h17.6v1.5H29c-.4 0-.7-.2-1-.5l-1.2-1.2c-.3-.3-.6-.4-.8-.4H16v-1.5z"/>
+  <rect class="af" x="16" y="62" width="6" height="5" rx="1" opacity="0.5"/>
+
+  <!-- Folder 4 (bottom-right) -->
+  <rect class="nf" x="75" y="43" width="56" height="30" rx="4"/>
+  <rect class="bg" x="77" y="45" width="52" height="26" rx="2"/>
+  <path class="nf" d="M82 51.25h10c1.2 0 1.9.6 2.4 1.1l1 1h17.6v1.5H95c-.4 0-.7-.2-1-.5l-1.2-1.2c-.3-.3-.6-.4-.8-.4H82v-1.5z"/>
+  <rect class="af" x="82" y="62" width="6" height="5" rx="1" opacity="0.3"/>
 </svg>

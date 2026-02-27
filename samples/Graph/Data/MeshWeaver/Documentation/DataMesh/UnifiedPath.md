@@ -5,11 +5,9 @@ Description: Reference and embed content using @ and @@ syntax
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/icon.svg
 ---
 
-# Unified Path
-
 Unified Path allows you to **reference** and **embed** content from anywhere in your MeshWeaver application using a simple `@` notation.
 
-## Pattern
+# Pattern
 
 ```
 {address}/{prefix}:{path}
@@ -21,7 +19,7 @@ Unified Path allows you to **reference** and **embed** content from anywhere in 
 | `prefix` | Either a **reserved keyword** or a **content collection name** |
 | `path` | Resource within the address |
 
-### Reserved Keywords
+## Reserved Keywords
 
 These prefixes have special meaning and map to specific layout areas:
 
@@ -33,7 +31,7 @@ These prefixes have special meaning and map to specific layout areas:
 | `metadata:` | Access MeshNode without Content |
 | `area:` | Access a specific layout area |
 
-### Content Collection Prefixes
+## Content Collection Prefixes
 
 **Any other prefix** is treated as a **content collection name**. The collection is configured in the hub setup:
 
@@ -44,7 +42,7 @@ These prefixes have special meaning and map to specific layout areas:
 | `files:` | Files from the "files" collection |
 | `docs:` | Files from the "docs" collection |
 
-## @ vs @@
+# @ vs @@
 
 | Syntax | Behavior |
 |--------|----------|
@@ -55,9 +53,9 @@ These prefixes have special meaning and map to specific layout areas:
 
 ---
 
-## Understanding Unified Path Syntax
+# Understanding Unified Path Syntax
 
-### Without Prefix = Layout Area
+## Without Prefix = Layout Area
 
 When you use `@path` or `@@path` **without a prefix**, it refers to a **layout area** of the target node:
 
@@ -66,7 +64,7 @@ When you use `@path` or `@@path` **without a prefix**, it refers to a **layout a
 @@Systemorph/Thumbnail    --> embeds Systemorph node's Thumbnail area inline
 ```
 
-### With Prefix = Specific Resource Type
+## With Prefix = Specific Resource Type
 
 Reserved keywords (`data:`, `schema:`, `metadata:`, `area:`) access specific resource types.
 Any other prefix (like `content:`, `assets:`, `files:`) accesses files from a content collection:
@@ -79,7 +77,7 @@ Any other prefix (like `content:`, `assets:`, `files:`) accesses files from a co
 @@node/metadata:          --> embeds MeshNode without Content
 ```
 
-### Content Collections
+## Content Collections
 
 Any prefix that is **not a reserved keyword** is treated as a content collection name. The collection must be configured in the hub setup using `AddFileSystemContentCollection`, `MapContentCollection`, or similar methods.
 
@@ -94,9 +92,9 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-## Quick Examples
+# Quick Examples
 
-### 1. Inline Image (content:)
+## 1. Inline Image (content:)
 
 **Syntax:**
 ```
@@ -109,7 +107,7 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-### 2. Embedded Markdown (content:)
+## 2. Embedded Markdown (content:)
 
 **Syntax:**
 ```
@@ -122,7 +120,7 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-### 3. Layout Area (Thumbnail)
+## 3. Layout Area (Thumbnail)
 
 **Syntax:**
 ```
@@ -135,7 +133,7 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-### 4. Data Entity (Self)
+## 4. Data Entity (Self)
 
 **Syntax:**
 ```
@@ -148,7 +146,7 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-### 5. Schema (Self)
+## 5. Schema (Self)
 
 **Syntax:**
 ```
@@ -161,7 +159,7 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-### 6. Metadata (MeshNode without Content)
+## 6. Metadata (MeshNode without Content)
 
 **Syntax:**
 ```
@@ -176,7 +174,7 @@ Returns the MeshNode with `Content` set to null, reducing payload size when you 
 
 ---
 
-### 7. Hyperlinks
+## 7. Hyperlinks
 
 **Syntax:**
 ```
@@ -192,7 +190,7 @@ Returns the MeshNode with `Content` set to null, reducing payload size when you 
 
 ---
 
-## Detailed Documentation
+# Detailed Documentation
 
 @MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax
 
@@ -206,7 +204,7 @@ Returns the MeshNode with `Content` set to null, reducing payload size when you 
 
 ---
 
-## Autocomplete
+# Autocomplete
 
 Type `@` in any editor to see suggestions. Autocomplete is **case-insensitive**.
 

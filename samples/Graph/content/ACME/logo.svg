@@ -1,23 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="acmeCorpGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1F2937"/>
-      <stop offset="100%" stop-color="#6B7280"/>
-    </linearGradient>
-  </defs>
-  <!-- Background with rounded corners -->
-  <rect width="128" height="128" rx="16" fill="#F9FAFB"/>
-  <!-- Abstract geometric mark - three stacked chevrons representing divisions -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <style>
+    .bg { fill: #fafafa; }
+    .chev-grey { fill: #616161; }
+    .chev-blue { fill: #0f6cbd; }
+    .chev-red { fill: #c50f1f; }
+    .title { fill: #242424; }
+    .subtitle { fill: #616161; }
+  </style>
+  <rect class="bg" width="128" height="128" rx="16"/>
   <g transform="translate(64, 46)">
-    <!-- Top chevron (grey - Insurance) -->
-    <path d="M-24,-26 L0,-14 L24,-26" fill="none" stroke="#6B7280" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Middle chevron (blue - Northwind) -->
-    <path d="M-24,-12 L0,0 L24,-12" fill="none" stroke="#2563EB" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Bottom chevron (red - Software) -->
-    <path d="M-24,2 L0,14 L24,2" fill="none" stroke="#DC2626" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path class="chev-grey" d="M-25.12,-23.76 L0,-11.2 L25.12,-23.76 L22.88,-28.24 L0,-16.8 L-22.88,-28.24 Z"/>
+    <path class="chev-blue" d="M-25.12,-9.76 L0,2.8 L25.12,-9.76 L22.88,-14.24 L0,-2.8 L-22.88,-14.24 Z"/>
+    <path class="chev-red" d="M-25.12,4.24 L0,16.8 L25.12,4.24 L22.88,-0.24 L0,11.2 L-22.88,-0.24 Z"/>
   </g>
-  <!-- Company name -->
-  <text x="64" y="96" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="url(#acmeCorpGrad)" text-anchor="middle" letter-spacing="6">ACME</text>
-  <!-- Tagline -->
-  <text x="64" y="112" font-family="Arial, sans-serif" font-size="9" fill="#6B7280" text-anchor="middle" letter-spacing="3">CORPORATION</text>
+  <text class="title" x="64" y="96" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="24" font-weight="bold" text-anchor="middle" letter-spacing="6">ACME</text>
+  <text class="subtitle" x="64" y="112" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="9" text-anchor="middle" letter-spacing="3">CORPORATION</text>
 </svg>

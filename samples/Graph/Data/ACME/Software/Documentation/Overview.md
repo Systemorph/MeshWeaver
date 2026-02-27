@@ -1,23 +1,21 @@
 ---
 NodeType: "ACME/Software/Article"
-Title: "ACME Case Studies"
-Abstract: "Learn MeshWeaver through practical examples with the ACME sample organization"
+Title: "ACME Software Case Studies"
+Abstract: "Learn MeshWeaver through practical examples with the ACME Software sample organization"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "ACME"
+  - "ACME Software"
   - "Getting Started"
 ---
 
-# ACME Case Studies
-
-The ACME sample organization demonstrates MeshWeaver capabilities through realistic business scenarios.
+The ACME Software sample organization demonstrates MeshWeaver capabilities through realistic business scenarios.
 
 ---
 
-## What do you want to learn?
+# What do you want to learn?
 
 | Topic | Go here |
 |-------|---------|
@@ -28,9 +26,9 @@ The ACME sample organization demonstrates MeshWeaver capabilities through realis
 
 ---
 
-## The ACME Organization
+# The ACME Software Organization
 
-ACME is a sample organization with two projects sharing a common Todo application:
+ACME Software is a sample organization with two projects sharing a common Todo application:
 
 ```
 ACME/                           # Organization
@@ -45,23 +43,23 @@ ACME/                           # Organization
 
 ---
 
-## Key Concepts Demonstrated
+# Key Concepts Demonstrated
 
-### Namespace Hierarchy
+## Namespace Hierarchy
 
 Data is organized in a hierarchical namespace:
 - **Organization** → **Project** → **Task**
 - Each level has its own context and permissions
 - Shared NodeTypes enable code reuse across projects
 
-### NodeType Reuse
+## NodeType Reuse
 
 The Todo NodeType (`ACME/Software/Project/Todo`) is defined once and used by both projects:
 - Same data model, views, and behavior
 - Project-specific instances with relevant categories
 - Shared AI agent for task management
 
-### AI Agent Integration
+## AI Agent Integration
 
 The TodoAgent demonstrates:
 - Natural language task creation and queries
@@ -70,9 +68,9 @@ The TodoAgent demonstrates:
 
 ---
 
-## Sample Data
+# Sample Data
 
-### CustomerOnboarding Project
+## CustomerOnboarding Project
 
 Insurance client onboarding with compliance-focused tasks:
 
@@ -82,7 +80,7 @@ Insurance client onboarding with compliance-focused tasks:
 | Calculate risk score | Paul | Risk |
 | Sanctions screening | Oliver | Compliance |
 
-### ProductLaunch Project
+## ProductLaunch Project
 
 Marketing campaign with cross-functional tasks:
 
@@ -94,9 +92,9 @@ Marketing campaign with cross-functional tasks:
 
 ---
 
-## Explore Further
+# Explore Further
 
-Navigate to `ACME` in the portal to explore:
+Navigate to `ACME Software` in the portal to explore:
 - Both projects with their tasks
 - Different views: TodaysFocus, AllTasks, TodosByCategory
 - The AI chat agent for natural language interactions

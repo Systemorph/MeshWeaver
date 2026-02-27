@@ -5,11 +5,9 @@ Description: Named rendering slots on hubs that define what UI each area display
 Icon: /static/NodeTypeIcons/code.svg
 ---
 
-# Layout Areas
-
 Layout areas are **named rendering slots** registered on a message hub. Each area has a name and a view function that produces UI controls. When a client requests a specific area, the hub runs the corresponding view function and streams the result.
 
-## How Layout Areas Work
+# How Layout Areas Work
 
 Register layout areas using the `AddLayout()` pipeline on `MessageHubConfiguration`:
 
@@ -22,14 +20,14 @@ public static MessageHubConfiguration AddCodeViews(this MessageHubConfiguration 
         .WithView("Edit", Edit));         // Editor view
 ```
 
-### Key Methods
+## Key Methods
 
 | Method | Purpose |
 |--------|---------|
 | `WithDefaultArea(name)` | Sets which area renders when the caller specifies an empty area name |
 | `WithView(name, function)` | Registers a view function for the named area |
 
-### View Function Signatures
+## View Function Signatures
 
 A view function takes a `LayoutAreaHost` and `RenderingContext` and returns either a static control or a reactive observable:
 
@@ -48,7 +46,7 @@ public static IObservable<UiControl?> Content(LayoutAreaHost host, RenderingCont
 }
 ```
 
-### Navigation Between Areas
+## Navigation Between Areas
 
 Use `LayoutAreaReference` and `ToHref()` to build navigation links between areas:
 
@@ -62,7 +60,7 @@ var overviewHref = new LayoutAreaReference("Overview").ToHref(otherNodePath);
 new NavLinkControl("View Code", FluentIcons.Code(), overviewHref);
 ```
 
-## LayoutAreaControl: Embedding One Hub's Area Inside Another
+# LayoutAreaControl: Embedding One Hub's Area Inside Another
 
 `LayoutAreaControl` embeds a layout area from one hub inside another hub's view. This is how you compose views across node boundaries.
 
@@ -74,7 +72,7 @@ new LayoutAreaControl(targetAddress, new LayoutAreaReference(""))
 new LayoutAreaControl(targetAddress, new LayoutAreaReference("Thumbnail"))
 ```
 
-### How the Default Area Resolves
+## How the Default Area Resolves
 
 When the `LayoutAreaReference` has an empty area name, the target hub's **default area** is rendered (the one set by `WithDefaultArea`). This is essential for composition without recursion.
 
@@ -93,7 +91,7 @@ new LayoutAreaControl(hubAddress, new LayoutAreaReference(""))
 // ^ Resolves to "Content" (the default), NOT "Overview"
 ```
 
-## Principle: Define Layout Areas Close to Their Object
+# Principle: Define Layout Areas Close to Their Object
 
 Layout areas should be defined in the same module as the object they represent. This keeps each node type **self-contained and composable**.
 
@@ -110,9 +108,9 @@ var codeHref = new LayoutAreaReference(CodeLayoutAreas.OverviewArea)
 new NavLinkControl(codeNode.Name, icon, codeHref);
 ```
 
-## Common Patterns
+# Common Patterns
 
-### Splitter with NavMenu and Content Pane
+## Splitter with NavMenu and Content Pane
 
 Used by NodeType and Code nodes to show a left navigation with a main content area:
 
@@ -128,7 +126,7 @@ Controls.Splitter
         skin => skin.WithSize("*"));
 ```
 
-### Read-Only View with Edit Button
+## Read-Only View with Edit Button
 
 Show content with a button that navigates to the Edit area:
 
@@ -142,7 +140,7 @@ Controls.Stack
         .WithNavigateToHref(editHref));
 ```
 
-### Edit View with Save and Cancel
+## Edit View with Save and Cancel
 
 An editor that saves data and navigates back to the Overview:
 
@@ -158,7 +156,7 @@ var cancelHref = new LayoutAreaReference("Overview").ToHref(hubAddress);
 Controls.Button("Cancel").WithNavigateToHref(cancelHref);
 ```
 
-## See Also
+# See Also
 
 - [Adding Controls to a UI](MeshWeaver/Documentation/GUI/ContainerControl) - Container types and WithView
 - [Data Binding](MeshWeaver/Documentation/GUI/DataBinding) - How data flows between server and UI

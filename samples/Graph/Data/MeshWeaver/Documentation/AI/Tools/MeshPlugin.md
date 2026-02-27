@@ -4,11 +4,9 @@ Category: Documentation
 Description: How to use MeshPlugin tools for mesh operations
 ---
 
-# MeshPlugin Tools
-
 MeshPlugin provides tools for working with the mesh data store.
 
-## Get - Retrieve Nodes
+# Get - Retrieve Nodes
 
 Retrieves a node or list of nodes from the mesh hierarchy. Returns JSON.
 
@@ -25,7 +23,7 @@ Retrieves a node or list of nodes from the mesh hierarchy. Returns JSON.
 - `Get('@NodeTypes/*')` - List all node types
 - `Get('@Agents/*')` - List all agents
 
-## Search - Query Nodes
+# Search - Query Nodes
 
 Searches the mesh using GitHub-style query syntax. Returns JSON array.
 
@@ -43,7 +41,7 @@ Searches the mesh using GitHub-style query syntax. Returns JSON array.
 
 Results limited to 50 items.
 
-## NavigateTo - Display Node
+# NavigateTo - Display Node
 
 Displays a node's visual representation in the chat UI.
 
@@ -55,7 +53,7 @@ Displays a node's visual representation in the chat UI.
 **Example:**
 - `NavigateTo('@graph/org1')` - Displays org1's visual view
 
-## Update - Create/Modify Nodes
+# Update - Create/Modify Nodes
 
 Creates or updates a node at a path. **Use with caution** - modifies persistent data.
 

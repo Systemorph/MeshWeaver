@@ -5,11 +5,9 @@ Description: Organize content into switchable tabbed panels
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/ContainerControl/Tabs/icon.svg
 ---
 
-# Organizing Content Into Switchable Tabs
-
 The Tabs control organizes content into switchable panels. Each tab has a label and displays its content when selected.
 
-## Basic Usage
+# Basic Usage
 
 ```csharp --render TabsBasic --show-code
 Controls.Tabs                                                       // Create a tabbed container
@@ -23,7 +21,7 @@ Controls.Tabs                                                       // Create a 
 
 ---
 
-## Setting the Active Tab
+# Setting the Active Tab
 
 Control which tab is selected programmatically using the auto-generated tab ID (1, 2, 3, etc.):
 
@@ -38,7 +36,7 @@ Controls.Tabs                                                       // Create a 
 
 ---
 
-## Tabs with Complex Content
+# Tabs with Complex Content
 
 Each tab can contain any control, including nested containers:
 
@@ -58,7 +56,7 @@ Controls.Tabs                                                       // Create a 
 
 ---
 
-## Configuration Methods
+# Configuration Methods
 
 | Method | Purpose | Example |
 |--------|---------|---------|
@@ -68,7 +66,7 @@ Controls.Tabs                                                       // Create a 
 
 ---
 
-## Tab Skin Properties
+# Tab Skin Properties
 
 Configure individual tabs via the skin function:
 
@@ -78,7 +76,7 @@ Configure individual tabs via the skin function:
 
 ---
 
-## See Also
+# See Also
 
 - [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Overview of all containers
 - [Stack Control](MeshWeaver/Documentation/UserInterface/ContainerControl/Stack) - Vertical/horizontal layouts

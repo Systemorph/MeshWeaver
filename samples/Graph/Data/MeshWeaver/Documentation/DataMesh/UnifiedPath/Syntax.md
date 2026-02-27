@@ -5,15 +5,13 @@ Description: The address/prefix:path pattern explained
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax/icon.svg
 ---
 
-# Unified Path Syntax
-
 Unified Path references use the pattern:
 
 ```
 {address}/{prefix}:{path}
 ```
 
-## Components
+# Components
 
 | Component | Description | Example |
 |-----------|-------------|----------|
@@ -21,7 +19,7 @@ Unified Path references use the pattern:
 | `prefix` | Content type selector | `content:`, `data:`, `area:`, `schema:`, `model:` |
 | `path` | Resource path within the address | `docs/readme.md`, `Posts`, `Thumbnail` |
 
-## Address Resolution
+# Address Resolution
 
 The `address` portion is matched against nodes in the MeshCatalog using score-based matching:
 
@@ -30,7 +28,7 @@ The `address` portion is matched against nodes in the MeshCatalog using score-ba
 3. The best match (highest score) determines the target node
 4. Remaining segments become the `path` portion
 
-## Prefix Types
+# Prefix Types
 
 | Prefix | Purpose | Renders As |
 |--------|---------|------------|
@@ -41,16 +39,16 @@ The `address` portion is matched against nodes in the MeshCatalog using score-ba
 | `model:` | Data model diagrams | Mermaid class diagram |
 | *(none)* | Default area reference | Layout component |
 
-## Single @ vs Double @@
+# Single @ vs Double @@
 
 | Syntax | Behavior |
 |--------|----------|
 | `@path` | Creates a **hyperlink** to the referenced content |
 | `@@path` | **Embeds** the content inline |
 
-## Examples
+# Examples
 
-### Simple Reference (hyperlink)
+## Simple Reference (hyperlink)
 
 ```
 @Systemorph/Marketing
@@ -60,7 +58,7 @@ Result:
 
 @Systemorph/Marketing
 
-### Embedded Content
+## Embedded Content
 
 ```
 @@Systemorph/Marketing/Thumbnail
@@ -70,7 +68,7 @@ Result:
 
 @@Systemorph/Marketing/Thumbnail
 
-## Related
+# Related
 
 @MeshWeaver/Documentation/DataMesh/UnifiedPath/ContentPrefix
 

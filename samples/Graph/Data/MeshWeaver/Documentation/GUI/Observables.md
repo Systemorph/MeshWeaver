@@ -5,11 +5,9 @@ Description: Understanding when and how UI areas update in response to data chan
 Icon: /static/storage/content/MeshWeaver/Documentation/GUI/Observables/icon.svg
 ---
 
-# Static vs. Dynamic Views
-
 MeshWeaver distinguishes between **static** views (rendered once) and **dynamic** views (re-rendered when observables emit). Understanding this distinction is key for efficient UIs.
 
-## Static Views
+# Static Views
 
 A static view is rendered once and never updates:
 
@@ -28,7 +26,7 @@ Controls.Stack                                              // Create a containe
 
 ---
 
-## Dynamic Views
+# Dynamic Views
 
 A dynamic view updates when its observable emits:
 
@@ -49,7 +47,7 @@ Controls.Stack                                                   // Create a con
 
 ---
 
-## Real-time Clock Example
+# Real-time Clock Example
 
 ```csharp --render Clock --show-code
 var tick = Observable.Interval(TimeSpan.FromSeconds(1));  // Stream that emits every second
@@ -60,7 +58,7 @@ Controls.Stack                                                                  
 
 ---
 
-## Combining Static and Dynamic
+# Combining Static and Dynamic
 
 A typical pattern combines both:
 
@@ -75,7 +73,7 @@ The header and button never re-render. Only the middle area updates when `metric
 
 ---
 
-## Loading Data First
+# Loading Data First
 
 When you need to fetch data before showing content:
 
@@ -89,7 +87,7 @@ Controls.Stack                                      // Create a container
 
 ---
 
-## Reacting to Data Changes
+# Reacting to Data Changes
 
 When content depends on data in the store:
 
@@ -102,7 +100,7 @@ Controls.Stack                                          // Create a container
 
 ---
 
-## How Re-rendering Works
+# How Re-rendering Works
 
 When a dynamic view receives a new value:
 
@@ -121,9 +119,9 @@ generator
 
 ---
 
-## Common Patterns
+# Common Patterns
 
-### Conditional Content
+## Conditional Content
 
 ```csharp
 isLoadingStream.Select(loading =>
@@ -132,21 +130,21 @@ isLoadingStream.Select(loading =>
         : Controls.Label("Ready"))
 ```
 
-### Computed Display
+## Computed Display
 
 ```csharp
 dataStream.Select(data =>
     Controls.Markdown($"**Total:** {data.Items.Sum(i => i.Value)}"))
 ```
 
-### Combined Streams
+## Combined Streams
 
 ```csharp
 userStream.CombineLatest(settingsStream, (user, settings) =>
     Controls.Label($"{user.Name} - {settings.Theme}"))
 ```
 
-### Debounced Updates
+## Debounced Updates
 
 ```csharp
 searchStream
@@ -156,7 +154,7 @@ searchStream
 
 ---
 
-## Observable Operators
+# Observable Operators
 
 Common Rx operators for UI:
 
@@ -170,7 +168,7 @@ Common Rx operators for UI:
 
 ---
 
-## Performance Guidelines
+# Performance Guidelines
 
 **Use static for:**
 - Headers, labels, navigation
@@ -189,7 +187,7 @@ Common Rx operators for UI:
 
 ---
 
-## See Also
+# See Also
 
 - [Container Control](MeshWeaver/Documentation/UserInterface/ContainerControl) - Adding content to containers
 - [Data Binding](MeshWeaver/Documentation/UserInterface/DataBinding) - How data flows to controls

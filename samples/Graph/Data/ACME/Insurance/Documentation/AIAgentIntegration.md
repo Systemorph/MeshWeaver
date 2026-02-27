@@ -1,28 +1,26 @@
 ---
 NodeType: "ACME/Insurance/Article"
-Title: "Cornerstone AI Agent Integration"
+Title: "ACME Insurance AI Agent Integration"
 Abstract: "How AI agents integrate with ACME Insurance through MeshPlugin and domain documentation"
 Icon: "Document"
 Published: "2025-01-31"
 Authors:
   - "MeshWeaver Team"
 Tags:
-  - "Cornerstone"
+  - "ACME Insurance"
   - "AI"
   - "Agents"
 ---
 
-# AI Agent Integration in Cornerstone
+One of the most powerful aspects of MeshWeaver's architecture is how naturally it supports AI agent integration. The ACME Insurance sample demonstrates this through natural language access to insurance pricing data using the MeshPlugin and domain documentation.
 
-One of the most powerful aspects of MeshWeaver's architecture is how naturally it supports AI agent integration. The Cornerstone sample demonstrates this through natural language access to insurance pricing data using the MeshPlugin and domain documentation.
-
-## Remote Control Philosophy
+# Remote Control Philosophy
 
 AI agents **remote control** MeshWeaver applications rather than being embedded within them. This ensures clean separation of concerns and allows agents to interact through the same message-based interfaces as human users.
 
 For the design philosophy and benefits of this approach, see [Agentic AI Architecture](MeshWeaver/Documentation/Architecture/AgenticAI).
 
-## AI Tool Integration
+# AI Tool Integration
 
 MeshWeaver uses [Microsoft.Extensions.AI](https://learn.microsoft.com/en-us/dotnet/ai/ai-extensions) to integrate AI capabilities. This framework provides abstractions for chat clients and tool calling.
 
@@ -44,7 +42,7 @@ graph TD
 
 When a user types a natural language request, the AI agent analyzes intent, determines which tools to call, executes them with appropriate parameters, and returns results through the chat interface.
 
-## MeshPlugin - Universal Data Access
+# MeshPlugin - Universal Data Access
 
 The `MeshPlugin` provides AI agents with tools to interact with the mesh. For the complete API reference, see [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin).
 
@@ -57,7 +55,7 @@ The `MeshPlugin` provides AI agents with tools to interact with the mesh. For th
 
 The MeshPlugin is completely generic - it works with Pricings, PropertyRisks, Insureds, or any other MeshNode type.
 
-### Example MeshPlugin Usage
+## Example MeshPlugin Usage
 
 Here's how the AI agent might use the MeshPlugin to handle a user request:
 
@@ -65,27 +63,27 @@ Here's how the AI agent might use the MeshPlugin to handle a user request:
 
 **Agent Process**:
 1. `Search("nodeType:ACME/Insurance/Pricing status:Bound")` → Finds bound pricings
-2. `NavigateTo("@Cornerstone/Microsoft/PricingCatalog")` → Displays results in catalog view
+2. `NavigateTo("@ACME/Insurance/Microsoft/PricingCatalog")` → Displays results in catalog view
 
-## Insurance Domain Context
+# Insurance Domain Context
 
-AI agents working with Cornerstone have access to essential context that helps understand the insurance domain:
+AI agents working with ACME Insurance have access to essential context that helps understand the insurance domain:
 
 - **Business Structure**: Knows the relationships between insured, primary insurer, broker, and reinsurer
 - **Reference Data**: Understands lines of business, countries, currencies, and statuses
 - **Views**: Knows which views are available (Overview, Property Risks, Risk Map, etc.)
 - **Data Model**: Understands PropertyRisk, ReinsuranceAcceptance, and ReinsuranceSection entities
 
-## Natural Language Processing Examples
+# Natural Language Processing Examples
 
 The AI agent integration enables sophisticated natural language interactions for insurance tasks.
 
-### Viewing Pricings
+## Viewing Pricings
 
 **Display Pricing Overview**:
 ```
 User: "Show me the Microsoft 2026 pricing"
-Agent: [Displays Overview view for Cornerstone/Microsoft/2026]
+Agent: [Displays Overview view for ACME/Insurance/Microsoft/2026]
 ```
 
 **View Property Risks**:
@@ -100,7 +98,7 @@ User: "Show me the risk map for Microsoft"
 Agent: [Displays Risk Map with geocoded property markers on Google Maps]
 ```
 
-### Querying Data
+## Querying Data
 
 **Find Pricings by Status**:
 ```
@@ -117,10 +115,10 @@ Agent: [Searches for pricings with lineOfBusiness:PROP]
 **Find by Insured**:
 ```
 User: "Show me all pricings for Global Manufacturing"
-Agent: [Navigates to Cornerstone/GlobalManufacturing/PricingCatalog]
+Agent: [Navigates to ACME/Insurance/GlobalManufacturing/PricingCatalog]
 ```
 
-### Creating Pricings
+## Creating Pricings
 
 **New Pricing**:
 ```
@@ -142,7 +140,7 @@ Agent: "Created draft pricing with:
         - Currency: GBP"
 ```
 
-### Understanding Insurance Terms
+## Understanding Insurance Terms
 
 **Reference Data Queries**:
 ```
@@ -166,7 +164,7 @@ Agent: "Pricing statuses (in order):
         5. Expired - Quote or policy has expired"
 ```
 
-### Reinsurance Structure
+## Reinsurance Structure
 
 **View Structure Diagram**:
 ```
@@ -183,7 +181,7 @@ Agent: "Reinsurance layers:
         - Layer 3: $50M xs $40M (Fire)"
 ```
 
-### File Management
+## File Management
 
 **View Submissions**:
 ```
@@ -197,11 +195,11 @@ User: "Import property risks from the uploaded Excel file"
 Agent: [Processes Excel file and imports PropertyRisk entities]
 ```
 
-## Excel Import Workflow
+# Excel Import Workflow
 
 MeshWeaver supports importing property risk data from Excel files. This section details the complete workflow for analyzing Excel files and creating import configurations.
 
-### Import Capabilities
+## Import Capabilities
 
 - Analyze uploaded Excel files to understand their structure (columns, headers, data types)
 - Intelligently match Excel columns to PropertyRisk properties
@@ -209,7 +207,7 @@ MeshWeaver supports importing property risk data from Excel files. This section 
 - Preview and confirm mappings before importing
 - Execute imports and provide feedback on results
 
-### Available Import Tools
+## Available Import Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -218,15 +216,15 @@ MeshWeaver supports importing property risk data from Excel files. This section 
 | **Import** | Execute import with a configuration |
 | **GetSchema** | Get the PropertyRisk schema for reference |
 
-### Import Workflow Steps
+## Import Workflow Steps
 
-#### Step 1: Identify the File
+### Step 1: Identify the File
 
 If the user doesn't specify a file:
 - Call `ListFiles` on the Submissions collection to show available files
 - Ask which file to import
 
-#### Step 2: Analyze the Excel Structure
+### Step 2: Analyze the Excel Structure
 
 Call `GetContent` with the file path and `numberOfRows: 20` to see:
 - All worksheet names
@@ -234,7 +232,7 @@ Call `GetContent` with the file path and `numberOfRows: 20` to see:
 - Header row location
 - Sample data rows
 
-#### Step 3: Identify Headers and Data Start Row
+### Step 3: Identify Headers and Data Start Row
 
 Examine the returned markdown table to determine:
 - Which row contains column headers (often row 1, but may be row 2-6 in broker files)
@@ -246,7 +244,7 @@ Common patterns:
 - Broker files: Title/metadata in rows 1-5, headers in row 6, data starts row 7
 - Files with freeze panes often have headers at the freeze row
 
-#### Step 4: Match Columns to PropertyRisk Properties
+### Step 4: Match Columns to PropertyRisk Properties
 
 Map the Excel columns to these PropertyRisk properties:
 
@@ -272,7 +270,7 @@ For numeric value columns (TsiBuilding, TsiContent, TsiBi):
 - If values are split across multiple columns, use `MappingKind.Sum`
 - If a total needs to be allocated proportionally, use an `Allocation` with weight columns
 
-#### Step 5: Present Mapping to User
+### Step 5: Present Mapping to User
 
 Present the proposed mapping clearly and wait for user confirmation:
 
@@ -299,7 +297,7 @@ I analyzed the Excel file. Here's my suggested mapping:
 Should I proceed with this mapping?
 ```
 
-#### Step 6: Generate Configuration
+### Step 6: Generate Configuration
 
 Create the ExcelImportConfiguration JSON:
 
@@ -325,26 +323,26 @@ Create the ExcelImportConfiguration JSON:
 }
 ```
 
-#### Step 7: Execute Import
+### Step 7: Execute Import
 
 Call `Import` with the configuration:
 
 ```
 Import(
   path: "Submissions@Microsoft-2026:NewRisks.xlsx",
-  address: "Cornerstone/Microsoft/2026",
+  address: "ACME/Insurance/Microsoft/2026",
   configuration: "<JSON from Step 6>"
 )
 ```
 
-#### Step 8: Report Results
+### Step 8: Report Results
 
 After import completes:
 - Report the number of records imported
 - Mention any warnings or errors from the import log
 - Suggest viewing the Property Risks view to verify the data
 
-### Mapping Kind Reference
+## Mapping Kind Reference
 
 | Kind | Usage | Example |
 |------|-------|---------|
@@ -353,7 +351,7 @@ After import completes:
 | `Difference` | Subtract columns | Column F - Column E -> some value |
 | `Constant` | Fixed value for all rows | "2026" -> PricingId |
 
-### Allocation Reference
+## Allocation Reference
 
 For distributing a total value proportionally across rows:
 
@@ -371,14 +369,14 @@ For distributing a total value proportionally across rows:
 
 This takes the value in cell Q50 and distributes it across all rows based on each row's weight in column Q.
 
-### Import Error Handling
+## Import Error Handling
 
 - If GetContent fails, the file may not exist or be corrupted
 - If column headers are unclear, ask the user to clarify
 - If import fails, report the error and suggest checking the mapping
 - Always offer to adjust the mapping if the user identifies issues
 
-## View Integration
+# View Integration
 
 Agents display results using appropriate views rather than raw data:
 
@@ -391,7 +389,7 @@ CRITICAL: When users ask to view, show, list, or display pricings:
   3. DO NOT also output the raw data as text
 ```
 
-Available views in Cornerstone:
+Available views in ACME Insurance:
 
 | View | Use Case |
 |------|----------|
@@ -403,29 +401,29 @@ Available views in Cornerstone:
 | **Import Configs** | Import settings |
 | **PricingCatalog** | Insured's pricings by status |
 
-## Architecture Benefits
+# Architecture Benefits
 
-### Scalability
+## Scalability
 
 - **Independent Scaling**: AI agents scale separately from the core application
 - **Multiple Agents**: Different agents can specialize in different domains
 - **Load Distribution**: Agent processing distributes across multiple servers
 
-### Maintainability
+## Maintainability
 
 - **Clean Separation**: Agent logic is separate from business logic
 - **Markdown Definition**: Agents are defined in simple markdown files
 - **Easy Updates**: Agent context can be updated without code changes
 
-### Security
+## Security
 
 - **Standard Access Controls**: Agents use the same authentication as human users
 - **Audit Trail**: All agent actions are logged and traceable
 - **Sandboxing**: Agents operate through well-defined interfaces
 
-## Domain-Specific Intelligence
+# Domain-Specific Intelligence
 
-AI agents working with Cornerstone documentation have domain-specific capabilities:
+AI agents working with ACME Insurance documentation have domain-specific capabilities:
 
 | Capability | Description |
 |------------|-------------|
@@ -435,9 +433,9 @@ AI agents working with Cornerstone documentation have domain-specific capabiliti
 | **Geographic Context** | Handles property geocoding and mapping |
 | **Workflow Status** | Manages Draft → Quoted → Bound progression |
 
-## Conclusion
+# Conclusion
 
-MeshWeaver's AI agent integration in Cornerstone demonstrates how thoughtful architectural design enables powerful AI capabilities for insurance applications. The documentation-driven approach provides:
+MeshWeaver's AI agent integration in ACME Insurance demonstrates how thoughtful architectural design enables powerful AI capabilities for insurance applications. The documentation-driven approach provides:
 
 - Natural language access to complex insurance data
 - Domain-aware responses using insurance terminology

@@ -1,25 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
-  <defs>
-    <linearGradient id="insuredGrad" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#4B5563"/>
-      <stop offset="100%" stop-color="#9CA3AF"/>
-    </linearGradient>
-  </defs>
-  <!-- Background -->
-  <rect width="24" height="24" rx="4" fill="#F3F4F6"/>
-  <!-- Stone fortress building -->
-  <rect x="3" y="8" width="12" height="14" rx="1" fill="url(#insuredGrad)"/>
-  <!-- Fortress crenellations -->
-  <rect x="2" y="5" width="4" height="4" rx="0.5" fill="url(#insuredGrad)"/>
-  <rect x="7" y="5" width="4" height="4" rx="0.5" fill="url(#insuredGrad)"/>
-  <rect x="12" y="5" width="4" height="4" rx="0.5" fill="url(#insuredGrad)"/>
-  <!-- Windows -->
-  <rect x="5" y="10" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
-  <rect x="9" y="10" width="2.5" height="2" rx="0.3" fill="#e2e8f0"/>
-  <!-- Door -->
-  <rect x="7" y="17" width="4" height="5" rx="0.5" fill="#e2e8f0"/>
-  <!-- Shield overlay -->
-  <path d="M19 7 L22.5 9 V13 C22.5 15.5 21 17.5 19 18.5 C17 17.5 15.5 15.5 15.5 13 V9 Z" fill="#9CA3AF" stroke="#4B5563" stroke-width="0.8"/>
-  <!-- Shield checkmark -->
-  <path d="M17.5 12.5 L18.5 13.5 L20.5 11" stroke="white" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .bg { fill: #f5f5f5; }
+    .fg { fill: #616161; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="24" height="24" rx="4"/>
+  <!-- Shield -->
+  <path class="fg" d="M12 2 L20 6 V12 C20 17 16 20 12 22 C8 20 4 17 4 12 V6 Z"/>
+  <!-- Checkmark (filled path, no stroke) -->
+  <path class="wh" d="M7.12 11.18 C6.63 11.67 6.63 12.45 7.12 12.94 L9.94 15.76 C10.43 16.25 11.21 16.25 11.7 15.76 L16.88 10.58 C17.37 10.09 17.37 9.31 16.88 8.82 C16.39 8.33 15.61 8.33 15.12 8.82 L10.82 13.12 L8.88 11.18 C8.39 10.69 7.61 10.69 7.12 11.18 Z"/>
 </svg>

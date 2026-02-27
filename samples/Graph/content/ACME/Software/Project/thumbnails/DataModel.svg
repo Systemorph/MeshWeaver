@@ -1,28 +1,51 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+  </style>
   <!-- Background -->
-  <rect width="64" height="64" rx="8" fill="#FEE2E2"/>
-  <!-- Entity box 1 (top left) -->
-  <rect x="8" y="10" width="20" height="16" rx="2" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <line x1="8" y1="16" x2="28" y2="16" stroke="#78716C" stroke-width="1"/>
-  <rect x="11" y="19" width="14" height="2" rx="0.5" fill="#DC2626" opacity="0.6"/>
-  <rect x="11" y="23" width="10" height="2" rx="0.5" fill="#DC2626" opacity="0.4"/>
+  <rect class="bg" width="140" height="79" rx="8"/>
 
-  <!-- Entity box 2 (top right) -->
-  <rect x="36" y="10" width="20" height="16" rx="2" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <line x1="36" y1="16" x2="56" y2="16" stroke="#78716C" stroke-width="1"/>
-  <rect x="39" y="19" width="14" height="2" rx="0.5" fill="#DC2626" opacity="0.6"/>
-  <rect x="39" y="23" width="8" height="2" rx="0.5" fill="#DC2626" opacity="0.4"/>
+  <!-- Entity box 1 (left) -->
+  <!-- Original: rect x=10 y=10 w=30 h=22 rx=2 stroke-width=1.5 -->
+  <rect class="nf" x="9.25" y="9.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="10.75" y="10.75" width="28.5" height="20.5" rx="1.25"/>
+  <!-- Separator line: x1=10 y1=18 x2=40 y2=18 stroke-width=1 -->
+  <rect class="nf" x="10" y="17.5" width="30" height="1"/>
+  <!-- Field rects (already filled) -->
+  <rect class="af" x="14" y="22" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="14" y="27" width="14" height="2" rx="0.5" opacity="0.4"/>
 
-  <!-- Entity box 3 (bottom center) -->
-  <rect x="22" y="38" width="20" height="16" rx="2" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <line x1="22" y1="44" x2="42" y2="44" stroke="#78716C" stroke-width="1"/>
-  <rect x="25" y="47" width="14" height="2" rx="0.5" fill="#DC2626" opacity="0.6"/>
-  <rect x="25" y="51" width="12" height="2" rx="0.5" fill="#DC2626" opacity="0.4"/>
+  <!-- Entity box 2 (center) -->
+  <rect class="nf" x="54.25" y="9.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="55.75" y="10.75" width="28.5" height="20.5" rx="1.25"/>
+  <rect class="nf" x="55" y="17.5" width="30" height="1"/>
+  <rect class="af" x="59" y="22" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="59" y="27" width="12" height="2" rx="0.5" opacity="0.4"/>
 
-  <!-- Connection lines -->
-  <path d="M28 18 L32 18 L32 38" stroke="#78716C" stroke-width="1.5" fill="none"/>
-  <path d="M36 18 L32 18" stroke="#78716C" stroke-width="1.5" fill="none"/>
+  <!-- Entity box 3 (right) -->
+  <rect class="nf" x="99.25" y="9.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="100.75" y="10.75" width="28.5" height="20.5" rx="1.25"/>
+  <rect class="nf" x="100" y="17.5" width="30" height="1"/>
+  <rect class="af" x="104" y="22" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="104" y="27" width="16" height="2" rx="0.5" opacity="0.4"/>
 
-  <!-- Relationship diamonds -->
-  <polygon points="32,30 35,33 32,36 29,33" fill="#DC2626"/>
+  <!-- Entity box 4 (bottom center) -->
+  <rect class="nf" x="54.25" y="46.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="55.75" y="47.75" width="28.5" height="20.5" rx="1.25"/>
+  <rect class="nf" x="55" y="54.5" width="30" height="1"/>
+  <rect class="af" x="59" y="59" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="59" y="64" width="14" height="2" rx="0.5" opacity="0.4"/>
+
+  <!-- Connection lines (horizontal/vertical, stroke-width=1.5) -->
+  <!-- Horizontal: x1=40 x2=55 y=21 -->
+  <rect class="nf" x="40" y="20.25" width="15" height="1.5" rx="0.75"/>
+  <!-- Horizontal: x1=85 x2=100 y=21 -->
+  <rect class="nf" x="85" y="20.25" width="15" height="1.5" rx="0.75"/>
+  <!-- Vertical: x=70 y1=32 y2=47 -->
+  <rect class="nf" x="69.25" y="32" width="1.5" height="15" rx="0.75"/>
+
+  <!-- Relationship diamond (already filled) -->
+  <polygon class="af" points="70,37 73,40 70,43 67,40"/>
 </svg>

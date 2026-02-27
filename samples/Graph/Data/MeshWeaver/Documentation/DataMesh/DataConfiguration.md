@@ -1,22 +1,20 @@
 ---
-Name: Data Configuration
+Name: Data Configuration Guide
 Category: Documentation
 Description: How to configure data sources, initialization, and hub-to-hub synchronization
 Icon: /static/storage/content/MeshWeaver/Documentation/DataMesh/DataConfiguration/icon.svg
 ---
 
-# Data Configuration Guide
-
 This guide explains how to configure data in message hubs, including data sources with initialization and hub-to-hub data synchronization.
 
-## Overview
+# Overview
 
 MeshWeaver provides flexible data configuration patterns:
 - **AddSource**: Configure local data sources with optional initialization
 - **AddHubSource**: Synchronize data from parent or related hubs
 - **WithInitialData**: Seed data sources with predefined records
 
-## Data Model Relationships
+# Data Model Relationships
 
 ```mermaid
 classDiagram
@@ -42,7 +40,7 @@ classDiagram
     Todo --> Status : syncs from Project
 ```
 
-## Data Flow Architecture
+# Data Flow Architecture
 
 ```mermaid
 graph LR
@@ -55,13 +53,13 @@ graph LR
     PS -->|AddHubSource| TS
 ```
 
-## Configuring Data Sources
+# Configuring Data Sources
 
-### AddSource with WithInitialData
+## AddSource with WithInitialData
 
 Use `AddSource` to configure local data sources. The `WithInitialData` method seeds the source with predefined records.
 
-#### Example: Status Data Model
+### Example: Status Data Model
 
 First, define the data model in your `Code/Status.cs` file:
 
@@ -99,7 +97,7 @@ public record Status
 }
 ```
 
-#### Configuration in NodeType
+### Configuration in NodeType
 
 Add the data configuration to your NodeType's configuration string:
 
@@ -112,13 +110,13 @@ config => config
     .AddLayout(layout => layout.AddDefaultLayoutAreas())
 ```
 
-## Hub-to-Hub Data Synchronization
+# Hub-to-Hub Data Synchronization
 
-### AddHubSource
+## AddHubSource
 
 Use `AddHubSource` to synchronize data from a parent or related hub. This is useful when child hubs need access to reference data owned by a parent.
 
-#### Address Derivation
+### Address Derivation
 
 When a Todo hub needs to access Status data from its parent Project hub, compute the parent address:
 
@@ -130,7 +128,7 @@ When a Todo hub needs to access Status data from its parent Project hub, compute
 new Address(config.Address.Segments.Take(config.Address.Segments.Length - 2).ToArray())
 ```
 
-#### Configuration Example
+### Configuration Example
 
 ```csharp
 config => config
@@ -141,7 +139,7 @@ config => config
             source => source.WithType<Status>()))
     ```
 
-### Synchronization Flow
+## Synchronization Flow
 
 This example shows a scenario where the Todo hub is dormant (not in memory). When a message arrives, the hub is woken up and initialized before processing the request.
 
@@ -167,7 +165,7 @@ sequenceDiagram
 
 When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to storage and synced out to subscribers.
 
-## Best Practices
+# Best Practices
 
 1. **Use data models instead of enums**: Data models provide richer metadata (descriptions, display order) and can be extended without recompilation
 
@@ -179,9 +177,9 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
 
 > **Note**: Future versions of MeshWeaver will support shared data model assemblies to avoid duplicating model definitions across hubs.
 
-## Complete Example
+# Complete Example
 
-### Project Hub Configuration
+## Project Hub Configuration
 
 ```json
 {
@@ -195,7 +193,7 @@ When a `DataChangeRequest` arrives at the Todo hub, changes are persisted to sto
 }
 ```
 
-### Todo Hub Configuration
+## Todo Hub Configuration
 
 ```json
 {
