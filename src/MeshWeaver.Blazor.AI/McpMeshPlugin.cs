@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -22,6 +23,7 @@ public class McpMeshPlugin
     private readonly ILogger<McpMeshPlugin> logger;
     private readonly IPersistenceService? persistence;
     private readonly IMeshQuery? meshQuery;
+    private readonly IMeshCatalog? meshCatalog;
     private readonly string baseUrl;
 
     public McpMeshPlugin(
@@ -32,6 +34,7 @@ public class McpMeshPlugin
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<McpMeshPlugin>>();
         this.persistence = hub.ServiceProvider.GetService<IPersistenceService>();
         this.meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        this.meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
         this.baseUrl = config?.Value.BaseUrl ?? "http://localhost:5000";
     }
 
@@ -46,9 +49,9 @@ public class McpMeshPlugin
     }
 
     [McpServerTool]
-    [Description("Gets data from the mesh by path. Supports @ prefix shorthand (e.g., @graph/org1) and /* for children queries.")]
+    [Description("Retrieves a node from the mesh by path. Supports @ prefix shorthand, /* for children, and Unified Path prefixes (path/schema:, path/model:, path/metadata:).")]
     public async Task<string> Get(
-        [Description("Path to data (e.g., @graph/org1, @pricing/MS-2024, @NodeType/*)")] string path)
+        [Description("Path to data (e.g., @graph/org1, @Agent/*, @ACME/Insurance/schema:, @ACME/Insurance/schema:TypeName, @ACME/Insurance/model:)")] string path)
     {
         logger.LogInformation("MCP Get called with path={Path}", path);
 
@@ -81,6 +84,11 @@ public class McpMeshPlugin
                 return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
             }
 
+            // Check for Unified Path prefix (e.g., "ACME/schema:", "ACME/schema:TypeName", "ACME/model:")
+            var unifiedResult = await TryResolveUnifiedPathAsync(resolvedPath);
+            if (unifiedResult != null)
+                return unifiedResult;
+
             // Get single node
             var meshNode = await persistence.GetNodeAsync(resolvedPath);
             if (meshNode == null)
@@ -95,10 +103,40 @@ public class McpMeshPlugin
         }
     }
 
+    /// <summary>
+    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, metadata:).
+    /// Uses meshCatalog.ResolvePathAsync to split into address and remainder,
+    /// then routes data request to the resolved address.
+    /// Returns null if the path is not a Unified Path.
+    /// </summary>
+    private async Task<string?> TryResolveUnifiedPathAsync(string resolvedPath)
+    {
+        if (meshCatalog == null || !resolvedPath.Contains(':'))
+            return null;
+
+        var resolution = await meshCatalog.ResolvePathAsync(resolvedPath);
+        if (resolution?.Remainder == null || !resolution.Remainder.Contains(':'))
+            return null;
+
+        var reference = new UnifiedReference(resolution.Remainder);
+        var address = new Address(resolution.Prefix);
+        logger.LogInformation("MCP Resolving Unified Path: address={Address}, remainder={Remainder}",
+            resolution.Prefix, resolution.Remainder);
+
+        var response = await hub.AwaitResponse(
+            new GetDataRequest(reference),
+            o => o.WithTarget(address));
+
+        if (response.Message.Error != null)
+            return $"Error: {response.Message.Error}";
+
+        return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+    }
+
     [McpServerTool]
-    [Description("Searches the mesh using GitHub-style query syntax. Examples: 'nodeType:Agent', 'laptop', 'path:graph scope:descendants'.")]
+    [Description("Searches the mesh using GitHub-style query syntax. Returns up to 50 matching nodes.")]
     public async Task<string> Search(
-        [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:graph scope:descendants')")] string query,
+        [Description("Query string (e.g., 'nodeType:Agent', 'laptop', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
     {
         logger.LogInformation("MCP Search called with query={Query}, basePath={BasePath}", query, basePath);
@@ -140,53 +178,23 @@ public class McpMeshPlugin
     }
 
     [McpServerTool]
-    [Description("Creates or updates a node at a path. Provide the path and a JSON object with fields to update.")]
-    public async Task<string> Update(
-        [Description("Path to update (e.g., @graph/neworg)")] string path,
-        [Description("JSON object with fields to update (name, nodeType, content)")] string json)
+    [Description("Creates a new node in the mesh. Pass a JSON MeshNode object with id, namespace, name, nodeType, and content fields.")]
+    public async Task<string> Create(
+        [Description("JSON MeshNode object to create (e.g., {\"id\": \"NewOrg\", \"namespace\": \"ACME\", \"name\": \"New Org\", \"nodeType\": \"Organization\", \"content\": {}})")] string node)
     {
-        logger.LogInformation("MCP Update called with path={Path}", path);
+        logger.LogInformation("MCP Create called");
 
-        if (persistence == null)
-            return "Persistence service not available.";
-
-        var resolvedPath = ResolvePath(path);
+        if (meshCatalog == null)
+            return "Mesh catalog service not available.";
 
         try
         {
-            // Parse the update JSON
-            var updates = JsonSerializer.Deserialize<JsonElement>(json, hub.JsonSerializerOptions);
+            var meshNode = JsonSerializer.Deserialize<MeshNode>(node, hub.JsonSerializerOptions);
+            if (meshNode == null)
+                return "Invalid node: deserialized to null.";
 
-            // Get existing node or create new one
-            var existingNode = await persistence.GetNodeAsync(resolvedPath);
-            var isCreate = existingNode == null;
-
-            // Build the node from updates
-            var node = MeshNode.FromPath(resolvedPath);
-
-            // Apply updates from JSON
-            string? name = null;
-            string? nodeType = null;
-            object? content = null;
-
-            if (updates.TryGetProperty("name", out var nameProp))
-                name = nameProp.GetString();
-            if (updates.TryGetProperty("nodeType", out var typeProp))
-                nodeType = typeProp.GetString();
-            if (updates.TryGetProperty("content", out var contentProp))
-                content = contentProp;
-
-            node = node with
-            {
-                Name = name ?? existingNode?.Name ?? node.Id,
-                NodeType = nodeType ?? existingNode?.NodeType,
-                Content = content ?? existingNode?.Content
-            };
-
-            await persistence.SaveNodeAsync(node);
-            return isCreate
-                ? $"Created: {resolvedPath}"
-                : $"Updated: {resolvedPath}";
+            var created = await meshCatalog.CreateNodeAsync(meshNode);
+            return $"Created: {created.Path}";
         }
         catch (JsonException ex)
         {
@@ -194,7 +202,80 @@ public class McpMeshPlugin
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Error updating data at path {Path}", resolvedPath);
+            logger.LogWarning(ex, "Error creating node");
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    [McpServerTool]
+    [Description("Updates existing nodes in the mesh. Pass a JSON array of complete MeshNode objects. Always Get before Update — the entire node is replaced, not merged.")]
+    public async Task<string> Update(
+        [Description("JSON array of MeshNode objects with all fields (get existing node first, modify, then pass here)")] string nodes)
+    {
+        logger.LogInformation("MCP Update called");
+
+        if (persistence == null)
+            return "Persistence service not available.";
+
+        try
+        {
+            var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(nodes, hub.JsonSerializerOptions);
+            if (nodeList == null || nodeList.Count == 0)
+                return "No nodes provided.";
+
+            var results = new List<string>();
+            foreach (var node in nodeList)
+            {
+                var saved = await persistence.SaveNodeAsync(node);
+                results.Add($"Updated: {saved.Path}");
+            }
+
+            return string.Join("\n", results);
+        }
+        catch (JsonException ex)
+        {
+            return $"Invalid JSON: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error updating nodes");
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    [McpServerTool]
+    [Description("Deletes one or more nodes from the mesh by path.")]
+    public async Task<string> Delete(
+        [Description("JSON array of path strings to delete (e.g., [\"ACME/OldProject\", \"ACME/ArchivedTask\"])")] string paths)
+    {
+        logger.LogInformation("MCP Delete called");
+
+        if (meshCatalog == null)
+            return "Mesh catalog service not available.";
+
+        try
+        {
+            var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
+            if (pathList == null || pathList.Count == 0)
+                return "No paths provided.";
+
+            var results = new List<string>();
+            foreach (var path in pathList)
+            {
+                var resolvedPath = ResolvePath(path);
+                await meshCatalog.DeleteNodeAsync(resolvedPath);
+                results.Add($"Deleted: {resolvedPath}");
+            }
+
+            return string.Join("\n", results);
+        }
+        catch (JsonException ex)
+        {
+            return $"Invalid JSON: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error deleting nodes");
             return $"Error: {ex.Message}";
         }
     }
