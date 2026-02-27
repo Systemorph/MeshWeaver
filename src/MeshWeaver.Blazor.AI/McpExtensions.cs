@@ -31,7 +31,7 @@ public static class McpExtensions
     /// <param name="pattern">The URL pattern for the MCP endpoint. Defaults to "/mcp".</param>
     public static IEndpointRouteBuilder MapMeshMcp(this IEndpointRouteBuilder app, string pattern = "/mcp")
     {
-        app.MapMcp(pattern);
+        app.MapMcp(pattern).RequireAuthorization("McpAuth");
         return app;
     }
 }

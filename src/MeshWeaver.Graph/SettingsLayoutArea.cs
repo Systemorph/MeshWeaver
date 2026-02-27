@@ -29,6 +29,7 @@ public static class SettingsLayoutArea
     public const string GroupsTab = "Groups";
     public const string EffectiveAccessTab = "EffectiveAccess";
     public const string AppearanceTab = "Appearance";
+    public const string ApiTokensTab = "ApiTokens";
 
     private const string SelectionDataId = "settingsSelection";
 
@@ -149,6 +150,11 @@ public static class SettingsLayoutArea
         var effectiveAccessHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = EffectiveAccessTab }.ToHref(hubAddress);
         securityGroup = securityGroup.WithView(
             new NavLinkControl("Effective Access", FluentIcons.PersonSearch(), effectiveAccessHref)
+        );
+
+        // API Tokens — links to dedicated page rather than an in-page tab
+        securityGroup = securityGroup.WithView(
+            new NavLinkControl("API Tokens", FluentIcons.Key(), "/settings/api-tokens")
         );
 
         navMenu = navMenu.WithNavGroup(securityGroup);
