@@ -174,7 +174,7 @@ public class SqlGeneratorTests
         var (clause, parameters) = gen.GenerateScopeClause("ACME", QueryScope.Descendants);
 
         clause.Should().Contain("n.path LIKE @scopePrefix || '%'");
-        parameters["@scopePrefix"].Should().Be("ACME/Software/");
+        parameters["@scopePrefix"].Should().Be("ACME/");
     }
 
     [Fact]
@@ -196,9 +196,11 @@ public class SqlGeneratorTests
 
         clause.Should().Contain("n.path IN");
         parameters.Should().ContainKey("@ancestor0"); // ACME
-        parameters.Should().ContainKey("@ancestor1"); // ACME/Project
+        parameters.Should().ContainKey("@ancestor1"); // ACME/Software
+        parameters.Should().ContainKey("@ancestor2"); // ACME/Software/Project
         parameters["@ancestor0"].Should().Be("ACME");
-        parameters["@ancestor1"].Should().Be("ACME/Software/Project");
+        parameters["@ancestor1"].Should().Be("ACME/Software");
+        parameters["@ancestor2"].Should().Be("ACME/Software/Project");
     }
 
     [Fact]
@@ -243,7 +245,7 @@ public class SqlGeneratorTests
     public void GetAncestorPaths_ReturnsCorrectPaths()
     {
         PostgreSqlSqlGenerator.GetAncestorPaths("ACME/Software/Project/Story1")
-            .Should().BeEquivalentTo("ACME", "ACME/Software/Project");
+            .Should().BeEquivalentTo("ACME", "ACME/Software", "ACME/Software/Project");
 
         PostgreSqlSqlGenerator.GetAncestorPaths("ACME")
             .Should().BeEmpty();

@@ -364,4 +364,34 @@ public static class PersistenceExtensions
         return services.AddCosmosPersistence(cosmosClient, databaseName);
     }
 
+    /// <summary>
+    /// Adds partitioned Cosmos DB persistence where each top-level path segment
+    /// gets its own container pair ({segment}-nodes, {segment}-partitions).
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="cosmosClient">The Cosmos DB client</param>
+    /// <param name="databaseName">The database name</param>
+    /// <param name="throughput">The throughput for containers (default: 400)</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedCosmosPersistence(
+        this IServiceCollection services,
+        CosmosClient cosmosClient,
+        string databaseName,
+        int throughput = 400)
+    {
+        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+            new CosmosPartitionedStoreFactory(
+                cosmosClient,
+                databaseName,
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<MeshConfiguration>(),
+                throughput));
+
+        services.AddPartitionedCoreAndWrapperServices();
+
+        return services;
+    }
+
 }

@@ -197,4 +197,40 @@ public static class PostgreSqlExtensions
 
         await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
     }
+
+    /// <summary>
+    /// Adds partitioned PostgreSQL persistence where each top-level path segment
+    /// gets its own PostgreSQL schema with isolated tables.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="connectionString">PostgreSQL connection string</param>
+    /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedPostgreSqlPersistence(
+        this IServiceCollection services,
+        string connectionString,
+        Action<PostgreSqlStorageOptions>? configure = null)
+    {
+        var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
+        configure?.Invoke(opts);
+
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.UseVector();
+        var baseDataSource = dataSourceBuilder.Build();
+
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+            new PostgreSqlPartitionedStoreFactory(
+                baseDataSource,
+                connectionString,
+                opts,
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<IEmbeddingProvider>(),
+                sp.GetService<AccessService>()));
+
+        services.AddPartitionedCoreAndWrapperServices();
+
+        return services;
+    }
 }

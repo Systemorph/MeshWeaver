@@ -72,13 +72,9 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
         var path = $"{ApiTokenNamespace}/{hashPrefix}";
 
         var node = await persistence.GetNodeAsync(path);
-        if (node?.Content is not ApiToken apiToken)
-        {
-            // Content might be a JsonElement; try to extract via the node
-            apiToken = ExtractApiToken(node);
-            if (apiToken == null)
-                return null;
-        }
+        var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
+        if (apiToken == null)
+            return null;
 
         // Verify full hash matches
         if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
@@ -163,7 +159,7 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
         return tokens;
     }
 
-    internal static string HashToken(string rawToken)
+    public static string HashToken(string rawToken)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(rawToken);
         var hashBytes = SHA256.HashData(bytes);

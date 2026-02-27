@@ -208,6 +208,81 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Adds partitioned file system persistence where each top-level path segment
+    /// gets its own isolated partition with separate caching.
+    /// Files stay in the same directory tree; isolation is logical via routing.
+    /// </summary>
+    /// <param name="builder">The mesh builder</param>
+    /// <param name="baseDirectory">The base directory for storing JSON files</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing</param>
+    /// <returns>The mesh builder for chaining</returns>
+    public static TBuilder AddPartitionedFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services => services.AddPartitionedFileSystemPersistence(baseDirectory, writeOptionsModifier));
+        return builder;
+    }
+
+    /// <summary>
+    /// Adds partitioned file system persistence where each top-level path segment
+    /// gets its own isolated partition with separate caching.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="baseDirectory">The base directory for storing JSON files</param>
+    /// <param name="writeOptionsModifier">Optional modifier for JsonSerializerOptions when writing</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedFileSystemPersistence(
+        this IServiceCollection services,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+    {
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+            new FileSystemPartitionedStoreFactory(
+                baseDirectory,
+                writeOptionsModifier,
+                sp.GetService<IDataChangeNotifier>()));
+
+        return services.AddPartitionedCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Adds partitioned persistence using a custom IPartitionedStoreFactory.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedCoreAndWrapperServices(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        // Register the routing persistence core
+        services.AddSingleton<RoutingPersistenceServiceCore>(sp =>
+            new RoutingPersistenceServiceCore(sp.GetRequiredService<IPartitionedStoreFactory>()));
+        services.AddSingleton<IPersistenceServiceCore>(sp =>
+            sp.GetRequiredService<RoutingPersistenceServiceCore>());
+
+        // Register the routing query provider
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new RoutingMeshQueryProvider(sp.GetRequiredService<RoutingPersistenceServiceCore>()));
+
+        // Always add static node provider
+        services.AddSingleton<IMeshQueryProvider>(sp =>
+            new StaticNodeQueryProvider(
+                sp.GetServices<IStaticNodeProvider>(),
+                sp.GetService<MeshConfiguration>()));
+
+        // Wrapper services are scoped (per hub)
+        services.AddScoped<IPersistenceService, PersistenceService>();
+        services.AddScoped<IMeshQuery, MeshQuery>();
+
+        return services;
+    }
+
+    /// <summary>
     /// Helper method to register common services and wrapper services.
     /// </summary>
     private static IServiceCollection AddCoreAndWrapperServices<TPersistenceCore>(this IServiceCollection services)

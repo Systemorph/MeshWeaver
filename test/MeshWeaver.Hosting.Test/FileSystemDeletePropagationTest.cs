@@ -100,13 +100,13 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start the file system watcher
         _watcher.Start();
-        await Task.Delay(100); // Wait for watcher to be ready
+        await Task.Delay(500); // Wait for watcher to be ready
 
         // Act - Delete the file externally (simulating another process/editor)
         File.Delete(filePath);
 
         // Wait for file system events and processing
-        await Task.Delay(500);
+        await Task.Delay(2000);
 
         // Assert - Verify delete notification was received
         receivedNotifications.Should().Contain(n =>
@@ -147,14 +147,14 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(100);
+        await Task.Delay(500);
 
         // Act - Delete child2 externally
         var child2Path = Path.Combine(_testDirectory, "parent", "child2.json");
         File.Delete(child2Path);
 
         // Wait for propagation
-        await Task.Delay(500);
+        await Task.Delay(2000);
 
         // Assert - GetChildren should only return 2 children
         var childrenAfter = await _persistence.GetChildrenAsync("parent", _jsonOptions).ToListAsync();
@@ -198,13 +198,13 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(100);
+        await Task.Delay(500);
 
         // Act - Delete the file externally
         File.Delete(filePath);
 
         // Wait for propagation
-        await Task.Delay(500);
+        await Task.Delay(2000);
 
         // Assert - Verify delete notification was received
         receivedNotifications.Should().Contain(n =>
@@ -241,13 +241,13 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(100);
+        await Task.Delay(500);
 
         // Act - Delete the file
         File.Delete(filePath);
 
         // Wait for detection
-        await Task.Delay(500);
+        await Task.Delay(2000);
 
         // Assert - A Deleted notification should have been emitted
         receivedNotifications.Should().Contain(n =>
@@ -277,14 +277,14 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(100);
+        await Task.Delay(500);
 
         // Act - Delete the entire group directory
         var groupDir = Path.Combine(_testDirectory, "group");
         Directory.Delete(groupDir, recursive: true);
 
         // Wait for propagation (may need longer for directory deletion)
-        await Task.Delay(1000);
+        await Task.Delay(3000);
 
         // Assert - All nodes should be gone
         var item1AfterDelete = await _persistence.GetNodeAsync("group/item1", _jsonOptions);

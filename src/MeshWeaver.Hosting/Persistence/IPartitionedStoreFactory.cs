@@ -1,0 +1,40 @@
+using MeshWeaver.Mesh.Services;
+
+namespace MeshWeaver.Hosting.Persistence;
+
+/// <summary>
+/// Factory for creating per-partition persistence cores and query providers.
+/// Implementations are backend-specific (FileSystem, Cosmos, PostgreSQL).
+/// </summary>
+public interface IPartitionedStoreFactory
+{
+    /// <summary>
+    /// Creates or provisions a persistence core for the given first-segment partition.
+    /// For FileSystem: creates subfolder. For Cosmos: creates container. For PostgreSQL: creates schema.
+    /// This operation is idempotent.
+    /// </summary>
+    /// <param name="firstSegment">The first path segment identifying the partition (e.g., "ACME")</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>A partitioned store containing persistence core and optional query provider</returns>
+    Task<PartitionedStore> CreateStoreAsync(string firstSegment, CancellationToken ct = default);
+
+    /// <summary>
+    /// Discovers existing partitions from the backing store.
+    /// For FileSystem: scans for top-level directories.
+    /// For Cosmos: lists containers. For PostgreSQL: lists schemas.
+    /// </summary>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>List of first-segment partition names</returns>
+    Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default);
+}
+
+/// <summary>
+/// A store partition consisting of a persistence core and an optional query provider.
+/// </summary>
+/// <param name="PersistenceCore">The persistence core for this partition</param>
+/// <param name="QueryProvider">Optional native query provider (e.g., CosmosMeshQuery, PostgreSqlMeshQuery).
+/// When null, the InMemoryMeshQuery wrapping the persistence core is used.</param>
+public record PartitionedStore(
+    IPersistenceServiceCore PersistenceCore,
+    IMeshQueryProvider? QueryProvider
+);

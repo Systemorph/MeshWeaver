@@ -10,12 +10,13 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService : IPersistenceServiceCore
+public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
 {
     private readonly IStorageAdapter? _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ConcurrentDictionary<string, MeshNode> _nodes = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, Comment> _comments = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IDisposable? _changeSubscription;
 
     public InMemoryPersistenceService(
         IStorageAdapter? storageAdapter = null,
@@ -23,6 +24,22 @@ public class InMemoryPersistenceService : IPersistenceServiceCore
     {
         _storageAdapter = storageAdapter;
         _changeNotifier = changeNotifier;
+
+        // Subscribe to external change notifications to invalidate cache
+        _changeSubscription = _changeNotifier?.Subscribe(OnExternalChange);
+    }
+
+    private void OnExternalChange(DataChangeNotification notification)
+    {
+        if (notification.Kind == DataChangeKind.Deleted)
+        {
+            _nodes.TryRemove(notification.Path, out _);
+        }
+    }
+
+    public void Dispose()
+    {
+        _changeSubscription?.Dispose();
     }
 
     public Task InitializeAsync(CancellationToken ct = default)
