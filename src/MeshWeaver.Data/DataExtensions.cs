@@ -1138,7 +1138,7 @@ public static class DataExtensions
     }
 
 
-    private static string GenerateJsonSchema(IMessageHub hub, string typeName)
+    internal static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
 
@@ -1200,7 +1200,7 @@ public static class DataExtensions
         return schema.ToJsonString();
     }
 
-    private static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
+    internal static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)
     {
         var workspace = hub.GetWorkspace();
         var dataContext = workspace.DataContext;

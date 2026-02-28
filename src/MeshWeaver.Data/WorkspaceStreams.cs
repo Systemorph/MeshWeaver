@@ -153,6 +153,10 @@ c => c
         // These reference types are handled via registered stream factories, not collection-based resolution
         DataPathReference => [],
         UnifiedReference => [],
+        SchemaReference => [],
+        DataModelReference => [],
+        NodeTypeReference => [],
+        MetadataReference => [],
         _ => throw new NotSupportedException($"Collection reference {reference.GetType().Name} not supported.")
     };
 

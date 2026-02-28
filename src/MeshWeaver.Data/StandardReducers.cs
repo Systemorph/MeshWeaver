@@ -27,6 +27,22 @@ public static class StandardReducers
             .AddWorkspaceReference<FileReference, object>(ReduceEntityStoreTo)
             .AddWorkspaceReference<UnifiedReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
             .AddWorkspaceReference<DataPathReference, object>((ci, r, initial) => ReduceEntityStoreTo(ci, r, initial, typeRegistry))
+            .AddWorkspaceReference<SchemaReference, object>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub))
+            .AddWorkspaceReference<DataModelReference, object>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub))
+            .AddWorkspaceReference<NodeTypeReference, object>((ci, _, _) => new ChangeItem<object>(null, ci.StreamId, ci.Version))
+            .AddWorkspaceReference<MetadataReference, object>((ci, _, _) => new ChangeItem<object>(null, ci.StreamId, ci.Version))
+            .AddWorkspaceReferenceStream<object>(
+                (workspace, reference, configuration) =>
+                {
+                    if (reference is not SchemaReference
+                        and not DataModelReference
+                        and not NodeTypeReference
+                        and not MetadataReference)
+                        return null;
+                    var dataSource = workspace.DataContext.DataSources.FirstOrDefault();
+                    var parentStream = dataSource?.GetStreamForPartition(null);
+                    return parentStream?.Reduce((WorkspaceReference<object>)reference, configuration);
+                })
             .AddPatchFunction(PatchEntityStore)
             .ForReducedStream<InstanceCollection>(reduced =>
                 reduced.AddPatchFunction(PatchInstanceCollectionJsonElement)
@@ -473,6 +489,31 @@ public static class StandardReducers
         var collection = path[..slashIndex];
         var entityId = path[(slashIndex + 1)..];
         return (collection, string.IsNullOrEmpty(entityId) ? null : entityId);
+    }
+
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, SchemaReference reference, IMessageHub hub)
+    {
+        var typeName = reference.Type;
+        if (string.IsNullOrWhiteSpace(typeName))
+        {
+            var workspace = hub.GetWorkspace();
+            var contentTypeSource = workspace.DataContext.TypeSources.Values
+                .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
+            var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
+            if (typeSource != null)
+                typeName = typeSource.TypeDefinition.CollectionName;
+            else
+                return new ChangeItem<object>(new SchemaInfo("", "{}"), current.StreamId, current.Version);
+        }
+
+        var schema = DataExtensions.GenerateJsonSchema(hub, typeName);
+        return new ChangeItem<object>(new SchemaInfo(typeName, schema), current.StreamId, current.Version);
+    }
+
+    private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, DataModelReference reference, IMessageHub hub)
+    {
+        var types = DataExtensions.GetDomainTypes(hub).ToList();
+        return new ChangeItem<object>(types, current.StreamId, current.Version);
     }
 
     private static ChangeItem<object> ReduceContentPath(ChangeItem<EntityStore> current, string? remainingPath)
