@@ -22,6 +22,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IPersistenceService>();
     private readonly IMeshQuery? meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
     private readonly IMeshCatalog? meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+    private readonly IEnumerable<IStaticNodeProvider> staticNodeProviders = hub.ServiceProvider.GetServices<IStaticNodeProvider>();
 
     /// <summary>
     /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
@@ -73,8 +74,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             if (unifiedResult != null)
                 return unifiedResult;
 
-            // Get single node by path
+            // Get single node by path (persistence first, then static providers)
             var meshNode = await persistence.GetNodeAsync(resolvedPath);
+            meshNode ??= FindStaticNode(resolvedPath);
             if (meshNode == null)
                 return $"Not found: {resolvedPath}";
 
@@ -272,6 +274,17 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             logger.LogWarning(ex, "Error searching with query {Query}", query);
             return $"Error: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Finds a node by path in static node providers (e.g., BuiltInAgentProvider, DocumentationNodeProvider).
+    /// Falls back to this when file system persistence doesn't find the node.
+    /// </summary>
+    private MeshNode? FindStaticNode(string path)
+    {
+        return staticNodeProviders
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

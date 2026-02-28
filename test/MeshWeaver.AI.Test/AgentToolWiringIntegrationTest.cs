@@ -121,7 +121,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies that agent instructions contain expanded @@ references.
-    /// The Navigator.md contains @@MeshWeaver/Documentation/AI/Tools/MeshPlugin
+    /// The Navigator.md contains @@Doc/AI/Tools/ToolsReference
     /// which should be expanded to include the full tool documentation.
     /// </summary>
     [Fact]
@@ -147,8 +147,8 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         var allSystemText = string.Join("\n", systemMessages);
         Output.WriteLine($"System prompt length: {allSystemText.Length} chars");
 
-        // The @@ reference should have been expanded - the raw text "@@MeshWeaver" should NOT appear
-        allSystemText.Should().NotContain("@@MeshWeaver/Documentation/AI/Tools/MeshPlugin",
+        // The @@ reference should have been expanded - the raw text "@@Doc" should NOT appear
+        allSystemText.Should().NotContain("@@Doc/AI/Tools/ToolsReference",
             "@@ reference should be expanded, not left as a placeholder");
 
         // The expanded content should contain actual tool documentation

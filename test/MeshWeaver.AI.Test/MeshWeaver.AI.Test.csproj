@@ -18,5 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\samples\Graph\Data\**\*" LinkBase="TestData" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

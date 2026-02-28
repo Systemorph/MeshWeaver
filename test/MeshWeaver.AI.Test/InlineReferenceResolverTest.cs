@@ -133,8 +133,8 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
     [Fact]
     public async Task ResolveAsync_WithDocumentationReference_ExpandsContent()
     {
-        // The test data includes MeshWeaver/Documentation/AI/Tools/MeshPlugin.md
-        var text = "Tools: @@MeshWeaver/Documentation/AI/Tools/MeshPlugin";
+        // The test data includes TestDoc/ChildDoc.md
+        var text = "Tools: @@TestDoc/ChildDoc";
         var mockChat = new MockAgentChat();
 
         var result = await InlineReferenceResolver.ResolveAsync(text, Mesh, mockChat);
@@ -142,9 +142,8 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         // Should have expanded the reference - result should be longer than original
         result.Length.Should().BeGreaterThan(text.Length,
             "the @@ reference should be replaced with the document content");
-        // Should contain actual tool documentation content
-        result.Should().Contain("Get", "expanded content should include Get tool documentation");
-        result.Should().Contain("Search", "expanded content should include Search tool documentation");
+        // Should contain actual document content
+        result.Should().Contain("scope:children", "expanded content should include child document text");
     }
 
     [Fact]
@@ -162,22 +161,21 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
     [Fact]
     public async Task ResolveAsync_WithNestedReferences_ResolvesRecursively()
     {
-        // MeshPlugin.md contains @@MeshWeaver/Documentation/DataMesh/QuerySyntax
-        // and @@MeshWeaver/Documentation/DataMesh/UnifiedPath
-        // So resolving MeshPlugin.md should also expand those nested references
-        var text = "@@MeshWeaver/Documentation/AI/Tools/MeshPlugin";
+        // ParentDoc.md contains @@TestDoc/ChildDoc
+        // So resolving ParentDoc should also expand the nested reference
+        var text = "@@TestDoc/ParentDoc";
         var mockChat = new MockAgentChat();
 
         var result = await InlineReferenceResolver.ResolveAsync(text, Mesh, mockChat);
 
-        // The result should contain content from QuerySyntax (nested reference)
-        result.Should().Contain("scope:", "nested QuerySyntax reference should be expanded");
+        // The result should contain content from ChildDoc (nested reference)
+        result.Should().Contain("scope:children", "nested ChildDoc reference should be expanded");
     }
 
     [Fact]
     public async Task ResolveAsync_MultipleReferences_ExpandsAll()
     {
-        var text = "Query: @@MeshWeaver/Documentation/DataMesh/QuerySyntax\n\nPath: @@MeshWeaver/Documentation/DataMesh/UnifiedPath";
+        var text = "Parent: @@TestDoc/ParentDoc\n\nChild: @@TestDoc/ChildDoc";
         var mockChat = new MockAgentChat();
 
         var result = await InlineReferenceResolver.ResolveAsync(text, Mesh, mockChat);
@@ -185,9 +183,11 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         // At minimum, the result should be significantly longer than the original
         result.Length.Should().BeGreaterThan(text.Length,
             "at least one reference should have been expanded with document content");
-        // The first reference (QuerySyntax) should definitely be expanded
-        result.Should().NotContain("@@MeshWeaver/Documentation/DataMesh/QuerySyntax",
-            "QuerySyntax reference should be expanded");
+        // The references should be expanded
+        result.Should().NotContain("@@TestDoc/ParentDoc",
+            "ParentDoc reference should be expanded");
+        result.Should().NotContain("@@TestDoc/ChildDoc",
+            "ChildDoc reference should be expanded");
     }
 
     private class MockAgentChat : IAgentChat
