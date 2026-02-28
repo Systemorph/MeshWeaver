@@ -157,7 +157,12 @@ public class ContentReferenceIntegrityTest
                 }
                 else
                 {
-                    broken.Add($"{relativePath} → Icon: \"{icon}\"\n  (relative path with no namespace cannot be resolved)");
+                    // Top-level nodes (no namespace) — resolve icon directly against content dir
+                    var diskPath = Path.GetFullPath(Path.Combine(contentDir, icon));
+                    if (!File.Exists(diskPath))
+                    {
+                        broken.Add($"{relativePath} → Icon: \"{icon}\"\n  (relative path with no namespace cannot be resolved)");
+                    }
                 }
                 continue;
             }

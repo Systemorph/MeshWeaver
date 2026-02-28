@@ -1,0 +1,8 @@
+{
+  "id": "Admin",
+  "name": "Admin",
+  "nodeType": "Markdown",
+  "description": "Platform administration and configuration",
+  "isPersistent": true,
+  "state": "Active"
+}

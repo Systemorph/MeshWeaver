@@ -53,6 +53,11 @@ if (useDistributed)
     var embeddingKey = builder.AddParameter("embedding-key", secret: true);
     var embeddingModel = builder.AddParameter("embedding-model", secret: false);
 
+    // KeyVault URI for resolving auth provider secrets at startup
+    // Auth provider config (App IDs + KV secret names) is stored in Admin/AuthProviders graph nodes.
+    // At startup, AdminStartupReader reads these nodes and resolves secrets from KeyVault.
+    var keyVaultUri = builder.AddParameter("keyvault-uri", secret: false);
+
     // Memex Distributed (co-hosted silo + web)
     builder
         .AddProject<Projects.Memex_Portal_Distributed>("memex-distributed")
@@ -65,6 +70,7 @@ if (useDistributed)
         .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
         .WithEnvironment("Embedding__ApiKey", embeddingKey)
         .WithEnvironment("Embedding__Model", embeddingModel)
+        .WithEnvironment("KeyVault__Uri", keyVaultUri)
         .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)
@@ -74,6 +80,8 @@ if (useDistributed)
 if (useMonolith)
 {
     // Memex Monolith (standalone, no Orleans)
+    // Auth provider config is read from Admin/AuthProviders graph nodes at startup.
+    // In monolith/dev mode (FileSystem storage), no KeyVault is needed.
     builder
         .AddProject<Projects.Memex_Portal_Monolith>("memex-monolith")
         .WithExternalHttpEndpoints();

@@ -1,0 +1,13 @@
+{
+  "id": "Initialization",
+  "namespace": "Admin",
+  "name": "Initialization",
+  "nodeType": "Markdown",
+  "state": "Active",
+  "content": {
+    "$type": "InitializationContent",
+    "version": "3.0",
+    "initializedAt": "2026-02-28T00:00:00+00:00",
+    "initializedBy": "dev"
+  }
+}

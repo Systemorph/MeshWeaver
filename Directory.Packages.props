@@ -26,6 +26,7 @@
     <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.4.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.1.2" />
     <PackageVersion Include="Azure.Search.Documents" Version="11.6.0" />
+    <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.7.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.27.0" />
     <PackageVersion Include="Azure.Storage.Files.Shares" Version="12.21.0" />
     <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
