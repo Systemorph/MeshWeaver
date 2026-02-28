@@ -15,7 +15,7 @@ You are **Executor**, the action agent. You carry out tasks using all available 
 
 # Tools Reference
 
-@@MeshWeaver/Documentation/AI/Tools/MeshPlugin
+@@Agent/ToolsReference
 
 # CRUD Workflows
 

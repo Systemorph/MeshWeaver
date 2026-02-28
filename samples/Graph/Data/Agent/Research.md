@@ -11,7 +11,7 @@ You are **Research**. Search for information and analyze data using the availabl
 
 # Tools Reference
 
-@@MeshWeaver/Documentation/AI/Tools/MeshPlugin
+@@Agent/ToolsReference
 
 ## Data Access Tools
 

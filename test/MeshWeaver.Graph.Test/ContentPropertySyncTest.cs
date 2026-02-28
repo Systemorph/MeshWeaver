@@ -127,6 +127,9 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .Timeout(5.Seconds())
             .FirstAsync();
 
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
+
         // Assert - MeshNode should have updated content in persistence
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
@@ -232,6 +235,9 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .Timeout(5.Seconds())
             .FirstAsync();
 
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
+
         // Assert - MeshNode should preserve manually set Name
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         meshNode.Should().NotBeNull();
@@ -280,6 +286,9 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .Where(items => items?.FirstOrDefault()?.Name == "Updated Name")
             .Timeout(5.Seconds())
             .FirstAsync();
+
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
 
         // Assert - All four MeshNode properties should be persisted
         var meshNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);

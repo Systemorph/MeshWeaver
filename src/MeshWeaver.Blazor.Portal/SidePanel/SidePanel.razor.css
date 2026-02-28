@@ -11,7 +11,7 @@
     max-height: 100%;
     width: 100%;
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
     background-color: var(--neutral-layer-1);
     color: var(--neutral-foreground-rest);
     margin: 0;

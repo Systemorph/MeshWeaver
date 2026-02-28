@@ -392,7 +392,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         assembledPrompt.Should().NotBeNullOrEmpty();
 
         // The agent instructions in the prompt should be Research's, not Navigator's
-        assembledPrompt.Should().Contain("You are Research",
+        assembledPrompt.Should().Contain("You are **Research**",
             "the @Agent/Research reference should override the Navigator combobox selection");
         assembledPrompt.Should().NotContain("You are **Navigator**",
             "Navigator's instructions should NOT be present when Research was selected via @reference");

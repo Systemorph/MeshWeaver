@@ -128,6 +128,9 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             .Timeout(5.Seconds())
             .FirstAsync();
 
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
+
         // Assert - Changes should be persisted
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         persistedNode.Should().NotBeNull();
@@ -175,6 +178,9 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             .Where(items => items?.FirstOrDefault()?.Name == "Synced Title")
             .Timeout(5.Seconds())
             .FirstAsync();
+
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
 
         // Assert - MeshNode properties should be persisted
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
@@ -251,6 +257,9 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
             .Where(items => items?.FirstOrDefault()?.Name == "Updated Title")
             .Timeout(5.Seconds())
             .FirstAsync();
+
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
 
         // Assert - NodeType should be preserved
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);

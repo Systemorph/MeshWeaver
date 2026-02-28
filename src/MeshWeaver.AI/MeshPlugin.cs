@@ -88,7 +88,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     }
 
     /// <summary>
-    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, data:, metadata:).
+    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, data:).
     /// Uses meshCatalog.ResolvePathAsync to split into address and remainder,
     /// then routes data request to the resolved address.
     /// Returns null if the path is not a Unified Path.

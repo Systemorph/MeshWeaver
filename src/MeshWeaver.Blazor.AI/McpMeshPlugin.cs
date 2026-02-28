@@ -49,7 +49,7 @@ public class McpMeshPlugin
     }
 
     [McpServerTool]
-    [Description("Retrieves a node from the mesh by path. Supports @ prefix shorthand, /* for children, and Unified Path prefixes (path/schema:, path/model:, path/metadata:).")]
+    [Description("Retrieves a node from the mesh by path. Supports @ prefix shorthand, /* for children, and Unified Path prefixes (path/schema:, path/model:).")]
     public async Task<string> Get(
         [Description("Path to data (e.g., @graph/org1, @Agent/*, @Cornerstone/schema:, @Cornerstone/schema:TypeName, @Cornerstone/model:)")] string path)
     {
@@ -104,7 +104,7 @@ public class McpMeshPlugin
     }
 
     /// <summary>
-    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, metadata:).
+    /// Tries to resolve a path as a Unified Path with prefix (schema:, model:).
     /// Uses meshCatalog.ResolvePathAsync to split into address and remainder,
     /// then routes data request to the resolved address.
     /// Returns null if the path is not a Unified Path.

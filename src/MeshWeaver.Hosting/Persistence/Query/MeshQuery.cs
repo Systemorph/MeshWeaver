@@ -29,6 +29,9 @@ public class MeshQuery(
         // a reserved qualifier stripped by the parser, so it doesn't affect filters).
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Parse query once to extract select: projection (applied uniformly after dedup)
+        var parsedQuery = new QueryParser().Parse(request.Query);
+
         foreach (var provider in providers)
         {
             await foreach (var item in provider.QueryAsync(request, Options, ct))
@@ -38,7 +41,12 @@ public class MeshQuery(
                     if (!seen.Add(node.Path))
                         continue; // deduplicate by path, first provider wins
                 }
-                yield return item;
+
+                // Apply select: projection only if item is still a MeshNode
+                // (providers that already projected will return dictionaries)
+                yield return parsedQuery.Select != null && item is MeshNode
+                    ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
+                    : item;
             }
         }
     }

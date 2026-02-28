@@ -13,7 +13,6 @@ The following prefixes have special meaning and are **not** collection names:
 - `data:` - Access data entities
 - `schema:` - Access type schemas
 - `model:` - Access data models
-- `metadata:` - Access node metadata
 - `area:` - Access layout areas
 
 # Collection Names
