@@ -399,7 +399,7 @@ public class NodeTypeReleaseTest
     {
         // Arrange
         var release = NodeTypeRelease.Create(
-            "ACME/Software/Type/Project",
+            "ACME/Type/Project",
             "public record Project { }",
             null,
             null,

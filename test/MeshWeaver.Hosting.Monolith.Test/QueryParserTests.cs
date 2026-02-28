@@ -517,12 +517,12 @@ public class QueryParserTests
     [Fact]
     public void Parse_PathValueWithSlash_ParsesCorrectly()
     {
-        var result = _parser.Parse("nodeType:ACME/Software/Project/Todo");
+        var result = _parser.Parse("nodeType:ACME/Project/Todo");
 
         result.Filter.Should().BeOfType<QueryComparison>();
         var comparison = (QueryComparison)result.Filter!;
         comparison.Condition.Selector.Should().Be("nodeType");
-        comparison.Condition.Value.Should().Be("ACME/Software/Project/Todo");
+        comparison.Condition.Value.Should().Be("ACME/Project/Todo");
     }
 
     #endregion
@@ -593,9 +593,9 @@ public class QueryParserTests
     [Fact]
     public void Parse_NamespaceWithNestedPath_ParsesCorrectly()
     {
-        var result = _parser.Parse("namespace:ACME/Software/ProductLaunch/Todo");
+        var result = _parser.Parse("namespace:ACME/ProductLaunch/Todo");
 
-        result.Path.Should().Be("ACME/Software/ProductLaunch/Todo");
+        result.Path.Should().Be("ACME/ProductLaunch/Todo");
         result.Scope.Should().Be(QueryScope.Children);
     }
 
@@ -671,9 +671,9 @@ public class QueryParserTests
     public void Parse_PathWithSubtreeScope_FindsSelfAndDescendants()
     {
         // subtree = self + descendants - important for finding agents under a NodeType
-        var result = _parser.Parse("path:ACME/Software/Project nodeType:Agent scope:subtree");
+        var result = _parser.Parse("path:ACME/Project nodeType:Agent scope:subtree");
 
-        result.Path.Should().Be("ACME/Software/Project");
+        result.Path.Should().Be("ACME/Project");
         result.Scope.Should().Be(QueryScope.Subtree);
         result.Filter.Should().BeOfType<QueryComparison>();
         var comparison = (QueryComparison)result.Filter!;

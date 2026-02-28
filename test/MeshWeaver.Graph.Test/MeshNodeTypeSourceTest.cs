@@ -223,7 +223,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         var node = MeshNode.FromPath(hubPath) with
         {
             Name = "Test Node",
-            NodeType = "ACME/Software/Project/Todo",
+            NodeType = "ACME/Project/Todo",
             Content = content
         };
         await _persistence.SaveNodeAsync(node, JsonOptions);
@@ -255,7 +255,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         // Assert - NodeType should be preserved
         var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
         persistedNode.Should().NotBeNull();
-        persistedNode!.NodeType.Should().Be("ACME/Software/Project/Todo");
+        persistedNode!.NodeType.Should().Be("ACME/Project/Todo");
     }
 }
 

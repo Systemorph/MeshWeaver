@@ -81,7 +81,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task SaveNode_NestedPath_RoutesToCorrectPartition()
     {
         // Arrange & Act
-        var node = MeshNode.FromPath("ACME/Insurance/Article") with
+        var node = MeshNode.FromPath("ACME/Article") with
         {
             Name = "Insurance Article",
             NodeType = "Article"
@@ -89,12 +89,12 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SaveNodeAsync(node, _jsonOptions);
 
         // Assert
-        var result = await _router.GetNodeAsync("ACME/Insurance/Article", _jsonOptions);
+        var result = await _router.GetNodeAsync("ACME/Article", _jsonOptions);
         result.Should().NotBeNull();
         result!.Name.Should().Be("Insurance Article");
 
         // File should exist on disk
-        var filePath = Path.Combine(_testDirectory, "ACME", "Insurance", "Article.json");
+        var filePath = Path.Combine(_testDirectory, "ACME", "Article.json");
         File.Exists(filePath).Should().BeTrue("file should be created at the correct path");
     }
 
@@ -131,7 +131,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     {
         // Arrange
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Banking") with { Name = "Banking" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions);
 
@@ -140,7 +140,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
 
         // Assert
         children.Should().HaveCount(2);
-        children.Select(c => c.Name).Should().Contain(new[] { "Insurance", "Banking" });
+        children.Select(c => c.Name).Should().Contain(new[] { "SubDiv", "Banking" });
         children.Select(c => c.Name).Should().NotContain("Marketing");
     }
 
@@ -163,7 +163,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     {
         // Arrange
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions);
 
@@ -172,7 +172,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
 
         // Assert - should include root nodes + their descendants
         descendants.Should().HaveCountGreaterThanOrEqualTo(4);
-        descendants.Select(d => d.Name).Should().Contain(new[] { "ACME", "Insurance", "Contoso", "Marketing" });
+        descendants.Select(d => d.Name).Should().Contain(new[] { "ACME", "SubDiv", "Contoso", "Marketing" });
     }
 
     [Fact]
@@ -180,15 +180,15 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     {
         // Arrange
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance/Article") with { Name = "Article" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Article") with { Name = "Article" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Marketing") with { Name = "Marketing" }, _jsonOptions);
 
         // Act - descendants of ACME only
         var descendants = await _router.GetDescendantsAsync("ACME", _jsonOptions).ToListAsync();
 
         // Assert
-        descendants.Select(d => d.Name).Should().Contain(new[] { "Insurance", "Article" });
+        descendants.Select(d => d.Name).Should().Contain(new[] { "SubDiv", "Article" });
         descendants.Select(d => d.Name).Should().NotContain("Marketing");
     }
 
@@ -200,31 +200,31 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task Search_NoPath_SearchesAllPartitions()
     {
         // Arrange
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance Division" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Insurance") with { Name = "Insurance Department" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Banking") with { Name = "Banking Division" }, _jsonOptions);
 
         // Act - search all partitions
-        var results = await _router.SearchAsync(null, "Insurance", _jsonOptions).ToListAsync();
+        var results = await _router.SearchAsync(null, "SubDiv", _jsonOptions).ToListAsync();
 
         // Assert
         results.Should().HaveCount(2);
-        results.Select(r => r.Name).Should().Contain(new[] { "Insurance Division", "Insurance Department" });
+        results.Select(r => r.Name).Should().Contain(new[] { "SubDiv One", "SubDiv Two" });
     }
 
     [Fact]
     public async Task Search_WithPath_RoutesToPartition()
     {
         // Arrange
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance Division" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Insurance") with { Name = "Insurance Department" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv One" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/SubDiv") with { Name = "SubDiv Two" }, _jsonOptions);
 
         // Act - search ACME partition only
-        var results = await _router.SearchAsync("ACME", "Insurance", _jsonOptions).ToListAsync();
+        var results = await _router.SearchAsync("ACME", "SubDiv", _jsonOptions).ToListAsync();
 
         // Assert
         results.Should().HaveCount(1);
-        results[0].Name.Should().Be("Insurance Division");
+        results[0].Name.Should().Be("SubDiv One");
     }
 
     #endregion
@@ -384,7 +384,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     {
         // Arrange - Save nodes in different partitions
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance", NodeType = "Division" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions);
 
@@ -402,7 +402,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     {
         // Arrange
         await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" }, _jsonOptions);
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance", NodeType = "Division" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/SubDiv") with { Name = "SubDiv", NodeType = "Division" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions);
 
@@ -411,7 +411,7 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         var results = await _queryProvider.QueryAsync(request, _jsonOptions).ToListAsync();
 
         // Assert - Should only find ACME's divisions
-        results.OfType<MeshNode>().Select(n => n.Name).Should().Contain("Insurance");
+        results.OfType<MeshNode>().Select(n => n.Name).Should().Contain("SubDiv");
         results.OfType<MeshNode>().Select(n => n.Name).Should().NotContain("Sales");
     }
 
@@ -423,15 +423,15 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public async Task PartitionObjects_RoutedByNodePath()
     {
         // Arrange
-        await _router.SaveNodeAsync(MeshNode.FromPath("ACME/Insurance") with { Name = "Insurance" }, _jsonOptions);
+        await _router.SaveNodeAsync(MeshNode.FromPath("ACME") with { Name = "Insurance" }, _jsonOptions);
 
         var objects = new List<object> { new { Id = "obj1", Type = "LayoutArea" } };
 
         // Act
-        await _router.SavePartitionObjectsAsync("ACME/Insurance", "layoutAreas", objects, _jsonOptions);
+        await _router.SavePartitionObjectsAsync("ACME", "layoutAreas", objects, _jsonOptions);
 
         // Assert
-        var retrieved = await _router.GetPartitionObjectsAsync("ACME/Insurance", "layoutAreas", _jsonOptions).ToListAsync();
+        var retrieved = await _router.GetPartitionObjectsAsync("ACME", "layoutAreas", _jsonOptions).ToListAsync();
         retrieved.Should().HaveCount(1);
     }
 
@@ -458,10 +458,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     #region PathPartition Utility
 
     [Theory]
-    [InlineData("ACME/Insurance/Article", "ACME")]
-    [InlineData("ACME/Insurance", "ACME")]
+    [InlineData("ACME/Article", "ACME")]
     [InlineData("ACME", "ACME")]
-    [InlineData("/ACME/Insurance/", "ACME")]
+    [InlineData("ACME", "ACME")]
+    [InlineData("/ACME/", "ACME")]
     [InlineData("", null)]
     [InlineData(null, null)]
     [InlineData("  ", null)]
