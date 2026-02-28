@@ -1,0 +1,12 @@
+{
+  "id": "AuthProviders",
+  "namespace": "Admin",
+  "name": "Auth Providers",
+  "nodeType": "Markdown",
+  "state": "Active",
+  "content": {
+    "$type": "AuthProviderSettings",
+    "enableDevLogin": true,
+    "providers": {}
+  }
+}

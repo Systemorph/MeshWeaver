@@ -25,7 +25,7 @@ public class MeshNodeAttributeResolveQueriesTest
         var resolved = MeshNodeAttribute.ResolveQueries(queries, null, "ACME/Project/Alice_Access");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("path:Software/Project/Alice_Access nodeType:AccessAssignment");
+        resolved[0].Should().Be("path:ACME/Project/Alice_Access nodeType:AccessAssignment");
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public class MeshNodeAttributeResolveQueriesTest
         var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Alice_Access");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("namespace:ACME path:Software/Alice_Access nodeType:Role");
+        resolved[0].Should().Be("namespace:ACME path:ACME/Alice_Access nodeType:Role");
     }
 
     [Fact]

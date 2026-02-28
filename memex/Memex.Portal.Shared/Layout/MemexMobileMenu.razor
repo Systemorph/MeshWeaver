@@ -15,6 +15,10 @@
         <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Slot="start" />
         Settings
     </FluentMenuItem>
+    <FluentMenuItem OnClick="@HandleAdminClick">
+        <FluentIcon Value="@(new Icons.Regular.Size20.ShieldKeyhole())" Slot="start" />
+        Admin Settings
+    </FluentMenuItem>
 </FluentMenu>
 
 @code {
@@ -48,6 +52,12 @@
         var currentPath = NavigationService.CurrentNamespace ?? "";
         var settingsUrl = string.IsNullOrEmpty(currentPath) ? "/Settings" : $"/{currentPath}/Settings";
         NavigationManager.NavigateTo(settingsUrl);
+        await OnClose.InvokeAsync();
+    }
+
+    private async Task HandleAdminClick()
+    {
+        NavigationManager.NavigateTo("/admin/settings");
         await OnClose.InvokeAsync();
     }
 }

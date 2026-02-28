@@ -149,7 +149,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         var query = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:Software scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME scope:self", null, ct))
         {
             contextNode = node;
             break;

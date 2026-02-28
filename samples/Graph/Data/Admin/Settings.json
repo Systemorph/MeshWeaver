@@ -1,0 +1,11 @@
+{
+  "id": "Settings",
+  "namespace": "Admin",
+  "name": "Settings",
+  "nodeType": "Markdown",
+  "state": "Active",
+  "content": {
+    "$type": "AdminSettings",
+    "adminUsers": []
+  }
+}

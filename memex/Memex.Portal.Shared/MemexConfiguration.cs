@@ -15,6 +15,7 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
+using Memex.Portal.Shared.Admin;
 using Memex.Portal.Shared.Authentication;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 using MeshWeaver.ContentCollections;
@@ -29,6 +30,7 @@ using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Kernel.Hub;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication;
@@ -119,13 +121,31 @@ public static class MemexConfiguration
         var provider = authSection["Provider"]
             ?? (entraIdConfig.GetChildren().Any() ? AuthenticationProviders.MicrosoftIdentity : AuthenticationProviders.Dev);
 
-        // Bind providers list from configuration
+        // Bind providers list from configuration (fallback)
         var externalProviders = authSection.GetSection("Providers").Get<List<ExternalProviderConfig>>()
                                 ?? new List<ExternalProviderConfig>();
 
         // Dev login is enabled explicitly or when provider is Dev (backward compat)
         var enableDevLogin = authSection.GetValue<bool?>("EnableDevLogin")
                              ?? (provider == AuthenticationProviders.Dev);
+
+        // Try to read auth providers from Admin nodes (graph storage)
+        // This overrides appsettings-based provider config when Admin nodes exist
+#pragma warning disable CA1416
+        var startupLogger = LoggerFactory.Create(lb => lb.AddConsole()).CreateLogger("AdminStartup");
+#pragma warning restore CA1416
+        var adminAuthProviders = AdminStartupReader.ReadAuthProviders(builder.Configuration, startupLogger);
+        if (adminAuthProviders != null)
+        {
+            enableDevLogin = adminAuthProviders.EnableDevLogin;
+
+            // Resolve KeyVault secrets into ExternalProviderConfig list
+            var keyVaultUri = builder.Configuration["KeyVault:Uri"];
+            externalProviders = AdminStartupReader.ResolveProviders(adminAuthProviders, keyVaultUri, startupLogger);
+
+            if (externalProviders.Count > 0)
+                provider = AuthenticationProviders.Custom; // Force unified cookie-based auth
+        }
 
         // Register authentication navigation service
         services.AddAuthenticationNavigation(options =>
@@ -340,6 +360,19 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                // Register Admin namespace content types for polymorphic deserialization
+                .ConfigureServices(services =>
+                {
+                    var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
+                    if (typeRegistry != null)
+                    {
+                        typeRegistry.WithType(typeof(InitializationContent), nameof(InitializationContent));
+                        typeRegistry.WithType(typeof(AuthProviderSettings), nameof(AuthProviderSettings));
+                        typeRegistry.WithType(typeof(AuthProviderEntry), nameof(AuthProviderEntry));
+                        typeRegistry.WithType(typeof(AdminSettings), nameof(AdminSettings));
+                    }
+                    return services;
+                })
                 // Add kernel for interactive markdown code execution
                 .AddKernel()
                 // Register Azure Blob support for content collections.
@@ -438,6 +471,7 @@ public static class MemexConfiguration
         app.MapMeshWeaver();
         app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<UserContextMiddleware>();
+        app.UseMiddleware<InitializationMiddleware>();
         app.UseMiddleware<OnboardingMiddleware>();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)

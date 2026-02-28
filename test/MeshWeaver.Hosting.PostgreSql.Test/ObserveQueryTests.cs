@@ -57,7 +57,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story1", "ACME/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         // Act
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
@@ -79,7 +79,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story1", "ACME/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -105,7 +105,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story1", "ACME/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -131,7 +131,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story2", "ACME/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -157,7 +157,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story1", "ACME/Project", "Story");
 
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -180,7 +180,7 @@ public class ObserveQueryTests : IAsyncLifetime
     {
         // Arrange
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));
@@ -207,7 +207,7 @@ public class ObserveQueryTests : IAsyncLifetime
     {
         // Arrange
         var changes = new List<QueryResultChange<MeshNode>>();
-        var request = MeshQueryRequest.FromQuery("path:Software/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         using var sub = _query.ObserveQuery<MeshNode>(request, _options)
             .Subscribe(c => changes.Add(c));

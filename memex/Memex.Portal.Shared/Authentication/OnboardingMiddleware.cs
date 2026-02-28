@@ -26,6 +26,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         "/login",
         "/auth/",
         "/dev/",
+        "/admin/",
         "/_framework",
         "/_content",
         "/_blazor",
