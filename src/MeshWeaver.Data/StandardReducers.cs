@@ -30,14 +30,13 @@ public static class StandardReducers
             .AddWorkspaceReference<SchemaReference, object>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub))
             .AddWorkspaceReference<DataModelReference, object>((ci, r, _) => ReduceEntityStoreTo(ci, r, hub))
             .AddWorkspaceReference<NodeTypeReference, object>((ci, _, _) => new ChangeItem<object>(null, ci.StreamId, ci.Version))
-            .AddWorkspaceReference<MetadataReference, object>((ci, _, _) => new ChangeItem<object>(null, ci.StreamId, ci.Version))
             .AddWorkspaceReferenceStream<object>(
                 (workspace, reference, configuration) =>
                 {
                     if (reference is not SchemaReference
                         and not DataModelReference
                         and not NodeTypeReference
-                        and not MetadataReference)
+                        )
                         return null;
                     var dataSource = workspace.DataContext.DataSources.FirstOrDefault();
                     var parentStream = dataSource?.GetStreamForPartition(null);

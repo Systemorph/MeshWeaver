@@ -44,11 +44,10 @@ The MeshPlugin provides AI agents with tools to interact with the mesh:
 | **Delete** | Delete nodes by path |
 | **NavigateTo** | Display a node's visual representation |
 
-Get supports **Unified Path prefixes** for accessing schemas and metadata:
+Get supports **Unified Path prefixes** for accessing schemas and data models:
 - `Get('@path/schema:')` — JSON Schema for the node's content type
 - `Get('@path/schema:TypeName')` — Schema for a specific type (nodes with multiple data types)
 - `Get('@path/model:')` — Full data model
-- `Get('@path/metadata:')` — MeshNode without content
 
 [Read more: MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin)
 

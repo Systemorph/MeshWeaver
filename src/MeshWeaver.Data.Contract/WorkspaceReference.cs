@@ -192,15 +192,5 @@ public record DataModelReference() : WorkspaceReference<object>
     public override string ToString() => "model";
 }
 
-/// <summary>
-/// Reference for accessing MeshNode metadata without Content.
-/// Returns MeshNode with Content = null to reduce payload size.
-/// Path format: metadata
-/// </summary>
-public record MetadataReference() : WorkspaceReference<object>
-{
-    public override string ToString() => "metadata";
-}
-
 
 
