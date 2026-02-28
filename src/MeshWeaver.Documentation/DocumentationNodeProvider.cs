@@ -1,0 +1,161 @@
+using System.Reflection;
+using Markdig;
+using Markdig.Extensions.Yaml;
+using Markdig.Syntax;
+using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using YamlDotNet.Serialization;
+
+namespace MeshWeaver.Documentation;
+
+/// <summary>
+/// Provides MeshWeaver platform documentation as static MeshNodes
+/// loaded from embedded markdown resources.
+/// </summary>
+public class DocumentationNodeProvider : IStaticNodeProvider
+{
+    public const string RootNamespace = "Doc";
+
+    private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadNodes);
+
+    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
+        .UseYamlFrontMatter()
+        .Build();
+
+    private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
+        .IgnoreUnmatchedProperties()
+        .Build();
+
+    public IEnumerable<MeshNode> GetStaticNodes() => LazyNodes.Value;
+
+    private static MeshNode[] LoadNodes()
+    {
+        var assembly = typeof(DocumentationNodeProvider).Assembly;
+        var prefix = $"{assembly.GetName().Name}.Data.";
+
+        var nodes = new List<MeshNode>();
+
+        foreach (var resourceName in assembly.GetManifestResourceNames()
+                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .Order())
+        {
+            using var stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream == null) continue;
+
+            using var reader = new StreamReader(stream);
+            var content = reader.ReadToEnd();
+
+            var relativePath = ResourceNameToPath(resourceName, prefix);
+            var node = ParseMarkdownNode(content, relativePath);
+            if (node != null)
+                nodes.Add(node);
+        }
+
+        return nodes.ToArray();
+    }
+
+    private static MeshNode? ParseMarkdownNode(string content, string relativePath)
+    {
+        var (id, ns) = DeriveIdAndNamespace(relativePath);
+
+        var document = Markdig.Markdown.Parse(content, Pipeline);
+        var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
+
+        FrontMatter? frontMatter = null;
+        if (yamlBlock != null)
+        {
+            try
+            {
+                var yamlContent = yamlBlock.Lines.ToString();
+                frontMatter = YamlDeserializer.Deserialize<FrontMatter>(yamlContent);
+            }
+            catch
+            {
+                // Use defaults if YAML parsing fails
+            }
+        }
+
+        var markdownBody = yamlBlock != null
+            ? content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n')
+            : content;
+
+        var markdownDocument = MarkdownContent.Parse(markdownBody, ns) with
+        {
+            Authors = frontMatter?.Authors,
+            Tags = frontMatter?.Tags,
+            Thumbnail = frontMatter?.Thumbnail,
+            Abstract = frontMatter?.Abstract ?? frontMatter?.Description
+        };
+
+        return new MeshNode(id, ns)
+        {
+            NodeType = frontMatter?.NodeType ?? "Markdown",
+            Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
+            Category = frontMatter?.Category,
+            Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
+            Content = markdownDocument,
+            PreRenderedHtml = markdownDocument.PrerenderedHtml
+        };
+    }
+
+    /// <summary>
+    /// Converts embedded resource name back to file path relative to Data/.
+    /// E.g. "MeshWeaver.Documentation.Data.AI.AgenticAI.md" → "AI/AgenticAI.md"
+    /// </summary>
+    private static string ResourceNameToPath(string resourceName, string prefix)
+    {
+        var withoutPrefix = resourceName[prefix.Length..];
+        var lastDot = withoutPrefix.LastIndexOf('.');
+        if (lastDot > 0)
+        {
+            var nameWithoutExt = withoutPrefix[..lastDot].Replace('.', '/');
+            var ext = withoutPrefix[lastDot..];
+            return nameWithoutExt + ext;
+        }
+        return withoutPrefix.Replace('.', '/');
+    }
+
+    private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath)
+    {
+        var pathWithoutExt = relativePath;
+        if (pathWithoutExt.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            pathWithoutExt = pathWithoutExt[..^3];
+
+        pathWithoutExt = pathWithoutExt.Trim('/').Replace('\\', '/');
+
+        var lastSlash = pathWithoutExt.LastIndexOf('/');
+        if (lastSlash < 0)
+            return (pathWithoutExt, RootNamespace);
+
+        var ns = $"{RootNamespace}/{pathWithoutExt[..lastSlash]}";
+        var id = pathWithoutExt[(lastSlash + 1)..];
+        return (id, ns);
+    }
+
+    private static string ResolveIcon(string? iconValue, string? ns)
+    {
+        if (string.IsNullOrEmpty(iconValue))
+            return "Document";
+        if (iconValue.StartsWith("/") || iconValue.StartsWith("http") || iconValue.StartsWith("data:"))
+            return iconValue;
+        if (iconValue.Contains('/') && !string.IsNullOrEmpty(ns))
+            return $"/static/storage/content/{ns}/{iconValue}";
+        return iconValue;
+    }
+
+    private class FrontMatter
+    {
+        public string? NodeType { get; set; }
+        public string? Name { get; set; }
+        public string? Category { get; set; }
+        public string? Description { get; set; }
+        public string? Icon { get; set; }
+        public string? Title { get; set; }
+        public string? Abstract { get; set; }
+        public string? Published { get; set; }
+        public List<string>? Authors { get; set; }
+        public List<string>? Tags { get; set; }
+        public string? Thumbnail { get; set; }
+    }
+}

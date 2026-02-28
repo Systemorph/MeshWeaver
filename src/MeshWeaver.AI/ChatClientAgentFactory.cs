@@ -225,7 +225,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
 
-        // Resolve @@ references in agent instructions (e.g., @@MeshWeaver/Documentation/AI/Tools/MeshPlugin)
+        // Resolve @@ references in agent instructions (e.g., @@Doc/AI/Tools/ToolsReference)
         baseInstructions = await InlineReferenceResolver.ResolveAsync(baseInstructions, Hub, chat);
 
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };

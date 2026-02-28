@@ -300,7 +300,7 @@ public class AgentChatClient : IAgentChat
     private async Task<string> LoadToolDocumentationAsync()
     {
         var meshPlugin = new MeshPlugin(hub, this);
-        var docs = await meshPlugin.Get("@MeshWeaver/Documentation/AI/Tools/MeshPlugin");
+        var docs = await meshPlugin.Get("@Doc/AI/Tools/MeshPlugin");
 
         if (docs.StartsWith("Not found") || docs.StartsWith("Error"))
             return string.Empty;
