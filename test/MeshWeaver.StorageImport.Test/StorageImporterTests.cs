@@ -46,11 +46,11 @@ public class StorageImporterTests : IDisposable
         result.Elapsed.Should().BeGreaterThan(TimeSpan.Zero);
 
         // Verify known nodes were copied (use .md nodes which don't require polymorphic JSON)
-        var executorExists = await target.ExistsAsync("Executor", ct);
-        executorExists.Should().BeTrue("Executor.md node should exist in target");
+        var executorExists = await target.ExistsAsync("Agent/Executor", ct);
+        executorExists.Should().BeTrue("Agent/Executor.md node should exist in target");
 
-        var plannerExists = await target.ExistsAsync("Planner", ct);
-        plannerExists.Should().BeTrue("Planner.md node should exist in target");
+        var plannerExists = await target.ExistsAsync("Agent/Planner", ct);
+        plannerExists.Should().BeTrue("Agent/Planner.md node should exist in target");
     }
 
     [Fact]
@@ -264,16 +264,16 @@ public class StorageImporterTests : IDisposable
         var fullResult = await importer.ImportAsync(ct: ct);
         fullResult.NodesImported.Should().BeGreaterThan(0);
 
-        // Verify Executor and Planner exist in target
-        (await target.ExistsAsync("Executor", ct)).Should().BeTrue();
-        (await target.ExistsAsync("Planner", ct)).Should().BeTrue();
+        // Verify Cornerstone and Northwind exist in target (both are root-level .md nodes)
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Northwind", ct)).Should().BeTrue();
 
-        // Now create a partial source with only Executor
+        // Now create a partial source with only Cornerstone
         var partialSourceDir = Path.Combine(_targetDir, "partial_source");
         Directory.CreateDirectory(partialSourceDir);
-        var sampleExecutor = Path.Combine(_sourceDir, "Executor.md");
-        File.Exists(sampleExecutor).Should().BeTrue();
-        File.Copy(sampleExecutor, Path.Combine(partialSourceDir, "Executor.md"));
+        var sampleCornerstone = Path.Combine(_sourceDir, "Cornerstone.md");
+        File.Exists(sampleCornerstone).Should().BeTrue();
+        File.Copy(sampleCornerstone, Path.Combine(partialSourceDir, "Cornerstone.md"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
@@ -281,11 +281,11 @@ public class StorageImporterTests : IDisposable
         // Act - re-import partial source with RemoveMissing
         var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true }, ct);
 
-        // Assert - Executor should still exist, Planner should be removed
+        // Assert - Cornerstone should still exist, Northwind should be removed
         result.NodesImported.Should().Be(1);
         result.NodesRemoved.Should().BeGreaterThan(0);
-        (await target.ExistsAsync("Executor", ct)).Should().BeTrue("Executor was in the source");
-        (await target.ExistsAsync("Planner", ct)).Should().BeFalse("Planner was not in partial source and should be removed");
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue("Cornerstone was in the source");
+        (await target.ExistsAsync("Northwind", ct)).Should().BeFalse("Northwind was not in partial source and should be removed");
     }
 
     [Fact]
@@ -304,7 +304,7 @@ public class StorageImporterTests : IDisposable
         fullResult.NodesImported.Should().BeGreaterThan(0);
 
         // Verify both top-level and subtree nodes exist
-        (await target.ExistsAsync("Executor", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct)).Should().BeTrue();
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", ct)).Should().BeTrue();
 
@@ -335,8 +335,8 @@ public class StorageImporterTests : IDisposable
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct)).Should().BeTrue();
         // CollaborativeEditing should be removed (not in partial source)
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", ct)).Should().BeFalse();
-        // Top-level nodes like Executor should NOT be affected (outside scoped subtree)
-        (await target.ExistsAsync("Executor", ct)).Should().BeTrue("Executor is outside the import subtree and should not be removed");
+        // Top-level nodes like Cornerstone should NOT be affected (outside scoped subtree)
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue("Cornerstone is outside the import subtree and should not be removed");
     }
 
     [Fact]
@@ -353,12 +353,12 @@ public class StorageImporterTests : IDisposable
         // Full import first
         await importer.ImportAsync(ct: ct);
 
-        // Create partial source with only Executor
+        // Create partial source with only Cornerstone
         var partialSourceDir = Path.Combine(_targetDir, "partial_no_remove");
         Directory.CreateDirectory(partialSourceDir);
         File.Copy(
-            Path.Combine(_sourceDir, "Executor.md"),
-            Path.Combine(partialSourceDir, "Executor.md"));
+            Path.Combine(_sourceDir, "Cornerstone.md"),
+            Path.Combine(partialSourceDir, "Cornerstone.md"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
@@ -368,8 +368,8 @@ public class StorageImporterTests : IDisposable
 
         // Assert - nothing should be removed
         result.NodesRemoved.Should().Be(0);
-        (await target.ExistsAsync("Executor", ct)).Should().BeTrue();
-        (await target.ExistsAsync("Planner", ct)).Should().BeTrue("Planner should still exist when RemoveMissing is false");
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Northwind", ct)).Should().BeTrue("Northwind should still exist when RemoveMissing is false");
     }
 
     [Fact]
@@ -535,7 +535,7 @@ public class StorageImporterTests : IDisposable
             "re-importing same subtree should produce zero removals");
 
         // Nodes outside the subtree should still exist
-        (await target.ExistsAsync("Executor", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
         (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct)).Should().BeTrue();
     }
 

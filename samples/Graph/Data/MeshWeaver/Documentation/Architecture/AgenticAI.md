@@ -150,12 +150,11 @@ Get("@Insurance/Claims/CLM-2024-001")     -> Returns claim JSON
 Get("@Insurance/Claims/*")                -> Returns all claims (children)
 ```
 
-**Get with Unified Path prefixes** — Access schemas and metadata:
+**Get with Unified Path prefixes** — Access schemas and data models:
 ```
 Get("@Cornerstone/schema:")             -> JSON Schema for content type
 Get("@Cornerstone/schema:Pricing")      -> Schema for a specific named type
 Get("@Cornerstone/model:")              -> Full data model with all types
-Get("@Cornerstone/metadata:")           -> MeshNode without content
 ```
 
 **Search** — Query with GitHub-style syntax:
@@ -207,7 +206,6 @@ The `@` prefix provides convenient shorthand. Unified Path prefixes access speci
 | `@Cornerstone/schema:` | Content type JSON Schema |
 | `@Cornerstone/schema:TypeName` | Schema for a specific named type |
 | `@Cornerstone/model:` | Full data model |
-| `@Cornerstone/metadata:` | Node without content |
 
 # Include External MCP Servers
 
@@ -266,7 +264,7 @@ The MCP server exposes the same mesh operations as the internal MeshPlugin, so e
 
 | Tool | Description |
 |------|-------------|
-| **Get** | Retrieve nodes by path. Supports `@` shorthand, `/*` for children, and Unified Path prefixes (`schema:`, `model:`, `metadata:`) |
+| **Get** | Retrieve nodes by path. Supports `@` shorthand, `/*` for children, and Unified Path prefixes (`schema:`, `model:`) |
 | **Search** | Query nodes using GitHub-style syntax with optional base path scoping |
 | **Create** | Create new nodes from JSON MeshNode objects |
 | **Update** | Update existing nodes (pass JSON array of complete MeshNode objects) |

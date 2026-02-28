@@ -491,7 +491,8 @@ public static class DataExtensions
             return request.Processed();
         }
 
-        var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        var suppressActivity = changeRequest.SuppressActivityLog || hub.Address.Type == AddressExtensions.ActivityType;
+        var activity = suppressActivity ? null : new Activity(ActivityCategory.DataUpdate, hub);
         hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity,
             request);
         if (activity is null)

@@ -36,7 +36,7 @@ You are **Navigator**, the primary agent for understanding user intent and navig
 
 # Tools Reference
 
-@@MeshWeaver/Documentation/AI/Tools/MeshPlugin
+@@Agent/ToolsReference
 
 # Northwind Analytics
 

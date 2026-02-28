@@ -1,4 +1,5 @@
-﻿using System.Text.Json;
+using System.Collections.Concurrent;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
@@ -11,6 +12,7 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// TypeSource for MeshNode that syncs to IPersistenceService.
 /// Loads own node + children on init, syncs adds/updates/deletes to persistence.
+/// Saves are debounced: changes are buffered and flushed after 200ms of inactivity.
 /// </summary>
 public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
 {
@@ -19,6 +21,28 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
     private InstanceCollection _lastSaved = new();
+
+    /// <summary>
+    /// Debounce interval for persistence saves. After this duration of inactivity, pending saves are flushed.
+    /// </summary>
+    private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Pending node saves, keyed by path. Latest version wins.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, MeshNode> _pendingSaves = new();
+
+    /// <summary>
+    /// Pending node deletions.
+    /// </summary>
+    private readonly ConcurrentBag<string> _pendingDeletes = new();
+
+    /// <summary>
+    /// Timer that fires after DebounceInterval of inactivity to flush pending saves.
+    /// </summary>
+    private Timer? _debounceTimer;
+
+    private readonly object _timerLock = new();
 
     public MeshNodeTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath)
         : base(workspace, dataSource)
@@ -33,6 +57,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
             TypeDefinition.CollectionName,
             new KeyFunction(o => ((MeshNode)o).Path, typeof(string)));
+
+        // Flush pending saves when the hub disposes
+        workspace.Hub.RegisterForDisposal(new FlushOnDispose(this));
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
@@ -63,33 +90,67 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _logger?.LogDebug("MeshNodeTypeSource.UpdateImpl: adds={Adds}, updates={Updates}, deletes={Deletes}",
             adds.Length, updates.Length, deletes.Length);
 
-        // Sync to persistence
-        // IPersistenceService handles partition automatically based on node.Path:
-        // - Own node (Namespace == _hubPath) → saved to parent partition (file: parentPath/nodeName.json)
-        // - Child nodes (Namespace starts with _hubPath/) → saved to own partition (file: _hubPath/childName.json)
+        // Buffer changes for debounced persistence
         var hubVersion = _workspace.Hub.Version;
         foreach (var node in adds.Concat(updates))
         {
-            // Capture hub version when saving
             var nodeWithVersion = node with { Version = hubVersion };
-
-            // Save synchronously to ensure it completes before returning
-            // TODO: Consider making this async with proper task tracking
-            try
-            {
-                _persistence.SaveNodeAsync(nodeWithVersion).GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "MeshNodeTypeSource: Save failed for {Path}", nodeWithVersion.Path);
-            }
+            _pendingSaves[node.Path] = nodeWithVersion;
         }
 
         foreach (var node in deletes)
-            _ = _persistence.DeleteNodeAsync(node.Path, recursive: true);
+            _pendingDeletes.Add(node.Path);
+
+        // Reset the debounce timer
+        ResetDebounceTimer();
 
         _lastSaved = instances;
         return instances;
+    }
+
+    private void ResetDebounceTimer()
+    {
+        lock (_timerLock)
+        {
+            _debounceTimer?.Dispose();
+            _debounceTimer = new Timer(_ => FlushPendingSaves(), null, DebounceInterval, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    private void FlushPendingSaves()
+    {
+        // Snapshot and clear pending saves
+        var saves = new List<MeshNode>();
+        foreach (var key in _pendingSaves.Keys.ToArray())
+        {
+            if (_pendingSaves.TryRemove(key, out var node))
+                saves.Add(node);
+        }
+
+        var deletes = new List<string>();
+        while (_pendingDeletes.TryTake(out var path))
+            deletes.Add(path);
+
+        if (saves.Count == 0 && deletes.Count == 0)
+            return;
+
+        _logger?.LogDebug("MeshNodeTypeSource: Flushing {Saves} saves, {Deletes} deletes for {HubPath}",
+            saves.Count, deletes.Count, _hubPath);
+
+        foreach (var node in saves)
+        {
+            try
+            {
+                _persistence.SaveNodeAsync(node).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "MeshNodeTypeSource: Save failed for {Path}", node.Path);
+            }
+        }
+
+        foreach (var path in deletes)
+            _ = _persistence.DeleteNodeAsync(path, recursive: true);
     }
 
     /// <summary>
@@ -218,5 +279,21 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         }
 
         return node;
+    }
+
+    /// <summary>
+    /// Helper to flush pending saves on hub disposal.
+    /// </summary>
+    private sealed class FlushOnDispose(MeshNodeTypeSource source) : IDisposable
+    {
+        public void Dispose()
+        {
+            lock (source._timerLock)
+            {
+                source._debounceTimer?.Dispose();
+                source._debounceTimer = null;
+            }
+            source.FlushPendingSaves();
+        }
     }
 }

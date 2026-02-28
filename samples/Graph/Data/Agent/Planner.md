@@ -18,7 +18,7 @@ You are **Planner**, the strategic planning agent. You analyze complex requests,
 
 # Tools Reference
 
-@@MeshWeaver/Documentation/AI/Tools/MeshPlugin
+@@Agent/ToolsReference
 
 # Planning Methodology
 
