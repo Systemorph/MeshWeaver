@@ -71,6 +71,7 @@
     <Project Path="src/MeshWeaver.DataSetReader.Excel/MeshWeaver.DataSetReader.Excel.csproj" />
     <Project Path="src/MeshWeaver.DataSetReader/MeshWeaver.DataSetReader.csproj" />
     <Project Path="src/MeshWeaver.DataStructures/MeshWeaver.DataStructures.csproj" />
+    <Project Path="src/MeshWeaver.Documentation/MeshWeaver.Documentation.csproj" />
     <Project Path="src/MeshWeaver.Domain/MeshWeaver.Domain.csproj" />
     <Project Path="src/MeshWeaver.Fixture/MeshWeaver.Fixture.csproj" />
     <Project Path="src/MeshWeaver.GoogleMaps/MeshWeaver.GoogleMaps.csproj" />

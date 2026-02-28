@@ -19,6 +19,7 @@ using Memex.Portal.Shared.Admin;
 using Memex.Portal.Shared.Authentication;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -360,6 +361,7 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                .AddDocumentation()
                 // Register Admin namespace content types for polymorphic deserialization
                 .ConfigureServices(services =>
                 {
