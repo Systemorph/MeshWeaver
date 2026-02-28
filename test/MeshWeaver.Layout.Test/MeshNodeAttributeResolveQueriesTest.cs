@@ -14,7 +14,7 @@ public class MeshNodeAttributeResolveQueriesTest
         var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME/Project");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("namespace:Software/Project nodeType:Group scope:selfAndAncestors");
+        resolved[0].Should().Be("namespace:ACME/Project nodeType:Group scope:selfAndAncestors");
     }
 
     [Fact]
