@@ -1,0 +1,20 @@
+{
+  "id": "VerifyOwnership",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Verify beneficial ownership",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Verify UBO structure and ownership chain",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Verify beneficial ownership",
+    "description": "Verify Ultimate Beneficial Ownership (UBO) for Apex Manufacturing. Awaiting additional documentation on parent company structure and 25%+ shareholders.",
+    "category": "Legal",
+    "priority": "Critical",
+    "assignee": "Oliver",
+    "dueDateOffsetDays": -6,
+    "status": "Blocked"
+  }
+}

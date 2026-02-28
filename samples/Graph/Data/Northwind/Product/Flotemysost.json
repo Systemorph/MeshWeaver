@@ -1,0 +1,23 @@
+{
+  "id": "Flotemysost",
+  "namespace": "Northwind/Product",
+  "name": "Flotemysost",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Flotemysost - 10 - 500 g pkgs.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 71,
+    "productName": "Flotemysost",
+    "supplierId": 15,
+    "categoryId": 4,
+    "quantityPerUnit": "10 - 500 g pkgs.",
+    "unitPrice": 21.5,
+    "unitsInStock": 26,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

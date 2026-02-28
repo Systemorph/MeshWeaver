@@ -1,0 +1,21 @@
+{
+  "id": "Karkki_Oy",
+  "namespace": "Northwind/Supplier",
+  "name": "Karkki Oy",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Karkki Oy - Lappeenranta, Finland",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 23,
+    "companyName": "Karkki Oy",
+    "contactName": "Anne Heikkonen",
+    "contactTitle": "Product Manager",
+    "city": "Lappeenranta",
+    "region": "",
+    "country": "Finland",
+    "phone": "(953) 10956"
+  }
+}

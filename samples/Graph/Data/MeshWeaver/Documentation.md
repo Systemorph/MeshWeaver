@@ -78,7 +78,7 @@ Learn MeshWeaver through a task management app:
 - AI agent integration in practice
 - Real-world task management scenarios
 
-[Explore ACME Use Case](ACME/Software/Documentation)
+[Explore ACME Use Case](Software/Documentation)
 
 ---
 
@@ -89,7 +89,7 @@ Learn MeshWeaver through an agent-based pricing process:
 - Geographic risk visualization with mapping (PropertyRisks + RiskMap)
 - Document management and Excel import workflows (Submissions + ImportConfigs)
 
-[Explore Cornerstone Insurance Use Case](ACME/Insurance/Documentation)
+[Explore Cornerstone Insurance Use Case](Cornerstone/Documentation)
 
 ---
 
@@ -101,4 +101,4 @@ Learn MeshWeaver through gourmet food analytics:
 - 53 views organized across 8 analytics categories
 - Natural language queries with the NorthwindAgent
 
-[Explore Northwind Use Case](ACME/Northwind/Documentation)
+[Explore Northwind Use Case](Northwind/Documentation)

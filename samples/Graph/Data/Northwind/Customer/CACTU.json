@@ -1,0 +1,23 @@
+{
+  "id": "CACTU",
+  "namespace": "Northwind/Customer",
+  "name": "Cactus Comidas para llevar",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Cactus Comidas para llevar - Buenos Aires, Argentina",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "CACTU",
+    "companyName": "Cactus Comidas para llevar",
+    "contactName": "Patricio Simpson",
+    "contactTitle": "Sales Agent",
+    "city": "Buenos Aires",
+    "region": "",
+    "postalCode": "1010",
+    "country": "Argentina",
+    "phone": "(1) 135-5555",
+    "fax": "(1) 135-4892"
+  }
+}

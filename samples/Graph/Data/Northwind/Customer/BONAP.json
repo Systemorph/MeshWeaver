@@ -1,0 +1,23 @@
+{
+  "id": "BONAP",
+  "namespace": "Northwind/Customer",
+  "name": "Bon app'",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Bon app' - Marseille, France",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "BONAP",
+    "companyName": "Bon app'",
+    "contactName": "Laurence Lebihan",
+    "contactTitle": "Owner",
+    "city": "Marseille",
+    "region": "",
+    "postalCode": "13008",
+    "country": "France",
+    "phone": "91.24.45.40",
+    "fax": "91.24.45.41"
+  }
+}

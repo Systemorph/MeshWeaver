@@ -105,7 +105,7 @@ The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-l
 
 Before creating a node, discover what content fields are expected by looking at an existing node of the same type, or at the target namespace:
 
-- `Get('@path/schema:')` — Returns the JSON Schema for the node's content type (e.g., `Get('@ACME/Insurance/schema:')`)
+- `Get('@path/schema:')` — Returns the JSON Schema for the node's content type (e.g., `Get('@Cornerstone/schema:')`)
 - `Get('@path/schema:TypeName')` — Returns the JSON Schema for a specific named type
 - `Get('@path/model:')` — Returns the full data model with all registered types
 

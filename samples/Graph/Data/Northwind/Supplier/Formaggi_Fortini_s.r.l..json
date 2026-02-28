@@ -1,0 +1,21 @@
+{
+  "id": "Formaggi_Fortini_s.r.l.",
+  "namespace": "Northwind/Supplier",
+  "name": "Formaggi Fortini s.r.l.",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Formaggi Fortini s.r.l. - Ravenna, Italy",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 14,
+    "companyName": "Formaggi Fortini s.r.l.",
+    "contactName": "Elio Rossi",
+    "contactTitle": "Sales Representative",
+    "city": "Ravenna",
+    "region": "",
+    "country": "Italy",
+    "phone": "(0544) 60323"
+  }
+}

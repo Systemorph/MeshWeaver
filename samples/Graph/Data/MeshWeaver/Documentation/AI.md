@@ -25,7 +25,7 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 | Use mesh tools in agents | [MeshPlugin Tools](MeshWeaver/Documentation/AI/Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
 | Understand agent architecture | [Agentic AI](MeshWeaver/Documentation/Architecture/AgenticAI) - Multi-agent patterns |
 | Connect external AI via MCP | [MCP Integration](MeshWeaver/Documentation/Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
-| See AI in action | [ACME Case Studies](ACME/Software/Documentation) - Practical examples |
+| See AI in action | [ACME Case Studies](Software/Documentation) - Practical examples |
 
 ---
 

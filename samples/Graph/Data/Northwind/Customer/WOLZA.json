@@ -1,0 +1,23 @@
+{
+  "id": "WOLZA",
+  "namespace": "Northwind/Customer",
+  "name": "Wolski  Zajazd",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Wolski  Zajazd - Warszawa, Poland",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "WOLZA",
+    "companyName": "Wolski  Zajazd",
+    "contactName": "Zbyszek Piestrzeniewicz",
+    "contactTitle": "Owner",
+    "city": "Warszawa",
+    "region": "",
+    "postalCode": "01-012",
+    "country": "Poland",
+    "phone": "(26) 642-7012",
+    "fax": "(26) 642-7012"
+  }
+}

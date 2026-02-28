@@ -1,0 +1,24 @@
+{
+  "id": "Margaret_Peacock",
+  "namespace": "Northwind/Employee",
+  "name": "Margaret Peacock",
+  "nodeType": "Northwind/Employee",
+  "category": "Employees",
+  "description": "Margaret Peacock - Sales Representative",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 4,
+    "lastName": "Peacock",
+    "firstName": "Margaret",
+    "title": "Sales Representative",
+    "titleOfCourtesy": "Mrs.",
+    "birthDate": "1937-09-19",
+    "hireDate": "1993-05-03",
+    "city": "Redmond",
+    "region": "WA",
+    "country": "USA",
+    "reportsTo": 2
+  }
+}

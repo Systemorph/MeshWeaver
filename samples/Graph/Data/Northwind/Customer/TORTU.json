@@ -1,0 +1,23 @@
+{
+  "id": "TORTU",
+  "namespace": "Northwind/Customer",
+  "name": "Tortuga Restaurante",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Tortuga Restaurante - M\u00e9xico D.F., Mexico",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "TORTU",
+    "companyName": "Tortuga Restaurante",
+    "contactName": "Miguel Angel Paolino",
+    "contactTitle": "Owner",
+    "city": "M\u00e9xico D.F.",
+    "region": "",
+    "postalCode": "05033",
+    "country": "Mexico",
+    "phone": "(5) 555-2933",
+    "fax": ""
+  }
+}

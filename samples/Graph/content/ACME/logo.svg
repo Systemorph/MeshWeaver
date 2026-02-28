@@ -1,18 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
   <style>
-    .bg { fill: #fafafa; }
-    .chev-grey { fill: #616161; }
-    .chev-blue { fill: #0f6cbd; }
-    .chev-red { fill: #c50f1f; }
-    .title { fill: #242424; }
-    .subtitle { fill: #616161; }
+    .bg { fill: #d13438; }
+    .tool { fill: #ffffff; }
+    .tool-inner { fill: #d13438; }
+    .title { fill: #ffffff; }
+    .subtitle { fill: rgba(255,255,255,0.7); }
   </style>
   <rect class="bg" width="128" height="128" rx="16"/>
-  <g transform="translate(64, 46)">
-    <path class="chev-grey" d="M-25.12,-23.76 L0,-11.2 L25.12,-23.76 L22.88,-28.24 L0,-16.8 L-22.88,-28.24 Z"/>
-    <path class="chev-blue" d="M-25.12,-9.76 L0,2.8 L25.12,-9.76 L22.88,-14.24 L0,-2.8 L-22.88,-14.24 Z"/>
-    <path class="chev-red" d="M-25.12,4.24 L0,16.8 L25.12,4.24 L22.88,-0.24 L0,11.2 L-22.88,-0.24 Z"/>
+  <g transform="translate(64,48)" opacity="0.9">
+    <!-- Wrench -->
+    <g transform="rotate(-30)">
+      <rect class="tool" x="-3" y="-28" width="6" height="36" rx="2"/>
+      <circle class="tool" cx="0" cy="-28" r="9"/>
+      <circle class="tool-inner" cx="0" cy="-28" r="5"/>
+    </g>
+    <!-- Hammer -->
+    <g transform="rotate(30)">
+      <rect class="tool" x="-3" y="-26" width="6" height="34" rx="2"/>
+      <rect class="tool" x="-10" y="-36" width="20" height="12" rx="2"/>
+    </g>
   </g>
-  <text class="title" x="64" y="96" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="24" font-weight="bold" text-anchor="middle" letter-spacing="6">ACME</text>
-  <text class="subtitle" x="64" y="112" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="9" text-anchor="middle" letter-spacing="3">CORPORATION</text>
+  <text class="title" x="64" y="108" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="24" font-weight="bold" text-anchor="middle" letter-spacing="6">ACME</text>
+  <text class="subtitle" x="64" y="120" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="8" text-anchor="middle" letter-spacing="2">SOFTWARE</text>
 </svg>

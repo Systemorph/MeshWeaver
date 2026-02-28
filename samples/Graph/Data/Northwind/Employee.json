@@ -1,0 +1,19 @@
+{
+  "id": "Employee",
+  "namespace": "Northwind",
+  "name": "Employee",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Employee master data with job title and location",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Employee",
+    "namespace": "Northwind",
+    "displayName": "Employee",
+    "iconName": "User",
+    "description": "Employee master data with job title and location",
+    "configuration": "config => config.WithContentType<EmployeeContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddEmployeeNodeViews())"
+  }
+}

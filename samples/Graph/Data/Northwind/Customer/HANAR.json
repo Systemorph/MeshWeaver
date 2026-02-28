@@ -1,0 +1,23 @@
+{
+  "id": "HANAR",
+  "namespace": "Northwind/Customer",
+  "name": "Hanari Carnes",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Hanari Carnes - Rio de Janeiro, Brazil",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "HANAR",
+    "companyName": "Hanari Carnes",
+    "contactName": "Mario Pontes",
+    "contactTitle": "Accounting Manager",
+    "city": "Rio de Janeiro",
+    "region": "RJ",
+    "postalCode": "05454-876",
+    "country": "Brazil",
+    "phone": "(21) 555-0091",
+    "fax": "(21) 555-8765"
+  }
+}

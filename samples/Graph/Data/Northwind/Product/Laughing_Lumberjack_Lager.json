@@ -1,0 +1,23 @@
+{
+  "id": "Laughing_Lumberjack_Lager",
+  "namespace": "Northwind/Product",
+  "name": "Laughing Lumberjack Lager",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Laughing Lumberjack Lager - 24 - 12 oz bottles",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 67,
+    "productName": "Laughing Lumberjack Lager",
+    "supplierId": 16,
+    "categoryId": 1,
+    "quantityPerUnit": "24 - 12 oz bottles",
+    "unitPrice": 14.0,
+    "unitsInStock": 52,
+    "unitsOnOrder": 0,
+    "reorderLevel": 10,
+    "discontinued": false
+  }
+}

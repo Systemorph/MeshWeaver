@@ -1,0 +1,21 @@
+{
+  "id": "Tokyo_Traders",
+  "namespace": "Northwind/Supplier",
+  "name": "Tokyo Traders",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Tokyo Traders - Tokyo, Japan",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 4,
+    "companyName": "Tokyo Traders",
+    "contactName": "Yoshi Nagase",
+    "contactTitle": "Marketing Manager",
+    "city": "Tokyo",
+    "region": "",
+    "country": "Japan",
+    "phone": "(03) 3555-5011"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "SPECD",
+  "namespace": "Northwind/Customer",
+  "name": "Sp\u00e9cialit\u00e9s du monde",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Sp\u00e9cialit\u00e9s du monde - Paris, France",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "SPECD",
+    "companyName": "Sp\u00e9cialit\u00e9s du monde",
+    "contactName": "Dominique Perrier",
+    "contactTitle": "Marketing Manager",
+    "city": "Paris",
+    "region": "",
+    "postalCode": "75016",
+    "country": "France",
+    "phone": "(1) 47.55.60.10",
+    "fax": "(1) 47.55.60.20"
+  }
+}

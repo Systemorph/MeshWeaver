@@ -9,7 +9,7 @@ Partitioned persistence routes storage operations by the first segment of a node
 
 # Motivation
 
-In a multi-tenant or multi-domain mesh, data from different organizations or business domains must be isolated. When `ACME/Insurance/Policy` and `Contoso/HR/Employee` coexist in the same mesh, their data should live in separate storage partitions:
+In a multi-tenant or multi-domain mesh, data from different organizations or business domains must be isolated. When `Cornerstone/Policy` and `Contoso/HR/Employee` coexist in the same mesh, their data should live in separate storage partitions:
 
 - **PostgreSQL**: separate schemas (`acme`, `contoso`)
 - **Cosmos DB**: separate container pairs (`acme-nodes`, `contoso-nodes`)
@@ -42,7 +42,7 @@ The `PathPartition.GetFirstSegment` utility extracts the routing key:
 
 | Input | Result |
 |---|---|
-| `"ACME/Insurance/Article"` | `"ACME"` |
+| `"Cornerstone/Article"` | `"ACME"` |
 | `"ACME"` | `"ACME"` |
 | `""` or `null` | `null` (root level) |
 
@@ -102,7 +102,7 @@ public record PartitionedStore(
 
 ## File System
 
-All partitions share the same `FileSystemStorageAdapter`. Isolation is logical: each partition gets its own `FileSystemPersistenceService` instance with a separate in-memory cache. The file layout remains unchanged (`baseDir/ACME/Insurance/Article.json`).
+All partitions share the same `FileSystemStorageAdapter`. Isolation is logical: each partition gets its own `FileSystemPersistenceService` instance with a separate in-memory cache. The file layout remains unchanged (`baseDir/Cornerstone/Article.json`).
 
 Discovery scans top-level directories for `.json` files.
 
@@ -162,7 +162,7 @@ Each registration method calls `AddPartitionedCoreAndWrapperServices()` which re
 
 # Key Design Decisions
 
-**Full paths preserved everywhere.** No path stripping occurs. `ACME/Insurance/Article` is stored with that full path inside the ACME partition. This simplifies the implementation and avoids path translation bugs.
+**Full paths preserved everywhere.** No path stripping occurs. `Cornerstone/Article` is stored with that full path inside the ACME partition. This simplifies the implementation and avoids path translation bugs.
 
 **Thread-safe provisioning.** `RoutingPersistenceServiceCore` uses `ConcurrentDictionary` with a `SemaphoreSlim` to ensure each partition is provisioned exactly once, even under concurrent access.
 

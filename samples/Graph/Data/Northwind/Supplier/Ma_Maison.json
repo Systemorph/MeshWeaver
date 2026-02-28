@@ -1,0 +1,21 @@
+{
+  "id": "Ma_Maison",
+  "namespace": "Northwind/Supplier",
+  "name": "Ma Maison",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Ma Maison - Montr\u00e9al, Canada",
+  "iconName": "Truck",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 25,
+    "companyName": "Ma Maison",
+    "contactName": "Jean-Guy Lauzon",
+    "contactTitle": "Marketing Manager",
+    "city": "Montr\u00e9al",
+    "region": "Qu\u00e9bec",
+    "country": "Canada",
+    "phone": "(514) 555-9022"
+  }
+}

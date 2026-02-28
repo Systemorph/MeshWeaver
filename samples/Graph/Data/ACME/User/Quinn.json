@@ -1,0 +1,16 @@
+{
+  "id": "Quinn",
+  "namespace": "ACME/User",
+  "name": "Quinn Johnson",
+  "nodeType": "User",
+  "description": "Customer Support Lead at Software",
+  "iconName": "Person",
+  "isPersistent": true,
+  "content": {
+    "id": "Quinn",
+    "name": "Quinn Johnson",
+    "email": "quinn.johnson@acme.example.com",
+    "bio": "Customer support lead focused on client satisfaction and onboarding experience.",
+    "role": "Customer Support Lead"
+  }
+}

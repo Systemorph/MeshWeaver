@@ -1,0 +1,23 @@
+{
+  "id": "OLDWO",
+  "namespace": "Northwind/Customer",
+  "name": "Old World Delicatessen",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Old World Delicatessen - Anchorage, USA",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "OLDWO",
+    "companyName": "Old World Delicatessen",
+    "contactName": "Rene Phillips",
+    "contactTitle": "Sales Representative",
+    "city": "Anchorage",
+    "region": "AK",
+    "postalCode": "99508",
+    "country": "USA",
+    "phone": "(907) 555-7584",
+    "fax": "(907) 555-2880"
+  }
+}

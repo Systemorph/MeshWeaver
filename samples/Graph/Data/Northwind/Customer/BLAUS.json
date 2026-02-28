@@ -1,0 +1,23 @@
+{
+  "id": "BLAUS",
+  "namespace": "Northwind/Customer",
+  "name": "Blauer See Delikatessen",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Blauer See Delikatessen - Mannheim, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "BLAUS",
+    "companyName": "Blauer See Delikatessen",
+    "contactName": "Hanna Moos",
+    "contactTitle": "Sales Representative",
+    "city": "Mannheim",
+    "region": "",
+    "postalCode": "68306",
+    "country": "Germany",
+    "phone": "0621-08460",
+    "fax": "0621-08924"
+  }
+}

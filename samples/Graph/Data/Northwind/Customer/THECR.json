@@ -1,0 +1,23 @@
+{
+  "id": "THECR",
+  "namespace": "Northwind/Customer",
+  "name": "The Cracker Box",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "The Cracker Box - Butte, USA",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "THECR",
+    "companyName": "The Cracker Box",
+    "contactName": "Liu Wong",
+    "contactTitle": "Marketing Assistant",
+    "city": "Butte",
+    "region": "MT",
+    "postalCode": "59801",
+    "country": "USA",
+    "phone": "(406) 555-5834",
+    "fax": "(406) 555-8083"
+  }
+}
