@@ -1,0 +1,24 @@
+{
+  "id": "Steven_Buchanan",
+  "namespace": "Northwind/Employee",
+  "name": "Steven Buchanan",
+  "nodeType": "Northwind/Employee",
+  "category": "Employees",
+  "description": "Steven Buchanan - Sales Manager",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 5,
+    "lastName": "Buchanan",
+    "firstName": "Steven",
+    "title": "Sales Manager",
+    "titleOfCourtesy": "Mr.",
+    "birthDate": "1955-03-04",
+    "hireDate": "1993-10-17",
+    "city": "London",
+    "region": "",
+    "country": "UK",
+    "reportsTo": 2
+  }
+}

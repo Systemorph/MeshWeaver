@@ -1,0 +1,23 @@
+{
+  "id": "Mishi_Kobe_Niku",
+  "namespace": "Northwind/Product",
+  "name": "Mishi Kobe Niku",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Mishi Kobe Niku - 18 - 500 g pkgs.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 9,
+    "productName": "Mishi Kobe Niku",
+    "supplierId": 4,
+    "categoryId": 6,
+    "quantityPerUnit": "18 - 500 g pkgs.",
+    "unitPrice": 97.0,
+    "unitsInStock": 29,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": true
+  }
+}

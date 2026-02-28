@@ -1,0 +1,23 @@
+{
+  "id": "COMMI",
+  "namespace": "Northwind/Customer",
+  "name": "Com\u00e9rcio Mineiro",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Com\u00e9rcio Mineiro - Sao Paulo, Brazil",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "COMMI",
+    "companyName": "Com\u00e9rcio Mineiro",
+    "contactName": "Pedro Afonso",
+    "contactTitle": "Sales Associate",
+    "city": "Sao Paulo",
+    "region": "SP",
+    "postalCode": "05432-043",
+    "country": "Brazil",
+    "phone": "(11) 555-7647",
+    "fax": ""
+  }
+}

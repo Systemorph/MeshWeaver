@@ -1,0 +1,24 @@
+{
+  "id": "Anne_Dodsworth",
+  "namespace": "Northwind/Employee",
+  "name": "Anne Dodsworth",
+  "nodeType": "Northwind/Employee",
+  "category": "Employees",
+  "description": "Anne Dodsworth - Sales Representative",
+  "iconName": "User",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 9,
+    "lastName": "Dodsworth",
+    "firstName": "Anne",
+    "title": "Sales Representative",
+    "titleOfCourtesy": "Ms.",
+    "birthDate": "1966-01-27",
+    "hireDate": "1994-11-15",
+    "city": "London",
+    "region": "",
+    "country": "UK",
+    "reportsTo": 5
+  }
+}

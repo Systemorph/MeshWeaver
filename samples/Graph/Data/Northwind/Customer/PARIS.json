@@ -1,0 +1,23 @@
+{
+  "id": "PARIS",
+  "namespace": "Northwind/Customer",
+  "name": "Paris sp\u00e9cialit\u00e9s",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Paris sp\u00e9cialit\u00e9s - Paris, France",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "PARIS",
+    "companyName": "Paris sp\u00e9cialit\u00e9s",
+    "contactName": "Marie Bertrand",
+    "contactTitle": "Owner",
+    "city": "Paris",
+    "region": "",
+    "postalCode": "75012",
+    "country": "France",
+    "phone": "(1) 42.34.22.66",
+    "fax": "(1) 42.34.22.77"
+  }
+}

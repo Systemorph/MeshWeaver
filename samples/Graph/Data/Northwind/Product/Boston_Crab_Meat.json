@@ -1,0 +1,23 @@
+{
+  "id": "Boston_Crab_Meat",
+  "namespace": "Northwind/Product",
+  "name": "Boston Crab Meat",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Boston Crab Meat - 24 - 4 oz tins",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 40,
+    "productName": "Boston Crab Meat",
+    "supplierId": 19,
+    "categoryId": 8,
+    "quantityPerUnit": "24 - 4 oz tins",
+    "unitPrice": 18.4,
+    "unitsInStock": 123,
+    "unitsOnOrder": 0,
+    "reorderLevel": 30,
+    "discontinued": false
+  }
+}

@@ -152,10 +152,10 @@ Get("@Insurance/Claims/*")                -> Returns all claims (children)
 
 **Get with Unified Path prefixes** — Access schemas and metadata:
 ```
-Get("@ACME/Insurance/schema:")             -> JSON Schema for content type
-Get("@ACME/Insurance/schema:Pricing")      -> Schema for a specific named type
-Get("@ACME/Insurance/model:")              -> Full data model with all types
-Get("@ACME/Insurance/metadata:")           -> MeshNode without content
+Get("@Cornerstone/schema:")             -> JSON Schema for content type
+Get("@Cornerstone/schema:Pricing")      -> Schema for a specific named type
+Get("@Cornerstone/model:")              -> Full data model with all types
+Get("@Cornerstone/metadata:")           -> MeshNode without content
 ```
 
 **Search** — Query with GitHub-style syntax:
@@ -204,10 +204,10 @@ The `@` prefix provides convenient shorthand. Unified Path prefixes access speci
 |--------|---------|
 | `@Insurance/Claims/CLM-001` | Full node JSON |
 | `@Insurance/Claims/*` | Direct children |
-| `@ACME/Insurance/schema:` | Content type JSON Schema |
-| `@ACME/Insurance/schema:TypeName` | Schema for a specific named type |
-| `@ACME/Insurance/model:` | Full data model |
-| `@ACME/Insurance/metadata:` | Node without content |
+| `@Cornerstone/schema:` | Content type JSON Schema |
+| `@Cornerstone/schema:TypeName` | Schema for a specific named type |
+| `@Cornerstone/model:` | Full data model |
+| `@Cornerstone/metadata:` | Node without content |
 
 # Include External MCP Servers
 
@@ -277,8 +277,8 @@ The MCP server exposes the same mesh operations as the internal MeshPlugin, so e
 
 **Example — Claude Code using MeshWeaver MCP:**
 ```
-Get("@ACME/Insurance/Claims/*")           -> List all claims
-Get("@ACME/Insurance/schema:")             -> Get content type schema
+Get("@Cornerstone/Claims/*")           -> List all claims
+Get("@Cornerstone/schema:")             -> Get content type schema
 Search("nodeType:Claim status:Open")       -> Find open claims
 Create('{"id": "CLM-NEW", ...}')           -> Create a claim
 ```

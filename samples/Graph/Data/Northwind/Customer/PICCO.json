@@ -1,0 +1,23 @@
+{
+  "id": "PICCO",
+  "namespace": "Northwind/Customer",
+  "name": "Piccolo und mehr",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Piccolo und mehr - Salzburg, Austria",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "PICCO",
+    "companyName": "Piccolo und mehr",
+    "contactName": "Georg Pipps",
+    "contactTitle": "Sales Manager",
+    "city": "Salzburg",
+    "region": "",
+    "postalCode": "5020",
+    "country": "Austria",
+    "phone": "6562-9722",
+    "fax": "6562-9723"
+  }
+}

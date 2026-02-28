@@ -1,0 +1,23 @@
+{
+  "id": "LACOR",
+  "namespace": "Northwind/Customer",
+  "name": "La corne d'abondance",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "La corne d'abondance - Versailles, France",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "LACOR",
+    "companyName": "La corne d'abondance",
+    "contactName": "Daniel Tonini",
+    "contactTitle": "Sales Representative",
+    "city": "Versailles",
+    "region": "",
+    "postalCode": "78000",
+    "country": "France",
+    "phone": "30.59.84.10",
+    "fax": "30.59.85.11"
+  }
+}

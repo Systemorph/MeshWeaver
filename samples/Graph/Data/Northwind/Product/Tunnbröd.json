@@ -1,0 +1,23 @@
+{
+  "id": "Tunnbr\u00f6d",
+  "namespace": "Northwind/Product",
+  "name": "Tunnbr\u00f6d",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Tunnbr\u00f6d - 12 - 250 g pkgs.",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 23,
+    "productName": "Tunnbr\u00f6d",
+    "supplierId": 9,
+    "categoryId": 5,
+    "quantityPerUnit": "12 - 250 g pkgs.",
+    "unitPrice": 9.0,
+    "unitsInStock": 61,
+    "unitsOnOrder": 0,
+    "reorderLevel": 25,
+    "discontinued": false
+  }
+}

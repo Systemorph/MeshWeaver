@@ -1,0 +1,23 @@
+{
+  "id": "ANTON",
+  "namespace": "Northwind/Customer",
+  "name": "Antonio Moreno Taquer\u00eda",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Antonio Moreno Taquer\u00eda - M\u00e9xico D.F., Mexico",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "ANTON",
+    "companyName": "Antonio Moreno Taquer\u00eda",
+    "contactName": "Antonio Moreno",
+    "contactTitle": "Owner",
+    "city": "M\u00e9xico D.F.",
+    "region": "",
+    "postalCode": "05023",
+    "country": "Mexico",
+    "phone": "(5) 555-3932",
+    "fax": ""
+  }
+}

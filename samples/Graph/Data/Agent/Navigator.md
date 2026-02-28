@@ -14,7 +14,7 @@ delegations:
     instructions: Manages the mesh graph structure. Can read, create, update, and delete nodes.
   - agentPath: ACME/TodoAgent
     instructions: "Todo items, categories, task management"
-  - agentPath: ACME/InsuranceAgent
+  - agentPath: CornerstoneAgent
     instructions: "Insurance pricings, property risks"
   - agentPath: ACME/TicTacToePlayer1
     instructions: TicTacToe Player (X) - Plays tic-tac-toe

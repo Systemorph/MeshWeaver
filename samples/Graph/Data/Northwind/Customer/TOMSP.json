@@ -1,0 +1,23 @@
+{
+  "id": "TOMSP",
+  "namespace": "Northwind/Customer",
+  "name": "Toms Spezialit\u00e4ten",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Toms Spezialit\u00e4ten - M\u00fcnster, Germany",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "TOMSP",
+    "companyName": "Toms Spezialit\u00e4ten",
+    "contactName": "Karin Josephs",
+    "contactTitle": "Marketing Manager",
+    "city": "M\u00fcnster",
+    "region": "",
+    "postalCode": "44087",
+    "country": "Germany",
+    "phone": "0251-031259",
+    "fax": "0251-035695"
+  }
+}

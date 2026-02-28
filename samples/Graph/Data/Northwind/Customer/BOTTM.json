@@ -1,0 +1,23 @@
+{
+  "id": "BOTTM",
+  "namespace": "Northwind/Customer",
+  "name": "Bottom-Dollar Markets",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Bottom-Dollar Markets - Tsawassen, Canada",
+  "iconName": "Users",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "BOTTM",
+    "companyName": "Bottom-Dollar Markets",
+    "contactName": "Elizabeth Lincoln",
+    "contactTitle": "Accounting Manager",
+    "city": "Tsawassen",
+    "region": "BC",
+    "postalCode": "T2F 8M4",
+    "country": "Canada",
+    "phone": "(604) 555-4729",
+    "fax": "(604) 555-3745"
+  }
+}

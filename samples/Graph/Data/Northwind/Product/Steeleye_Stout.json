@@ -1,0 +1,23 @@
+{
+  "id": "Steeleye_Stout",
+  "namespace": "Northwind/Product",
+  "name": "Steeleye Stout",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Steeleye Stout - 24 - 12 oz bottles",
+  "iconName": "ShoppingBag",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 35,
+    "productName": "Steeleye Stout",
+    "supplierId": 16,
+    "categoryId": 1,
+    "quantityPerUnit": "24 - 12 oz bottles",
+    "unitPrice": 18.0,
+    "unitsInStock": 20,
+    "unitsOnOrder": 0,
+    "reorderLevel": 15,
+    "discontinued": false
+  }
+}
