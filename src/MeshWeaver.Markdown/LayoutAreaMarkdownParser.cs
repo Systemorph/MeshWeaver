@@ -205,11 +205,6 @@ public class LayoutAreaMarkdownParser : BlockParser
     public const string ModelAreaName = "$Model";
 
     /// <summary>
-    /// Area name for metadata references.
-    /// </summary>
-    public const string MetadataAreaName = "$Metadata";
-
-    /// <summary>
     /// Area name for collection browser references.
     /// </summary>
     public const string CollectionAreaName = "$Collection";
@@ -220,7 +215,7 @@ public class LayoutAreaMarkdownParser : BlockParser
     /// Supports both `address/keyword/path` and `address/keyword:path` formats.
     /// Any prefix that is NOT in this set is treated as a content collection name.
     /// </summary>
-    private static readonly HashSet<string> ReservedKeywords = ["data", "area", "schema", "model", "metadata"];
+    private static readonly HashSet<string> ReservedKeywords = ["data", "area", "schema", "model"];
 
     /// <summary>
     /// Creates the appropriate block type based on the token content.
@@ -265,13 +260,6 @@ public class LayoutAreaMarkdownParser : BlockParser
                 remainingPath,
                 this,
                 isInline),
-            "metadata" => new LayoutAreaComponentInfo(
-                token,
-                address,
-                MetadataAreaName,
-                remainingPath,
-                this,
-                isInline),
             "area" or "" => CreateAreaBlock(token, address, remainingPath, isInline),
             // Any unknown prefix is treated as a content collection name
             // The collection name and path are combined: {collectionName}/{path}
@@ -281,7 +269,7 @@ public class LayoutAreaMarkdownParser : BlockParser
 
     /// <summary>
     /// Creates a content collection block for unknown prefixes.
-    /// Any prefix that is not a reserved keyword (data, area, schema, model, metadata) is treated
+    /// Any prefix that is not a reserved keyword (data, area, schema, model) is treated
     /// as a content collection name (e.g., content:, assets:, files:, docs:).
     /// The collection name and path are combined as: {collectionName}/{path}
     /// Links (@) go to $Collection (file browser), inline (@@) goes to $Content (rendered content).

@@ -7,7 +7,7 @@ using MeshWeaver.Layout.Composition;
 namespace MeshWeaver.Layout.Views;
 
 /// <summary>
-/// Provides the $Data and $Metadata layout areas for unified data references.
+/// Provides the $Data layout area for unified data references.
 /// </summary>
 public static class DataPathViews
 {
@@ -16,12 +16,7 @@ public static class DataPathViews
     /// </summary>
     public const string DataAreaName = "$Data";
 
-    /// <summary>
-    /// Area name for metadata references. Uses $ prefix to avoid name collisions.
-    /// </summary>
-    public const string MetadataAreaName = "$Metadata";
-
-    private const int MaxTruncatedLines = 100;
+private const int MaxTruncatedLines = 100;
 
     /// <summary>
     /// Adds the $Data layout area for unified data references.
@@ -29,8 +24,7 @@ public static class DataPathViews
     /// </summary>
     public static LayoutDefinition AddDataReferenceView(this LayoutDefinition layout)
         => layout
-            .WithView(ctx => ctx.Area == DataAreaName, DataContentView)
-            .WithView(ctx => ctx.Area == MetadataAreaName, MetadataContentView);
+            .WithView(ctx => ctx.Area == DataAreaName, DataContentView);
 
     /// <summary>
     /// Renders data content references as JSON in a markdown code block.
@@ -118,42 +112,6 @@ public static class DataPathViews
 
                 return markdown;
             });
-    }
-
-    /// <summary>
-    /// Renders metadata references as JSON in a markdown code block.
-    /// Uses GetDataRequest with MetadataReference to get MeshNode with Content stripped.
-    /// </summary>
-    [Browsable(false)]
-    private static IObservable<UiControl> MetadataContentView(LayoutAreaHost host, RenderingContext ctx)
-    {
-        return Observable.FromAsync(async ct =>
-        {
-            try
-            {
-                var response = await host.Hub.AwaitResponse(
-                    new GetDataRequest(new MetadataReference()),
-                    ct);
-
-                if (response.Message.Error != null)
-                    return Controls.Html($"<div class='error'>{response.Message.Error}</div>");
-
-                var json = SerializeToJson(response.Message.Data, host.Hub.JsonSerializerOptions);
-
-                if (string.IsNullOrEmpty(json))
-                    return Controls.Html("<div class='muted'>No metadata</div>");
-
-                return (UiControl)Controls.Markdown($"```json\n{json}\n```")
-                    .WithStyle(style => style
-                        .WithWidth("100%")
-                        .WithMaxHeight("400px")
-                        .WithOverflow("auto"));
-            }
-            catch (Exception ex)
-            {
-                return Controls.Html($"<div class='error'>Error fetching metadata: {ex.Message}</div>");
-            }
-        });
     }
 
     /// <summary>

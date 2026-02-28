@@ -33,7 +33,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         return path;
     }
 
-    [Description("Retrieves a node from the mesh by path. Supports Unified Path prefixes (schema:, model:, data:, metadata:).")]
+    [Description("Retrieves a node from the mesh by path. Supports Unified Path prefixes (schema:, model:, data:).")]
     public async Task<string> Get(
         [Description("Path to data (e.g., @graph/org1, @NodeType/*, @ACME/schema:, @ACME/model:)")] string path)
     {

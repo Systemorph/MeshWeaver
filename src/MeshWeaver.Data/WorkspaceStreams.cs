@@ -156,7 +156,6 @@ c => c
         SchemaReference => [],
         DataModelReference => [],
         NodeTypeReference => [],
-        MetadataReference => [],
         _ => throw new NotSupportedException($"Collection reference {reference.GetType().Name} not supported.")
     };
 

@@ -400,15 +400,6 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         stream.Should().NotBeNull();
     }
 
-    [Fact]
-    public async Task ReduceMetadataReference()
-    {
-        var host = GetHost();
-        var stream = host.GetWorkspace()
-            .GetStream(new MetadataReference(), x => x.ReturnNullWhenNotPresent());
-        stream.Should().NotBeNull();
-    }
-
     /// <summary>
     /// Tests that GetSchemaRequest returns a valid JSON schema for MyData type
     /// </summary>

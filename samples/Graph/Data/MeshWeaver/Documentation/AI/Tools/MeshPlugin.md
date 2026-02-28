@@ -27,7 +27,6 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 | `Get('@path/schema:')` | JSON Schema for the node's content type |
 | `Get('@path/schema:TypeName')` | JSON Schema for a specific named type |
 | `Get('@path/model:')` | Full data model with all registered types |
-| `Get('@path/metadata:')` | MeshNode without Content (reduced payload) |
 
 For the complete Unified Path reference:
 

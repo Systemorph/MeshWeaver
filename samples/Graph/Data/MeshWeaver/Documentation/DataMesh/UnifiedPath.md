@@ -28,7 +28,6 @@ These prefixes have special meaning and map to specific layout areas:
 | `data:` | Access the node's Content data as JSON |
 | `schema:` | Access the ContentType schema |
 | `model:` | Access the data model |
-| `metadata:` | Access MeshNode without Content |
 | `area:` | Access a specific layout area |
 
 ## Content Collection Prefixes
@@ -66,7 +65,7 @@ When you use `@path` or `@@path` **without a prefix**, it refers to a **layout a
 
 ## With Prefix = Specific Resource Type
 
-Reserved keywords (`data:`, `schema:`, `metadata:`, `area:`) access specific resource types.
+Reserved keywords (`data:`, `schema:`, `area:`) access specific resource types.
 Any other prefix (like `content:`, `assets:`, `files:`) accesses files from a content collection:
 
 ```
@@ -74,7 +73,6 @@ Any other prefix (like `content:`, `assets:`, `files:`) accesses files from a co
 @@node/assets:logo.svg    --> embeds file from "assets" collection
 @@node/data:              --> embeds the node's Content data as JSON
 @@node/schema:            --> embeds the ContentType schema
-@@node/metadata:          --> embeds MeshNode without Content
 ```
 
 ## Content Collections
@@ -159,22 +157,7 @@ This allows flexible naming of content collections to match your project structu
 
 ---
 
-## 6. Metadata (MeshNode without Content)
-
-**Syntax:**
-```
-@@MeshWeaver/Documentation/DataMesh/UnifiedPath/metadata:
-```
-
-Returns the MeshNode with `Content` set to null, reducing payload size when you only need node metadata (Path, NodeType, etc.).
-
-**Result:**
-
-@@MeshWeaver/Documentation/DataMesh/UnifiedPath/metadata:
-
----
-
-## 7. Hyperlinks
+## 6. Hyperlinks
 
 **Syntax:**
 ```
