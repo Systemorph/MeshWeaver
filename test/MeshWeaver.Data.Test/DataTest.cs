@@ -326,6 +326,89 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         collection.Should().BeEquivalentTo(MyData.InitialData);
     }
 
+    [Fact]
+    public async Task ReduceSchemaReference()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference(nameof(MyData)))!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(nameof(MyData));
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
+        GetPropertyType(schemaJson.RootElement).Should().Contain("object");
+    }
+
+    [Fact]
+    public async Task ReduceSchemaReference_NullType_ReturnsDefaultSchema()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference(null))!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+    }
+
+    [Fact]
+    public async Task ReduceSchemaReference_UnknownType_ReturnsEmptySchema()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference("NonExistentType"))!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be("NonExistentType");
+        schemaInfo.Schema.Should().Be("{}");
+    }
+
+    [Fact]
+    public async Task ReduceDataModelReference()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new DataModelReference())!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var types = result.Should().BeAssignableTo<IEnumerable<TypeDescription>>().Which.ToArray();
+        types.Should().NotBeEmpty();
+        types.Should().Contain(t => t.Name.Contains("MyData"));
+    }
+
+    [Fact]
+    public async Task ReduceNodeTypeReference()
+    {
+        var host = GetHost();
+        var stream = host.GetWorkspace()
+            .GetStream(new NodeTypeReference(), x => x.ReturnNullWhenNotPresent());
+        stream.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task ReduceMetadataReference()
+    {
+        var host = GetHost();
+        var stream = host.GetWorkspace()
+            .GetStream(new MetadataReference(), x => x.ReturnNullWhenNotPresent());
+        stream.Should().NotBeNull();
+    }
+
     /// <summary>
     /// Tests that GetSchemaRequest returns a valid JSON schema for MyData type
     /// </summary>
