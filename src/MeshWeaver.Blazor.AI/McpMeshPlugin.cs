@@ -51,7 +51,7 @@ public class McpMeshPlugin
     [McpServerTool]
     [Description("Retrieves a node from the mesh by path. Supports @ prefix shorthand, /* for children, and Unified Path prefixes (path/schema:, path/model:, path/metadata:).")]
     public async Task<string> Get(
-        [Description("Path to data (e.g., @graph/org1, @Agent/*, @ACME/Insurance/schema:, @ACME/Insurance/schema:TypeName, @ACME/Insurance/model:)")] string path)
+        [Description("Path to data (e.g., @graph/org1, @Agent/*, @Cornerstone/schema:, @Cornerstone/schema:TypeName, @Cornerstone/model:)")] string path)
     {
         logger.LogInformation("MCP Get called with path={Path}", path);
 

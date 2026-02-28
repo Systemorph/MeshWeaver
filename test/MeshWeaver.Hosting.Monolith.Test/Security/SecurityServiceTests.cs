@@ -373,7 +373,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         {
             "MeshWeaver/Documentation/Architecture",
             "Systemorph",
-            "ACME/Software",
+            "ACME",
             "some/random/path"
         };
 
@@ -390,10 +390,10 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         const string userId = "Alice";
 
-        var canEditAcme = await securityService.HasPermissionAsync("ACME/Software/Project/Task1", userId, Permission.Update, TestTimeout);
+        var canEditAcme = await securityService.HasPermissionAsync("ACME/Project/Task1", userId, Permission.Update, TestTimeout);
         var canEditMeshWeaver = await securityService.HasPermissionAsync("MeshWeaver/Documentation", userId, Permission.Update, TestTimeout);
 
-        canEditAcme.Should().BeTrue("Alice should be able to edit in ACME/Software namespace");
+        canEditAcme.Should().BeTrue("Alice should be able to edit in Software namespace");
         canEditMeshWeaver.Should().BeFalse("Alice should NOT be able to edit in MeshWeaver namespace");
     }
 

@@ -65,21 +65,21 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         {
             // Microsoft 2026 - PropertyRisks from JSON
             new object[] { new DataLoadingTestCase(
-                "ACME/Insurance/Microsoft/2026",
+                "Cornerstone/Microsoft/2026",
                 "PropertyRisk",
                 ExpectedMinCount: 1,
                 Description: "Microsoft 2026 should load PropertyRisks from JSON") },
 
             // Microsoft 2026 - ReinsuranceAcceptances from Slip.md
             new object[] { new DataLoadingTestCase(
-                "ACME/Insurance/Microsoft/2026",
+                "Cornerstone/Microsoft/2026",
                 "ReinsuranceAcceptance",
                 ExpectedMinCount: 1,
                 Description: "Microsoft 2026 should load ReinsuranceAcceptances from Slip.md") },
 
             // Microsoft 2026 - ReinsuranceSections from Slip.md
             new object[] { new DataLoadingTestCase(
-                "ACME/Insurance/Microsoft/2026",
+                "Cornerstone/Microsoft/2026",
                 "ReinsuranceSection",
                 ExpectedMinCount: 1,
                 Description: "Microsoft 2026 should load ReinsuranceSections from Slip.md") },
@@ -89,7 +89,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that a node type correctly loads data from its configured source documents.
     /// This is a parameterized test that can be used for any node type.
     /// </summary>
-    [Theory(Timeout = 60000)]
+    [Theory(Timeout = 30000)]
     [MemberData(nameof(CornerstonePricingTestCases))]
     public async Task NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
     {
@@ -110,7 +110,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
         // Get data for the specified type
         var data = await GetDynamicObservable(workspace, testCase.TypeName)
             .Where(d => d != null && d.Length > 0)
-            .Timeout(30.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync();
 
         // Verify data was loaded
@@ -138,7 +138,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that a node hub can be initialized and has the expected data types registered.
     /// </summary>
     [Theory(Timeout = 30000)]
-    [InlineData("ACME/Insurance/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
+    [InlineData("Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
     public async Task NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
     {
         var client = GetClient();
@@ -168,10 +168,10 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// This helps catch configuration issues early.
     /// </summary>
     [Theory(Timeout = 5000)]
-    [InlineData("ACME/Insurance/Microsoft/2026", "Submissions/Slip.md")]
+    [InlineData("Cornerstone/Microsoft/2026", "Submissions/Slip.md")]
     public void SourceDocuments_ExistInFileSystem(string nodeAddress, string relativePath)
     {
-        var basePath = TestPaths.SamplesGraphData;
+        var basePath = Path.Combine(TestPaths.SamplesGraph, "attachments");
         var addressParts = nodeAddress.Split('/');
 
         // Build the full path: basePath/Cornerstone/Microsoft/2026/Submissions/file
@@ -185,10 +185,10 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that data loaded from source documents has valid structure.
     /// Checks that key properties are present and have valid values.
     /// </summary>
-    [Theory(Timeout = 60000)]
-    [InlineData("ACME/Insurance/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
-    [InlineData("ACME/Insurance/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
-    [InlineData("ACME/Insurance/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
+    [Theory(Timeout = 30000)]
+    [InlineData("Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
+    [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
+    [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]
     public async Task LoadedData_HasValidStructure(string nodeAddress, string typeName, params string[] requiredProperties)
     {
         var client = GetClient();
@@ -207,7 +207,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
 
         var data = await GetDynamicObservable(workspace, typeName)
             .Where(d => d != null && d.Length > 0)
-            .Timeout(30.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync();
 
         // Verify each record has the required properties with non-null values

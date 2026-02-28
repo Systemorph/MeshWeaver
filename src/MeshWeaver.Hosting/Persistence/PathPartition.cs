@@ -7,7 +7,7 @@ public static class PathPartition
 {
     /// <summary>
     /// Extracts the first segment from a path.
-    /// "ACME/Insurance/Article" → "ACME"
+    /// "Cornerstone/Article" → "ACME"
     /// "ACME" → "ACME" (root node)
     /// "" or null → null (root level, no partition)
     /// </summary>

@@ -24,7 +24,7 @@ public partial class ContentIntegrityTest
     /// <summary>
     /// Discovers all ContentCatalog instances by scanning JSON files.
     /// Returns node paths derived from file system location (matching how FileSystemStorageAdapter works).
-    /// For example, a file at "ACME/Northwind/Reports.json" yields path "ACME/Northwind/Reports".
+    /// For example, a file at "Northwind/Reports.json" yields path "Northwind/Reports".
     /// Returns a placeholder if no ContentCatalog nodes exist to prevent xUnit "No data found" error.
     /// </summary>
     public static IEnumerable<object[]> GetContentCatalogNodes()
@@ -136,8 +136,8 @@ public partial class ContentIntegrityTest
             if (segments.Length < 2) continue;
 
             // Try to find the matching node path by progressively checking prefixes
-            // e.g., for "ACME/Northwind/Analytics/SalesReport", check:
-            //   "ACME/Northwind/Analytics/SalesReport", "ACME/Northwind/Analytics", "ACME/Northwind", "ACME"
+            // e.g., for "Northwind/Analytics/SalesReport", check:
+            //   "Northwind/Analytics/SalesReport", "Northwind/Analytics", "Northwind", "ACME"
             var nodeFound = false;
             for (int i = segments.Length; i >= 2; i--)
             {

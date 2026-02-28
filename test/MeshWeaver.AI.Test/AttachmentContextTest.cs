@@ -138,18 +138,18 @@ public class AttachmentContextTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Helper: sets up an AgentChatClient with context pointing to ACME/Software.
+    /// Helper: sets up an AgentChatClient with context pointing to Software.
     /// </summary>
     private async Task<(AgentChatClient Chat, CapturingChatClientFactory Factory)> SetupAgentChatAsync(CancellationToken ct)
     {
         var factory = (CapturingChatClientFactory)Mesh.ServiceProvider.GetRequiredService<IChatClientFactory>();
 
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
-        await agentChat.InitializeAsync("ACME/Software");
+        await agentChat.InitializeAsync("ACME");
 
         var query = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/Software scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:Software scope:self", null, ct))
         {
             contextNode = node;
             break;
@@ -158,11 +158,11 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         agentChat.SetContext(new AgentContext
         {
-            Address = new Address("ACME", "Software"),
+            Address = new Address("ACME", "ACME"),
             Node = contextNode
         });
 
-        agentChat.SetThreadId($"ACME/Software/{Guid.NewGuid().AsString()}");
+        agentChat.SetThreadId($"ACME/{Guid.NewGuid().AsString()}");
 
         var agents = await agentChat.GetOrderedAgentsAsync();
         agents.Should().NotBeEmpty();
@@ -182,7 +182,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
         // Set an attachment to a known path in test data
-        agentChat.SetAttachments(["ACME/Software"]);
+        agentChat.SetAttachments(["ACME"]);
 
         // Send a user message
         const string userText = "What is the launch status?";
@@ -214,7 +214,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
         // First message with attachment
-        agentChat.SetAttachments(["ACME/Software"]);
+        agentChat.SetAttachments(["ACME"]);
         await foreach (var _ in agentChat.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "First message")], ct)) { }
 
@@ -225,7 +225,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var messageCountAfterFirst = factory.AllCapturedMessages.Count;
 
         // Second message without setting attachments again (should be cleared)
-        agentChat.SetThreadId($"ACME/Software/{Guid.NewGuid().AsString()}");
+        agentChat.SetThreadId($"ACME/{Guid.NewGuid().AsString()}");
         await foreach (var _ in agentChat.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "Second message")], ct)) { }
 
@@ -270,7 +270,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
-        agentChat.SetAttachments(["ACME/Software"]);
+        agentChat.SetAttachments(["ACME"]);
 
         const string userText = "Check status please";
         await foreach (var _ in agentChat.GetResponseAsync(
@@ -345,7 +345,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
-        // The setup already sets a context (ACME/Software). Verify it appears in the prompt
+        // The setup already sets a context (Software). Verify it appears in the prompt
         // even when an agent attachment is also present (agent attachments are filtered,
         // but the main context section is a completely separate code path).
         agentChat.SetAttachments(["Agent/Research"]);

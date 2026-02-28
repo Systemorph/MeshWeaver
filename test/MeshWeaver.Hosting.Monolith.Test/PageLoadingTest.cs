@@ -190,9 +190,9 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// This specifically tests the CombineLatest fix with StartWith.
     /// </summary>
     [Theory(Timeout = 30000)]
-    [InlineData("ACME/Insurance/Microsoft")]
-    [InlineData("ACME/Insurance/EuropeanLogistics")]
-    [InlineData("ACME/Insurance/GlobalManufacturing")]
+    [InlineData("Cornerstone/Microsoft")]
+    [InlineData("Cornerstone/EuropeanLogistics")]
+    [InlineData("Cornerstone/GlobalManufacturing")]
     public async Task CornerstoneInsured_LoadsWithoutHanging(string nodePath)
     {
         await AssertNodeLoadsWithoutHanging(nodePath);
@@ -205,7 +205,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact(Timeout = 30000)]
     public async Task CornerstoneInsured_PricingCatalog_LoadsWithoutHanging()
     {
-        await AssertAreaLoadsWithoutHanging("ACME/Insurance/Microsoft", "PricingCatalog");
+        await AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "PricingCatalog");
     }
 
     #endregion
@@ -248,7 +248,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var nodePaths = new[]
         {
-            "ACME/Insurance/Microsoft",
+            "Cornerstone/Microsoft",
             "ACME",
             "User/Alice",
             "Northwind"

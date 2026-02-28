@@ -93,7 +93,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         // Query for all Todo items under ACME/ProductLaunch/Todo (same pattern used by ProjectViews)
-        var query = "path:ACME/Software/ProductLaunch/Todo nodeType:ACME/Software/Project/Todo scope:subtree";
+        var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
@@ -106,7 +106,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         }
 
         results.Should().NotBeEmpty("Should find Todo items under ACME/ProductLaunch/Todo");
-        results.Should().OnlyContain(n => n.NodeType == "ACME/Software/Project/Todo", "All results should be Todo nodes");
+        results.Should().OnlyContain(n => n.NodeType == "ACME/Project/Todo", "All results should be Todo nodes");
     }
 
     /// <summary>
@@ -118,7 +118,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         // Query for all Todo items - we have 21 sample Todo items
-        var query = "path:ACME/Software/ProductLaunch/Todo nodeType:ACME/Software/Project/Todo scope:subtree";
+        var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
@@ -131,7 +131,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         }
 
         results.Should().HaveCountGreaterThanOrEqualTo(23, "Should find at least 23 Todo sample items (21 original + 2 backlog, plus any test items)");
-        results.Should().OnlyContain(n => n.NodeType == "ACME/Software/Project/Todo", "All results should be Todo nodes");
+        results.Should().OnlyContain(n => n.NodeType == "ACME/Project/Todo", "All results should be Todo nodes");
     }
 
     /// <summary>
@@ -143,19 +143,19 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         // Query without nodeType filter
-        var queryWithoutFilter = "path:ACME/Software/ProductLaunch/Todo scope:subtree";
+        var queryWithoutFilter = "path:ACME/ProductLaunch/Todo scope:subtree";
         var allResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithoutFilter), null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Query with nodeType filter
-        var queryWithFilter = "path:ACME/Software/ProductLaunch/Todo nodeType:ACME/Software/Project/Todo scope:subtree";
+        var queryWithFilter = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         var filteredResults = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(queryWithFilter), null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Without filter: {allResults.Count}, With filter: {filteredResults.Count}");
 
         filteredResults.Should().NotBeEmpty("Should find Todo nodes with filter");
-        filteredResults.Should().OnlyContain(n => n.NodeType == "ACME/Software/Project/Todo", "All filtered results should be Todo nodes");
+        filteredResults.Should().OnlyContain(n => n.NodeType == "ACME/Project/Todo", "All filtered results should be Todo nodes");
     }
 
     #endregion
@@ -172,7 +172,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var workspace = GetClient().GetWorkspace();
         // TodaysFocus is the overview/summary view showing urgent items
         var reference = new LayoutAreaReference("TodaysFocus");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -196,7 +196,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("AllTasks");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -221,7 +221,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("TodosByCategory");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -249,7 +249,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var workspace = GetClient().GetWorkspace();
         // "Planning" group contains Backlog view
         var reference = new LayoutAreaReference("Backlog");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -279,7 +279,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // in the test infrastructure. The view will render with "Guest" user context.
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("MyTasks");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -304,7 +304,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("Backlog");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -329,7 +329,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("TodaysFocus");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -360,7 +360,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         // Query for all Todo items
-        var query = "path:ACME/Software/ProductLaunch/Todo nodeType:ACME/Software/Project/Todo scope:subtree";
+        var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
         Output.WriteLine($"Querying: {query}");
 
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
@@ -431,7 +431,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         // With the fix, it should show "Guest" (the fallback) with no tasks
         var workspace = GetClient().GetWorkspace();
         var reference = new LayoutAreaReference("MyTasks");
-        var projectAddress = new Address("ACME/Software/ProductLaunch");
+        var projectAddress = new Address("ACME/ProductLaunch");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             projectAddress,
@@ -458,7 +458,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         // Arrange: Query all Todo items to verify test data
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var query = "path:ACME/Software/ProductLaunch/Todo nodeType:ACME/Software/Project/Todo scope:subtree";
+        var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
 
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);

@@ -161,11 +161,11 @@ public class MarkdownFileParserTest
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/root/ACME/Insurance/doc.md", content, "ACME/Insurance/doc.md");
+        var node = await _parser.ParseAsync("/root/Cornerstone/doc.md", content, "Cornerstone/doc.md");
 
         // Assert
         node.Should().NotBeNull();
-        node!.Icon.Should().Be("/static/storage/content/ACME/Insurance/icons/custom.svg");
+        node!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
     }
 
     [Fact(Timeout = 10000)]
@@ -355,8 +355,8 @@ public class MarkdownFileParserTest
             """;
 
         // Act - Parse (resolves relative icon), serialize, re-parse
-        var node = await _parser.ParseAsync("/root/ACME/Insurance/doc.md", originalContent, "ACME/Insurance/doc.md");
-        node!.Icon.Should().Be("/static/storage/content/ACME/Insurance/icons/custom.svg");
+        var node = await _parser.ParseAsync("/root/Cornerstone/doc.md", originalContent, "Cornerstone/doc.md");
+        node!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
 
         var serialized = await _parser.SerializeAsync(node);
 
@@ -364,11 +364,11 @@ public class MarkdownFileParserTest
         serialized.Should().NotContain("/static/storage/content/");
 
         // Re-parse — Thumbnail is still in YAML and should resolve again
-        var reparsed = await _parser.ParseAsync("/root/ACME/Insurance/doc.md", serialized, "ACME/Insurance/doc.md");
+        var reparsed = await _parser.ParseAsync("/root/Cornerstone/doc.md", serialized, "Cornerstone/doc.md");
 
         // Assert — icon resolves to the same absolute URL (no double-resolution)
         reparsed.Should().NotBeNull();
-        reparsed!.Icon.Should().Be("/static/storage/content/ACME/Insurance/icons/custom.svg");
+        reparsed!.Icon.Should().Be("/static/storage/content/Cornerstone/icons/custom.svg");
     }
 
     [Fact(Timeout = 10000)]

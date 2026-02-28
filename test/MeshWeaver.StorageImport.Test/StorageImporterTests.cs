@@ -71,8 +71,8 @@ public class StorageImporterTests : IDisposable
         result.NodesImported.Should().BeGreaterThan(0);
 
         // ACME children should be copied
-        var todoAgentExists = await target.ExistsAsync("ACME/Software/Project/TodoAgent", ct);
-        todoAgentExists.Should().BeTrue("ACME/Software/Project/TodoAgent should have been imported");
+        var todoAgentExists = await target.ExistsAsync("ACME/Project/TodoAgent", ct);
+        todoAgentExists.Should().BeTrue("ACME/Project/TodoAgent should have been imported");
 
         // Nodes outside ACME should NOT be copied
         var executorExists = await target.ExistsAsync("Executor", ct);

@@ -83,7 +83,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 30000)]
     public async Task ACME_Organization_CanBeInitialized()
     {
-        var acmeAddress = new Address("ACME/Software");
+        var acmeAddress = new Address("ACME");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -101,7 +101,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ACME_Project_NodeType_CanBeInitialized()
     {
-        var projectTypeAddress = new Address("ACME/Software/Project");
+        var projectTypeAddress = new Address("ACME/Project");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -119,7 +119,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ACME_Todo_NodeType_CanBeInitialized()
     {
-        var todoTypeAddress = new Address("ACME/Software/Project/Todo");
+        var todoTypeAddress = new Address("ACME/Project/Todo");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -137,7 +137,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ProductLaunch_Instance_CanBeInitialized()
     {
-        var productLaunchAddress = new Address("ACME/Software/ProductLaunch");
+        var productLaunchAddress = new Address("ACME/ProductLaunch");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -155,7 +155,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task Task_Instance_CanBeInitialized()
     {
-        var taskAddress = new Address("ACME/Software/ProductLaunch/Todo/DefinePersona");
+        var taskAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
 
         var client = GetClient(c => c.AddData(data => data));
 
@@ -175,12 +175,12 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/Software/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
+        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");
         children.Should().HaveCountGreaterThan(10, "ProductLaunch should have at least 10 tasks");
-        children.Should().Contain(n => n.Path == "ACME/Software/ProductLaunch/Todo/DefinePersona");
+        children.Should().Contain(n => n.Path == "ACME/ProductLaunch/Todo/DefinePersona");
     }
 
     /// <summary>
@@ -191,9 +191,9 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     {
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        var task = await persistence.GetNodeAsync("ACME/Software/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var task = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
 
         task.Should().NotBeNull();
-        task!.NodeType.Should().Be("ACME/Software/Project/Todo");
+        task!.NodeType.Should().Be("ACME/Project/Todo");
     }
 }

@@ -11,10 +11,10 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "namespace:{node.namespace} nodeType:Group scope:selfAndAncestors" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME/Software/Project");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME/Project");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("namespace:ACME/Software/Project nodeType:Group scope:selfAndAncestors");
+        resolved[0].Should().Be("namespace:Software/Project nodeType:Group scope:selfAndAncestors");
     }
 
     [Fact]
@@ -22,10 +22,10 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "path:{node.path} nodeType:AccessAssignment" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, null, "ACME/Software/Project/Alice_Access");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, null, "ACME/Project/Alice_Access");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("path:ACME/Software/Project/Alice_Access nodeType:AccessAssignment");
+        resolved[0].Should().Be("path:Software/Project/Alice_Access nodeType:AccessAssignment");
     }
 
     [Fact]
@@ -33,10 +33,10 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "namespace:{node.namespace} path:{node.path} nodeType:Role" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Software/Alice_Access");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Alice_Access");
 
         resolved.Should().HaveCount(1);
-        resolved[0].Should().Be("namespace:ACME path:ACME/Software/Alice_Access nodeType:Role");
+        resolved[0].Should().Be("namespace:ACME path:Software/Alice_Access nodeType:Role");
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class MeshNodeAttributeResolveQueriesTest
     {
         var queries = new[] { "namespace:User nodeType:User", "nodeType:Role" };
 
-        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Software/Alice_Access");
+        var resolved = MeshNodeAttribute.ResolveQueries(queries, "ACME", "ACME/Alice_Access");
 
         resolved.Should().BeEquivalentTo(queries);
     }
