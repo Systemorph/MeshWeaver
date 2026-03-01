@@ -599,12 +599,12 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task AnonymousUser_PermissionsAreNone_ByDefault()
     {
-        // Arrange — no role assigned to anonymous/"Public" user
+        // Arrange — no role assigned to anonymous user
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        // Act — check effective permissions for "Public" on an unassigned path
+        // Act — check effective permissions for "Anonymous" on an unassigned path
         var permissions = await securityService.GetEffectivePermissionsAsync(
-            "rls/no_public_access", WellKnownUsers.Public, TestTimeout);
+            "rls/no_public_access", WellKnownUsers.Anonymous, TestTimeout);
 
         // Assert
         permissions.Should().Be(Permission.None,
@@ -612,22 +612,22 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     }
 
     [Fact]
-    public async Task AnonymousUser_WithPublicViewerRole_CannotCreate()
+    public async Task AnonymousUser_WithAnonymousViewerRole_CannotCreate()
     {
-        // Arrange — grant Public user Viewer role (Read only)
+        // Arrange — grant Anonymous user Viewer role (Read only)
         var client = GetClient();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         const string parentPath = "rls/public_viewer";
         await securityService.AddUserRoleAsync(
-            WellKnownUsers.Public, "Viewer", parentPath, "system", TestTimeout);
+            WellKnownUsers.Anonymous, "Viewer", parentPath, "system", TestTimeout);
 
         // Verify permissions
         var permissions = await securityService.GetEffectivePermissionsAsync(
-            parentPath, WellKnownUsers.Public, TestTimeout);
-        permissions.Should().Be(Permission.Read, "Public Viewer should only have Read");
+            parentPath, WellKnownUsers.Anonymous, TestTimeout);
+        permissions.Should().Be(Permission.Read, "Anonymous Viewer should only have Read");
 
-        // Act — anonymous Create (CreatedBy = empty, will resolve to Public user)
+        // Act — anonymous Create (CreatedBy = empty, will resolve to Anonymous user)
         var node = new MeshNode("PublicCreate", parentPath)
         {
             Name = "Public Create",
@@ -640,7 +640,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Assert
         response.Message.Success.Should().BeFalse(
-            "Public/Viewer user must not be able to create nodes");
+            "Anonymous/Viewer user must not be able to create nodes");
     }
 
     [Fact]

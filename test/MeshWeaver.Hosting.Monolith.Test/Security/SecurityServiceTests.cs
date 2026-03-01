@@ -185,12 +185,12 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 10000)]
-    public async Task PublicUser_GetsAnonymousPermissions()
+    public async Task AnonymousUser_GetsAnonymousPermissions()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         const string targetNamespace = "org/public/area";
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", targetNamespace, "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", targetNamespace, "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync(targetNamespace, "", TestTimeout);
 
