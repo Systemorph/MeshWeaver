@@ -17,6 +17,7 @@ using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
 using Memex.Portal.Shared.Admin;
 using Memex.Portal.Shared.Authentication;
+using Memex.Portal.Shared.Settings;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
@@ -409,7 +410,7 @@ public static class MemexConfiguration
                             .MapContentCollection("attachments", contentStorageConfig.Name, $"attachments/{nodePath}");
                     }
 
-                    return config.AddDefaultLayoutAreas().AddThreadsLayoutArea();
+                    return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })
                 // Register in-memory activity store for non-database scenarios
                 .ConfigureServices(services =>

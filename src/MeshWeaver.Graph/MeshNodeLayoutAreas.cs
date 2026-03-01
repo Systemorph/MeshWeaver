@@ -87,6 +87,7 @@ public static class MeshNodeLayoutAreas
             .WithNodeOperationHandlers()
             .AddMeshDataSource()
             .AddDefaultMeshMenu()
+            .AddDefaultSettingsMenuItems()
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
