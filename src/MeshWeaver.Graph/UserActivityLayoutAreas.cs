@@ -274,41 +274,39 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Builds a "Discover Content" section with a search box for new users.
+    /// Builds a "Discover Content" section showing doc sections for new users.
+    /// Only shows direct children (sections) — not all nested pages.
     /// </summary>
     private static async Task<UiControl> BuildSuggestedContent(LayoutAreaHost host)
     {
         var section = Controls.Stack.WithVerticalGap(8);
         section = section.WithView(Controls.PaneHeader("Discover"));
 
-        // Show a search control so users can explore the mesh
         var searchControl = Controls.MeshSearch
             .WithPlaceholder("Search for content to explore...")
-            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithMaxColumns(2)
+            .WithItemLimit(6)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false);
 
-        // Try to find documentation namespace to pre-populate
+        // Try to find documentation namespace and show its direct sections
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         if (meshCatalog != null)
         {
-            // Query root-level nodes to find documentation
             var rootNodes = new List<MeshNode>();
             await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
-            {
                 rootNodes.Add(node);
-            }
 
-            // Find the documentation node specifically
             var docNode = rootNodes.FirstOrDefault(n =>
                 n.Category?.Contains("Documentation", StringComparison.OrdinalIgnoreCase) == true
                 || n.Name?.Contains("Documentation", StringComparison.OrdinalIgnoreCase) == true);
 
             if (docNode != null)
             {
+                // scope:children — only direct sections, not every nested page
                 searchControl = searchControl
-                    .WithHiddenQuery($"namespace:{docNode.Path} scope:descendants")
+                    .WithHiddenQuery($"path:{docNode.Path} scope:children")
                     .WithShowSearchBox(true);
             }
         }
@@ -319,6 +317,7 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Builds quick links to root-level content as a replacement for empty "Recently Viewed".
+    /// Excludes system node types (AccessAssignment, NodeType, etc.).
     /// </summary>
     private static UiControl BuildQuickLinks(LayoutAreaHost host)
     {
@@ -327,6 +326,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;\">Suggested pages:</div>"));
 
         var searchControl = Controls.MeshSearch
+            .WithHiddenQuery("-nodeType:(AccessAssignment OR NodeType OR User OR Role OR Group) scope:children")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithItemLimit(5)
