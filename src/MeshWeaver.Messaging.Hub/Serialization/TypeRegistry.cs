@@ -84,6 +84,18 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeDefinition = typeByName.GetValueOrDefault(name);
         if (typeDefinition != null)
             return true;
+        // Handle nullable syntax (e.g., "Int32?" -> Nullable<Int32>)
+        if (name.EndsWith('?'))
+        {
+            var underlyingName = name[..^1];
+            if (TryGetType(underlyingName, out var underlyingDef) && underlyingDef != null)
+            {
+                var nullableType = typeof(Nullable<>).MakeGenericType(underlyingDef.Type);
+                typeDefinition = new TypeDefinition(nullableType, name, keyFunctionBuilder);
+                return true;
+            }
+            return false;
+        }
         if (name.Contains('[') && name.EndsWith(']'))
         {
             var typeName = name.Substring(0, name.IndexOf('['));
