@@ -51,10 +51,10 @@ public class QueryTests
             NodeType = "Project"
         }, _options, TestContext.Current.CancellationToken);
 
-        // Grant Public Read access so query tests work without explicit userId
+        // Grant Anonymous Read access so query tests work without explicit userId
         var ac = _fixture.AccessControl;
-        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
-        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("Contoso", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
     }
 
     [Fact]

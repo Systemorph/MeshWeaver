@@ -1,5 +1,6 @@
 @page "/"
 @using MeshWeaver.Blazor.Components
+@using MeshWeaver.Mesh.Security
 @using MeshWeaver.Messaging
 @inject AccessService AccessService
 @inject NavigationManager Navigation
@@ -14,9 +15,9 @@
 @code {
     private bool IsRealUser =>
         AccessService?.Context != null
-        && !string.Equals(AccessService.Context.ObjectId, "Public", StringComparison.OrdinalIgnoreCase)
         && !string.IsNullOrEmpty(AccessService.Context.ObjectId)
-        && !AccessService.Context.IsVirtual;
+        && !AccessService.Context.IsVirtual
+        && !string.Equals(AccessService.Context.ObjectId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
 
     private string UserAddress => $"User/{AccessService?.Context?.ObjectId}";
 

@@ -6,8 +6,14 @@ namespace MeshWeaver.Mesh.Security;
 public static class WellKnownUsers
 {
     /// <summary>
-    /// The "Public" user represents anonymous/unauthenticated access.
-    /// Assign roles to "Public" to grant permissions to anonymous users.
+    /// The "Anonymous" user represents unauthenticated/virtual access.
+    /// Assign roles to "Anonymous" to grant permissions to visitors who haven't logged in.
+    /// </summary>
+    public const string Anonymous = "Anonymous";
+
+    /// <summary>
+    /// The "Public" user represents the baseline permissions for all authenticated users.
+    /// Every logged-in user inherits "Public" permissions in addition to their own.
     /// </summary>
     public const string Public = "Public";
 }

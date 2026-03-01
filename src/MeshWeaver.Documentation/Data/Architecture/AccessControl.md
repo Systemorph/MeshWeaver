@@ -178,17 +178,31 @@ public interface ISecurityService
 }
 ```
 
-# Anonymous (Public) Access
+# Anonymous and Public Access
 
-The well-known user `"Public"` represents anonymous/unauthenticated users. When no user context is available (empty or null userId), permissions are evaluated for the Public user.
+MeshWeaver distinguishes between two well-known user groups:
+
+| User | Constant | Meaning |
+|------|----------|---------|
+| **Anonymous** | `WellKnownUsers.Anonymous` | Unauthenticated/virtual visitors (not logged in) |
+| **Public** | `WellKnownUsers.Public` | Baseline permissions for all authenticated users |
+
+When no user context is available (empty userId or virtual user), permissions are evaluated for the **Anonymous** user. Authenticated users automatically inherit **Public** permissions in addition to their own.
 
 ```csharp
-// Make MeshWeaver namespace publicly readable
+// Grant Anonymous users read access to the Welcome page
+await securityService.AddUserRoleAsync("Anonymous", "Viewer", "Welcome", "system", ct);
+
+// Grant all logged-in users read access to MeshWeaver content
 await securityService.AddUserRoleAsync("Public", "Viewer", "MeshWeaver", "system", ct);
 
-// Anonymous users can now read MeshWeaver content
-var canRead = await securityService.HasPermissionAsync("MeshWeaver/Docs", "", Permission.Read, ct);
-// canRead == true
+// Anonymous users can read Welcome but not MeshWeaver
+var anonCanRead = await securityService.HasPermissionAsync("MeshWeaver/Docs", "", Permission.Read, ct);
+// anonCanRead == false
+
+// Authenticated users inherit Public permissions
+var authCanRead = await securityService.HasPermissionAsync("MeshWeaver/Docs", "Alice", Permission.Read, ct);
+// authCanRead == true (Alice inherits Public's Viewer role)
 ```
 
 # Hierarchical Access Pattern
@@ -286,7 +300,8 @@ var builder = new MeshBuilder()
 
 1. **Start with hierarchy** — assign roles at the organizational level and let inheritance handle descendants
 2. **Use deny sparingly** — deny overrides only the specific role, not all permissions
-3. **Public user for anonymous access** — configure Public user with Viewer role on namespaces that should be publicly readable
+3. **Anonymous for unauthenticated access** — configure Anonymous user with Viewer role on namespaces that should be visible without login
+3. **Public for authenticated baseline** — configure Public user with Viewer role on namespaces that all logged-in users should access
 4. **Cache permissions** — SecurityService caches effective permissions with a 5-minute sliding expiration
 5. **Fail closed** — no roles assigned means no permissions (Permission.None)
 6. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what

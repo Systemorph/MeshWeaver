@@ -25,7 +25,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         else
         {
             logger.LogDebug("No authenticated user context found, clearing access context");
-            // Clear both contexts so GetEffectiveUserId falls back to WellKnownUsers.Public
+            // Clear both contexts so GetEffectiveUserId falls back to WellKnownUsers.Anonymous
             userService.SetContext(null);
             userService.SetCircuitContext(null);
         }

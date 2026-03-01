@@ -189,14 +189,14 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     #endregion
 
-    #region Anonymous Access with Public User
+    #region Anonymous Access
 
     [Fact]
-    public async Task GetEffectivePermissions_PublicNamespace_AnonymousHasReadAccess()
+    public async Task GetEffectivePermissions_AnonymousNamespace_AnonymousHasReadAccess()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "MeshWeaver", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "MeshWeaver", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "", TestTimeout);
 
@@ -213,7 +213,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("Doc1", "PublicArea") { Name = "Document 1" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("Doc2", "PublicArea") { Name = "Document 2" }, TestTimeout);
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicArea", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "PublicArea", "system", TestTimeout);
 
         var children = await persistenceService.GetChildrenSecureAsync("PublicArea", null).ToListAsync();
 
@@ -247,7 +247,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("OpenProject") { Name = "Open Project" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("ClosedProject") { Name = "Closed Project" }, TestTimeout);
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "OpenProject", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "OpenProject", "system", TestTimeout);
 
         var rootChildren = await persistenceService.GetChildrenSecureAsync(null, null).ToListAsync();
 
@@ -270,7 +270,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Private/PublicDocs", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Private/PublicDocs", "system", TestTimeout);
 
         var permPrivate = await securityService.GetEffectivePermissionsAsync("Private", "", TestTimeout);
         var permPublicDocs = await securityService.GetEffectivePermissionsAsync("Private/PublicDocs", "", TestTimeout);
@@ -281,7 +281,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     #endregion
 
-    #region Integration: Access + Public User
+    #region Integration: Access + Anonymous/Public User
 
     [Fact]
     public async Task GetEffectivePermissions_AuthenticatedUser_HasAccessToPrivateNamespace()
@@ -295,6 +295,38 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         permAnonymous.Should().Be(Permission.None);
         permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment);
+    }
+
+    [Fact]
+    public async Task AuthenticatedUser_InheritsPublicPermissions()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Grant Public (logged-in baseline) Viewer on a namespace
+        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicBase", "system", TestTimeout);
+
+        // An authenticated user should inherit Public's Viewer permissions
+        var permAuth = await securityService.GetEffectivePermissionsAsync("PublicBase", "SomeAuthUser", TestTimeout);
+        permAuth.Should().HaveFlag(Permission.Read,
+            "Authenticated users should inherit Public user permissions as a baseline");
+    }
+
+    [Fact]
+    public async Task AnonymousUser_DoesNotInheritPublicPermissions()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Grant Public (logged-in baseline) Viewer on a namespace, but NOT Anonymous
+        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicOnly", "system", TestTimeout);
+
+        // Anonymous should NOT inherit Public's permissions
+        var permAnon = await securityService.GetEffectivePermissionsAsync("PublicOnly", "", TestTimeout);
+        permAnon.Should().Be(Permission.None,
+            "Anonymous users should not inherit Public user permissions");
+
+        var permAnonExplicit = await securityService.GetEffectivePermissionsAsync("PublicOnly", WellKnownUsers.Anonymous, TestTimeout);
+        permAnonExplicit.Should().Be(Permission.None,
+            "Anonymous user explicitly should not inherit Public user permissions");
     }
 
     #endregion
@@ -326,7 +358,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "Organization"
         }, TestTimeout);
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Systemorph", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Systemorph", "system", TestTimeout);
 
         var request = new MeshQueryRequest
         {
@@ -336,7 +368,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
-        nodeNames.Should().Contain("Systemorph", "Public namespace should be visible");
+        nodeNames.Should().Contain("Systemorph", "Anonymous-accessible namespace should be visible");
         nodeNames.Should().NotContain("ACME", "Private namespace should NOT be visible to anonymous");
     }
 
@@ -366,7 +398,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
             NodeType = "Organization2"
         }, TestTimeout);
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "MeshWeaver2", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "MeshWeaver2", "system", TestTimeout);
 
         accessService?.SetContext(null);
 
@@ -377,7 +409,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var results = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
         var nodeNames = results.OfType<MeshNode>().Select(n => n.Name).ToList();
-        nodeNames.Should().Contain("MeshWeaver2", "Public namespace should be visible");
+        nodeNames.Should().Contain("MeshWeaver2", "Anonymous-accessible namespace should be visible");
         nodeNames.Should().NotContain("SecretOrg", "Private namespace should NOT be visible to anonymous");
     }
 
@@ -396,7 +428,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("Private") { Name = "Private" }, TestTimeout);
         await persistenceService.SaveNodeAsync(restrictedNode, TestTimeout);
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "Public", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Public", "system", TestTimeout);
 
         var request = new MeshQueryRequest { Query = "path:Public scope:descendants", UserId = "" };
         var publicResults = await meshQuery.QueryAsync(request, TestTimeout).ToListAsync();
@@ -503,7 +535,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     #region Explicit Public Access Grants
 
     [Fact]
-    public async Task SecurePersistence_NodeInUserNamespace_VisibleViaExplicitPublicGrant()
+    public async Task SecurePersistence_NodeInUserNamespace_VisibleViaExplicitAnonymousGrant()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var persistenceService = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
@@ -511,7 +543,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await persistenceService.SaveNodeAsync(new MeshNode("User") { Name = "User" }, TestTimeout);
         await persistenceService.SaveNodeAsync(new MeshNode("AliceProfile", "User") { Name = "Alice Profile", NodeType = "Person" }, TestTimeout);
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "User", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "User", "system", TestTimeout);
 
         var children = await persistenceService.GetChildrenSecureAsync("User", null).ToListAsync();
 

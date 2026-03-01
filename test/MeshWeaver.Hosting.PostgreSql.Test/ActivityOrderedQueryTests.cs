@@ -57,8 +57,8 @@ public class ActivityOrderedQueryTests
             NodeType = "Document"
         }, _options, TestContext.Current.CancellationToken);
 
-        // Grant public read access
-        await ac.GrantAsync("org", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        // Grant anonymous read access
+        await ac.GrantAsync("org", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         var now = DateTimeOffset.UtcNow;
 

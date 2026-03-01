@@ -61,9 +61,9 @@ public class SecurityService : ISecurityService
         var context = _accessService.Context;
         var userId = context?.ObjectId;
 
-        // If no user context, check "Public" user permissions
-        if (string.IsNullOrEmpty(userId))
-            userId = WellKnownUsers.Public;
+        // If no user context or virtual user, check "Anonymous" user permissions
+        if (string.IsNullOrEmpty(userId) || context?.IsVirtual == true)
+            userId = WellKnownUsers.Anonymous;
 
         return HasPermissionAsync(nodePath, userId, permission, ct);
     }
@@ -82,8 +82,9 @@ public class SecurityService : ISecurityService
         var context = _accessService.Context;
         var userId = context?.ObjectId;
 
-        if (string.IsNullOrEmpty(userId))
-            userId = WellKnownUsers.Public;
+        // If no user context or virtual user, check "Anonymous" user permissions
+        if (string.IsNullOrEmpty(userId) || context?.IsVirtual == true)
+            userId = WellKnownUsers.Anonymous;
 
         return GetEffectivePermissionsAsync(nodePath, userId, ct);
     }
@@ -91,7 +92,7 @@ public class SecurityService : ISecurityService
     public async Task<Permission> GetEffectivePermissionsAsync(string nodePath, string userId, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(userId))
-            userId = WellKnownUsers.Public;
+            userId = WellKnownUsers.Anonymous;
 
         var cacheKey = $"{userId}:{nodePath}";
         if (_permissionCache.TryGetValue(cacheKey, out Permission cached))
@@ -154,6 +155,14 @@ public class SecurityService : ISecurityService
                 if (role != null)
                     effectivePermissions |= role.Permissions;
             }
+        }
+
+        // For authenticated (non-anonymous, non-public) users, merge in Public permissions.
+        // Public represents the baseline permission floor for all logged-in users.
+        if (userId != WellKnownUsers.Anonymous && userId != WellKnownUsers.Public)
+        {
+            var publicPermissions = await GetEffectivePermissionsAsync(nodePath, WellKnownUsers.Public, ct);
+            effectivePermissions |= publicPermissions;
         }
 
         _logger.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath}",

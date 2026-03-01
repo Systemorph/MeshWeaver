@@ -71,9 +71,9 @@ public class QuerySyntaxTests
             NodeType = "Project"
         }, _options, TestContext.Current.CancellationToken);
 
-        // Grant Public access so tests work without explicit userId
-        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
-        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        // Grant Anonymous access so tests work without explicit userId
+        await ac.GrantAsync("ACME", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("Contoso", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
     }
 
     #region Text Search

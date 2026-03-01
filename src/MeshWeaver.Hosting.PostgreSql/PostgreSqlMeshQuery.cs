@@ -40,7 +40,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
     /// <summary>
     /// Gets the effective user ID from the request or from the current access context.
-    /// Returns WellKnownUsers.Public for anonymous/unauthenticated access.
+    /// Returns WellKnownUsers.Anonymous for unauthenticated/virtual access.
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
     {
@@ -48,7 +48,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             return request.UserId;
 
         var userId = _accessService?.Context?.ObjectId;
-        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Public : userId;
+        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
     public async IAsyncEnumerable<object> QueryAsync(
@@ -178,7 +178,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         var suggestions = new List<QuerySuggestion>();
 
         var acUserId = _accessService?.Context?.ObjectId;
-        var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Public : acUserId;
+        var effectiveAutocompleteUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
         await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveAutocompleteUserId, ct: ct))
         {
@@ -239,7 +239,7 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
             Scope: QueryScope.Exact);
 
         var acUserId = _accessService?.Context?.ObjectId;
-        var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Public : acUserId;
+        var effectiveSelectUserId = string.IsNullOrEmpty(acUserId) ? WellKnownUsers.Anonymous : acUserId;
 
         await foreach (var node in _adapter.QueryNodesAsync(query, options, effectiveSelectUserId, ct: ct))
         {

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using Pgvector;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -501,16 +502,19 @@ public class PostgreSqlSqlGenerator
     {
         var paramName = $"@acUser{_paramIndex++}";
         _parameters[paramName] = userId;
-        // Always check both the specific user and the Public well-known user.
-        // At the same path specificity, user-specific permissions take priority over Public.
+        // Anonymous users only get their own permissions (no Public inheritance).
+        // All other users also inherit Public permissions as a baseline floor.
         // NodeType definitions (node_type = 'NodeType') are always publicly readable.
+        var userList = userId == WellKnownUsers.Anonymous
+            ? $"{paramName}"
+            : $"{paramName}, 'Public'";
         return $"""
             (
                 n.node_type = 'NodeType'
                 OR
                 (SELECT uep.is_allow
                  FROM user_effective_permissions uep
-                 WHERE uep.user_id IN ({paramName}, 'Public')
+                 WHERE uep.user_id IN ({userList})
                    AND uep.permission = 'Read'
                    AND n.path LIKE uep.node_path_prefix || '%'
                  ORDER BY LENGTH(uep.node_path_prefix) DESC,

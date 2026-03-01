@@ -58,8 +58,11 @@ public class AccessControlQueryTests
         // bob only has access to ACME/Project
         await ac.GrantAsync("ACME/Project", "bob", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Public has access to Contoso
+        // Public (authenticated baseline) has access to Contoso
         await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Anonymous also has access to Contoso (for default/no-userId queries)
+        await ac.GrantAsync("Contoso", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -133,13 +136,13 @@ public class AccessControlQueryTests
     }
 
     [Fact]
-    public async Task QueryWithoutUserIdDefaultsToPublicFiltering()
+    public async Task QueryWithoutUserIdDefaultsToAnonymousFiltering()
     {
         await SeedDataAndPermissionsAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
 
-        // No userId - defaults to "Public" user via GetEffectiveUserId.
-        // Public has Read on Contoso only, so querying all nodes should return only Contoso nodes.
+        // No userId - defaults to "Anonymous" user via GetEffectiveUserId.
+        // Anonymous has Read on Contoso only, so querying all nodes should return only Contoso nodes.
         var request = MeshQueryRequest.FromQuery("scope:descendants");
 
         var results = new List<object>();

@@ -33,7 +33,7 @@ public class InMemoryMeshQuery(
 
     /// <summary>
     /// Gets the effective user ID from the request or from the current access context.
-    /// Returns WellKnownUsers.Public for anonymous/unauthenticated access.
+    /// Returns WellKnownUsers.Anonymous for unauthenticated/virtual access.
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
     {
@@ -41,9 +41,9 @@ public class InMemoryMeshQuery(
         if (!string.IsNullOrEmpty(request.UserId))
             return request.UserId;
 
-        // Get from access context, defaulting to Public for anonymous users
+        // Get from access context, defaulting to Anonymous for unauthenticated users
         var userId = accessService?.Context?.ObjectId;
-        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Public : userId;
+        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
     /// <inheritdoc />

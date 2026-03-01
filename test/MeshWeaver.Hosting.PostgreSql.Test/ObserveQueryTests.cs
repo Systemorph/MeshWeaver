@@ -34,8 +34,8 @@ public class ObserveQueryTests : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         await _fixture.CleanDataAsync();
-        // Grant Public Read access so observe tests work without explicit userId
-        await _fixture.AccessControl.GrantAsync("ACME", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        // Grant Anonymous Read access so observe tests work without explicit userId
+        await _fixture.AccessControl.GrantAsync("ACME", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
         _notifier = new DataChangeNotifier();
         _listener = new PostgreSqlChangeListener(_fixture.DataSource, _notifier);
         await _listener.StartAsync(TestContext.Current.CancellationToken);
