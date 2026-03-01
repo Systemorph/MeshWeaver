@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Supplier",
   "category": "Suppliers",
   "description": "Cooperativa de Quesos 'Las Cabras' - Oviedo, Spain",
-  "iconName": "Truck",
+  "icon": "/static/NodeTypeIcons/truck.svg",
   "isPersistent": true,
   "content": {
     "$type": "SupplierContent",

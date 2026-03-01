@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Customer",
   "category": "Customers",
   "description": "Let's Stop N Shop - San Francisco, USA",
-  "iconName": "Users",
+  "icon": "/static/NodeTypeIcons/people.svg",
   "isPersistent": true,
   "content": {
     "$type": "CustomerContent",

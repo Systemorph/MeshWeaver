@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Supplier",
   "category": "Suppliers",
   "description": "For\u00eats d'\u00e9rables - Ste-Hyacinthe, Canada",
-  "iconName": "Truck",
+  "icon": "/static/NodeTypeIcons/truck.svg",
   "isPersistent": true,
   "content": {
     "$type": "SupplierContent",

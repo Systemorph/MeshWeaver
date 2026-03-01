@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Supplier",
   "category": "Suppliers",
   "description": "Plutzer Lebensmittelgro\u00dfm\u00e4rkte AG - Frankfurt, Germany",
-  "iconName": "Truck",
+  "icon": "/static/NodeTypeIcons/truck.svg",
   "isPersistent": true,
   "content": {
     "$type": "SupplierContent",

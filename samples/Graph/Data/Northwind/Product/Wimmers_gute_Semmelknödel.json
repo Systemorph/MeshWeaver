@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Product",
   "category": "Products",
   "description": "Wimmers gute Semmelkn\u00f6del - 20 bags x 4 pieces",
-  "iconName": "ShoppingBag",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
   "isPersistent": true,
   "content": {
     "$type": "ProductContent",

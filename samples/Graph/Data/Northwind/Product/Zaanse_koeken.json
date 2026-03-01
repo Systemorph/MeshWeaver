@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Product",
   "category": "Products",
   "description": "Zaanse koeken - 10 - 4 oz boxes",
-  "iconName": "ShoppingBag",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
   "isPersistent": true,
   "content": {
     "$type": "ProductContent",

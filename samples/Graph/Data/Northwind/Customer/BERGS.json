@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Customer",
   "category": "Customers",
   "description": "Berglunds snabbk\u00f6p - Lule\u00e5, Sweden",
-  "iconName": "Users",
+  "icon": "/static/NodeTypeIcons/people.svg",
   "isPersistent": true,
   "content": {
     "$type": "CustomerContent",

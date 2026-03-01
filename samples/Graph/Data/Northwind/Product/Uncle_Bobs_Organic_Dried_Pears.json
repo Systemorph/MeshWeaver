@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Product",
   "category": "Products",
   "description": "Uncle Bob's Organic Dried Pears - 12 - 1 lb pkgs.",
-  "iconName": "ShoppingBag",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
   "isPersistent": true,
   "content": {
     "$type": "ProductContent",

@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Customer",
   "category": "Customers",
   "description": "Toms Spezialit\u00e4ten - M\u00fcnster, Germany",
-  "iconName": "Users",
+  "icon": "/static/NodeTypeIcons/people.svg",
   "isPersistent": true,
   "content": {
     "$type": "CustomerContent",

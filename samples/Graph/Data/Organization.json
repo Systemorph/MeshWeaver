@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "An organization containing projects",
-  "iconName": "Building",
   "icon": "/static/storage/content/Organization/icon.svg",
   "isPersistent": true,
   "lastModified": "2025-12-27T22:43:18.5377224+00:00",

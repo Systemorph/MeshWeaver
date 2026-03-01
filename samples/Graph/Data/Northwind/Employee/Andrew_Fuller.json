@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Employee",
   "category": "Employees",
   "description": "Andrew Fuller - Vice President, Sales",
-  "iconName": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",

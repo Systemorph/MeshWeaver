@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Supplier",
   "category": "Suppliers",
   "description": "Formaggi Fortini s.r.l. - Ravenna, Italy",
-  "iconName": "Truck",
+  "icon": "/static/NodeTypeIcons/truck.svg",
   "isPersistent": true,
   "content": {
     "$type": "SupplierContent",

@@ -3,7 +3,7 @@
   "name": "Emma Johnson",
   "nodeType": "User",
   "description": "Tech Lead",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "Emma Johnson",

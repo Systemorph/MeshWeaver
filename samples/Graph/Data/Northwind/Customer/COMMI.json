@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Customer",
   "category": "Customers",
   "description": "Com\u00e9rcio Mineiro - Sao Paulo, Brazil",
-  "iconName": "Users",
+  "icon": "/static/NodeTypeIcons/people.svg",
   "isPersistent": true,
   "content": {
     "$type": "CustomerContent",

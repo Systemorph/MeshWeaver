@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Supplier",
   "category": "Suppliers",
   "description": "Leka Trading - Singapore, Singapore",
-  "iconName": "Truck",
+  "icon": "/static/NodeTypeIcons/truck.svg",
   "isPersistent": true,
   "content": {
     "$type": "SupplierContent",

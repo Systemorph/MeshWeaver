@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Product",
   "category": "Products",
   "description": "Teatime Chocolate Biscuits - 10 boxes x 12 pieces",
-  "iconName": "ShoppingBag",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
   "isPersistent": true,
   "content": {
     "$type": "ProductContent",

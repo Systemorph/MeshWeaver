@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Customer",
   "category": "Customers",
   "description": "LINO-Delicateses - I. de Margarita, Venezuela",
-  "iconName": "Users",
+  "icon": "/static/NodeTypeIcons/people.svg",
   "isPersistent": true,
   "content": {
     "$type": "CustomerContent",

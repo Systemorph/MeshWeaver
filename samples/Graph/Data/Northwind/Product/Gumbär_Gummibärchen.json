@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Product",
   "category": "Products",
   "description": "Gumb\u00e4r Gummib\u00e4rchen - 100 - 250 g bags",
-  "iconName": "ShoppingBag",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
   "isPersistent": true,
   "content": {
     "$type": "ProductContent",

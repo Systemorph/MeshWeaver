@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Employee",
   "category": "Employees",
   "description": "Laura Callahan - Inside Sales Coordinator",
-  "iconName": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",

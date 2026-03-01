@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "Cornerstone pricing with property risks and reinsurance structure",
-  "iconName": "DocumentBulletList",
   "icon": "/static/storage/content/Cornerstone/icons/pricing.svg",
   "isPersistent": true,
   "content": {

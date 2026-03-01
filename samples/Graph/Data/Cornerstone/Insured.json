@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "An insurance client with pricings grouped by status",
-  "iconName": "Building",
   "icon": "/static/storage/content/Cornerstone/icons/insured.svg",
   "isPersistent": true,
   "content": {

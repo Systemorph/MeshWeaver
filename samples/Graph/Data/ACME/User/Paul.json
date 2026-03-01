@@ -4,7 +4,7 @@
   "name": "Paul Martinez",
   "nodeType": "User",
   "description": "Risk Manager at Software",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "id": "Paul",

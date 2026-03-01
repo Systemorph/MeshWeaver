@@ -2,6 +2,7 @@
   "id": "AuthProviders",
   "namespace": "Admin",
   "name": "Auth Providers",
+  "icon": "/static/NodeTypeIcons/shield.svg",
   "nodeType": "Markdown",
   "state": "Active",
   "content": {

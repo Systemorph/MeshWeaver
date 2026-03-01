@@ -5,7 +5,7 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "An Cornerstone content article with metadata",
-  "iconName": "DocumentText",
+  "icon": "/static/NodeTypeIcons/document.svg",
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",

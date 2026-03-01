@@ -4,7 +4,7 @@
   "name": "Quinn Johnson",
   "nodeType": "User",
   "description": "Customer Support Lead at Software",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "id": "Quinn",

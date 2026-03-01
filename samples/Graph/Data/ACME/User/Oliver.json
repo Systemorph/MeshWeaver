@@ -4,7 +4,7 @@
   "name": "Oliver Chen",
   "nodeType": "User",
   "description": "Compliance Officer at Software",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "id": "Oliver",
