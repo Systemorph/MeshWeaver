@@ -1,5 +1,7 @@
 using System;
+using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
@@ -36,8 +38,13 @@ public class CosmosEmulatorFixture : IAsyncLifetime
         {
             HttpClientFactory = () => _container.HttpClient,
             ConnectionMode = ConnectionMode.Gateway,
-            UseSystemTextJsonSerializerWithOptions = jsonOptions
+            UseSystemTextJsonSerializerWithOptions = jsonOptions,
+            // Retry handler for emulator 503 ServiceUnavailable during warmup
+            CustomHandlers = { new ServiceUnavailableRetryHandler() }
         });
+
+        // Wait for the emulator to be fully operational
+        await WaitForEmulatorReadyAsync();
 
         // Create database and containers matching the AppHost layout
         var dbResponse = await SharedClient.CreateDatabaseIfNotExistsAsync(DatabaseName);
@@ -45,6 +52,33 @@ public class CosmosEmulatorFixture : IAsyncLifetime
             new ContainerProperties("nodes", "/namespace") { DefaultTimeToLive = -1 });
         await dbResponse.Database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey") { DefaultTimeToLive = -1 });
+
+        // Drop and recreate the partition_test database used by PartitionedContainerTests
+        // to ensure clean state (containers may have stale partition key definitions)
+        try { await SharedClient.GetDatabase("partition_test").DeleteAsync(); } catch (CosmosException) { }
+        await SharedClient.CreateDatabaseIfNotExistsAsync("partition_test");
+    }
+
+    private async Task WaitForEmulatorReadyAsync()
+    {
+        const int maxAttempts = 15;
+        for (var i = 0; i < maxAttempts; i++)
+        {
+            try
+            {
+                await SharedClient!.ReadAccountAsync();
+                return;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.ServiceUnavailable)
+            {
+                await Task.Delay(2000);
+            }
+            catch (HttpRequestException)
+            {
+                await Task.Delay(2000);
+            }
+        }
+        throw new TimeoutException($"Cosmos emulator did not become ready after {maxAttempts} attempts.");
     }
 
     public async ValueTask DisposeAsync()
@@ -54,6 +88,31 @@ public class CosmosEmulatorFixture : IAsyncLifetime
 
         if (_container != null)
             await _container.DisposeAsync();
+    }
+}
+
+/// <summary>
+/// Cosmos SDK request handler that retries on 503 ServiceUnavailable.
+/// The emulator returns 503 briefly after startup while partition services warm up.
+/// </summary>
+internal class ServiceUnavailableRetryHandler : RequestHandler
+{
+    private const int MaxRetries = 5;
+
+    public override async Task<ResponseMessage> SendAsync(
+        RequestMessage request, CancellationToken cancellationToken)
+    {
+        ResponseMessage? response = null;
+        for (var attempt = 0; attempt <= MaxRetries; attempt++)
+        {
+            response = await base.SendAsync(request, cancellationToken);
+            if (response.StatusCode != HttpStatusCode.ServiceUnavailable)
+                return response;
+
+            if (attempt < MaxRetries)
+                await Task.Delay(2000 * (attempt + 1), cancellationToken);
+        }
+        return response!;
     }
 }
 

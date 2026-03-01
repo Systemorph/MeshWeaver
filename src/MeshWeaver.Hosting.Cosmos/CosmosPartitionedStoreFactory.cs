@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.RegularExpressions;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
@@ -39,20 +40,11 @@ public partial class CosmosPartitionedStoreFactory : IPartitionedStoreFactory
         var nodesContainerName = $"{sanitized}-nodes";
         var partitionsContainerName = $"{sanitized}-partitions";
 
-        // Create containers if not exists (idempotent)
-        await _database.CreateContainerIfNotExistsAsync(
-            new ContainerProperties(nodesContainerName, "/key")
-            {
-                DefaultTimeToLive = -1
-            },
-            cancellationToken: ct);
-
-        await _database.CreateContainerIfNotExistsAsync(
-            new ContainerProperties(partitionsContainerName, "/partitionKey")
-            {
-                DefaultTimeToLive = -1
-            },
-            cancellationToken: ct);
+        // Create containers if not exists (idempotent, with retry for transient 503)
+        await CreateContainerWithRetryAsync(
+            new ContainerProperties(nodesContainerName, "/namespace") { DefaultTimeToLive = -1 }, ct);
+        await CreateContainerWithRetryAsync(
+            new ContainerProperties(partitionsContainerName, "/partitionKey") { DefaultTimeToLive = -1 }, ct);
 
         var nodesContainer = _database.GetContainer(nodesContainerName);
         var partitionsContainer = _database.GetContainer(partitionsContainerName);
@@ -111,6 +103,25 @@ public partial class CosmosPartitionedStoreFactory : IPartitionedStoreFactory
         if (sanitized.Length > 52)
             sanitized = sanitized[..52];
         return sanitized;
+    }
+
+    private async Task CreateContainerWithRetryAsync(
+        ContainerProperties properties, CancellationToken ct)
+    {
+        const int maxRetries = 5;
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                await _database.CreateContainerIfNotExistsAsync(properties, cancellationToken: ct);
+                return;
+            }
+            catch (CosmosException ex) when (
+                ex.StatusCode == HttpStatusCode.ServiceUnavailable && attempt < maxRetries)
+            {
+                await Task.Delay(2000 * (attempt + 1), ct);
+            }
+        }
     }
 
     [GeneratedRegex("[^a-z0-9-]")]

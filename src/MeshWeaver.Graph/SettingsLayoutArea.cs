@@ -270,7 +270,7 @@ public static class SettingsLayoutArea
         // Icon picker: collection combobox + file browser + manual text field
         stack = stack.WithView(BuildIconPicker(host, dataId));
 
-        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference("Order"), typeof(int?))
+        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference("Order"), "Int32?")
         {
             Label = "Order",
             Immediate = true,

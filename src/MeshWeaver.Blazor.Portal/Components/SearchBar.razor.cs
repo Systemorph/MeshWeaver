@@ -137,7 +137,7 @@ public partial class SearchBar : IAsyncDisposable
         }
     }
 
-    private void HandleKeyDown(KeyboardEventArgs e)
+    private Task HandleKeyDown(KeyboardEventArgs e)
     {
         switch (e.Key)
         {
@@ -175,6 +175,9 @@ public partial class SearchBar : IAsyncDisposable
                 highlightedIndex = -1;
                 break;
         }
+
+        StateHasChanged();
+        return Task.CompletedTask;
     }
 
     private void HandleSubmit()
