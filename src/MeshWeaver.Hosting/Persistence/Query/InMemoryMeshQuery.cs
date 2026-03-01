@@ -80,142 +80,127 @@ public class InMemoryMeshQuery(
 
         var basePath = NormalizePath(effectivePath);
 
-        // Determine paths to search based on scope
-        var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
-
-        // Collect results with fuzzy scores for ordering
-        var results = new List<(object Item, int Score)>();
-
         // Get the effective user ID for security filtering (from request or access context)
         var userId = GetEffectiveUserId(request);
 
         // Context-based exclusion
         var context = request.Context ?? parsedQuery.Context;
 
+        // Stream results immediately as they are found — no buffering.
+        // Skip/limit are applied as inline counters.
+        int skipped = 0;
+        int yielded = 0;
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        await foreach (var node in FindMatchingNodesAsync(
+            parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
+        {
+            if (!seen.Add(node))
+                continue;
+
+            // Apply skip
+            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
+            {
+                skipped++;
+                continue;
+            }
+
+            // Apply access control filtering if security service is available
+            if (securityService != null)
+            {
+                var itemPath = GetItemPath(node);
+                if (!string.IsNullOrEmpty(itemPath))
+                {
+                    var permissions = await securityService.GetEffectivePermissionsAsync(
+                        itemPath, userId, ct);
+                    if (!permissions.HasFlag(Permission.Read))
+                        continue;
+                }
+            }
+
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                : node;
+
+            // Apply limit
+            yielded++;
+            if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0
+                && yielded >= parsedQuery.Limit.Value)
+                yield break;
+        }
+    }
+
+    /// <summary>
+    /// Yields matching nodes as they are discovered across all applicable scopes.
+    /// No buffering or sorting — results stream immediately.
+    /// </summary>
+    private async IAsyncEnumerable<object> FindMatchingNodesAsync(
+        ParsedQuery parsedQuery,
+        QueryScope effectiveScope,
+        string basePath,
+        string userId,
+        string? context,
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var pathsToSearch = GetPathsForScope(basePath, effectiveScope);
+
+        // Exact path matches
         foreach (var searchPath in pathsToSearch)
         {
-            // Search MeshNodes at this path (with security filtering)
             var node = await persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
-            if (node != null)
+            if (node != null && _evaluator.Matches(node, parsedQuery)
+                && !IsExcludedByContext(node, context))
             {
-                if (_evaluator.Matches(node, parsedQuery) && !IsExcludedByContext(node, context))
-                {
-                    var score = _evaluator.GetFuzzyScore(node, parsedQuery.TextSearch);
-                    score += (int)PathProximity.ComputeBoost(request.ContextPath, node.Path);
-                    results.Add((node, score));
-                }
+                yield return node;
             }
-
         }
 
-        // If we're doing scope=children, search immediate children only
+        // Children scope
         if (effectiveScope == QueryScope.Children)
         {
-            await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options).WithCancellation(ct))
+            await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options)
+                .WithCancellation(ct))
             {
-                // Evaluate the node itself
                 if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context))
-                {
-                    var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
-                    score += (int)PathProximity.ComputeBoost(request.ContextPath, child.Path);
-                    // Avoid duplicates
-                    if (!results.Any(r => ReferenceEquals(r.Item, child)))
-                        results.Add((child, score));
-                }
-
+                    yield return child;
             }
         }
 
-        // If scope includes ancestors (AncestorsAndSelf, Hierarchy), also search children of self and each ancestor path
-        // This allows finding agents like "TodoAgent" (child of self) and "Navigator" (child of root)
-        // when searching from "ACME/Project"
-        if (effectiveScope == QueryScope.AncestorsAndSelf || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Ancestors)
+        // Ancestor children (AncestorsAndSelf, Hierarchy, Ancestors)
+        if (effectiveScope == QueryScope.AncestorsAndSelf
+            || effectiveScope == QueryScope.Hierarchy
+            || effectiveScope == QueryScope.Ancestors)
         {
-            // Get self + ancestors for AncestorsAndSelf, just ancestors for Ancestors
             var pathsToSearchChildren = effectiveScope == QueryScope.Ancestors
                 ? GetPathsForScope(basePath, QueryScope.Ancestors)
                 : GetPathsForScope(basePath, QueryScope.AncestorsAndSelf);
 
             foreach (var ancestorPath in pathsToSearchChildren)
             {
-                await foreach (var child in persistence.GetChildrenSecureAsync(ancestorPath, userId, options).WithCancellation(ct))
+                await foreach (var child in persistence.GetChildrenSecureAsync(
+                    ancestorPath, userId, options).WithCancellation(ct))
                 {
-                    // Evaluate the node itself
-                    if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context))
-                    {
-                        var score = _evaluator.GetFuzzyScore(child, parsedQuery.TextSearch);
-                        score += (int)PathProximity.ComputeBoost(request.ContextPath, child.Path);
-                        // Avoid duplicates
-                        if (!results.Any(r => ReferenceEquals(r.Item, child)))
-                            results.Add((child, score));
-                    }
+                    if (_evaluator.Matches(child, parsedQuery)
+                        && !IsExcludedByContext(child, context))
+                        yield return child;
                 }
             }
         }
 
-        // If we're doing scope=descendants, also search descendant paths recursively
-        if (effectiveScope == QueryScope.Descendants || effectiveScope == QueryScope.Hierarchy || effectiveScope == QueryScope.Subtree)
+        // Descendants scope
+        if (effectiveScope == QueryScope.Descendants
+            || effectiveScope == QueryScope.Hierarchy
+            || effectiveScope == QueryScope.Subtree)
         {
-            await foreach (var descendant in persistence.GetDescendantsSecureAsync(basePath, userId, options).WithCancellation(ct))
+            await foreach (var descendant in persistence.GetDescendantsSecureAsync(
+                basePath, userId, options).WithCancellation(ct))
             {
-                // Evaluate the node itself
-                if (_evaluator.Matches(descendant, parsedQuery) && !IsExcludedByContext(descendant, context))
-                {
-                    var score = _evaluator.GetFuzzyScore(descendant, parsedQuery.TextSearch);
-                    score += (int)PathProximity.ComputeBoost(request.ContextPath, descendant.Path);
-                    // Avoid duplicates
-                    if (!results.Any(r => ReferenceEquals(r.Item, descendant)))
-                        results.Add((descendant, score));
-                }
-
+                if (_evaluator.Matches(descendant, parsedQuery)
+                    && !IsExcludedByContext(descendant, context))
+                    yield return descendant;
             }
-        }
-
-        // Order by fuzzy score (higher first) for text searches or when proximity boost is active
-        IEnumerable<object> orderedResults;
-        if (!string.IsNullOrEmpty(parsedQuery.TextSearch) || !string.IsNullOrEmpty(request.ContextPath))
-        {
-            orderedResults = results.OrderByDescending(r => r.Score).Select(r => r.Item);
-        }
-        else if (parsedQuery.OrderBy != null)
-        {
-            orderedResults = _evaluator.OrderResults(results.Select(r => r.Item), parsedQuery.OrderBy);
-        }
-        else
-        {
-            orderedResults = results.Select(r => r.Item);
-        }
-
-        // Apply skip (for paging)
-        if (request.Skip.HasValue && request.Skip.Value > 0)
-        {
-            orderedResults = orderedResults.Skip(request.Skip.Value);
-        }
-
-        // Apply limit
-        if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0)
-        {
-            orderedResults = _evaluator.LimitResults(orderedResults, parsedQuery.Limit);
-        }
-
-        foreach (var item in orderedResults)
-        {
-            // Apply access control filtering if security service is available
-            if (securityService != null)
-            {
-                var itemPath = GetItemPath(item);
-                if (!string.IsNullOrEmpty(itemPath))
-                {
-                    var permissions = await securityService.GetEffectivePermissionsAsync(
-                        itemPath, userId, ct);
-                    if (!permissions.HasFlag(Permission.Read))
-                        continue; // Skip items user cannot read
-                }
-            }
-
-            yield return parsedQuery.Select != null
-                ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
-                : item;
         }
     }
 

@@ -2,7 +2,6 @@ using System;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
-using DotNet.Testcontainers.Builders;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
 using Microsoft.Azure.Cosmos;
@@ -29,15 +28,7 @@ public class CosmosEmulatorFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _container = new CosmosDbBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest")
-            // Allocate enough partitions for all test containers.
-            // Default is ~5 which causes 503 when creating more containers.
-            .WithEnvironment("AZURE_COSMOS_EMULATOR_PARTITION_COUNT", "30")
-            .WithEnvironment("AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE", "127.0.0.1")
-            // Give the emulator enough time to start all partitions
-            .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r =>
-                r.ForPort(8081).ForPath("/_explorer/emulator.pem").UsingTls()))
-            .Build();
+        _container = new CosmosDbBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest").Build();
         await _container.StartAsync();
 
         var jsonOptions = StorageImporter.CreateFullImportOptions();
@@ -49,7 +40,7 @@ public class CosmosEmulatorFixture : IAsyncLifetime
             UseSystemTextJsonSerializerWithOptions = jsonOptions
         });
 
-        // Wait for the emulator to be fully operational (document round-trip succeeds)
+        // Wait for the emulator to be fully operational
         await WaitForEmulatorReadyAsync();
 
         // Create database and containers matching the AppHost layout
@@ -67,13 +58,7 @@ public class CosmosEmulatorFixture : IAsyncLifetime
         {
             try
             {
-                var dbResp = await SharedClient!.CreateDatabaseIfNotExistsAsync("_probe");
-                var cResp = await dbResp.Database.CreateContainerIfNotExistsAsync(
-                    new ContainerProperties("_probe", "/id"));
-                await cResp.Container.UpsertItemAsync(
-                    new { id = "ping", value = "ok" }, new PartitionKey("ping"));
-                await cResp.Container.ReadItemAsync<object>("ping", new PartitionKey("ping"));
-                await dbResp.Database.DeleteAsync();
+                await SharedClient!.ReadAccountAsync();
                 return;
             }
             catch (CosmosException ex) when (ex.StatusCode is HttpStatusCode.ServiceUnavailable

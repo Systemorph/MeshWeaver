@@ -21,6 +21,7 @@ public class NavigationService : INavigationService
     private readonly NavigationManager _navigationManager;
     private readonly IMeshCatalog _meshCatalog;
     private readonly IMessageHub _hub;
+    private readonly IActivityStore? _activityStore;
     private readonly ILogger<NavigationService>? _logger;
 
     private NavigationContext? _context;
@@ -33,11 +34,13 @@ public class NavigationService : INavigationService
     public NavigationService(
         NavigationManager navigationManager,
         IMeshCatalog meshCatalog,
-        IMessageHub hub)
+        IMessageHub hub,
+        IActivityStore? activityStore = null)
     {
         _navigationManager = navigationManager;
         _meshCatalog = meshCatalog;
         _hub = hub;
+        _activityStore = activityStore;
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
     }
 
@@ -247,9 +250,8 @@ public class NavigationService : INavigationService
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
     {
-        var activityStore = _hub.ServiceProvider.GetService<IActivityStore>();
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        if (activityStore == null)
+        if (_activityStore == null)
         {
             _logger?.LogDebug("Activity tracking skipped for {Path}: no IActivityStore registered", node.Path);
             return;
@@ -299,7 +301,7 @@ public class NavigationService : INavigationService
         {
             try
             {
-                await activityStore.SaveActivitiesAsync(userId, [record]);
+                await _activityStore.SaveActivitiesAsync(userId, [record]);
             }
             catch (Exception ex)
             {

@@ -179,6 +179,17 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
                 .WithInitialData([builtInNode]));
         }
 
+        // Check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
+        var staticNode = Workspace.Hub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
+        if (staticNode != null)
+        {
+            return WithType<MeshNode>(ts => ts
+                .WithKey(n => n.Path)
+                .WithInitialData([staticNode]));
+        }
+
         if (_persistence == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence service, using basic MeshNode type source");
