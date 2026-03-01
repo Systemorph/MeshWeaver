@@ -3,6 +3,7 @@ NodeType: Organization
 Name: Northwind
 Category: Analytics
 Description: Gourmet food distribution analytics demonstrating MeshWeaver's data visualization and AI-assisted exploration capabilities
+Icon: /static/storage/content/Northwind/icon.svg
 Thumbnail: Northwind/icon.svg
 ---
 

@@ -1,5 +1,6 @@
 ---
 Description: Welcome page for new and anonymous visitors
+Icon: /static/storage/content/MeshWeaver/logo.svg
 ---
 
 # Welcome to MeshWeaver

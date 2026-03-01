@@ -3,6 +3,7 @@ NodeType: Organization
 Name: Cornerstone
 Category: Insurance
 Description: Reinsurance pricing demo showcasing property risk management, geographic visualization, and Excel data import
+Icon: /static/storage/content/Cornerstone/icon.svg
 Thumbnail: Cornerstone/icon.svg
 ---
 
