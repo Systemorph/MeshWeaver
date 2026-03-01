@@ -1,0 +1,19 @@
+{
+  "$type": "MeshNode",
+  "id": "c6",
+  "path": "Doc/DataMesh/CollaborativeEditing/c6",
+  "name": "Comment by Eve",
+  "nodeType": "Comment",
+  "lastModified": "2025-12-25T12:00:00+00:00",
+  "content": {
+    "$type": "Comment",
+    "id": "c6",
+    "primaryNodePath": "Doc/DataMesh/CollaborativeEditing",
+    "markerId": "c6",
+    "highlightedText": "Additional resources",
+    "author": "Eve",
+    "text": "We need to confirm headcount with HR first",
+    "createdAt": "2025-12-25T12:00:00+00:00",
+    "status": "Active"
+  }
+}
