@@ -5,7 +5,7 @@
   "nodeType": "Northwind/Employee",
   "category": "Employees",
   "description": "Janet Leverling - Sales Representative",
-  "iconName": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "$type": "EmployeeContent",

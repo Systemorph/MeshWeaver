@@ -5,7 +5,7 @@
   "nodeType": "Cornerstone/Pricing",
   "category": "Pricings",
   "description": "Property reinsurance for Nestle S.A. - UW Year 2026",
-  "iconName": "DocumentBulletList",
+  "icon": "/static/NodeTypeIcons/document.svg",
   "isPersistent": true,
   "state": "Active",
   "content": {

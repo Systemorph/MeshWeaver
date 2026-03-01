@@ -4,7 +4,6 @@
   "name": "Apex Manufacturing Onboarding",
   "nodeType": "ACME/Project",
   "description": "Commercial insurance onboarding for Apex Manufacturing Inc.",
-  "iconName": "Briefcase",
   "icon": "/static/storage/content/ACME/Project/icon.svg",
   "isPersistent": true,
   "content": {

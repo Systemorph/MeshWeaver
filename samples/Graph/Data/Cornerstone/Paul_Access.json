@@ -2,6 +2,7 @@
   "id": "Paul_Access",
   "namespace": "Cornerstone",
   "name": "Paul Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",

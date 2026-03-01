@@ -3,7 +3,7 @@
   "name": "Agents",
   "nodeType": "Section",
   "description": "Default AI agents for the mesh",
-  "iconName": "Bot",
+  "icon": "/static/NodeTypeIcons/bot.svg",
   "isPersistent": true,
   "content": {
     "$type": "Section",

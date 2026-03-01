@@ -5,7 +5,6 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "A project containing tasks and deliverables",
-  "iconName": "Folder",
   "icon": "/static/storage/content/ACME/Project/icon.svg",
   "isPersistent": true,
   "content": {

@@ -94,11 +94,7 @@
         var imageUrl = GetImageUrl(node);
         if (!string.IsNullOrEmpty(imageUrl))
         {
-            if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
-            {
-                return @<span class="mesh-node-picker-avatar-icon" style="--icon-url: url('@imageUrl')" role="img" aria-label="@(node.Name ?? node.Id)"></span>;
-            }
-            return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-picker-avatar-img" />;
+            return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="@(imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "mesh-node-picker-avatar-icon" : "mesh-node-picker-avatar-img")" />;
         }
         return @<div class="mesh-node-picker-avatar">@initial</div>;
     }

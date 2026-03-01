@@ -3,7 +3,7 @@
   "name": "Alice Chen",
   "nodeType": "User",
   "description": "Senior Software Engineer",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "Alice Chen",

@@ -3,7 +3,7 @@
   "name": "Bob Wilson",
   "nodeType": "User",
   "description": "Product Manager",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "Bob Wilson",

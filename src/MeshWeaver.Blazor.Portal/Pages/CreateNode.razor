@@ -57,7 +57,10 @@
                          onmouseover="this.style.borderColor='var(--accent-fill-rest)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)';"
                          onmouseout="this.style.borderColor='var(--neutral-stroke-rest)'; this.style.boxShadow='none';">
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
-                            <FluentIcon Value="@GetFluentIcon(typeInfo.Icon)" Color="Color.Accent" />
+                            @if (!string.IsNullOrEmpty(typeInfo.Icon))
+                            {
+                                <img src="@typeInfo.Icon" alt="" style="width: 20px; height: 20px; flex-shrink: 0;" />
+                            }
                             <strong>@(typeInfo.DisplayName ?? GetLastSegment(typeInfo.NodeTypePath))</strong>
                         </div>
                         @if (!string.IsNullOrEmpty(typeInfo.Description))
@@ -105,7 +108,7 @@
                     @if (!string.IsNullOrEmpty(nodeIcon))
                     {
                         <div style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;">
-                            <FluentIcon Value="@GetFluentIcon(nodeIcon)" />
+                            <img src="@nodeIcon" alt="" style="width: 24px; height: 24px;" />
                         </div>
                     }
                 </div>
@@ -281,25 +284,6 @@
         {
             isCreating = false;
         }
-    }
-
-    private Icon GetFluentIcon(string? iconName)
-    {
-        return iconName?.ToLowerInvariant() switch
-        {
-            "document" => new Icons.Regular.Size20.Document(),
-            "code" => new Icons.Regular.Size20.Code(),
-            "bot" => new Icons.Regular.Size20.Bot(),
-            "briefcase" => new Icons.Regular.Size20.Briefcase(),
-            "building" => new Icons.Regular.Size20.Building(),
-            "person" => new Icons.Regular.Size20.Person(),
-            "settings" => new Icons.Regular.Size20.Settings(),
-            "star" => new Icons.Regular.Size20.Star(),
-            "folder" => new Icons.Regular.Size20.Folder(),
-            "checkmark" => new Icons.Regular.Size20.Checkmark(),
-            "add" => new Icons.Regular.Size20.Add(),
-            _ => new Icons.Regular.Size20.Document()
-        };
     }
 
     private static string GetLastSegment(string path)

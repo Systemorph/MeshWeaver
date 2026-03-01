@@ -3,7 +3,7 @@
   "name": "Samuel Glauser",
   "nodeType": "User",
   "description": "Solution Architect at Systemorph",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "Samuel Glauser",

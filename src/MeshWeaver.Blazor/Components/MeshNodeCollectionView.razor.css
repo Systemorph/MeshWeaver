@@ -42,20 +42,11 @@
 }
 
 ::deep .mesh-node-collection-avatar-icon {
-    display: inline-block;
     width: 36px;
     height: 36px;
     border-radius: 6px;
     flex-shrink: 0;
-    background-color: currentColor;
-    -webkit-mask-image: var(--icon-url);
-    mask-image: var(--icon-url);
-    -webkit-mask-size: contain;
-    mask-size: contain;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: center;
-    mask-position: center;
+    object-fit: contain;
 }
 
 .mesh-node-collection-info {

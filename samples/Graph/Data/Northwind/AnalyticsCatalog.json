@@ -5,7 +5,7 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "Northwind analytics catalog with reference data, orders, and 50+ views",
-  "iconName": "Building",
+  "icon": "/static/NodeTypeIcons/building.svg",
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",

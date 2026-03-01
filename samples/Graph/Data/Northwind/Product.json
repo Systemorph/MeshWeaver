@@ -5,7 +5,7 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "Product master data with inventory and pricing information",
-  "iconName": "ShoppingBag",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",

@@ -3,7 +3,7 @@
   "name": "Roland Bürgi",
   "nodeType": "User",
   "description": "Founder & CEO at Systemorph",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "Roland Bürgi",

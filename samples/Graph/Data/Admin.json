@@ -1,6 +1,7 @@
 {
   "id": "Admin",
   "name": "Platform",
+  "icon": "/static/NodeTypeIcons/rocket.svg",
   "nodeType": "Platform",
   "description": "Platform administration and configuration",
   "isPersistent": true,

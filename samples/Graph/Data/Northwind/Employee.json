@@ -5,7 +5,7 @@
   "nodeType": "NodeType",
   "category": "Types",
   "description": "Employee master data with job title and location",
-  "iconName": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "$type": "NodeTypeDefinition",

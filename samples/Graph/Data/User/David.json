@@ -3,7 +3,7 @@
   "name": "David Kim",
   "nodeType": "User",
   "description": "DevOps Engineer",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "David Kim",

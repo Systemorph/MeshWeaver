@@ -2,6 +2,7 @@
   "id": "Samuel_Access",
   "namespace": "",
   "name": "Samuel Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",

@@ -5,7 +5,6 @@
   "nodeType": "Cornerstone/Insured",
   "category": "Clients",
   "description": "Electric vehicle and clean energy company - Insurance client",
-  "iconName": "Building",
   "icon": "/static/storage/content/Cornerstone/icons/tesla.svg",
   "isPersistent": true,
   "content": {

@@ -3,7 +3,7 @@
   "name": "Carol Martinez",
   "nodeType": "User",
   "description": "UX Designer",
-  "iconName": "Person",
+  "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
     "name": "Carol Martinez",

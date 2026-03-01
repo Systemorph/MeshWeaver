@@ -2,6 +2,7 @@
   "id": "Roland_Access",
   "namespace": "",
   "name": "Roland Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",

@@ -5,7 +5,6 @@
   "nodeType": "Cornerstone/Insured",
   "category": "Clients",
   "description": "US manufacturing corporation - Insurance client",
-  "iconName": "Building",
   "icon": "/static/storage/content/Cornerstone/icons/globalmanufacturing.svg",
   "isPersistent": true,
   "content": {
