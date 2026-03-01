@@ -23,6 +23,7 @@ public static class GroupLayoutAreas
 {
     public const string OverviewArea = "Overview";
     public const string EditArea = "Edit";
+    public const string MembershipsArea = "Memberships";
 
     /// <summary>
     /// Adds the Group views to the hub's layout.
@@ -32,8 +33,18 @@ public static class GroupLayoutAreas
             .WithDefaultArea(OverviewArea)
             .WithView(OverviewArea, Overview)
             .WithView(EditArea, Edit)
+            .WithView(MembershipsArea, Memberships)
+            .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
             .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateLayoutArea.Create)
             .WithView(MeshNodeLayoutAreas.DeleteArea, DeleteLayoutArea.Delete));
+
+    /// <summary>
+    /// Renders the Memberships area for a Group node.
+    /// Delegates to GroupsLayoutArea.Groups() to show inherited + local memberships.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Memberships(LayoutAreaHost host, RenderingContext ctx)
+        => GroupsLayoutArea.Groups(host, ctx);
 
     /// <summary>
     /// Renders the Overview area for a Group node.

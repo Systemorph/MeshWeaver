@@ -62,9 +62,9 @@ public static class MarkdownEditLayoutArea
         if (node != null)
         {
             dataId = $"editTitle_{hubPath.Replace("/", "_")}";
-            var props = MeshNodeProperties.FromNode(node);
+            var props = MeshNodeMetadata.FromNode(node);
             host.UpdateData(dataId, props);
-            SetupNodePropertiesAutoSave(host, dataId, props, node);
+            SetupNodeMetadataAutoSave(host, dataId, props, node);
         }
 
         // Header row with back button and inline title editor
@@ -126,10 +126,10 @@ public static class MarkdownEditLayoutArea
         return container;
     }
 
-    private static void SetupNodePropertiesAutoSave(
+    private static void SetupNodeMetadataAutoSave(
         LayoutAreaHost host,
         string dataId,
-        MeshNodeProperties initial,
+        MeshNodeMetadata initial,
         MeshNode node)
     {
         var current = (object)initial;
@@ -144,7 +144,7 @@ public static class MarkdownEditLayoutArea
 
                     current = updated;
 
-                    if (updated is not MeshNodeProperties updatedProps)
+                    if (updated is not MeshNodeMetadata updatedProps)
                         return;
 
                     var updatedNode = updatedProps.ApplyTo(node);

@@ -264,7 +264,7 @@ public class ContentService : IContentService
             var parentConfigs = parent.GetAllCollectionConfigs();
             foreach (var parentConfig in parentConfigs)
             {
-                if (!collectionConfigs.ContainsKey(parentConfig.Name))
+                if (!collectionConfigs.ContainsKey(parentConfig.Name) && parentConfig.ExposeInChildren)
                 {
                     configs.Add(parentConfig);
                 }

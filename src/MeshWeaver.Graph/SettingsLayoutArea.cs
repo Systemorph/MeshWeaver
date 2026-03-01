@@ -22,7 +22,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class SettingsLayoutArea
 {
-    public const string PropertiesTab = "Properties";
+    public const string MetadataTab = "Metadata";
     public const string NodeTypesTab = "NodeTypes";
     public const string FilesTab = "Files";
     public const string AccessControlTab = "AccessControl";
@@ -45,9 +45,9 @@ public static class SettingsLayoutArea
         var hubAddress = host.Hub.Address;
         var tabId = host.Reference.Id?.ToString();
 
-        // Default to Properties tab
+        // Default to Metadata tab
         if (string.IsNullOrEmpty(tabId))
-            tabId = PropertiesTab;
+            tabId = MetadataTab;
 
         // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
@@ -109,10 +109,10 @@ public static class SettingsLayoutArea
             new NavLinkControl(nodeName, FluentIcons.ArrowLeft(), backHref)
         );
 
-        // Properties tab
-        var propertiesHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = PropertiesTab }.ToHref(hubAddress);
+        // Metadata tab
+        var metadataHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = MetadataTab }.ToHref(hubAddress);
         navMenu = navMenu.WithView(
-            new NavLinkControl("Properties", FluentIcons.Settings(), propertiesHref)
+            new NavLinkControl("Metadata", FluentIcons.Info(), metadataHref)
         );
 
         // Node Types group
@@ -180,18 +180,18 @@ public static class SettingsLayoutArea
 
         return tabId switch
         {
-            PropertiesTab => BuildPropertiesTab(host, node, stack),
+            MetadataTab => BuildMetadataTab(host, node, stack),
             NodeTypesTab => BuildNodeTypesTab(host, hubPath, stack),
             FilesTab => BuildFilesTab(host, stack),
             AccessControlTab => BuildAccessControlTab(host, node, hubPath, stack),
             GroupsTab => BuildGroupsTab(host, node, hubPath, stack),
             EffectiveAccessTab => BuildEffectiveAccessTab(host, hubPath, stack),
             AppearanceTab => BuildAppearanceTab(stack),
-            _ => BuildPropertiesTab(host, node, stack),
+            _ => BuildMetadataTab(host, node, stack),
         };
     }
 
-    private static UiControl BuildPropertiesTab(LayoutAreaHost host, MeshNode? node, StackControl stack)
+    private static UiControl BuildMetadataTab(LayoutAreaHost host, MeshNode? node, StackControl stack)
     {
         if (node == null)
         {
@@ -200,31 +200,154 @@ public static class SettingsLayoutArea
         }
 
         var nodePath = node.Namespace ?? host.Hub.Address.ToString();
-        var props = MeshNodeProperties.FromNode(node);
+        var meta = MeshNodeMetadata.FromNode(node);
 
         // Set up local data for editing
-        var dataId = $"nodeProps_{nodePath.Replace("/", "_")}";
-        host.UpdateData(dataId, props);
+        var dataId = $"nodeMeta_{nodePath.Replace("/", "_")}";
+        host.UpdateData(dataId, meta);
 
         // Auto-save: map changes back to MeshNode and persist
-        SetupNodePropertiesAutoSave(host, dataId, props, node);
+        SetupNodeMetadataAutoSave(host, dataId, meta, node);
 
-        // Build click-to-edit property form (same pattern as OverviewLayoutArea)
-        stack = stack.WithView(EditLayoutArea.BuildContentView(host, new ContentViewOptions
-        {
-            DataId = dataId,
-            ContentType = typeof(MeshNodeProperties),
-            CanEdit = true,
-            IsToggleable = true
-        }));
+        // Section 1: Identity (read-only)
+        stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
+
+        // Section 2: Display (editable)
+        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, dataId)));
+
+        // Section 3: Timestamps (read-only)
+        stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta)));
 
         return stack;
     }
 
-    private static void SetupNodePropertiesAutoSave(
+    private static UiControl BuildSection(string title, UiControl content)
+    {
+        return Controls.Stack
+            .WithStyle("border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; overflow: hidden; margin-bottom: 8px;")
+            .WithView(Controls.Html(
+                $"<div style=\"padding: 10px 16px; background: var(--neutral-layer-2); font-weight: 600; font-size: 0.9rem; border-bottom: 1px solid var(--neutral-stroke-rest);\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
+            .WithView(Controls.Stack.WithStyle("padding: 16px; gap: 12px;").WithView(content));
+    }
+
+    private static UiControl BuildIdentitySection(MeshNodeMetadata meta)
+    {
+        var grid = Controls.Stack.WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        grid = AddReadOnlyField(grid, "Id", meta.Id);
+        grid = AddReadOnlyField(grid, "Namespace", meta.Namespace);
+        grid = AddReadOnlyField(grid, "Node Type", meta.NodeType);
+        grid = AddReadOnlyField(grid, "State", meta.State.ToString());
+        grid = AddReadOnlyField(grid, "Version", meta.Version.ToString());
+        return grid;
+    }
+
+    private static StackControl AddReadOnlyField(StackControl grid, string label, string? value)
+    {
+        return grid
+            .WithView(Controls.Html($"<span style=\"color: var(--neutral-foreground-hint); font-weight: 500;\">{System.Web.HttpUtility.HtmlEncode(label)}</span>"))
+            .WithView(Controls.Html($"<span>{System.Web.HttpUtility.HtmlEncode(value ?? "—")}</span>"));
+    }
+
+    private static UiControl BuildDisplaySection(LayoutAreaHost host, string dataId)
+    {
+        var dataPointer = LayoutAreaReference.GetDataPointer(dataId);
+        var stack = Controls.Stack.WithStyle("gap: 16px;");
+
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Name"))
+        {
+            Label = "Name",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("Category"))
+        {
+            Label = "Category",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        // Icon picker: collection combobox + file browser + manual text field
+        stack = stack.WithView(BuildIconPicker(host, dataId));
+
+        stack = stack.WithView(new NumberFieldControl(new JsonPointerReference("Order"), typeof(int?))
+        {
+            Label = "Order",
+            Immediate = true,
+            DataContext = dataPointer
+        });
+
+        return stack;
+    }
+
+    private static UiControl BuildIconPicker(LayoutAreaHost host, string metadataDataId)
+    {
+        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var collections = contentService?.GetAllCollectionConfigs()?.ToList() ?? [];
+
+        var section = Controls.Stack.WithStyle("gap: 8px;");
+        section = section.WithView(Controls.Html(
+            "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
+
+        if (collections.Count > 0)
+        {
+            var collectionOptions = collections
+                .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
+                .ToArray();
+
+            var pickerDataId = $"iconPicker_{metadataDataId}";
+            host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = "" });
+            host.UpdateData($"{pickerDataId}_options", collectionOptions);
+
+            // Collection selector combobox
+            section = section.WithView(new ComboboxControl(
+                new JsonPointerReference("collection"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer($"{pickerDataId}_options")))
+            {
+                Label = "Browse Collection",
+                Placeholder = "Select a collection to browse icons...",
+                Autocomplete = ComboboxAutocomplete.Both,
+                DataContext = LayoutAreaReference.GetDataPointer(pickerDataId)
+            });
+
+            // File browser for selected collection (reactive)
+            section = section.WithView((h, _) =>
+                h.Stream.GetDataStream<Dictionary<string, object?>>(pickerDataId)
+                    .Select(data =>
+                    {
+                        var selectedCollection = data?.GetValueOrDefault("collection")?.ToString();
+                        if (string.IsNullOrEmpty(selectedCollection))
+                            return (UiControl?)Controls.Stack;
+                        return (UiControl?)new FileBrowserControl(selectedCollection);
+                    }));
+        }
+
+        // Current value / manual text field
+        section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
+        {
+            Label = "Icon Path",
+            Placeholder = "e.g., /static/collection/icon.svg",
+            Immediate = true,
+            DataContext = LayoutAreaReference.GetDataPointer(metadataDataId)
+        });
+
+        return section;
+    }
+
+    private static UiControl BuildTimestampsSection(MeshNodeMetadata meta)
+    {
+        var grid = Controls.Stack.WithStyle("display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; font-size: 0.9rem;");
+        grid = AddReadOnlyField(grid, "Created",
+            meta.CreatedDate == default ? "—" : meta.CreatedDate.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+        grid = AddReadOnlyField(grid, "Last Modified",
+            meta.LastModified == default ? "—" : meta.LastModified.ToString("yyyy-MM-dd HH:mm:ss zzz"));
+        return grid;
+    }
+
+    private static void SetupNodeMetadataAutoSave(
         LayoutAreaHost host,
         string dataId,
-        MeshNodeProperties initial,
+        MeshNodeMetadata initial,
         MeshNode node)
     {
         var current = (object)initial;
@@ -239,10 +362,10 @@ public static class SettingsLayoutArea
 
                     current = updated;
 
-                    if (updated is not MeshNodeProperties updatedProps)
+                    if (updated is not MeshNodeMetadata updatedMeta)
                         return;
 
-                    var updatedNode = updatedProps.ApplyTo(node);
+                    var updatedNode = updatedMeta.ApplyTo(node);
 
                     host.Hub.Post(
                         new DataChangeRequest { ChangedBy = host.Stream.ClientId }.WithUpdates(updatedNode),
@@ -268,20 +391,42 @@ public static class SettingsLayoutArea
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.ToList();
 
-        if (collections is { Count: > 0 })
+        if (collections is not { Count: > 0 })
         {
-            foreach (var config in collections)
-            {
-                stack = stack.WithView(Controls.H3(config.DisplayName ?? config.Name)
-                    .WithStyle("margin: 16px 0 8px 0;"));
-                stack = stack.WithView(new FileBrowserControl(config.Name));
-            }
-        }
-        else
-        {
-            // Fallback: default "content" collection
             stack = stack.WithView(new FileBrowserControl("content"));
+            return stack;
         }
+
+        var options = collections
+            .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
+            .ToArray();
+
+        var selectDataId = "filesTabCollectionSelect";
+        var optionsDataId = "filesTabCollectionOptions";
+
+        host.UpdateData(selectDataId, new Dictionary<string, object?> { ["collection"] = collections[0].Name });
+        host.UpdateData(optionsDataId, options);
+
+        // Collection selector
+        stack = stack.WithView(new ComboboxControl(
+            new JsonPointerReference("collection"),
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsDataId)))
+        {
+            Label = "Collection",
+            Autocomplete = ComboboxAutocomplete.Both,
+            DataContext = LayoutAreaReference.GetDataPointer(selectDataId)
+        });
+
+        // Reactive file browser based on selection
+        stack = stack.WithView((h, _) =>
+            h.Stream.GetDataStream<Dictionary<string, object?>>(selectDataId)
+                .Select(data =>
+                {
+                    var selected = data?.GetValueOrDefault("collection")?.ToString();
+                    if (string.IsNullOrEmpty(selected))
+                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
+                    return (UiControl?)new FileBrowserControl(selected);
+                }));
 
         return stack;
     }
@@ -298,11 +443,34 @@ public static class SettingsLayoutArea
 
     private static UiControl BuildGroupsTab(LayoutAreaHost host, MeshNode? node, string hubPath, StackControl stack)
     {
-        // Delegate to the existing Groups view
-        stack = stack.WithView(
-            (h, ctx) => MeshNodeLayoutAreas.Groups(h, ctx)!,
-            "GroupsContent"
-        );
+        stack = stack.WithView(Controls.H2("Groups").WithStyle("margin: 0 0 16px 0;"));
+
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+        {
+            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
+            return stack;
+        }
+
+        // Show child Group nodes
+        stack = stack.WithView((h, _) =>
+            meshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{hubPath} nodeType:Group scope:children"))
+                .Select(change =>
+                {
+                    var groupNodes = change.Items?.ToList() ?? [];
+                    if (groupNodes.Count == 0)
+                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No groups defined at this level.</p>");
+
+                    var container = Controls.Stack.WithStyle("gap: 8px;");
+                    foreach (var groupNode in groupNodes.OrderBy(n => n.Order).ThenBy(n => n.Name))
+                    {
+                        container = container.WithView(
+                            MeshNodeThumbnailControl.FromNode(groupNode, groupNode.Path));
+                    }
+                    return (UiControl?)container;
+                }));
+
         return stack;
     }
 
@@ -408,10 +576,10 @@ public static class SettingsLayoutArea
 }
 
 /// <summary>
-/// DTO record exposing editable MeshNode properties (excluding Content)
-/// for the Settings Properties tab with click-to-edit support.
+/// DTO record exposing editable MeshNode metadata (excluding Content)
+/// for the Settings Metadata tab with click-to-edit support.
 /// </summary>
-public record MeshNodeProperties
+public record MeshNodeMetadata
 {
     [Editable(false)]
     public string? Id { get; init; }
@@ -434,12 +602,15 @@ public record MeshNodeProperties
     public MeshNodeState State { get; init; }
 
     [Editable(false)]
+    public DateTimeOffset CreatedDate { get; init; }
+
+    [Editable(false)]
     public DateTimeOffset LastModified { get; init; }
 
     [Editable(false)]
     public long Version { get; init; }
 
-    public static MeshNodeProperties FromNode(MeshNode node) => new()
+    public static MeshNodeMetadata FromNode(MeshNode node) => new()
     {
         Id = node.Id,
         Name = node.Name,
@@ -449,6 +620,7 @@ public record MeshNodeProperties
         Icon = node.Icon,
         Order = node.Order,
         State = node.State,
+        CreatedDate = node.CreatedDate,
         LastModified = node.LastModified,
         Version = node.Version,
     };
