@@ -33,6 +33,32 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
     /// </summary>
     internal IEnumerable<string> PartitionNames => _stores.Keys;
 
+    /// <summary>
+    /// Discovers partitions not yet provisioned, provisions each, and yields its query provider.
+    /// Already-provisioned partitions are skipped. Safe to call concurrently.
+    /// </summary>
+    internal async IAsyncEnumerable<IMeshQueryProvider> DiscoverNewProvidersAsync(
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var partitions = await _factory.DiscoverPartitionsAsync(ct);
+
+        foreach (var segment in partitions)
+        {
+            if (_stores.ContainsKey(segment))
+                continue;
+
+            var partition = await _factory.CreateStoreAsync(segment, ct);
+            if (_stores.TryAdd(segment, partition.PersistenceCore))
+            {
+                if (partition.QueryProvider != null)
+                {
+                    _queryProviders[segment] = partition.QueryProvider;
+                    yield return partition.QueryProvider;
+                }
+            }
+        }
+    }
+
     private async Task<IPersistenceServiceCore> GetOrCreateStoreAsync(string firstSegment, CancellationToken ct)
     {
         if (_stores.TryGetValue(firstSegment, out var existing))
@@ -65,12 +91,9 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        var partitions = await _factory.DiscoverPartitionsAsync(ct);
-        foreach (var segment in partitions)
-        {
-            var store = await GetOrCreateStoreAsync(segment, ct);
-            await store.InitializeAsync(ct);
-        }
+        // Drain to ensure all partitions are provisioned
+        await foreach (var _ in DiscoverNewProvidersAsync(ct))
+        { }
     }
 
     #region Node Operations
