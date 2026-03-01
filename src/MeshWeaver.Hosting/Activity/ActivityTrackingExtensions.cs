@@ -1,5 +1,7 @@
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -14,13 +16,20 @@ public static class ActivityTrackingExtensions
     /// Adds user activity tracking.
     /// Activity is tracked at the navigation level (ApplicationPage) via NavigationService,
     /// not at the persistence layer, to avoid noisy internal data fetches.
-    /// Falls back to InMemoryActivityStore if no IActivityStore has been registered.
+    /// Uses PersistenceActivityStore when IPersistenceServiceCore is available,
+    /// falls back to InMemoryActivityStore otherwise.
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
         return builder.ConfigureServices(services =>
         {
-            services.TryAddSingleton<IActivityStore, InMemoryActivityStore>();
+            services.TryAddSingleton<IActivityStore>(sp =>
+            {
+                var persistence = sp.GetService<IPersistenceServiceCore>();
+                if (persistence != null)
+                    return new PersistenceActivityStore(persistence);
+                return new InMemoryActivityStore();
+            });
             return services;
         });
     }

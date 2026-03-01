@@ -57,4 +57,18 @@ public class PersistenceActivityLogStore : IActivityLogStore
 
         return query.OrderByDescending(l => l.Start).Take(limit).ToList();
     }
+
+    /// <summary>
+    /// Cross-partition query is not supported by partition storage.
+    /// Returns empty list. Use PostgreSqlActivityLogStore for cross-hub feed queries.
+    /// </summary>
+    public Task<IReadOnlyList<ActivityLog>> GetRecentActivityLogsAsync(
+        string? user = null,
+        DateTime? from = null,
+        DateTime? to = null,
+        int limit = 20,
+        CancellationToken ct = default)
+    {
+        return Task.FromResult<IReadOnlyList<ActivityLog>>([]);
+    }
 }

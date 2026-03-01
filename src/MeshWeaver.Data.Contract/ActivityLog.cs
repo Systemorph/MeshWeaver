@@ -16,6 +16,7 @@ public record ActivityLog(string Category)
     public ActivityStatus Status { get; init; }
     public DateTime? End { get; init; }
     public UserInfo? User { get; init; }
+    public string? HubPath { get; init; }
     public ImmutableList<ActivityLog> SubActivities { get; init; } = [];
 
     public ActivityLog Fail(string error) =>

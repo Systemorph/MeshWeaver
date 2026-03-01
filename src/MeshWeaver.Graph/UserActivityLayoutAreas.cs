@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -10,7 +11,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Registers the "Activity" area on User nodes for the personal dashboard start page.
-/// Sections: Chat Entry, Recent Activity, Notifications, Pending Actions.
+/// Layout: Activity Feed (main) + sidebar (Recently Viewed, Notifications, Pending Actions) + Chat pinned to bottom.
 /// </summary>
 public static class UserActivityLayoutAreas
 {
@@ -24,8 +25,7 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Renders the user's personal dashboard: welcome header,
-    /// responsive 3-column grid (Recently Viewed, Notifications, Pending Actions),
-    /// and compact chat entry at the bottom.
+    /// 2-column layout (Activity Feed + sidebar), and chat pinned to bottom.
     /// </summary>
     public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
     {
@@ -35,34 +35,48 @@ public static class UserActivityLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
+            // Outer container: flex column filling available height
             var dashboard = Controls.Stack
                 .WithWidth("100%")
+                .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0;");
+
+            // Scrollable content area
+            var contentArea = Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("flex: 1; overflow-y: auto; min-height: 0;")
                 .WithVerticalGap(16);
 
             // Welcome header
             var userName = accessService?.Context?.Name ?? "User";
-            dashboard = dashboard.WithView(Controls.H2($"Welcome back, {userName}"));
+            contentArea = contentArea.WithView(Controls.H2($"Welcome back, {userName}"));
 
-            // 3-column responsive grid
-            var grid = Controls.LayoutGrid
-                .WithStyle("width: 100%;")
-                .WithView(
-                    await BuildRecentActivity(host, userId),
-                    skin => skin.WithXs(12).WithSm(4)
-                )
-                .WithView(
-                    BuildNotifications(nodePath, userId),
-                    skin => skin.WithXs(12).WithSm(4)
-                )
-                .WithView(
-                    BuildPendingActions(userId),
-                    skin => skin.WithXs(12).WithSm(4)
-                );
+            // 2-column responsive grid: feed (8 cols) + sidebar (4 cols)
+            var grid = Controls.LayoutGrid.WithStyle("width: 100%;");
 
-            dashboard = dashboard.WithView(grid);
+            // Activity Feed (main area)
+            grid = grid.WithView(
+                await BuildActivityFeed(host, userId),
+                skin => skin.WithXs(12).WithSm(8)
+            );
 
-            // Chat entry at the bottom
-            dashboard = dashboard.WithView(BuildChatEntry(host, nodePath));
+            // Sidebar: Recently Viewed + Notifications + Pending Actions
+            var sidebar = Controls.Stack.WithVerticalGap(16);
+            sidebar = sidebar.WithView(await BuildRecentActivity(host, userId));
+            sidebar = sidebar.WithView(BuildNotifications(nodePath, userId));
+            sidebar = sidebar.WithView(BuildPendingActions(userId));
+
+            grid = grid.WithView(sidebar, skin => skin.WithXs(12).WithSm(4));
+            contentArea = contentArea.WithView(grid);
+
+            dashboard = dashboard.WithView(contentArea);
+
+            // Chat pinned to bottom
+            dashboard = dashboard.WithView(
+                Controls.Stack
+                    .WithWidth("100%")
+                    .WithStyle("flex-shrink: 0; border-top: 1px solid var(--neutral-stroke-divider-rest); padding-top: 8px;")
+                    .WithView(BuildChatEntry(host, nodePath))
+            );
 
             return (UiControl?)dashboard;
         });
@@ -76,6 +90,94 @@ public static class UserActivityLayoutAreas
             .WithHideEmptyState();
 
         return Controls.Stack.WithWidth("100%").WithView(chatControl);
+    }
+
+    /// <summary>
+    /// Builds the system-wide activity feed combining UserActivityRecords and ActivityLogs.
+    /// </summary>
+    private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host, string userId)
+    {
+        var section = Controls.Stack.WithVerticalGap(8);
+        section = section.WithView(Controls.PaneHeader("Activity Feed"));
+
+        var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
+        var activityLogStore = host.Hub.ServiceProvider.GetService<IActivityLogStore>();
+
+        // Fetch both sources in parallel
+        var userActivitiesTask = activityStore != null && !string.IsNullOrEmpty(userId)
+            ? activityStore.GetActivitiesAsync(userId)
+            : Task.FromResult<IReadOnlyList<UserActivityRecord>>([]);
+
+        var activityLogsTask = activityLogStore != null
+            ? activityLogStore.GetRecentActivityLogsAsync(limit: 20)
+            : Task.FromResult<IReadOnlyList<ActivityLog>>([]);
+
+        await Task.WhenAll(userActivitiesTask, activityLogsTask);
+
+        var userActivities = await userActivitiesTask;
+        var activityLogs = await activityLogsTask;
+
+        // Build unified feed items sorted by timestamp
+        var feedItems = new List<(DateTime Timestamp, string Html)>();
+
+        // Add ActivityLog entries (system-wide edits)
+        foreach (var log in activityLogs)
+        {
+            var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
+            var hubPath = log.HubPath ?? "unknown";
+            var hubName = hubPath.Contains('/') ? hubPath.Substring(hubPath.LastIndexOf('/') + 1) : hubPath;
+            var changeCount = log.Messages.Count > 0 ? log.Messages[0].Message : "data changes";
+            var timeAgo = GetRelativeTime(new DateTimeOffset(log.Start, TimeSpan.Zero));
+            var statusColor = log.Status switch
+            {
+                ActivityStatus.Failed => "var(--error)",
+                ActivityStatus.Warning => "var(--warning)",
+                _ => "var(--accent-fill-rest)"
+            };
+
+            feedItems.Add((log.Start,
+                $"<div style=\"display: flex; gap: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--neutral-stroke-divider-rest); background: var(--neutral-layer-2);\">" +
+                $"<div style=\"flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: {statusColor}; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px;\">&#9998;</div>" +
+                $"<div style=\"flex: 1; min-width: 0;\">" +
+                $"<div style=\"font-weight: 500;\">{EscapeHtml(userName)} <span style=\"font-weight: 400; color: var(--neutral-foreground-hint);\">edited</span> <a href=\"/{EscapeHtml(hubPath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest);\">{EscapeHtml(hubName)}</a></div>" +
+                $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">{EscapeHtml(changeCount)}</div>" +
+                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{timeAgo}</div>" +
+                "</div></div>"));
+        }
+
+        // Add recent user activity (personal views) — show top 10
+        foreach (var activity in userActivities.Take(10))
+        {
+            var timeAgo = GetRelativeTime(activity.LastAccessedAt);
+            var nodeTypeBadge = !string.IsNullOrEmpty(activity.NodeType)
+                ? $"<span style=\"font-size: 0.7rem; padding: 1px 5px; border-radius: 3px; background: var(--neutral-layer-3); color: var(--neutral-foreground-hint);\">{EscapeHtml(activity.NodeType)}</span> "
+                : "";
+
+            feedItems.Add((activity.LastAccessedAt.UtcDateTime,
+                $"<div style=\"display: flex; gap: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--neutral-stroke-divider-rest);\">" +
+                $"<div style=\"flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--neutral-layer-3); display: flex; align-items: center; justify-content: center; color: var(--neutral-foreground-hint); font-size: 14px;\">&#128065;</div>" +
+                $"<div style=\"flex: 1; min-width: 0;\">" +
+                $"<div>{nodeTypeBadge}You viewed <a href=\"/{EscapeHtml(activity.NodePath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest);\">{EscapeHtml(activity.NodeName ?? activity.NodePath)}</a></div>" +
+                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{timeAgo}</div>" +
+                "</div></div>"));
+        }
+
+        if (feedItems.Count == 0)
+        {
+            section = section.WithView(Controls.Html(
+                "<p style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px;\">No activity yet. Browse the system to see your feed populate.</p>"));
+            return section;
+        }
+
+        // Sort by timestamp descending and render
+        var feed = Controls.Stack.WithVerticalGap(8);
+        foreach (var item in feedItems.OrderByDescending(f => f.Timestamp).Take(30))
+        {
+            feed = feed.WithView(Controls.Html(item.Html));
+        }
+
+        section = section.WithView(feed);
+        return section;
     }
 
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
@@ -95,7 +197,7 @@ public static class UserActivityLayoutAreas
         var activities = await activityStore.GetActivitiesAsync(userId);
         var recent = activities
             .OrderByDescending(a => a.LastAccessedAt)
-            .Take(10)
+            .Take(5)
             .ToList();
 
         if (recent.Count == 0)
