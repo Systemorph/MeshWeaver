@@ -1,7 +1,7 @@
 {
   "id": "Admin",
-  "name": "Admin",
-  "nodeType": "Markdown",
+  "name": "Platform",
+  "nodeType": "Platform",
   "description": "Platform administration and configuration",
   "isPersistent": true,
   "state": "Active"

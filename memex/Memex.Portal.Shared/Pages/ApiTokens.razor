@@ -1,10 +1,13 @@
 @page "/settings/api-tokens"
+@layout Memex.Portal.Shared.Layout.SettingsLayout
 @using Memex.Portal.Shared.Authentication
-@using System.Text.Json
+@using System.Security.Claims
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @attribute [Authorize]
 @inject NavigationManager Navigation
-@inject IHttpClientFactory HttpClientFactory
+@inject ApiTokenService TokenService
+@inject AuthenticationStateProvider AuthStateProvider
 
 <PageTitle>API Tokens - Memex Portal</PageTitle>
 
@@ -198,24 +201,32 @@
         await LoadTokens();
     }
 
+    private async Task<(string userId, string userName, string userEmail)> GetUserInfoAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        var userId = user.FindFirst("preferred_username")?.Value
+                     ?? user.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "";
+        var userName = user.FindFirst(ClaimTypes.Name)?.Value
+                       ?? user.FindFirst("name")?.Value ?? "";
+        var userEmail = user.FindFirst(ClaimTypes.Email)?.Value
+                        ?? user.FindFirst("email")?.Value ?? "";
+        return (userId, userName, userEmail);
+    }
+
     private async Task LoadTokens()
     {
         try
         {
             isLoading = true;
             error = null;
-            var client = CreateClient();
-            var response = await client.GetAsync("/api/tokens");
-            if (response.IsSuccessStatusCode)
+            var (userId, _, _) = await GetUserInfoAsync();
+            if (string.IsNullOrEmpty(userId))
             {
-                var json = await response.Content.ReadAsStringAsync();
-                tokens = JsonSerializer.Deserialize<List<ApiTokenInfo>>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+                error = "No user identity found.";
+                return;
             }
-            else
-            {
-                error = $"Failed to load tokens: {response.StatusCode}";
-            }
+            tokens = await TokenService.GetTokensForUserAsync(userId);
         }
         catch (Exception ex)
         {
@@ -242,26 +253,25 @@
             successMessage = null;
             newlyCreatedToken = null;
 
-            var client = CreateClient();
-            var request = new { label = newTokenLabel, expiresInDays = newTokenExpiryDays > 0 ? newTokenExpiryDays : (int?)null };
-            var response = await client.PostAsJsonAsync("/api/tokens", request);
-
-            if (response.IsSuccessStatusCode)
+            var (userId, userName, userEmail) = await GetUserInfoAsync();
+            if (string.IsNullOrEmpty(userId))
             {
-                var json = await response.Content.ReadAsStringAsync();
-                var result = JsonSerializer.Deserialize<CreateTokenResponse>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                error = "No user identity found.";
+                return;
+            }
 
-                newlyCreatedToken = result?.RawToken;
-                successMessage = $"Token '{newTokenLabel}' created successfully.";
-                newTokenLabel = "";
-                newTokenExpiryDays = 0;
-                await LoadTokens();
-            }
-            else
-            {
-                error = $"Failed to create token: {response.StatusCode}";
-            }
+            DateTimeOffset? expiresAt = newTokenExpiryDays > 0
+                ? DateTimeOffset.UtcNow.AddDays(newTokenExpiryDays)
+                : null;
+
+            var (rawToken, _) = await TokenService.CreateTokenAsync(
+                userId, userName, userEmail, newTokenLabel, expiresAt);
+
+            newlyCreatedToken = rawToken;
+            successMessage = $"Token '{newTokenLabel}' created successfully.";
+            newTokenLabel = "";
+            newTokenExpiryDays = 0;
+            await LoadTokens();
         }
         catch (Exception ex)
         {
@@ -281,30 +291,21 @@
             successMessage = null;
             newlyCreatedToken = null;
 
-            var client = CreateClient();
-            var response = await client.DeleteAsync($"/api/tokens/{token.NodePath}");
-
-            if (response.IsSuccessStatusCode)
+            var success = await TokenService.RevokeTokenAsync(token.NodePath);
+            if (success)
             {
                 successMessage = $"Token '{token.Label}' has been revoked.";
                 await LoadTokens();
             }
             else
             {
-                error = $"Failed to revoke token: {response.StatusCode}";
+                error = "Failed to revoke token: token not found.";
             }
         }
         catch (Exception ex)
         {
             error = $"Error revoking token: {ex.Message}";
         }
-    }
-
-    private HttpClient CreateClient()
-    {
-        var client = HttpClientFactory.CreateClient();
-        client.BaseAddress = new Uri(Navigation.BaseUri);
-        return client;
     }
 
     private static class Icons
