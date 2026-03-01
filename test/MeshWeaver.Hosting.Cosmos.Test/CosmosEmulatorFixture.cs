@@ -2,6 +2,7 @@ using System;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
+using DotNet.Testcontainers.Builders;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
 using Microsoft.Azure.Cosmos;
@@ -29,7 +30,13 @@ public class CosmosEmulatorFixture : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         _container = new CosmosDbBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest")
-            .WithEnvironment("AZURE_COSMOS_EMULATOR_PARTITION_COUNT", "25")
+            // Allocate enough partitions for all test containers.
+            // Default is ~5 which causes 503 when creating more containers.
+            .WithEnvironment("AZURE_COSMOS_EMULATOR_PARTITION_COUNT", "30")
+            .WithEnvironment("AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE", "127.0.0.1")
+            // Give the emulator enough time to start all partitions
+            .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r =>
+                r.ForPort(8081).ForPath("/_explorer/emulator.pem").UsingTls()))
             .Build();
         await _container.StartAsync();
 
@@ -42,7 +49,7 @@ public class CosmosEmulatorFixture : IAsyncLifetime
             UseSystemTextJsonSerializerWithOptions = jsonOptions
         });
 
-        // Wait for the emulator to be fully operational
+        // Wait for the emulator to be fully operational (document round-trip succeeds)
         await WaitForEmulatorReadyAsync();
 
         // Create database and containers matching the AppHost layout
@@ -51,13 +58,10 @@ public class CosmosEmulatorFixture : IAsyncLifetime
             new ContainerProperties("nodes", "/namespace") { DefaultTimeToLive = -1 });
         await dbResponse.Database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey") { DefaultTimeToLive = -1 });
-
     }
 
     private async Task WaitForEmulatorReadyAsync()
     {
-        // The emulator returns 503 for several seconds after the container starts.
-        // Wait until a full document round-trip succeeds.
         const int maxAttempts = 30;
         for (var i = 0; i < maxAttempts; i++)
         {

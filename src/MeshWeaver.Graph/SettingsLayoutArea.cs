@@ -1,9 +1,10 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -19,45 +20,47 @@ namespace MeshWeaver.Graph;
 /// Unified Settings page with Splitter layout: left NavMenu + right content pane.
 /// URL pattern: /{nodePath}/Settings/{tabId}
 /// The host.Reference.Id determines which tab to show.
+/// Tabs are registered via <see cref="SettingsMenuItemsExtensions.AddSettingsMenuItems"/>.
 /// </summary>
 public static class SettingsLayoutArea
 {
-    public const string MetadataTab = "Metadata";
-    public const string NodeTypesTab = "NodeTypes";
-    public const string FilesTab = "Files";
-    public const string AccessControlTab = "AccessControl";
-    public const string GroupsTab = "Groups";
-    public const string EffectiveAccessTab = "EffectiveAccess";
-    public const string AppearanceTab = "Appearance";
-    public const string ApiTokensTab = "ApiTokens";
-
-    private const string SelectionDataId = "settingsSelection";
+    internal const string MetadataTab = "Metadata";
+    internal const string NodeTypesTab = "NodeTypes";
+    internal const string FilesTab = "Files";
+    internal const string AccessControlTab = "AccessControl";
+    internal const string GroupsTab = "Groups";
+    internal const string EffectiveAccessTab = "EffectiveAccess";
+    internal const string AppearanceTab = "Appearance";
 
     /// <summary>
     /// Renders the unified Settings page with Splitter layout.
-    /// Left pane: NavMenu with tab links.
+    /// Left pane: NavMenu with tab links (dynamically built from registered providers).
     /// Right pane: Content based on host.Reference.Id (tab selection).
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Settings(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Settings(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
         var hubAddress = host.Hub.Address;
         var tabId = host.Reference.Id?.ToString();
 
-        // Default to Metadata tab
-        if (string.IsNullOrEmpty(tabId))
-            tabId = MetadataTab;
-
-        // Get the node from the workspace stream
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
         return nodeStream.SelectMany(async nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
-            return (UiControl?)BuildSettingsPage(host, node, hubAddress, hubPath, tabId, canEdit);
+            var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+            var canEdit = perms.HasFlag(Permission.Update);
+
+            var items = await host.Hub.Configuration
+                .EvaluateSettingsMenuItemsAsync(host, ctx, perms);
+
+            if (string.IsNullOrEmpty(tabId) && items.Count > 0)
+                tabId = items[0].Id;
+            tabId ??= MetadataTab;
+
+            return (UiControl?)BuildSettingsPage(host, node, hubAddress, hubPath, tabId, canEdit, items);
         });
     }
 
@@ -67,22 +70,22 @@ public static class SettingsLayoutArea
         object hubAddress,
         string hubPath,
         string tabId,
-        bool canEdit = true)
+        bool canEdit,
+        IReadOnlyList<SettingsMenuItemDefinition> items)
     {
         var settingsPage = Controls.Splitter
             .WithSkin(s => s.WithOrientation(Orientation.Horizontal).WithWidth("100%").WithHeight("calc(100vh - 100px)"))
             .WithView(
-                BuildNavMenu(host, node, hubAddress, hubPath, tabId),
+                BuildNavMenu(node, hubAddress, hubPath, items),
                 skin => skin.WithSize("280px").WithMin("200px").WithMax("400px").WithCollapsible(true)
             )
             .WithView(
-                BuildContentPane(host, node, hubPath, tabId),
+                BuildContentPane(host, node, tabId, items),
                 skin => skin.WithSize("*")
             );
 
         if (!canEdit)
         {
-            // Show read-only indicator at the top
             return Controls.Stack.WithWidth("100%")
                 .WithView(Controls.Html(
                     "<div style=\"padding: 8px 16px; background: var(--neutral-layer-3); border-bottom: 1px solid var(--neutral-stroke-rest); " +
@@ -94,76 +97,58 @@ public static class SettingsLayoutArea
     }
 
     private static UiControl BuildNavMenu(
-        LayoutAreaHost host,
         MeshNode? node,
         object hubAddress,
         string hubPath,
-        string activeTab)
+        IReadOnlyList<SettingsMenuItemDefinition> items)
     {
         var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
 
-        // Back to node link
+        // Back to node link (always present)
         var backHref = $"/{hubPath}";
         var nodeName = node?.Name ?? "Back";
         navMenu = navMenu.WithView(
             new NavLinkControl(nodeName, FluentIcons.ArrowLeft(), backHref)
         );
 
-        // Metadata tab
-        var metadataHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = MetadataTab }.ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Metadata", FluentIcons.Info(), metadataHref)
-        );
+        // Separate top-level items from grouped items
+        var topLevel = items.Where(i => i.Group == null).ToList();
+        var grouped = items.Where(i => i.Group != null)
+            .GroupBy(i => i.Group!)
+            .OrderBy(g => g.Min(i => i.Order))
+            .ToList();
 
-        // Node Types group
-        var nodeTypesGroup = new NavGroupControl("Management")
-            .WithIcon(FluentIcons.Document())
-            .WithSkin(s => s.WithExpanded(true));
+        // Interleave top-level and groups by order
+        int topIdx = 0, grpIdx = 0;
+        while (topIdx < topLevel.Count || grpIdx < grouped.Count)
+        {
+            var topOrder = topIdx < topLevel.Count ? topLevel[topIdx].Order : int.MaxValue;
+            var grpOrder = grpIdx < grouped.Count ? grouped[grpIdx].Min(i => i.Order) : int.MaxValue;
 
-        var nodeTypesHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = NodeTypesTab }.ToHref(hubAddress);
-        nodeTypesGroup = nodeTypesGroup.WithView(
-            new NavLinkControl("Node Types", FluentIcons.Document(), nodeTypesHref)
-        );
+            if (topOrder <= grpOrder && topIdx < topLevel.Count)
+            {
+                var item = topLevel[topIdx++];
+                var href = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = item.Id }.ToHref(hubAddress);
+                navMenu = navMenu.WithView(new NavLinkControl(item.Label, item.Icon, href));
+            }
+            else if (grpIdx < grouped.Count)
+            {
+                var group = grouped[grpIdx++];
+                var groupIcon = group.Select(i => i.GroupIcon).FirstOrDefault(gi => gi != null);
+                var navGroup = new NavGroupControl(group.Key)
+                    .WithSkin(s => s.WithExpanded(true));
+                if (groupIcon != null)
+                    navGroup = navGroup.WithIcon(groupIcon);
 
-        var filesHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = FilesTab }.ToHref(hubAddress);
-        nodeTypesGroup = nodeTypesGroup.WithView(
-            new NavLinkControl("Files", FluentIcons.Folder(), filesHref)
-        );
+                foreach (var item in group.OrderBy(i => i.Order))
+                {
+                    var href = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = item.Id }.ToHref(hubAddress);
+                    navGroup = navGroup.WithView(new NavLinkControl(item.Label, item.Icon, href));
+                }
 
-        navMenu = navMenu.WithNavGroup(nodeTypesGroup);
-
-        // Security group
-        var securityGroup = new NavGroupControl("Security")
-            .WithIcon(FluentIcons.Shield())
-            .WithSkin(s => s.WithExpanded(true));
-
-        var accessControlHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = AccessControlTab }.ToHref(hubAddress);
-        securityGroup = securityGroup.WithView(
-            new NavLinkControl("Access Control", FluentIcons.Shield(), accessControlHref)
-        );
-
-        var groupsHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = GroupsTab }.ToHref(hubAddress);
-        securityGroup = securityGroup.WithView(
-            new NavLinkControl("Groups", FluentIcons.People(), groupsHref)
-        );
-
-        var effectiveAccessHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = EffectiveAccessTab }.ToHref(hubAddress);
-        securityGroup = securityGroup.WithView(
-            new NavLinkControl("Effective Access", FluentIcons.PersonSearch(), effectiveAccessHref)
-        );
-
-        // API Tokens — links to dedicated page rather than an in-page tab
-        securityGroup = securityGroup.WithView(
-            new NavLinkControl("API Tokens", FluentIcons.Key(), "/settings/api-tokens")
-        );
-
-        navMenu = navMenu.WithNavGroup(securityGroup);
-
-        // Appearance tab (always visible)
-        var appearanceHref = new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = AppearanceTab }.ToHref(hubAddress);
-        navMenu = navMenu.WithView(
-            new NavLinkControl("Appearance", FluentIcons.PaintBrush(), appearanceHref)
-        );
+                navMenu = navMenu.WithNavGroup(navGroup);
+            }
+        }
 
         return navMenu;
     }
@@ -171,27 +156,25 @@ public static class SettingsLayoutArea
     private static UiControl BuildContentPane(
         LayoutAreaHost host,
         MeshNode? node,
-        string hubPath,
-        string tabId)
+        string tabId,
+        IReadOnlyList<SettingsMenuItemDefinition> items)
     {
         var stack = Controls.Stack
             .WithWidth("100%")
             .WithStyle("padding: 24px; height: 100%; overflow: auto;");
 
-        return tabId switch
-        {
-            MetadataTab => BuildMetadataTab(host, node, stack),
-            NodeTypesTab => BuildNodeTypesTab(host, hubPath, stack),
-            FilesTab => BuildFilesTab(host, stack),
-            AccessControlTab => BuildAccessControlTab(host, node, hubPath, stack),
-            GroupsTab => BuildGroupsTab(host, node, hubPath, stack),
-            EffectiveAccessTab => BuildEffectiveAccessTab(host, hubPath, stack),
-            AppearanceTab => BuildAppearanceTab(stack),
-            _ => BuildMetadataTab(host, node, stack),
-        };
+        var matchedItem = items.FirstOrDefault(i => i.Id == tabId)
+            ?? items.FirstOrDefault();
+
+        if (matchedItem == null)
+            return stack.WithView(Controls.Html("<p><em>No settings tabs available.</em></p>"));
+
+        return matchedItem.ContentBuilder(host, stack, node);
     }
 
-    private static UiControl BuildMetadataTab(LayoutAreaHost host, MeshNode? node, StackControl stack)
+    #region Default Tab Content Builders
+
+    internal static UiControl BuildMetadataTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
     {
         if (node == null)
         {
@@ -202,24 +185,188 @@ public static class SettingsLayoutArea
         var nodePath = node.Namespace ?? host.Hub.Address.ToString();
         var meta = MeshNodeMetadata.FromNode(node);
 
-        // Set up local data for editing
         var dataId = $"nodeMeta_{nodePath.Replace("/", "_")}";
         host.UpdateData(dataId, meta);
 
-        // Auto-save: map changes back to MeshNode and persist
         SetupNodeMetadataAutoSave(host, dataId, meta, node);
 
-        // Section 1: Identity (read-only)
         stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
-
-        // Section 2: Display (editable)
         stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, dataId)));
-
-        // Section 3: Timestamps (read-only)
         stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta)));
 
         return stack;
     }
+
+    internal static UiControl BuildNodeTypesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        stack = stack.WithView(Controls.H2("Node Types").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(
+            (h, ctx) => MeshNodeLayoutAreas.NodeTypes(h, ctx)!,
+            "NodeTypesContent"
+        );
+        return stack;
+    }
+
+    internal static UiControl BuildFilesTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        stack = stack.WithView(Controls.H2("Files").WithStyle("margin: 0 0 24px 0;"));
+
+        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var collections = contentService?.GetAllCollectionConfigs()?.ToList();
+
+        if (collections is not { Count: > 0 })
+        {
+            stack = stack.WithView(new FileBrowserControl("content"));
+            return stack;
+        }
+
+        var options = collections
+            .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
+            .ToArray();
+
+        var selectDataId = "filesTabCollectionSelect";
+        var optionsDataId = "filesTabCollectionOptions";
+
+        host.UpdateData(selectDataId, new Dictionary<string, object?> { ["collection"] = collections[0].Name });
+        host.UpdateData(optionsDataId, options);
+
+        stack = stack.WithView(new ComboboxControl(
+            new JsonPointerReference("collection"),
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsDataId)))
+        {
+            Label = "Collection",
+            Autocomplete = ComboboxAutocomplete.Both,
+            DataContext = LayoutAreaReference.GetDataPointer(selectDataId)
+        });
+
+        stack = stack.WithView((h, _) =>
+            h.Stream.GetDataStream<Dictionary<string, object?>>(selectDataId)
+                .Select(data =>
+                {
+                    var selected = data?.GetValueOrDefault("collection")?.ToString();
+                    if (string.IsNullOrEmpty(selected))
+                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
+                    return (UiControl?)new FileBrowserControl(selected);
+                }));
+
+        return stack;
+    }
+
+    internal static UiControl BuildAccessControlTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        stack = stack.WithView(
+            (h, ctx) => MeshNodeLayoutAreas.AccessControl(h, ctx)!,
+            "AccessControlContent"
+        );
+        return stack;
+    }
+
+    internal static UiControl BuildGroupsTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        stack = stack.WithView(Controls.H2("Groups").WithStyle("margin: 0 0 16px 0;"));
+
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+        {
+            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
+            return stack;
+        }
+
+        stack = stack.WithView((h, _) =>
+            meshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{hubPath} nodeType:Group scope:children"))
+                .Select(change =>
+                {
+                    var groupNodes = change.Items?.ToList() ?? [];
+                    if (groupNodes.Count == 0)
+                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No groups defined at this level.</p>");
+
+                    var container = Controls.Stack.WithStyle("gap: 8px;");
+                    foreach (var groupNode in groupNodes.OrderBy(n => n.Order).ThenBy(n => n.Name))
+                    {
+                        container = container.WithView(
+                            MeshNodeThumbnailControl.FromNode(groupNode, groupNode.Path));
+                    }
+                    return (UiControl?)container;
+                }));
+
+        return stack;
+    }
+
+    internal static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        if (securityService == null)
+        {
+            return stack.WithView(Controls.Html(
+                "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
+        }
+
+        stack = stack.WithView(Controls.H2("Effective Access").WithStyle("margin: 0 0 16px 0;"));
+        stack = stack.WithView(Controls.Html(
+            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
+            "Test what permissions a user has on this node. Enter a user ID and press Enter or click Check.</p>"));
+
+        var formId = $"effectiveAccess_{hubPath.Replace("/", "_")}";
+        var resultId = $"effectiveAccessResult_{hubPath.Replace("/", "_")}";
+        host.UpdateData(formId, new Dictionary<string, object?> { ["userId"] = "" });
+        host.UpdateData(resultId, "");
+
+        var userField = new TextFieldControl(new JsonPointerReference("userId"))
+        {
+            Placeholder = "Enter user ID (e.g. alice@example.com)...",
+            Label = "User ID",
+            Immediate = true,
+            DataContext = LayoutAreaReference.GetDataPointer(formId)
+        };
+        stack = stack.WithView(userField);
+
+        stack = stack.WithView(Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("margin-top: 12px; gap: 8px;")
+            .WithView(Controls.Button("Check")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async ctx =>
+                {
+                    var userId = "";
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+                        .Take(1)
+                        .Subscribe(data => userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "");
+
+                    if (string.IsNullOrEmpty(userId))
+                    {
+                        ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
+                        return;
+                    }
+
+                    var perms = await securityService.GetEffectivePermissionsAsync(hubPath, userId);
+                    var html = BuildPermissionResultHtml(userId, perms);
+                    ctx.Host.UpdateData(resultId, html);
+                })));
+
+        stack = stack.WithView((h, _) =>
+        {
+            return h.Stream.GetDataStream<string>(resultId)
+                .Select(html => string.IsNullOrEmpty(html)
+                    ? (UiControl)Controls.Stack
+                    : (UiControl)Controls.Html(html));
+        });
+
+        return stack;
+    }
+
+    internal static UiControl BuildAppearanceTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        stack = stack.WithView(Controls.H2("Appearance").WithStyle("margin: 0 0 24px 0;"));
+        stack = stack.WithView(new AppearanceControl());
+        return stack;
+    }
+
+    #endregion
+
+    #region Helpers
 
     private static UiControl BuildSection(string title, UiControl content)
     {
@@ -267,7 +414,6 @@ public static class SettingsLayoutArea
             DataContext = dataPointer
         });
 
-        // Icon picker: collection combobox + file browser + manual text field
         stack = stack.WithView(BuildIconPicker(host, dataId));
 
         stack = stack.WithView(new NumberFieldControl(new JsonPointerReference("Order"), "Int32?")
@@ -299,7 +445,6 @@ public static class SettingsLayoutArea
             host.UpdateData(pickerDataId, new Dictionary<string, object?> { ["collection"] = "" });
             host.UpdateData($"{pickerDataId}_options", collectionOptions);
 
-            // Collection selector combobox
             section = section.WithView(new ComboboxControl(
                 new JsonPointerReference("collection"),
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer($"{pickerDataId}_options")))
@@ -310,7 +455,6 @@ public static class SettingsLayoutArea
                 DataContext = LayoutAreaReference.GetDataPointer(pickerDataId)
             });
 
-            // File browser for selected collection (reactive)
             section = section.WithView((h, _) =>
                 h.Stream.GetDataStream<Dictionary<string, object?>>(pickerDataId)
                     .Select(data =>
@@ -322,7 +466,6 @@ public static class SettingsLayoutArea
                     }));
         }
 
-        // Current value / manual text field
         section = section.WithView(new TextFieldControl(new JsonPointerReference("Icon"))
         {
             Label = "Icon Path",
@@ -373,173 +516,6 @@ public static class SettingsLayoutArea
                 }));
     }
 
-    private static UiControl BuildNodeTypesTab(LayoutAreaHost host, string hubPath, StackControl stack)
-    {
-        // Delegate to the existing NodeTypes view content
-        stack = stack.WithView(Controls.H2("Node Types").WithStyle("margin: 0 0 24px 0;"));
-        stack = stack.WithView(
-            (h, ctx) => MeshNodeLayoutAreas.NodeTypes(h, ctx)!,
-            "NodeTypesContent"
-        );
-        return stack;
-    }
-
-    private static UiControl BuildFilesTab(LayoutAreaHost host, StackControl stack)
-    {
-        stack = stack.WithView(Controls.H2("Files").WithStyle("margin: 0 0 24px 0;"));
-
-        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
-        var collections = contentService?.GetAllCollectionConfigs()?.ToList();
-
-        if (collections is not { Count: > 0 })
-        {
-            stack = stack.WithView(new FileBrowserControl("content"));
-            return stack;
-        }
-
-        var options = collections
-            .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
-            .ToArray();
-
-        var selectDataId = "filesTabCollectionSelect";
-        var optionsDataId = "filesTabCollectionOptions";
-
-        host.UpdateData(selectDataId, new Dictionary<string, object?> { ["collection"] = collections[0].Name });
-        host.UpdateData(optionsDataId, options);
-
-        // Collection selector
-        stack = stack.WithView(new ComboboxControl(
-            new JsonPointerReference("collection"),
-            new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsDataId)))
-        {
-            Label = "Collection",
-            Autocomplete = ComboboxAutocomplete.Both,
-            DataContext = LayoutAreaReference.GetDataPointer(selectDataId)
-        });
-
-        // Reactive file browser based on selection
-        stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<Dictionary<string, object?>>(selectDataId)
-                .Select(data =>
-                {
-                    var selected = data?.GetValueOrDefault("collection")?.ToString();
-                    if (string.IsNullOrEmpty(selected))
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
-                    return (UiControl?)new FileBrowserControl(selected);
-                }));
-
-        return stack;
-    }
-
-    private static UiControl BuildAccessControlTab(LayoutAreaHost host, MeshNode? node, string hubPath, StackControl stack)
-    {
-        // Delegate to the existing AccessControl view
-        stack = stack.WithView(
-            (h, ctx) => MeshNodeLayoutAreas.AccessControl(h, ctx)!,
-            "AccessControlContent"
-        );
-        return stack;
-    }
-
-    private static UiControl BuildGroupsTab(LayoutAreaHost host, MeshNode? node, string hubPath, StackControl stack)
-    {
-        stack = stack.WithView(Controls.H2("Groups").WithStyle("margin: 0 0 16px 0;"));
-
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery == null)
-        {
-            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));
-            return stack;
-        }
-
-        // Show child Group nodes
-        stack = stack.WithView((h, _) =>
-            meshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{hubPath} nodeType:Group scope:children"))
-                .Select(change =>
-                {
-                    var groupNodes = change.Items?.ToList() ?? [];
-                    if (groupNodes.Count == 0)
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No groups defined at this level.</p>");
-
-                    var container = Controls.Stack.WithStyle("gap: 8px;");
-                    foreach (var groupNode in groupNodes.OrderBy(n => n.Order).ThenBy(n => n.Name))
-                    {
-                        container = container.WithView(
-                            MeshNodeThumbnailControl.FromNode(groupNode, groupNode.Path));
-                    }
-                    return (UiControl?)container;
-                }));
-
-        return stack;
-    }
-
-    private static UiControl BuildEffectiveAccessTab(LayoutAreaHost host, string hubPath, StackControl stack)
-    {
-        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
-        if (securityService == null)
-        {
-            return stack.WithView(Controls.Html(
-                "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
-        }
-
-        stack = stack.WithView(Controls.H2("Effective Access").WithStyle("margin: 0 0 16px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Test what permissions a user has on this node. Enter a user ID and press Enter or click Check.</p>"));
-
-        // Form data area
-        var formId = $"effectiveAccess_{hubPath.Replace("/", "_")}";
-        var resultId = $"effectiveAccessResult_{hubPath.Replace("/", "_")}";
-        host.UpdateData(formId, new Dictionary<string, object?> { ["userId"] = "" });
-        host.UpdateData(resultId, "");
-
-        // User ID input
-        var userField = new TextFieldControl(new JsonPointerReference("userId"))
-        {
-            Placeholder = "Enter user ID (e.g. alice@example.com)...",
-            Label = "User ID",
-            Immediate = true,
-            DataContext = LayoutAreaReference.GetDataPointer(formId)
-        };
-        stack = stack.WithView(userField);
-
-        // Check button
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("margin-top: 12px; gap: 8px;")
-            .WithView(Controls.Button("Check")
-                .WithAppearance(Appearance.Accent)
-                .WithClickAction(async ctx =>
-                {
-                    var userId = "";
-                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-                        .Take(1)
-                        .Subscribe(data => userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "");
-
-                    if (string.IsNullOrEmpty(userId))
-                    {
-                        ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
-                        return;
-                    }
-
-                    var perms = await securityService.GetEffectivePermissionsAsync(hubPath, userId);
-                    var html = BuildPermissionResultHtml(userId, perms);
-                    ctx.Host.UpdateData(resultId, html);
-                })));
-
-        // Result area — data-bound
-        stack = stack.WithView((h, _) =>
-        {
-            return h.Stream.GetDataStream<string>(resultId)
-                .Select(html => string.IsNullOrEmpty(html)
-                    ? (UiControl)Controls.Stack
-                    : (UiControl)Controls.Html(html));
-        });
-
-        return stack;
-    }
-
     private static string BuildPermissionResultHtml(string userId, Permission perms)
     {
         var allPerms = new[] { Permission.Read, Permission.Create, Permission.Update, Permission.Delete, Permission.Comment };
@@ -567,12 +543,7 @@ public static class SettingsLayoutArea
             </div>";
     }
 
-    private static UiControl BuildAppearanceTab(StackControl stack)
-    {
-        stack = stack.WithView(Controls.H2("Appearance").WithStyle("margin: 0 0 24px 0;"));
-        stack = stack.WithView(new AppearanceControl());
-        return stack;
-    }
+    #endregion
 }
 
 /// <summary>
