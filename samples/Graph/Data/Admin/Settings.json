@@ -6,6 +6,6 @@
   "state": "Active",
   "content": {
     "$type": "AdminSettings",
-    "adminUsers": []
+    "adminUsers": ["Roland"]
   }
 }

@@ -362,6 +362,7 @@ public static class MemexConfiguration
                 // Configure graph from the same base path
                 .AddGraph()
                 .AddDocumentation()
+                .AddPlatformType()
                 // Register Admin namespace content types for polymorphic deserialization
                 .ConfigureServices(services =>
                 {
