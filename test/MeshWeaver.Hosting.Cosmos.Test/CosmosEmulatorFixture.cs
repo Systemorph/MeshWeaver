@@ -1,7 +1,6 @@
 using System;
 using System.Net;
 using System.Net.Http;
-using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Persistence;
@@ -29,7 +28,9 @@ public class CosmosEmulatorFixture : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        _container = new CosmosDbBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest").Build();
+        _container = new CosmosDbBuilder("mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator:latest")
+            .WithEnvironment("AZURE_COSMOS_EMULATOR_PARTITION_COUNT", "25")
+            .Build();
         await _container.StartAsync();
 
         var jsonOptions = StorageImporter.CreateFullImportOptions();
@@ -38,9 +39,7 @@ public class CosmosEmulatorFixture : IAsyncLifetime
         {
             HttpClientFactory = () => _container.HttpClient,
             ConnectionMode = ConnectionMode.Gateway,
-            UseSystemTextJsonSerializerWithOptions = jsonOptions,
-            // Retry handler for emulator 503 ServiceUnavailable during warmup
-            CustomHandlers = { new ServiceUnavailableRetryHandler() }
+            UseSystemTextJsonSerializerWithOptions = jsonOptions
         });
 
         // Wait for the emulator to be fully operational
@@ -53,23 +52,28 @@ public class CosmosEmulatorFixture : IAsyncLifetime
         await dbResponse.Database.CreateContainerIfNotExistsAsync(
             new ContainerProperties("partitions", "/partitionKey") { DefaultTimeToLive = -1 });
 
-        // Drop and recreate the partition_test database used by PartitionedContainerTests
-        // to ensure clean state (containers may have stale partition key definitions)
-        try { await SharedClient.GetDatabase("partition_test").DeleteAsync(); } catch (CosmosException) { }
-        await SharedClient.CreateDatabaseIfNotExistsAsync("partition_test");
     }
 
     private async Task WaitForEmulatorReadyAsync()
     {
-        const int maxAttempts = 15;
+        // The emulator returns 503 for several seconds after the container starts.
+        // Wait until a full document round-trip succeeds.
+        const int maxAttempts = 30;
         for (var i = 0; i < maxAttempts; i++)
         {
             try
             {
-                await SharedClient!.ReadAccountAsync();
+                var dbResp = await SharedClient!.CreateDatabaseIfNotExistsAsync("_probe");
+                var cResp = await dbResp.Database.CreateContainerIfNotExistsAsync(
+                    new ContainerProperties("_probe", "/id"));
+                await cResp.Container.UpsertItemAsync(
+                    new { id = "ping", value = "ok" }, new PartitionKey("ping"));
+                await cResp.Container.ReadItemAsync<object>("ping", new PartitionKey("ping"));
+                await dbResp.Database.DeleteAsync();
                 return;
             }
-            catch (CosmosException ex) when (ex.StatusCode == HttpStatusCode.ServiceUnavailable)
+            catch (CosmosException ex) when (ex.StatusCode is HttpStatusCode.ServiceUnavailable
+                                              or HttpStatusCode.Gone)
             {
                 await Task.Delay(2000);
             }
@@ -88,31 +92,6 @@ public class CosmosEmulatorFixture : IAsyncLifetime
 
         if (_container != null)
             await _container.DisposeAsync();
-    }
-}
-
-/// <summary>
-/// Cosmos SDK request handler that retries on 503 ServiceUnavailable.
-/// The emulator returns 503 briefly after startup while partition services warm up.
-/// </summary>
-internal class ServiceUnavailableRetryHandler : RequestHandler
-{
-    private const int MaxRetries = 5;
-
-    public override async Task<ResponseMessage> SendAsync(
-        RequestMessage request, CancellationToken cancellationToken)
-    {
-        ResponseMessage? response = null;
-        for (var attempt = 0; attempt <= MaxRetries; attempt++)
-        {
-            response = await base.SendAsync(request, cancellationToken);
-            if (response.StatusCode != HttpStatusCode.ServiceUnavailable)
-                return response;
-
-            if (attempt < MaxRetries)
-                await Task.Delay(2000 * (attempt + 1), cancellationToken);
-        }
-        return response!;
     }
 }
 

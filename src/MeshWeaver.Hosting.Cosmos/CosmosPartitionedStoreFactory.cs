@@ -108,7 +108,7 @@ public partial class CosmosPartitionedStoreFactory : IPartitionedStoreFactory
     private async Task CreateContainerWithRetryAsync(
         ContainerProperties properties, CancellationToken ct)
     {
-        const int maxRetries = 5;
+        const int maxRetries = 10;
         for (var attempt = 0; ; attempt++)
         {
             try
@@ -119,7 +119,9 @@ public partial class CosmosPartitionedStoreFactory : IPartitionedStoreFactory
             catch (CosmosException ex) when (
                 ex.StatusCode == HttpStatusCode.ServiceUnavailable && attempt < maxRetries)
             {
-                await Task.Delay(2000 * (attempt + 1), ct);
+                // Cosmos DB (including the emulator) can return 503 when partition services
+                // are overloaded. Use exponential backoff with jitter.
+                await Task.Delay(1000 * (attempt + 1), ct);
             }
         }
     }

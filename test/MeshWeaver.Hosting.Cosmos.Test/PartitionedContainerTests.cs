@@ -16,21 +16,20 @@ public class PartitionedContainerTests
 {
     private readonly CosmosEmulatorFixture _fixture;
     private readonly JsonSerializerOptions _options = new();
-    private const string TestDb = "partition_test";
 
     public PartitionedContainerTests(CosmosEmulatorFixture fixture)
     {
         _fixture = fixture;
     }
 
-    private async Task<CosmosPartitionedStoreFactory> CreateFactoryAsync()
+    private Task<CosmosPartitionedStoreFactory> CreateFactoryAsync()
     {
-        var client = CosmosEmulatorFixture.SharedClient!;
-        await client.CreateDatabaseIfNotExistsAsync(TestDb, cancellationToken: TestContext.Current.CancellationToken);
-
-        return new CosmosPartitionedStoreFactory(
-            client,
-            TestDb);
+        // Reuse the pre-created cosmostest database from the fixture.
+        // The emulator's partition service cannot handle rapid container creation
+        // across multiple databases in a single test run.
+        return Task.FromResult(new CosmosPartitionedStoreFactory(
+            CosmosEmulatorFixture.SharedClient!,
+            CosmosEmulatorFixture.DatabaseName));
     }
 
     [Fact]
@@ -42,7 +41,7 @@ public class PartitionedContainerTests
 
         // Verify containers exist
         var client = CosmosEmulatorFixture.SharedClient!;
-        var database = client.GetDatabase(TestDb);
+        var database = client.GetDatabase(CosmosEmulatorFixture.DatabaseName);
 
         var nodesContainer = database.GetContainer("sales-nodes");
         var props = await nodesContainer.ReadContainerAsync(cancellationToken: TestContext.Current.CancellationToken);
