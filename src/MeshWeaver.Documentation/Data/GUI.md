@@ -2,7 +2,7 @@
 Name: Graphical User Interface
 Category: Documentation
 Description: Build reactive UIs with controls, layout areas, and data binding
-Icon: /static/storage/content/Doc/GUI/icon.svg
+Icon: /static/DocContent/GUI/icon.svg
 ---
 
 MeshWeaver provides a control-based GUI system that renders reactive user interfaces from C# code.

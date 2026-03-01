@@ -2,7 +2,7 @@
 Name: CRUD Operations
 Category: Documentation
 Description: Create, Read, Update, and Delete operations in MeshWeaver
-Icon: /static/storage/content/Doc/DataMesh/CRUD/icon.svg
+Icon: /static/DocContent/DataMesh/CRUD/icon.svg
 ---
 
 MeshWeaver provides a reactive, type-safe approach to data operations. This guide explains how Create, Read, Update, and Delete (CRUD) operations work in the DataMesh.

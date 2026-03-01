@@ -2,7 +2,7 @@
 Name: Unified Path
 Category: Documentation
 Description: Reference and embed content using @ and @@ syntax
-Icon: /static/storage/content/Doc/DataMesh/UnifiedPath/icon.svg
+Icon: /static/DocContent/DataMesh/UnifiedPath/icon.svg
 ---
 
 Unified Path allows you to **reference** and **embed** content from anywhere in your MeshWeaver application using a simple `@` notation.

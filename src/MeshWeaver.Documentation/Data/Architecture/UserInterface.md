@@ -2,7 +2,7 @@
 Name: User Interface Architecture
 Category: Documentation
 Description: How UI components are generated where data lives and streamed to browsers with two-way binding
-Icon: /static/storage/content/Doc/Architecture/UserInterface/icon.svg
+Icon: /static/DocContent/Architecture/UserInterface/icon.svg
 ---
 
 MeshWeaver generates UI where the data lives. Instead of transferring large datasets to clients, we compute visualizations server-side and stream only the rendered components. This dramatically reduces network traffic and enables real-time interactivity.

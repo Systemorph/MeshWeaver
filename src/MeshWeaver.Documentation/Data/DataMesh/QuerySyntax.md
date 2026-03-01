@@ -2,7 +2,7 @@
 Name: Query Syntax Reference
 Category: Documentation
 Description: Documentation for the GitHub-style query syntax
-Icon: /static/storage/content/Doc/DataMesh/QuerySyntax/icon.svg
+Icon: /static/DocContent/DataMesh/QuerySyntax/icon.svg
 ---
 
 MeshWeaver uses a GitHub-style query syntax for searching and filtering nodes. This document describes all available query features.

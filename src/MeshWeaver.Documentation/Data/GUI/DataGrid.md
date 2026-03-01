@@ -2,7 +2,7 @@
 Name: Displaying Data in a UI
 Category: Documentation
 Description: Display collections of data with sortable, resizable columns
-Icon: /static/storage/content/Doc/GUI/DataGrid/icon.svg
+Icon: /static/DocContent/GUI/DataGrid/icon.svg
 ---
 
 The DataGrid control displays collections of data in a tabular format with sortable, resizable columns and optional virtualization for large datasets.

@@ -2,7 +2,7 @@
 Name: NodeType Configuration Guide
 Category: Documentation
 Description: How to create and configure NodeTypes
-Icon: /static/storage/content/Doc/DataMesh/NodeTypeConfiguration/icon.svg
+Icon: /static/DocContent/DataMesh/NodeTypeConfiguration/icon.svg
 ---
 
 NodeTypes define the schema and behavior for nodes in MeshWeaver. This guide explains how to create and configure NodeTypes.

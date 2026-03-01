@@ -2,7 +2,7 @@
 Name: MeshWeaver Architecture
 Category: Documentation
 Description: "Overview of MeshWeaver's distributed architecture: message-based communication, UI streaming, AI agents, and data management"
-Icon: /static/storage/content/Doc/Architecture/icon.svg
+Icon: /static/DocContent/Architecture/icon.svg
 ---
 
 MeshWeaver is a distributed platform for building data-driven applications with AI capabilities. This documentation covers the core architectural concepts.

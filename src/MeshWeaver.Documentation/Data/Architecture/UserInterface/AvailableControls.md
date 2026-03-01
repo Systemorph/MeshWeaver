@@ -2,7 +2,7 @@
 Name: Available Controls Reference
 Category: Documentation
 Description: Complete reference for MeshWeaver UI controls including layout, input, display, and navigation components
-Icon: /static/storage/content/Doc/Architecture/UserInterface/AvailableControls/icon.svg
+Icon: /static/DocContent/Architecture/UserInterface/AvailableControls/icon.svg
 ---
 
 MeshWeaver provides a comprehensive library of UI controls defined server-side and rendered in the browser. All controls are created using the `Controls` factory class.

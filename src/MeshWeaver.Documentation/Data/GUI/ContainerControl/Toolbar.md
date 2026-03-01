@@ -2,7 +2,7 @@
 Name: Organizing Buttons in a Toolbar
 Category: Documentation
 Description: Group action buttons horizontally or vertically
-Icon: /static/storage/content/Doc/GUI/ContainerControl/Toolbar/icon.svg
+Icon: /static/DocContent/GUI/ContainerControl/Toolbar/icon.svg
 ---
 
 The Toolbar control groups action buttons in a horizontal (default) or vertical layout, typically used for page headers and action bars.

@@ -2,7 +2,7 @@
 Name: Agentic AI Architecture
 Category: Documentation
 Description: How AI agents collaborate within the mesh, using MeshPlugin tools and integrating with external AI services
-Icon: /static/storage/content/Doc/Architecture/AgenticAI/icon.svg
+Icon: /static/DocContent/Architecture/AgenticAI/icon.svg
 ---
 
 MeshWeaver integrates AI agents as first-class citizens in the mesh. Agents can query data, navigate structures, execute tasks, and collaborate with other agents - all through unified mesh references.

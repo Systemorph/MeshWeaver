@@ -2,7 +2,7 @@
 Name: Interactive Markdown
 Category: Documentation
 Description: Interactive markdown is the future of software engineering. With the introduction of AI in software engineering, the main job of humans will be to compose different parts and review the quality. Executable markdown facilitates this process.
-Icon: /static/storage/content/Doc/DataMesh/InteractiveMarkdown/icon.svg
+Icon: /static/DocContent/DataMesh/InteractiveMarkdown/icon.svg
 ---
 
 There is a tradition including executable code in markdown, for instance: [R Markdown](https://rmarkdown.rstudio.com/). This is a normal Markdown dialect that allows specifying executable code. This is very close to the [Literate Programming](https://en.wikipedia.org/wiki/Literate_programming) approach promoted by [Donald Knuth](https://en.wikipedia.org/wiki/Donald_Knuth).

@@ -2,7 +2,7 @@
 Name: Adapting to Different Screens With Layout Grid
 Category: Documentation
 Description: Build responsive layouts that adapt beautifully to any screen size
-Icon: /static/storage/content/Doc/GUI/LayoutGrid/icon.svg
+Icon: /static/DocContent/GUI/LayoutGrid/icon.svg
 ---
 
 The LayoutGrid control creates responsive layouts that automatically adapt to different screen sizes - from smartphones to large desktop monitors.

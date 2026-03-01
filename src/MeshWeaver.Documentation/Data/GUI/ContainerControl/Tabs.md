@@ -2,7 +2,7 @@
 Name: Organizing Content Into Switchable Tabs
 Category: Documentation
 Description: Organize content into switchable tabbed panels
-Icon: /static/storage/content/Doc/GUI/ContainerControl/Tabs/icon.svg
+Icon: /static/DocContent/GUI/ContainerControl/Tabs/icon.svg
 ---
 
 The Tabs control organizes content into switchable panels. Each tab has a label and displays its content when selected.

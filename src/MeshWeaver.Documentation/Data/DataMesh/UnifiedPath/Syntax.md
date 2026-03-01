@@ -2,7 +2,7 @@
 Name: Unified Path Syntax
 Category: Documentation
 Description: The address/prefix:path pattern explained
-Icon: /static/storage/content/Doc/DataMesh/UnifiedPath/Syntax/icon.svg
+Icon: /static/DocContent/DataMesh/UnifiedPath/Syntax/icon.svg
 ---
 
 Unified Path references use the pattern:

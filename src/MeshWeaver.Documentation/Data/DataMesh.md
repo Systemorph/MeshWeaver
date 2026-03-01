@@ -2,7 +2,7 @@
 Name: Data Mesh Operations
 Category: Documentation
 Description: Operational guides for setting up, configuring, and operating the MeshWeaver data mesh
-Icon: /static/storage/content/Doc/DataMesh/icon.svg
+Icon: /static/DocContent/DataMesh/icon.svg
 ---
 
 This section covers the practical aspects of setting up, configuring, and operating your MeshWeaver data mesh.

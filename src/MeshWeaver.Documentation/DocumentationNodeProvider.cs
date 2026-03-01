@@ -139,8 +139,14 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             return "Document";
         if (iconValue.StartsWith("/") || iconValue.StartsWith("http") || iconValue.StartsWith("data:"))
             return iconValue;
-        if (iconValue.Contains('/') && !string.IsNullOrEmpty(ns))
-            return $"/static/storage/content/{ns}/{iconValue}";
+        if (!string.IsNullOrEmpty(ns))
+        {
+            // Strip the "Doc/" prefix from namespace since DocContent serves relative to Content/ folder
+            var contentPath = ns.StartsWith($"{RootNamespace}/", StringComparison.OrdinalIgnoreCase)
+                ? ns[(RootNamespace.Length + 1)..]
+                : ns;
+            return $"/static/DocContent/{contentPath}/{iconValue}";
+        }
         return iconValue;
     }
 

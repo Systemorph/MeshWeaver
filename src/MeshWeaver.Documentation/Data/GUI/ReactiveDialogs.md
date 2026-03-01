@@ -2,7 +2,7 @@
 Name: Reactive Dialogs
 Category: Documentation
 Description: Handle complex dialog logic with reactive programming patterns
-Icon: /static/storage/content/Doc/GUI/ReactiveDialogs/icon.svg
+Icon: /static/DocContent/GUI/ReactiveDialogs/icon.svg
 ---
 
 In typical business applications, we often encounter dialogs which contain complex business logic. We need to react on user interaction, switch parts depending on certain settings, compute results and display them. Reactive design is a low-complexity way of achieving this.

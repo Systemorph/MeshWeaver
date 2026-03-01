@@ -2,7 +2,7 @@
 Name: Adding Editable Forms to a UI
 Category: Documentation
 Description: Generate editable forms from C# records with automatic field rendering
-Icon: /static/storage/content/Doc/GUI/Editor/icon.svg
+Icon: /static/DocContent/GUI/Editor/icon.svg
 ---
 
 The Editor control automatically generates editable forms from C# records, mapping property types to appropriate input controls.

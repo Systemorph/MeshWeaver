@@ -2,7 +2,7 @@
 Name: Data Configuration Guide
 Category: Documentation
 Description: How to configure data sources, initialization, and hub-to-hub synchronization
-Icon: /static/storage/content/Doc/DataMesh/DataConfiguration/icon.svg
+Icon: /static/DocContent/DataMesh/DataConfiguration/icon.svg
 ---
 
 This guide explains how to configure data in message hubs, including data sources with initialization and hub-to-hub data synchronization.
