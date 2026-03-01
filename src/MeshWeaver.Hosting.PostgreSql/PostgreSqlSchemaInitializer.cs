@@ -77,6 +77,21 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_ua_user_last ON user_activity (user_id, last_accessed DESC);
             CREATE INDEX IF NOT EXISTS idx_ua_node_type ON user_activity (user_id, node_type);
 
+            -- change_logs (bundled activity logs)
+            CREATE TABLE IF NOT EXISTS change_logs (
+                id              TEXT        NOT NULL PRIMARY KEY,
+                hub_path        TEXT        NOT NULL,
+                changed_by      TEXT,
+                category        TEXT        NOT NULL,
+                start_time      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                end_time        TIMESTAMPTZ,
+                change_count    INTEGER     NOT NULL DEFAULT 0,
+                status          SMALLINT    NOT NULL DEFAULT 1,
+                messages        JSONB
+            );
+            CREATE INDEX IF NOT EXISTS idx_cl_hub ON change_logs (hub_path, start_time DESC);
+            CREATE INDEX IF NOT EXISTS idx_cl_user ON change_logs (changed_by, start_time DESC);
+
             -- user_effective_permissions (denormalized)
             CREATE TABLE IF NOT EXISTS user_effective_permissions (
                 user_id          TEXT     NOT NULL,

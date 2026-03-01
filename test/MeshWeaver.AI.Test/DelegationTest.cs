@@ -254,8 +254,8 @@ public class DelegationTest
         );
 
         // Act: Run agent A (which triggers delegation to B)
-        var parentSession = await agentA.CreateSessionAsync();
-        var result = await agentA.RunAsync("User query requiring delegation", parentSession);
+        var parentSession = await agentA.CreateSessionAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var result = await agentA.RunAsync("User query requiring delegation", parentSession, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: Both sessions were created
         parentSession.Should().NotBeNull("parent agent A should have a session (thread)");
@@ -357,8 +357,8 @@ public class DelegationTest
         );
 
         // Act
-        var parentSession = await agentA.CreateSessionAsync();
-        var result = await agentA.RunAsync("Delegate this work", parentSession);
+        var parentSession = await agentA.CreateSessionAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var result = await agentA.RunAsync("Delegate this work", parentSession, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: The delegation tool call appears in A's message history
         var functionCalls = result.Messages
@@ -449,8 +449,8 @@ public class DelegationTest
         );
 
         // Act
-        var session = await agentA.CreateSessionAsync();
-        var result = await agentA.RunAsync("Try to delegate", session);
+        var session = await agentA.CreateSessionAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var result = await agentA.RunAsync("Try to delegate", session, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: Delegation was attempted
         delegationExecuted.Should().BeTrue("the delegation callback should have been invoked");

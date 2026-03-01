@@ -34,32 +34,32 @@ public class AccessControlQueryTests
         {
             Name = "Story One",
             NodeType = "Story"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Story2", "ACME/Project")
         {
             Name = "Story Two",
             NodeType = "Story"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Alice", "ACME/Team")
         {
             Name = "Alice",
             NodeType = "Person"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
         await adapter.WriteAsync(new MeshNode("Project", "Contoso")
         {
             Name = "Contoso Project",
             NodeType = "Project"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         // Grant access
         // alice has full access to ACME
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         // bob only has access to ACME/Project
-        await ac.GrantAsync("ACME/Project", "bob", "Read", isAllow: true);
+        await ac.GrantAsync("ACME/Project", "bob", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         // Public has access to Contoso
-        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true);
+        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class AccessControlQueryTests
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "alice");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(3);
@@ -86,7 +86,7 @@ public class AccessControlQueryTests
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "bob");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         // Bob only has Read on ACME/Project, so sees Story1 and Story2
@@ -104,7 +104,7 @@ public class AccessControlQueryTests
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "charlie");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().BeEmpty();
@@ -117,13 +117,13 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Deny alice access to ACME/Team
-        await ac.GrantAsync("ACME/Team", "alice", "Read", isAllow: false);
+        await ac.GrantAsync("ACME/Team", "alice", "Read", isAllow: false, TestContext.Current.CancellationToken);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "alice");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         // Alice should see Story1 and Story2 but NOT Alice (ACME/Team denied)
@@ -143,7 +143,7 @@ public class AccessControlQueryTests
         var request = MeshQueryRequest.FromQuery("scope:descendants");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(1);
@@ -160,7 +160,7 @@ public class AccessControlQueryTests
         var request = MeshQueryRequest.FromQuery("scope:descendants", "Public");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(1);
@@ -178,7 +178,7 @@ public class AccessControlQueryTests
         var request = MeshQueryRequest.FromQuery("scope:descendants", "alice");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(4);
@@ -194,26 +194,26 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Seed nodes
-        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options);
-        await adapter.WriteAsync(new MeshNode("Doc2", "ACME/Docs") { Name = "Doc Two", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Doc2", "ACME/Docs") { Name = "Doc Two", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
 
         // Create nested groups: all-staff -> editors -> reviewers
         // reviewers contains dave
-        await ac.AddGroupMemberAsync("reviewers", "dave");
+        await ac.AddGroupMemberAsync("reviewers", "dave", TestContext.Current.CancellationToken);
         // editors contains the reviewers group
-        await ac.AddGroupMemberAsync("editors", "reviewers");
+        await ac.AddGroupMemberAsync("editors", "reviewers", TestContext.Current.CancellationToken);
         // all-staff contains the editors group
-        await ac.AddGroupMemberAsync("all-staff", "editors");
+        await ac.AddGroupMemberAsync("all-staff", "editors", TestContext.Current.CancellationToken);
 
         // Grant Read on ACME to all-staff group
-        await ac.GrantAsync("ACME", "all-staff", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "all-staff", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         // dave should see ACME nodes via: all-staff -> editors -> reviewers -> dave
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "dave");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(2);
@@ -229,22 +229,22 @@ public class AccessControlQueryTests
         var ac = _fixture.AccessControl;
 
         // Seed nodes
-        await adapter.WriteAsync(new MeshNode("Public", "ACME/Docs") { Name = "Public Doc", NodeType = "Document" }, _options);
-        await adapter.WriteAsync(new MeshNode("Secret", "ACME/Secret") { Name = "Secret Doc", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Public", "ACME/Docs") { Name = "Public Doc", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Secret", "ACME/Secret") { Name = "Secret Doc", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
 
         // Group: team contains eve
-        await ac.AddGroupMemberAsync("team", "eve");
+        await ac.AddGroupMemberAsync("team", "eve", TestContext.Current.CancellationToken);
 
         // Allow team Read on ACME
-        await ac.GrantAsync("ACME", "team", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "team", "Read", isAllow: true, TestContext.Current.CancellationToken);
         // Deny eve specifically on ACME/Secret
-        await ac.GrantAsync("ACME/Secret", "eve", "Read", isAllow: false);
+        await ac.GrantAsync("ACME/Secret", "eve", "Read", isAllow: false, TestContext.Current.CancellationToken);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "eve");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         // eve sees ACME/Docs/Public but NOT ACME/Secret/Secret (denied)
@@ -259,16 +259,16 @@ public class AccessControlQueryTests
         var adapter = _fixture.StorageAdapter;
 
         // Seed a NodeType definition and a regular node — no access grants at all
-        await adapter.WriteAsync(new MeshNode("Organization", "") { Name = "Organization", NodeType = "NodeType" }, _options);
-        await adapter.WriteAsync(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Organization" }, _options);
-        await adapter.WriteAsync(new MeshNode("Secret", "Private") { Name = "Secret", NodeType = "Document" }, _options);
+        await adapter.WriteAsync(new MeshNode("Organization", "") { Name = "Organization", NodeType = "NodeType" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("ACME", "") { Name = "ACME Corp", NodeType = "Organization" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Secret", "Private") { Name = "Secret", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
 
         // Query as unknown user with zero grants
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = MeshQueryRequest.FromQuery("scope:descendants", "nobody");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         var paths = results.Cast<MeshNode>().Select(n => n.Path).ToList();

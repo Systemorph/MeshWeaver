@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
@@ -91,6 +92,13 @@ public static class PostgreSqlExtensions
         {
             var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
             return new PostgreSqlActivityStore(dataSource);
+        });
+
+        // Register PostgreSqlActivityLogStore for bundled activity logs
+        services.TryAddSingleton<IActivityLogStore>(sp =>
+        {
+            var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
+            return new PostgreSqlActivityLogStore(dataSource);
         });
 
         return services;

@@ -37,28 +37,28 @@ public class ActivityOrderedQueryTests
         {
             Name = "Thread One",
             NodeType = "Thread"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Thread2", "org/ACME/Discussions")
         {
             Name = "Thread Two",
             NodeType = "Thread"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Thread3", "org/ACME/Discussions")
         {
             Name = "Thread Three",
             NodeType = "Thread"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Doc1", "org/ACME/Docs")
         {
             Name = "Document One",
             NodeType = "Document"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         // Grant public read access
-        await ac.GrantAsync("org", "Public", "Read", isAllow: true);
+        await ac.GrantAsync("org", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         var now = DateTimeOffset.UtcNow;
 
@@ -103,7 +103,7 @@ public class ActivityOrderedQueryTests
                 NodeType = "Thread",
                 Namespace = "org/ACME/Discussions"
             }
-        ]);
+        ], TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -119,7 +119,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);
@@ -146,7 +146,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);
@@ -174,7 +174,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);
@@ -198,7 +198,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);
@@ -222,7 +222,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);
@@ -248,7 +248,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);
@@ -272,7 +272,7 @@ public class ActivityOrderedQueryTests
         };
 
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);

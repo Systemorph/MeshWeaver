@@ -11,8 +11,8 @@ Welcome to the MeshWeaver documentation. This section contains comprehensive gui
 
 | Article | Description |
 |---------|-------------|
-| [The Beginning](MeshWeaver/Documentation/The Beginning) | Roland and Stefan introduce the Mesh Bros channel, discussing their journey and the future of data management |
-| [What is a Data Mesh](MeshWeaver/Documentation/DataMesh/What is a Data Mesh) | The Mesh Bros explain the basic concepts of a data mesh |
+| [The Beginning](Doc/TheBeginning) | Roland and Stefan introduce the Mesh Bros channel, discussing their journey and the future of data management |
+| [What is a Data Mesh](Doc/DataMesh/WhatIsADataMesh) | The Mesh Bros explain the basic concepts of a data mesh |
 
 ---
 
@@ -27,7 +27,7 @@ Deep dive into MeshWeaver's distributed architecture:
 - Data management and versioning
 - Security and access control
 
-[Explore Architecture](MeshWeaver/Documentation/Architecture)
+[Explore Architecture](Doc/Architecture)
 
 ---
 
@@ -40,7 +40,7 @@ Learn how to set up and operate the mesh:
 - Interactive markdown features
 - Collaborative editing
 
-[Explore Data Mesh](MeshWeaver/Documentation/DataMesh)
+[Explore Data Mesh](Doc/DataMesh)
 
 ---
 
@@ -53,7 +53,7 @@ Gain an understanding of the relevant GUI controls and concepts:
 - Data Binding
 - Observables
 
-[Explore GUI](MeshWeaver/Documentation/GUI)
+[Explore GUI](Doc/GUI)
 
 ---
 
@@ -65,7 +65,7 @@ Learn how AI agents integrate with MeshWeaver:
 - Remote control philosophy
 - Natural language interfaces
 
-[Explore AI Integration](MeshWeaver/Documentation/AI)
+[Explore AI Integration](Doc/AI)
 
 ---
 

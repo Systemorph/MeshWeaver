@@ -66,7 +66,7 @@ public class NavigationServiceTest
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Overview");
 
         // Wait for async processing
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         receivedContext.Should().NotBeNull();
         receivedContext!.Area.Should().Be("Overview");
@@ -90,7 +90,7 @@ public class NavigationServiceTest
 
         _navigationManager.SimulateLocationChanged("http://localhost/ACME");
 
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         eventCount.Should().Be(1);
     }
@@ -130,7 +130,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard/123");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         service.Context.Should().NotBeNull();
@@ -155,7 +155,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         receivedContext.Should().NotBeNull();
@@ -183,7 +183,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/unknown/path");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         receivedContext.Should().BeNull();
@@ -205,7 +205,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard/item-123");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         service.Context.Should().NotBeNull();
@@ -227,7 +227,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         service.Context.Should().NotBeNull();
@@ -249,7 +249,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         service.Context.Should().NotBeNull();
@@ -276,7 +276,7 @@ public class NavigationServiceTest
             .Returns(ToAsyncEnumerable(new CreatableTypeInfo("ACME/Todo")));
 
         await service.InitializeAsync();
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Change to different node path
         _meshCatalog.ResolvePathAsync("ACME/Project")
@@ -289,7 +289,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project");
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Assert
         lastSnapshot.Should().NotBeNull();
@@ -315,7 +315,7 @@ public class NavigationServiceTest
             });
 
         await service.InitializeAsync();
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Navigate to different area within same node
         _meshCatalog.ResolvePathAsync("ACME/Project/Dashboard")
@@ -323,7 +323,7 @@ public class NavigationServiceTest
 
         // Act
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Dashboard");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert - should only load once (during initialization)
         loadCount.Should().Be(1);
@@ -348,7 +348,7 @@ public class NavigationServiceTest
 
         // Act
         await service.InitializeAsync();
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert - should see incremental updates: 0 (loading), 1 (loading), 2 (loading), 2 (done)
         snapshots.Should().Contain(s => s.Items.Count == 0 && s.IsLoading); // Initial clear
@@ -373,7 +373,7 @@ public class NavigationServiceTest
 
         // Act
         await service.InitializeAsync();
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Assert - should see true while loading, false when done
         loadingStates.Should().Contain(true);
@@ -399,7 +399,7 @@ public class NavigationServiceTest
         // Act
         service.Dispose();
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/New");
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Assert
         eventFired.Should().BeFalse();
@@ -423,7 +423,7 @@ public class NavigationServiceTest
     {
         foreach (var item in items)
         {
-            await Task.Delay(30);
+            await Task.Delay(30, TestContext.Current.CancellationToken);
             yield return item;
         }
     }

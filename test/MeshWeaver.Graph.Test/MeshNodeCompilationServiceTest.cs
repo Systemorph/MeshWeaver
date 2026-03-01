@@ -86,7 +86,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
             NodeType = MeshNode.NodeTypePath,
             Content = definition
         };
-        await persistence.SaveNodeAsync(node, SetupJsonOptions);
+        await persistence.SaveNodeAsync(node, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         if (codeFile != null)
         {
@@ -97,7 +97,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
                 Name = codeFile.DisplayName ?? codeFile.Id ?? "Code",
                 Content = codeFile
             };
-            await persistence.SaveNodeAsync(codeNode, SetupJsonOptions);
+            await persistence.SaveNodeAsync(codeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
         }
     }
 
@@ -461,7 +461,7 @@ public record Organization
                 DisplayName = "Organization Data Model"
             }
         };
-        await persistence.SaveNodeAsync(codeNode, SetupJsonOptions);
+        await persistence.SaveNodeAsync(codeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         var service = CreateService(persistence);
         var node = MeshNode.FromPath("acme") with
@@ -507,7 +507,7 @@ public record Project
 }"
             }
         };
-        await persistence.SaveNodeAsync(dataModelNode, SetupJsonOptions);
+        await persistence.SaveNodeAsync(dataModelNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         // Second code file: enum
         var enumNode = new MeshNode("ProjectStatus", "type/Project/Code")
@@ -527,7 +527,7 @@ public enum ProjectStatus
 }"
             }
         };
-        await persistence.SaveNodeAsync(enumNode, SetupJsonOptions);
+        await persistence.SaveNodeAsync(enumNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         var service = CreateService(persistence);
         var node = MeshNode.FromPath("acme/web") with

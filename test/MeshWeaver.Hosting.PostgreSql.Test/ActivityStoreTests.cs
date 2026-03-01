@@ -41,9 +41,9 @@ public class ActivityStoreTests
             Namespace = "org"
         };
 
-        await store.SaveActivitiesAsync("alice", [record]);
+        await store.SaveActivitiesAsync("alice", [record], TestContext.Current.CancellationToken);
 
-        var results = await store.GetActivitiesAsync("alice");
+        var results = await store.GetActivitiesAsync("alice", TestContext.Current.CancellationToken);
         results.Should().ContainSingle();
         var loaded = results[0];
         loaded.NodePath.Should().Be("org/acme");
@@ -73,7 +73,7 @@ public class ActivityStoreTests
             LastAccessedAt = now.AddMinutes(-5),
             AccessCount = 1,
             NodeName = "Report"
-        }]);
+        }], TestContext.Current.CancellationToken);
 
         // Second save (upsert)
         await store.SaveActivitiesAsync("bob", [new UserActivityRecord
@@ -86,9 +86,9 @@ public class ActivityStoreTests
             LastAccessedAt = now,
             AccessCount = 1,
             NodeName = "Report Updated"
-        }]);
+        }], TestContext.Current.CancellationToken);
 
-        var results = await store.GetActivitiesAsync("bob");
+        var results = await store.GetActivitiesAsync("bob", TestContext.Current.CancellationToken);
         results.Should().ContainSingle();
         var loaded = results[0];
         loaded.AccessCount.Should().Be(2); // 1 + 1
@@ -137,9 +137,9 @@ public class ActivityStoreTests
                 AccessCount = 1,
                 NodeName = "Third"
             }
-        ]);
+        ], TestContext.Current.CancellationToken);
 
-        var results = await store.GetActivitiesAsync("charlie");
+        var results = await store.GetActivitiesAsync("charlie", TestContext.Current.CancellationToken);
         results.Should().HaveCount(3);
         // Should be ordered by last_accessed DESC
         results[0].NodePath.Should().Be("c/third");
@@ -164,7 +164,7 @@ public class ActivityStoreTests
             LastAccessedAt = now,
             AccessCount = 3,
             NodeName = "Shared"
-        }]);
+        }], TestContext.Current.CancellationToken);
 
         await store.SaveActivitiesAsync("bob", [new UserActivityRecord
         {
@@ -176,10 +176,10 @@ public class ActivityStoreTests
             LastAccessedAt = now,
             AccessCount = 1,
             NodeName = "Shared"
-        }]);
+        }], TestContext.Current.CancellationToken);
 
-        var aliceActivities = await store.GetActivitiesAsync("alice");
-        var bobActivities = await store.GetActivitiesAsync("bob");
+        var aliceActivities = await store.GetActivitiesAsync("alice", TestContext.Current.CancellationToken);
+        var bobActivities = await store.GetActivitiesAsync("bob", TestContext.Current.CancellationToken);
 
         aliceActivities.Should().ContainSingle();
         aliceActivities[0].AccessCount.Should().Be(3);
@@ -196,7 +196,7 @@ public class ActivityStoreTests
         await _fixture.CleanDataAsync();
         var store = _fixture.ActivityStore;
 
-        var results = await store.GetActivitiesAsync("nonexistent-user");
+        var results = await store.GetActivitiesAsync("nonexistent-user", TestContext.Current.CancellationToken);
         results.Should().BeEmpty();
     }
 
@@ -212,16 +212,16 @@ public class ActivityStoreTests
             new UserActivityRecord { Id = "n1", NodePath = "n/1", UserId = "dave", ActivityType = ActivityType.Read, FirstAccessedAt = now, LastAccessedAt = now, AccessCount = 1, NodeName = "Node 1" },
             new UserActivityRecord { Id = "n2", NodePath = "n/2", UserId = "dave", ActivityType = ActivityType.Read, FirstAccessedAt = now, LastAccessedAt = now, AccessCount = 1, NodeName = "Node 2" },
             new UserActivityRecord { Id = "n3", NodePath = "n/3", UserId = "dave", ActivityType = ActivityType.Read, FirstAccessedAt = now, LastAccessedAt = now, AccessCount = 1, NodeName = "Node 3" }
-        ]);
+        ], TestContext.Current.CancellationToken);
 
         // Upsert n1 and n2, add n4
         await store.SaveActivitiesAsync("dave", [
             new UserActivityRecord { Id = "n1", NodePath = "n/1", UserId = "dave", ActivityType = ActivityType.Write, FirstAccessedAt = now, LastAccessedAt = now.AddSeconds(1), AccessCount = 2, NodeName = "Node 1 Updated" },
             new UserActivityRecord { Id = "n2", NodePath = "n/2", UserId = "dave", ActivityType = ActivityType.Read, FirstAccessedAt = now, LastAccessedAt = now.AddSeconds(2), AccessCount = 1, NodeName = "Node 2" },
             new UserActivityRecord { Id = "n4", NodePath = "n/4", UserId = "dave", ActivityType = ActivityType.Read, FirstAccessedAt = now, LastAccessedAt = now.AddSeconds(3), AccessCount = 1, NodeName = "Node 4" }
-        ]);
+        ], TestContext.Current.CancellationToken);
 
-        var results = await store.GetActivitiesAsync("dave");
+        var results = await store.GetActivitiesAsync("dave", TestContext.Current.CancellationToken);
         results.Should().HaveCount(4);
 
         var n1 = results.First(r => r.NodePath == "n/1");
@@ -259,9 +259,9 @@ public class ActivityStoreTests
             NodeName = null,
             NodeType = null,
             Namespace = null
-        }]);
+        }], TestContext.Current.CancellationToken);
 
-        var results = await store.GetActivitiesAsync("eve");
+        var results = await store.GetActivitiesAsync("eve", TestContext.Current.CancellationToken);
         results.Should().ContainSingle();
         var loaded = results[0];
         loaded.NodeName.Should().BeNull();

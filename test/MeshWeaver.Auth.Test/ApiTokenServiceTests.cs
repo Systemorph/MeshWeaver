@@ -69,7 +69,7 @@ public class ApiTokenServiceTests : IDisposable
         var (rawToken, node) = await _service.CreateTokenAsync(
             "user1", "Test User", "test@example.com", "Test");
 
-        var stored = await _persistence.GetNodeAsync(node.Path);
+        var stored = await _persistence.GetNodeAsync(node.Path, TestContext.Current.CancellationToken);
         stored.Should().NotBeNull();
         stored!.NodeType.Should().Be("ApiToken");
     }

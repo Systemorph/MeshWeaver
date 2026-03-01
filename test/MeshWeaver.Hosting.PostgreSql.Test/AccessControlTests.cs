@@ -20,9 +20,9 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
-        var hasRead = await ac.HasPermissionAsync("alice", "ACME", "Read");
+        var hasRead = await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken);
         hasRead.Should().BeTrue();
     }
 
@@ -32,9 +32,9 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: false);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: false, TestContext.Current.CancellationToken);
 
-        var hasRead = await ac.HasPermissionAsync("alice", "ACME", "Read");
+        var hasRead = await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken);
         hasRead.Should().BeFalse();
     }
 
@@ -44,13 +44,13 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         // Child path should be allowed via hierarchical promotion
-        var hasRead = await ac.HasPermissionAsync("alice", "ACME/Project", "Read");
+        var hasRead = await ac.HasPermissionAsync("alice", "ACME/Project", "Read", TestContext.Current.CancellationToken);
         hasRead.Should().BeTrue();
 
-        var hasReadDeep = await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read");
+        var hasReadDeep = await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read", TestContext.Current.CancellationToken);
         hasReadDeep.Should().BeTrue();
     }
 
@@ -61,20 +61,20 @@ public class AccessControlTests
         var ac = _fixture.AccessControl;
 
         // Allow on ACME, deny on ACME/Project
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
-        await ac.GrantAsync("ACME/Project", "alice", "Read", isAllow: false);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME/Project", "alice", "Read", isAllow: false, TestContext.Current.CancellationToken);
 
         // ACME itself still allowed
-        (await ac.HasPermissionAsync("alice", "ACME", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
 
         // ACME/Project blocked (deny is more specific)
-        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeFalse();
 
         // ACME/Project/Story1 also blocked (inherits from ACME/Project deny)
-        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read", TestContext.Current.CancellationToken)).Should().BeFalse();
 
         // ACME/Team still allowed (sibling not affected by ACME/Project deny)
-        (await ac.HasPermissionAsync("alice", "ACME/Team", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Team", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
     }
 
     [Fact]
@@ -83,14 +83,14 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true);
-        await ac.GrantAsync("ACME/Project/Story2", "alice", "Update", isAllow: false);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME/Project/Story2", "alice", "Update", isAllow: false, TestContext.Current.CancellationToken);
 
         // ACME/Project/Story1 allowed (inherits from ACME)
-        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Update")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Update", TestContext.Current.CancellationToken)).Should().BeTrue();
 
         // ACME/Project/Story2 denied (specific deny)
-        (await ac.HasPermissionAsync("alice", "ACME/Project/Story2", "Update")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story2", "Update", TestContext.Current.CancellationToken)).Should().BeFalse();
     }
 
     [Fact]
@@ -100,18 +100,18 @@ public class AccessControlTests
         var ac = _fixture.AccessControl;
 
         // Create group with members
-        await ac.AddGroupMemberAsync("acme-editors", "alice");
-        await ac.AddGroupMemberAsync("acme-editors", "bob");
+        await ac.AddGroupMemberAsync("acme-editors", "alice", TestContext.Current.CancellationToken);
+        await ac.AddGroupMemberAsync("acme-editors", "bob", TestContext.Current.CancellationToken);
 
         // Grant to group
-        await ac.GrantAsync("ACME/Project", "acme-editors", "Read", isAllow: true);
+        await ac.GrantAsync("ACME/Project", "acme-editors", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
         // Both members should have access
-        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read")).Should().BeTrue();
-        (await ac.HasPermissionAsync("bob", "ACME/Project", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await ac.HasPermissionAsync("bob", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
 
         // Non-member should not
-        (await ac.HasPermissionAsync("charlie", "ACME/Project", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("charlie", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeFalse();
     }
 
     [Fact]
@@ -120,14 +120,14 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.AddGroupMemberAsync("editors", "alice");
-        await ac.GrantAsync("ACME", "editors", "Read", isAllow: true);
+        await ac.AddGroupMemberAsync("editors", "alice", TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "editors", "Read", isAllow: true, TestContext.Current.CancellationToken);
 
-        (await ac.HasPermissionAsync("alice", "ACME", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        await ac.RemoveGroupMemberAsync("editors", "alice");
+        await ac.RemoveGroupMemberAsync("editors", "alice", TestContext.Current.CancellationToken);
 
-        (await ac.HasPermissionAsync("alice", "ACME", "Read")).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken)).Should().BeFalse();
     }
 
     [Fact]
@@ -136,11 +136,11 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
-        (await ac.HasPermissionAsync("alice", "ACME", "Read")).Should().BeTrue();
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        (await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
 
-        await ac.RevokeAsync("ACME", "alice", "Read");
-        (await ac.HasPermissionAsync("alice", "ACME", "Read")).Should().BeFalse();
+        await ac.RevokeAsync("ACME", "alice", "Read", TestContext.Current.CancellationToken);
+        (await ac.HasPermissionAsync("alice", "ACME", "Read", TestContext.Current.CancellationToken)).Should().BeFalse();
     }
 
     [Fact]
@@ -149,12 +149,12 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
-        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true);
-        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true);
-        await ac.GrantAsync("ACME", "alice", "Delete", isAllow: false);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Delete", isAllow: false, TestContext.Current.CancellationToken);
 
-        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project");
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project", TestContext.Current.CancellationToken);
         perms.Should().Contain("Read");
         perms.Should().Contain("Create");
         perms.Should().Contain("Update");
@@ -167,7 +167,7 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        var perms = await ac.GetEffectivePermissionsAsync("nobody", "ACME");
+        var perms = await ac.GetEffectivePermissionsAsync("nobody", "ACME", TestContext.Current.CancellationToken);
         perms.Should().BeEmpty();
     }
 
@@ -177,13 +177,13 @@ public class AccessControlTests
         await _fixture.CleanDataAsync();
         var ac = _fixture.AccessControl;
 
-        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true);
-        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read")).Should().BeTrue();
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
 
         // Manual rebuild
-        await ac.RebuildDenormalizedTableAsync();
+        await ac.RebuildDenormalizedTableAsync(TestContext.Current.CancellationToken);
 
         // Should still work
-        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read")).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
     }
 }

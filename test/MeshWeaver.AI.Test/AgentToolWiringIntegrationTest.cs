@@ -71,7 +71,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
         // Send a message to trigger agent creation and tool wiring
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
-        await foreach (var _ in chatClient.GetResponseAsync(messages)) { }
+        await foreach (var _ in chatClient.GetResponseAsync(messages, TestContext.Current.CancellationToken)) { }
 
         // Check captured tool list
         var lastOptions = capturingClient.LastCapturedOptions;
@@ -103,7 +103,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
         // Send a message to trigger agent creation and tool wiring
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
-        await foreach (var _ in chatClient.GetResponseAsync(messages)) { }
+        await foreach (var _ in chatClient.GetResponseAsync(messages, TestContext.Current.CancellationToken)) { }
 
         // Check captured tool list
         var lastOptions = capturingClient.LastCapturedOptions;
@@ -135,7 +135,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
         // Send a message to trigger agent creation
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
-        await foreach (var _ in chatClient.GetResponseAsync(messages)) { }
+        await foreach (var _ in chatClient.GetResponseAsync(messages, TestContext.Current.CancellationToken)) { }
 
         // Check captured system messages for expanded documentation
         var systemMessages = capturingClient.AllCapturedMessages

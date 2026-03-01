@@ -151,7 +151,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
         };
 
         var responses = new List<ChatMessage>();
-        await foreach (var msg in chatClient.GetResponseAsync(messages))
+        await foreach (var msg in chatClient.GetResponseAsync(messages, TestContext.Current.CancellationToken))
         {
             responses.Add(msg);
             // Log each response message for debugging
@@ -238,7 +238,7 @@ public class DelegationIntegrationTest : MonolithMeshTestBase
         };
 
         var responses = new List<ChatMessage>();
-        await foreach (var msg in chatClient.GetResponseAsync(messages))
+        await foreach (var msg in chatClient.GetResponseAsync(messages, TestContext.Current.CancellationToken))
         {
             responses.Add(msg);
         }

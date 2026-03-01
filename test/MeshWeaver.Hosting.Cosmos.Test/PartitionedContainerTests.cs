@@ -26,7 +26,7 @@ public class PartitionedContainerTests
     private async Task<CosmosPartitionedStoreFactory> CreateFactoryAsync()
     {
         var client = CosmosEmulatorFixture.SharedClient!;
-        await client.CreateDatabaseIfNotExistsAsync(TestDb);
+        await client.CreateDatabaseIfNotExistsAsync(TestDb, cancellationToken: TestContext.Current.CancellationToken);
 
         return new CosmosPartitionedStoreFactory(
             client,
@@ -38,18 +38,18 @@ public class PartitionedContainerTests
     {
         var factory = await CreateFactoryAsync();
 
-        await factory.CreateStoreAsync("Sales");
+        await factory.CreateStoreAsync("Sales", TestContext.Current.CancellationToken);
 
         // Verify containers exist
         var client = CosmosEmulatorFixture.SharedClient!;
         var database = client.GetDatabase(TestDb);
 
         var nodesContainer = database.GetContainer("sales-nodes");
-        var props = await nodesContainer.ReadContainerAsync();
+        var props = await nodesContainer.ReadContainerAsync(cancellationToken: TestContext.Current.CancellationToken);
         props.Resource.Id.Should().Be("sales-nodes");
 
         var partitionsContainer = database.GetContainer("sales-partitions");
-        var pProps = await partitionsContainer.ReadContainerAsync();
+        var pProps = await partitionsContainer.ReadContainerAsync(cancellationToken: TestContext.Current.CancellationToken);
         pProps.Resource.Id.Should().Be("sales-partitions");
     }
 
@@ -58,28 +58,28 @@ public class PartitionedContainerTests
     {
         var factory = await CreateFactoryAsync();
 
-        var storeA = await factory.CreateStoreAsync("Vendor");
-        var storeB = await factory.CreateStoreAsync("Client");
+        var storeA = await factory.CreateStoreAsync("Vendor", TestContext.Current.CancellationToken);
+        var storeB = await factory.CreateStoreAsync("Client", TestContext.Current.CancellationToken);
 
         // Save to Vendor partition
         var nodeA = MeshNode.FromPath("Vendor/Products") with { Name = "Vendor Products" };
-        await storeA.PersistenceCore.SaveNodeAsync(nodeA, _options);
+        await storeA.PersistenceCore.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
 
         // Save to Client partition
         var nodeB = MeshNode.FromPath("Client/Orders") with { Name = "Client Orders" };
-        await storeB.PersistenceCore.SaveNodeAsync(nodeB, _options);
+        await storeB.PersistenceCore.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
         // Read back from Vendor
-        var readA = await storeA.PersistenceCore.GetNodeAsync("Vendor/Products", _options);
+        var readA = await storeA.PersistenceCore.GetNodeAsync("Vendor/Products", _options, TestContext.Current.CancellationToken);
         readA.Should().NotBeNull();
         readA!.Name.Should().Be("Vendor Products");
 
         // Vendor should not have Client data
-        var readCross = await storeA.PersistenceCore.GetNodeAsync("Client/Orders", _options);
+        var readCross = await storeA.PersistenceCore.GetNodeAsync("Client/Orders", _options, TestContext.Current.CancellationToken);
         readCross.Should().BeNull("Client data should not be in Vendor container");
 
         // Read back from Client
-        var readB = await storeB.PersistenceCore.GetNodeAsync("Client/Orders", _options);
+        var readB = await storeB.PersistenceCore.GetNodeAsync("Client/Orders", _options, TestContext.Current.CancellationToken);
         readB.Should().NotBeNull();
         readB!.Name.Should().Be("Client Orders");
     }
@@ -93,14 +93,14 @@ public class PartitionedContainerTests
         var nodeA = MeshNode.FromPath("Org1/Report") with { Name = "Org1 Report" };
         var nodeB = MeshNode.FromPath("Org2/Report") with { Name = "Org2 Report" };
 
-        await router.SaveNodeAsync(nodeA, _options);
-        await router.SaveNodeAsync(nodeB, _options);
+        await router.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
+        await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
-        var readA = await router.GetNodeAsync("Org1/Report", _options);
+        var readA = await router.GetNodeAsync("Org1/Report", _options, TestContext.Current.CancellationToken);
         readA.Should().NotBeNull();
         readA!.Name.Should().Be("Org1 Report");
 
-        var readB = await router.GetNodeAsync("Org2/Report", _options);
+        var readB = await router.GetNodeAsync("Org2/Report", _options, TestContext.Current.CancellationToken);
         readB.Should().NotBeNull();
         readB!.Name.Should().Be("Org2 Report");
     }
@@ -114,8 +114,8 @@ public class PartitionedContainerTests
         var nodeA = MeshNode.FromPath("Dept1") with { Name = "Department 1" };
         var nodeB = MeshNode.FromPath("Dept2") with { Name = "Department 2" };
 
-        await router.SaveNodeAsync(nodeA, _options);
-        await router.SaveNodeAsync(nodeB, _options);
+        await router.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
+        await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
         var children = new List<MeshNode>();
         await foreach (var child in router.GetChildrenAsync(null, _options))
@@ -131,12 +131,12 @@ public class PartitionedContainerTests
         var factory = await CreateFactoryAsync();
 
         // Create some partitions
-        await factory.CreateStoreAsync("Discover_A");
-        await factory.CreateStoreAsync("Discover_B");
+        await factory.CreateStoreAsync("Discover_A", TestContext.Current.CancellationToken);
+        await factory.CreateStoreAsync("Discover_B", TestContext.Current.CancellationToken);
 
         // Create a fresh factory and discover
         var freshFactory = await CreateFactoryAsync();
-        var partitions = await freshFactory.DiscoverPartitionsAsync();
+        var partitions = await freshFactory.DiscoverPartitionsAsync(TestContext.Current.CancellationToken);
 
         partitions.Should().Contain("discover-a");
         partitions.Should().Contain("discover-b");
@@ -167,17 +167,17 @@ public class PartitionedContainerTests
         var nodeA = MeshNode.FromPath("Region1/Item") with { Name = "Region1 Item" };
         var nodeB = MeshNode.FromPath("Region2/Item") with { Name = "Region2 Item" };
 
-        await router.SaveNodeAsync(nodeA, _options);
-        await router.SaveNodeAsync(nodeB, _options);
+        await router.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
+        await router.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
         // Delete from Region1
-        await router.DeleteNodeAsync("Region1/Item");
+        await router.DeleteNodeAsync("Region1/Item", ct: TestContext.Current.CancellationToken);
 
-        var readA = await router.GetNodeAsync("Region1/Item", _options);
+        var readA = await router.GetNodeAsync("Region1/Item", _options, TestContext.Current.CancellationToken);
         readA.Should().BeNull();
 
         // Region2 should still have its item
-        var readB = await router.GetNodeAsync("Region2/Item", _options);
+        var readB = await router.GetNodeAsync("Region2/Item", _options, TestContext.Current.CancellationToken);
         readB.Should().NotBeNull();
         readB!.Name.Should().Be("Region2 Item");
     }

@@ -33,7 +33,7 @@ The Cornerstone sample demonstrates a modular approach where the Pricing functio
 
 # The MeshNode and Namespace Hierarchy
 
-MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](MeshWeaver/Documentation/Architecture/MeshGraph).
+MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](Doc/Architecture/MeshGraph).
 
 ## Cornerstone Namespace Hierarchy
 

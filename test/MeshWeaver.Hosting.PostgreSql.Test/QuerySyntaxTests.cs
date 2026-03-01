@@ -36,44 +36,44 @@ public class QuerySyntaxTests
             Name = "Claims Processing",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High","points":8}""", _options)
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Story2", "ACME/Project")
         {
             Name = "User Authentication",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Closed","priority":"Low","points":3}""", _options)
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Story3", "ACME/Project")
         {
             Name = "Claims Dashboard",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"Medium","points":5}""", _options)
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Bug1", "ACME/Project")
         {
             Name = "Login Crash",
             NodeType = "Bug",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High","points":2}""", _options)
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Alice", "ACME/Team")
         {
             Name = "Alice Smith",
             NodeType = "Person"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Project", "Contoso")
         {
             Name = "Contoso Project",
             NodeType = "Project"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         // Grant Public access so tests work without explicit userId
-        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true);
-        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
     }
 
     #region Text Search
@@ -268,7 +268,7 @@ public class QuerySyntaxTests
         var request = MeshQueryRequest.FromQuery("nodeType:Story select:name path:ACME scope:descendants sort:name");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(3);
@@ -286,7 +286,7 @@ public class QuerySyntaxTests
         var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:exact select:name,nodeType,path");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(1);
@@ -489,7 +489,7 @@ public class QuerySyntaxTests
     private async Task<List<MeshNode>> CollectResults(PostgreSqlMeshQuery query, MeshQueryRequest request)
     {
         var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
         {
             if (item is MeshNode node)
                 results.Add(node);

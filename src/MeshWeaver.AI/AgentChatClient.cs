@@ -989,7 +989,7 @@ public class AgentChatClient : IAgentChat
     {
         // Check if the path matches a loaded agent's path or resolves to an agent ID
         return loadedAgents.Any(a =>
-            a.Path.Equals(path, StringComparison.OrdinalIgnoreCase) ||
+            (a.Path != null && a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)) ||
             a.Name.Equals(path.Split('/').Last(), StringComparison.OrdinalIgnoreCase));
     }
 

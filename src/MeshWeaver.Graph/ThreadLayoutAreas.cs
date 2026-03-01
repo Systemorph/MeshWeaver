@@ -552,7 +552,7 @@ public static class ThreadLayoutAreas
             Content = updatedMessage
         };
         var nodeJson = JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
-        hub.Post(new DataChangeRequest { Updates = [nodeJson], SuppressActivityLog = true },
+        hub.Post(new DataChangeRequest { Updates = [nodeJson] },
             o => o.WithTarget(new Address(responsePath)));
     }
 

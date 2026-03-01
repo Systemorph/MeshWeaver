@@ -176,8 +176,8 @@ public class HandoffTest
         );
 
         // Act
-        var session = await agentA.CreateSessionAsync();
-        await agentA.RunAsync("Complex task requiring planning", session);
+        var session = await agentA.CreateSessionAsync(cancellationToken: TestContext.Current.CancellationToken);
+        await agentA.RunAsync("Complex task requiring planning", session, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: HandoffRequest was captured
         capturedRequest.Should().NotBeNull("the handoff tool should set a HandoffRequest");
@@ -221,8 +221,8 @@ public class HandoffTest
         );
 
         // Act
-        var session = await agentA.CreateSessionAsync();
-        var result = await agentA.RunAsync("Do something", session);
+        var session = await agentA.CreateSessionAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var result = await agentA.RunAsync("Do something", session, cancellationToken: TestContext.Current.CancellationToken);
 
         // Assert: The function result contains the stop message
         var functionResults = result.Messages

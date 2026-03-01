@@ -30,31 +30,31 @@ public class QueryTests
             Name = "Story One",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High"}""", _options)
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Story2", "ACME/Project")
         {
             Name = "Story Two",
             NodeType = "Story",
             Content = JsonSerializer.Deserialize<object>("""{"status":"Closed","priority":"Low"}""", _options)
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Alice", "ACME/Team")
         {
             Name = "Alice",
             NodeType = "Person"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         await adapter.WriteAsync(new MeshNode("Project", "Contoso")
         {
             Name = "Contoso Project",
             NodeType = "Project"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         // Grant Public Read access so query tests work without explicit userId
         var ac = _fixture.AccessControl;
-        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true);
-        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true);
+        await ac.GrantAsync("ACME", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("Contoso", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public class QueryTests
         var request = MeshQueryRequest.FromQuery("nodeType:Story");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(2);
@@ -80,7 +80,7 @@ public class QueryTests
         var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(2);
@@ -95,7 +95,7 @@ public class QueryTests
         var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         // ACME/Project/Story1, ACME/Project/Story2, ACME/Team/Alice
@@ -110,7 +110,7 @@ public class QueryTests
         var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:exact");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(1);
@@ -128,12 +128,12 @@ public class QueryTests
         {
             Name = "ACME Corp",
             NodeType = "Organization"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         var request = MeshQueryRequest.FromQuery("path:ACME scope:subtree");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         // ACME + ACME/Project/Story1, ACME/Project/Story2, ACME/Team/Alice
@@ -151,17 +151,17 @@ public class QueryTests
         {
             Name = "ACME Corp",
             NodeType = "Organization"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
         await _fixture.StorageAdapter.WriteAsync(new MeshNode("Project", "ACME")
         {
             Name = "ACME Project",
             NodeType = "Project"
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
 
         var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:ancestors");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         // Ancestors: ACME, ACME/Project (NOT Story1 itself)
@@ -178,7 +178,7 @@ public class QueryTests
         var request = new MeshQueryRequest { Query = "nodeType:Story", Limit = 1 };
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(1);
@@ -197,7 +197,7 @@ public class QueryTests
         };
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(1);
@@ -212,7 +212,7 @@ public class QueryTests
         var request = MeshQueryRequest.FromQuery("nodeType:Story sort:name");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(2);
@@ -228,7 +228,7 @@ public class QueryTests
         var request = MeshQueryRequest.FromQuery("nodeType:Story sort:name-desc");
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(2);
@@ -248,7 +248,7 @@ public class QueryTests
         };
 
         var results = new List<object>();
-        await foreach (var item in query.QueryAsync(request, _options))
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
             results.Add(item);
 
         results.Should().HaveCount(2);

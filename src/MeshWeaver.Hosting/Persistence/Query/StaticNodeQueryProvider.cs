@@ -65,11 +65,13 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
         var context = request.Context ?? parsed.Context;
 
-        // Provider nodes (roles, etc.) — require field-level filter (no path-only), no path/scope check
-        if (HasFieldFilter(parsed))
+        // Provider nodes (roles, agents, etc.) — require field-level filter or explicit path
+        if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
         {
             foreach (var node in _providerNodes)
             {
+                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed))
+                    continue;
                 if (!_evaluator.Matches(node, parsed))
                     continue;
                 if (IsExcludedByContext(node, context))

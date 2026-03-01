@@ -1480,6 +1480,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Wait for the expected SplitterControl instead of collecting all updates for 20s
         var final = await stream
             .GetControlStream("Overview")
+            .Where(x => x != null).Select(x => x!)
             .OfType<SplitterControl>()
             .Timeout(TimeSpan.FromSeconds(20))
             .FirstAsync();

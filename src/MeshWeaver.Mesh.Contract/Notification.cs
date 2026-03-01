@@ -3,7 +3,18 @@ using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Mesh;
 
-public enum NotificationType { ApprovalRequired, ApprovalGiven, ApprovalRejected, General }
+/// <summary>Type of notification.</summary>
+public enum NotificationType
+{
+    /// <summary>An approval is required from this user.</summary>
+    ApprovalRequired,
+    /// <summary>An approval was granted.</summary>
+    ApprovalGiven,
+    /// <summary>An approval was rejected.</summary>
+    ApprovalRejected,
+    /// <summary>General notification.</summary>
+    General
+}
 
 /// <summary>
 /// Represents a notification for a user.
@@ -11,6 +22,7 @@ public enum NotificationType { ApprovalRequired, ApprovalGiven, ApprovalRejected
 /// </summary>
 public record Notification
 {
+    /// <summary>Unique identifier for the notification.</summary>
     [Browsable(false)]
     [Key]
     public string Id { get; init; } = Guid.NewGuid().ToString();

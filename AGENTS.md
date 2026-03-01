@@ -4,29 +4,37 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Documentation
 
-### Architecture 
+Documentation is embedded in `src/MeshWeaver.Documentation/` and served under the `Doc/` namespace at runtime.
 
-The documentation on the architecure is accessible via samples/Graph/Data/MeshWeaver/Documentation/Architecture/
+### Architecture
 
+The documentation on the architecture is accessible via src/MeshWeaver.Documentation/Data/Architecture/
 
-
+Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence
 
 ### DataMesh
 
-The documentation on the data mesh is accessible via samples/Graph/Data/MeshWeaver/Documentation/DataMesh/
+The documentation on the data mesh is accessible via src/MeshWeaver.Documentation/Data/DataMesh/
 
-
-
-
+Topics: Node type configuration, Query syntax, Unified Path references, Interactive markdown, Collaborative editing, CRUD operations, Data modeling
 
 ### GUI
 
-The documentation on the GUI is accessible via samples/Graph/Data/MeshWeaver/Documentation/GUI/
+The documentation on the GUI is accessible via src/MeshWeaver.Documentation/Data/GUI/
 
+Topics: Container controls (Stack, Tabs, Toolbar, Splitter), Layout grid, DataGrid, Editor, Observables, Data binding, Attributes, Reactive dialogs
 
+### AI Integration
 
+The documentation on AI integration is accessible via src/MeshWeaver.Documentation/Data/AI/
 
+Topics: Agentic AI, MCP authentication, MeshPlugin tools (Get, Search, Create, Update, Delete, NavigateTo)
 
+### Agents
+
+Built-in agent definitions are embedded in src/MeshWeaver.AI/Data/Agent/
+
+Agents: Executor, Navigator, Planner, Research
 
 ## Development Commands
 
@@ -57,7 +65,7 @@ dotnet run
 # Access at https://localhost:7122
 ```
 
-The Memex Portal uses `AddGraph()` to dynamically load Graph nodes from `samples/Graph/Data/`, including the MeshWeaver documentation and Architecture articles. This is the recommended portal for development.
+The Memex Portal uses `AddGraph()` to dynamically load Graph nodes from `samples/Graph/Data/`, and `AddDocumentation()` to serve embedded documentation under the `Doc/` namespace. This is the recommended portal for development.
 
 #### Microservices Portal (.NET Aspire)
 ```bash
@@ -75,21 +83,22 @@ dotnet run
 
 **Layout Areas**: The UI system uses reactive Layout Areas - framework-agnostic UI abstractions that render in Blazor Server. Layout areas are addressed by route and automatically update via reactive streams.
 
-**AI-First Design**: First-class AI integration using Semantic Kernel with plugins (DataPlugin, LayoutAreaPlugin, ChatPlugin) that provide agents access to application state and functionality.
+**AI-First Design**: First-class AI integration using Microsoft.Extensions.AI with plugins (MeshPlugin, LayoutAreaPlugin) that provide agents access to application state and functionality.
 
 ### Key Directory Structure
 
 - **`src/`** - Core framework libraries (50+ projects)
   - `MeshWeaver.Messaging.Hub` - Actor-based message routing
-  - `MeshWeaver.Layout` - Framework-agnostic UI abstractions  
+  - `MeshWeaver.Layout` - Framework-agnostic UI abstractions
   - `MeshWeaver.AI` - Agent framework with plugin architecture
   - `MeshWeaver.Blazor` - Blazor Server implementation
   - `MeshWeaver.Data` - CRUD operations with activity tracking
+  - `MeshWeaver.Documentation` - Embedded documentation (served under Doc/)
+  - `MeshWeaver.Graph` - Graph node configuration and node type system
 
 - **`samples/`** - Sample business domain applications
-  - `Documentation/` - Interactive markdown with live code execution
-  - `Northwind/` - Sample business application with analytics
-  - `Todo/` - Simple CRUD demonstration
+  - `Graph/Data/` - Sample data nodes (ACME, Northwind, Cornerstone, etc.)
+  - `Graph/content/` - Static content files (icons, images, attachments)
 
 - **`memex/`** - Memex Portal (recommended for development)
   - `Memex.Portal.Monolith/` - Development portal with full Graph support
@@ -97,14 +106,14 @@ dotnet run
 
 ### Architectural Patterns
 
-**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results. 
+**Request-Response**: Use `hub.AwaitResponse<TResponse>(request, o => o.WithTarget(address))` for operations requiring results.
 The response is submitted as `hub.Post(responseMessage, o => o.ResponseFor(request))`.
 
 **Fire-and-Forget**: Use `hub.Post(message, o => o.WithTarget(address))` for notifications and events.
 
-**Address-Based Routing**: Services register at specific addresses (e.g., `bookings/q1_2025`, `app/northwind`, `pricing/id`). 
+**Address-Based Routing**: Services register at specific addresses (e.g., `bookings/q1_2025`, `app/northwind`, `pricing/id`).
 Layout areas follow the pattern `@{address}/{areaName}/{areaId}`. The areaId is optional and depends on the view.
-E.g. `{address}/Details/{itemId}` would render a details view for the item with `idemId`.
+E.g. `{address}/Details/{itemId}` would render a details view for the item with `itemId`.
 
 Layout areas are typically kept on the same address as the underlying data.
 
@@ -119,7 +128,7 @@ public static class MyLayoutArea
     public static void AddMyLayoutArea(this LayoutConfiguration config) =>
         config.AddLayoutArea(nameof(MyLayout), MyLayout);
 
-    public static UiControl MyLayout(LayoutAreaHost host, RenderingContext ctx) => 
+    public static UiControl MyLayout(LayoutAreaHost host, RenderingContext ctx) =>
     Controls.Stack
             .WithView(Controls.Html("Some text")
             .WithView(Controls.Markdown("Some markdown view"))
@@ -127,7 +136,7 @@ public static class MyLayoutArea
 
 }
 ```
-We support rich markdown with mermaid diagrams, code blocks, MathJax, 
+We support rich markdown with mermaid diagrams, code blocks, MathJax,
 and live execution via dynamic markdown. Layout areas can be inserted by
 using `@{address}/{areaName}/{areaId}`
 
@@ -140,14 +149,14 @@ public static class NorthwindHubConfiguration
     {
         return config.AddHandler<MyRequestAsync>(HandleMyRequestAsync)
                      .AddHandler<MyRequest>(HandleMyRequest);
-        
+
     }
 
     public static async Task<IMessageDelivery> HandleMyRequestAsync(MessageHub hub, IMessageDelivery<MyRequestAsync> request, CancellationToken ct)
     {
         // Process the request
         var result = await SomeService.ProcessAsync(request.Message);
-        
+
         // Send response
         await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
         return request.Processed();
@@ -157,9 +166,9 @@ public static class NorthwindHubConfiguration
     {
         // Process the request
         var result = SomeService.Process(request.Input);
-        
+
         // Send response
-        await hub.Post(new MyResponse(result), o => o.ResponseFor(request));
+        hub.Post(new MyResponse(result), o => o.ResponseFor(request));
         return request.Processed();
     }
 }
@@ -169,7 +178,6 @@ public static class NorthwindHubConfiguration
 ```csharp
 public class MyPlugin(IMessageHub hub, IAgentChat chat)
 {
-    [KernelFunction]
     [Description("Description on how to use")]
     public async Task<string> DoSomething([Description("Description for input")]string input)
     {
@@ -194,8 +202,8 @@ public class MyPlugin(IMessageHub hub, IAgentChat chat)
 
 - **.NET 10.0** - Target framework
 - **Orleans** - Distributed deployment (distributed deployment, microservices)
-- **Blazor Server** - Web UI framework  
-- **Semantic Kernel** - AI integration
+- **Blazor Server** - Web UI framework
+- **Microsoft.Extensions.AI** - AI integration
 - **xUnit v3** - Testing framework
 - **FluentAssertions** - Test assertions
 - **Chart.js** - Data visualization
@@ -207,7 +215,7 @@ public class MyPlugin(IMessageHub hub, IAgentChat chat)
 
 Tests use xUnit v3 with structured logging and test parallelization configured via `xunit.runner.json`:
 - `parallelizeAssembly: false`
-- `parallelizeTestCollections: false` 
+- `parallelizeTestCollections: false`
 - `maxParallelThreads: 1`
 - `methodTimeout: 30000ms`
 
@@ -228,13 +236,13 @@ public class MyTest : HubTestBase, IAsyncLifetime
         return base.ConfigureClient(config)
             .AddLayoutClient(); // Add any required services
     }
-    
+
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         await InitializeSomething();
     }
-    
+
     public override async ValueTask DisposeAsync()
     {
         await DisposeSomething();
@@ -261,7 +269,7 @@ public class MyTest : HubTestBase, IAsyncLifetime
 
 - Framework code belongs in `src/`
 - Test code belongs in `test/`
-- Sample applications go in `samples/` 
+- Sample applications go in `samples/`
 - Each module should have its own set of hubs and address spaces (e.g., `@app/northwind`)
 - UI components should be framework-agnostic in the layout layer. The language are the controls inheriting from `UiControl`.
 - AI agents should use plugins to access application functionality
@@ -272,10 +280,10 @@ The solution uses centralized package management via `Directory.Packages.props`.
 
 ### Key Configuration Files
 - `Directory.Build.props` - Global MSBuild properties and versioning
-- `Directory.Packages.props` - Centralized NuGet package version management  
+- `Directory.Packages.props` - Centralized NuGet package version management
 - `nuget.config` - NuGet package sources configuration
 - `xunit.runner.json` - Test execution configuration
 
 ### Branch and Development
 - Main branch: `main` (use for PRs)
-- Solution file: `MeshWeaver.sln` contains 50+ projects
+- Solution file: `MeshWeaver.slnx` contains 50+ projects

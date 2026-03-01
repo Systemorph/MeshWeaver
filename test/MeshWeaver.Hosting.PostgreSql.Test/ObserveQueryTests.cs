@@ -35,12 +35,12 @@ public class ObserveQueryTests : IAsyncLifetime
     {
         await _fixture.CleanDataAsync();
         // Grant Public Read access so observe tests work without explicit userId
-        await _fixture.AccessControl.GrantAsync("ACME", "Public", "Read", isAllow: true);
+        await _fixture.AccessControl.GrantAsync("ACME", "Public", "Read", isAllow: true, TestContext.Current.CancellationToken);
         _notifier = new DataChangeNotifier();
         _listener = new PostgreSqlChangeListener(_fixture.DataSource, _notifier);
-        await _listener.StartAsync();
+        await _listener.StartAsync(TestContext.Current.CancellationToken);
         // Give the LISTEN connection a moment to establish
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
         _query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, _notifier);
     }
 
@@ -140,7 +140,7 @@ public class ObserveQueryTests : IAsyncLifetime
         changes[0].Items.Should().HaveCount(2);
 
         // Act: delete one node
-        await _fixture.StorageAdapter.DeleteAsync("ACME/Project/Story1");
+        await _fixture.StorageAdapter.DeleteAsync("ACME/Project/Story1", TestContext.Current.CancellationToken);
 
         await WaitForChanges(changes, 2, timeout: 5000);
 
@@ -168,7 +168,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Bob", "Contoso/Team", "Person");
 
         // Wait a bit and verify no additional changes were emitted
-        await Task.Delay(1000);
+        await Task.Delay(1000, TestContext.Current.CancellationToken);
 
         // Assert: should still only have the initial emission
         changes.Should().HaveCount(1);
@@ -220,7 +220,7 @@ public class ObserveQueryTests : IAsyncLifetime
         await WriteNode("Story3", "ACME/Project", "Story");
 
         // Wait for debounce + processing
-        await Task.Delay(2000);
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
 
         // Assert: all 3 nodes should appear as Added (possibly batched into one emission)
         var addedChanges = changes.Where(c => c.ChangeType == QueryChangeType.Added).ToList();
@@ -235,7 +235,7 @@ public class ObserveQueryTests : IAsyncLifetime
         {
             Name = id,
             NodeType = nodeType
-        }, _options);
+        }, _options, TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForChanges(
