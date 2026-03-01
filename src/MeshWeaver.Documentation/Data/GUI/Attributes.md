@@ -2,7 +2,7 @@
 Name: Controlling Form Fields Through Attributes
 Category: Documentation
 Description: Attributes that control how properties are rendered and validated in editors
-Icon: /static/storage/content/Doc/GUI/Attributes/icon.svg
+Icon: /static/DocContent/GUI/Attributes/icon.svg
 ---
 
 Property attributes control how the Editor control renders and validates form fields. They provide metadata that influences field appearance, behavior, and validation.

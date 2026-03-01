@@ -2,7 +2,7 @@
 Name: AI Integration
 Category: Documentation
 Description: AI agents, MeshPlugin tools, and natural language interfaces for MeshWeaver applications
-Icon: /static/storage/content/Doc/AI/icon.svg
+Icon: /static/DocContent/AI/icon.svg
 ---
 
 MeshWeaver provides comprehensive AI capabilities through agents, tools, and natural language interfaces.

@@ -2,7 +2,7 @@
 Name: Data Binding in MeshWeaver Layout
 Category: Documentation
 Description: How reactive two-way data binding works in MeshWeaver Layout using JSON Pointers
-Icon: /static/storage/content/Doc/GUI/DataBinding/icon.svg
+Icon: /static/DocContent/GUI/DataBinding/icon.svg
 ---
 
 Data binding connects your data objects to UI controls. You bind an object to the UI, the user edits it, and changes sync back to the server. The binding is **two-way**: the server can push updates to the UI, and user input flows back to the server.

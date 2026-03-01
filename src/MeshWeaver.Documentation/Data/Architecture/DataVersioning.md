@@ -2,7 +2,7 @@
 Name: Data Versioning Strategies
 Category: Documentation
 Description: Technology-specific approaches to data versioning across Snowflake, SQL Server, Cosmos DB, and file storage
-Icon: /static/storage/content/Doc/Architecture/DataVersioning/icon.svg
+Icon: /static/DocContent/Architecture/DataVersioning/icon.svg
 ---
 
 MeshWeaver supports data versioning through technology-specific mechanisms. The approach depends on the underlying data store, leveraging native capabilities where available.

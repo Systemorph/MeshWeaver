@@ -2,7 +2,7 @@
 Name: Schema Prefix
 Category: Documentation
 Description: Embed type schemas and data models
-Icon: /static/storage/content/Doc/DataMesh/UnifiedPath/SchemaPrefix/icon.svg
+Icon: /static/DocContent/DataMesh/UnifiedPath/SchemaPrefix/icon.svg
 ---
 
 The `schema:` prefix embeds type schema definitions from a node as JSON schema.

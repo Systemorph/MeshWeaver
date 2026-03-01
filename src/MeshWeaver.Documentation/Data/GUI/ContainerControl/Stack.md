@@ -2,7 +2,7 @@
 Name: Arranging UI Controls in a Stack
 Category: Documentation
 Description: Arrange controls vertically or horizontally with configurable spacing
-Icon: /static/storage/content/Doc/GUI/ContainerControl/Stack/icon.svg
+Icon: /static/DocContent/GUI/ContainerControl/Stack/icon.svg
 ---
 
 The Stack control arranges child controls in a vertical or horizontal layout with configurable spacing and alignment.

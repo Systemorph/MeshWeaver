@@ -2,7 +2,7 @@
 Name: Data Modeling Guide
 Category: Documentation
 Description: How to define data models using C# records, attributes, and reference data patterns
-Icon: /static/storage/content/Doc/DataMesh/DataModeling/icon.svg
+Icon: /static/DocContent/DataMesh/DataModeling/icon.svg
 ---
 
 This guide explains how to define data models in MeshWeaver using C# records, attributes, and reference data patterns.

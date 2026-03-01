@@ -2,7 +2,7 @@
 Name: Data Prefix
 Category: Documentation
 Description: Embed data collections and entities
-Icon: /static/storage/content/Doc/DataMesh/UnifiedPath/DataPrefix/icon.svg
+Icon: /static/DocContent/DataMesh/UnifiedPath/DataPrefix/icon.svg
 ---
 
 The `data:` prefix embeds data collections or individual entities from a node's data store.

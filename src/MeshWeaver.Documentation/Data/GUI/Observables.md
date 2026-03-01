@@ -2,7 +2,7 @@
 Name: Static vs. Dynamic Views
 Category: Documentation
 Description: Understanding when and how UI areas update in response to data changes
-Icon: /static/storage/content/Doc/GUI/Observables/icon.svg
+Icon: /static/DocContent/GUI/Observables/icon.svg
 ---
 
 MeshWeaver distinguishes between **static** views (rendered once) and **dynamic** views (re-rendered when observables emit). Understanding this distinction is key for efficient UIs.

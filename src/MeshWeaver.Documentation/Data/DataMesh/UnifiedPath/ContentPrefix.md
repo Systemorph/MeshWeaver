@@ -2,7 +2,7 @@
 Name: Collection Prefix
 Category: Documentation
 Description: Embed files from content collections using any collection name
-Icon: /static/storage/content/Doc/DataMesh/UnifiedPath/ContentPrefix/icon.svg
+Icon: /static/DocContent/DataMesh/UnifiedPath/ContentPrefix/icon.svg
 ---
 
 Any prefix that is **not a reserved keyword** is treated as a **content collection name**. This allows you to embed files from any configured content collection.

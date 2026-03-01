@@ -2,7 +2,7 @@
 Name: Mesh Graph Architecture
 Category: Documentation
 Description: How data types define hubs, hierarchical namespaces enable organization, and semantic versioning supports evolution
-Icon: /static/storage/content/Doc/Architecture/MeshGraph/icon.svg
+Icon: /static/DocContent/Architecture/MeshGraph/icon.svg
 ---
 
 The mesh graph is a hierarchical structure where **data types are data elements**. Types define hubs, namespaces organize content, and the hierarchy enables semantic versioning.

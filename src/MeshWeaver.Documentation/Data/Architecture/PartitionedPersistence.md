@@ -2,7 +2,7 @@
 Name: Partitioned Persistence
 Category: Documentation
 Description: How persistence is partitioned by the first path segment to isolate domains across PostgreSQL schemas, Cosmos containers, and file system directories
-Icon: /static/storage/content/Doc/Architecture/icon.svg
+Icon: /static/DocContent/Architecture/icon.svg
 ---
 
 Partitioned persistence routes storage operations by the first segment of a node's path, giving each top-level domain strict isolation in its own PostgreSQL schema, Cosmos DB container, or file system partition.

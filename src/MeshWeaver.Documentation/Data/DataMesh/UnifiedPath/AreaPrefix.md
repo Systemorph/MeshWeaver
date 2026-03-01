@@ -2,7 +2,7 @@
 Name: Area Prefix
 Category: Documentation
 Description: Embed layout areas like Thumbnail, Details, or Catalog
-Icon: /static/storage/content/Doc/DataMesh/UnifiedPath/AreaPrefix/icon.svg
+Icon: /static/DocContent/DataMesh/UnifiedPath/AreaPrefix/icon.svg
 ---
 
 The `area:` prefix (or no prefix) embeds layout areas from a node.

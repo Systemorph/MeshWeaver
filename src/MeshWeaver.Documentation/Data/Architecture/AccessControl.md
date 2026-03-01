@@ -2,7 +2,7 @@
 Name: Access Control Architecture
 Category: Documentation
 Description: How MeshWeaver implements row-level security through AccessAssignment MeshNodes and hierarchical permission evaluation
-Icon: /static/storage/content/Doc/Architecture/AccessControl/icon.svg
+Icon: /static/DocContent/Architecture/AccessControl/icon.svg
 ---
 
 MeshWeaver provides row-level security through **AccessAssignment MeshNodes** stored directly in the mesh node hierarchy. Permissions are evaluated by walking the node tree from root to target path, applying closest-wins semantics.

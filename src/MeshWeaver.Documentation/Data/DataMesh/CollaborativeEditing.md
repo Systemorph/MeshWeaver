@@ -2,7 +2,7 @@
 Name: Collaborative Editing
 Category: Documentation
 Description: How to use collaborative markdown editing with comments and track changes
-Icon: /static/storage/content/Doc/DataMesh/CollaborativeEditing/icon.svg
+Icon: /static/DocContent/DataMesh/CollaborativeEditing/icon.svg
 ---
 
 Work together on documents in real-time with comments and suggestions.

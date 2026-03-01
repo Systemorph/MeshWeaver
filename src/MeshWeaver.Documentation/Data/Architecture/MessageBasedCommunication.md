@@ -2,7 +2,7 @@
 Name: Message-Based Communication
 Category: Documentation
 Description: How MessageHubs enable distributed, single-threaded message processing across cloud environments
-Icon: /static/storage/content/Doc/Architecture/MessageBasedCommunication/icon.svg
+Icon: /static/DocContent/Architecture/MessageBasedCommunication/icon.svg
 ---
 
 MeshWeaver's architecture is built on message-based communication through **MessageHubs**. This design enables distributed processing, scalability, and clean separation of concerns.

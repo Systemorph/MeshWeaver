@@ -2,7 +2,7 @@
 Name: Adding Controls to a UI
 Category: Documentation
 Description: How to add controls to containers and make them update automatically
-Icon: /static/storage/content/Doc/GUI/ContainerControl/icon.svg
+Icon: /static/DocContent/GUI/ContainerControl/icon.svg
 ---
 
 When building a UI, you combine small pieces (buttons, labels, inputs) into larger structures called containers. The `WithView` method is how you add content to these containers.

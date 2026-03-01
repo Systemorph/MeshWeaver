@@ -2,7 +2,7 @@
 Name: Creating Resizable Panels With Splitter
 Category: Documentation
 Description: Divide the UI into resizable, collapsible panes
-Icon: /static/storage/content/Doc/GUI/ContainerControl/Splitter/icon.svg
+Icon: /static/DocContent/GUI/ContainerControl/Splitter/icon.svg
 ---
 
 The Splitter control divides the UI into multiple resizable panes. Users can drag the divider between panes to resize them interactively.
