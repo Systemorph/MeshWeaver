@@ -1,0 +1,19 @@
+{
+  "$type": "MeshNode",
+  "id": "c2",
+  "path": "Doc/DataMesh/CollaborativeEditing/c2",
+  "name": "Comment by Bob",
+  "nodeType": "Comment",
+  "lastModified": "2025-12-16T10:00:00+00:00",
+  "content": {
+    "$type": "Comment",
+    "id": "c2",
+    "primaryNodePath": "Doc/DataMesh/CollaborativeEditing",
+    "markerId": "c2",
+    "highlightedText": "collaborative applications",
+    "author": "Bob",
+    "text": "Would be great to include examples like real-time collaboration, shared editing, etc.",
+    "createdAt": "2025-12-16T10:00:00+00:00",
+    "status": "Active"
+  }
+}

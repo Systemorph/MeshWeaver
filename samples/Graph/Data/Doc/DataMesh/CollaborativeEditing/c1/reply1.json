@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "reply1",
+  "name": "Reply to Alice",
+  "nodeType": "Comment",
+  "icon": "/static/NodeTypeIcons/comment.svg",
+  "lastModified": "2026-02-19T10:33:59.6101527+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "Comment",
+    "id": "reply1",
+    "primaryNodePath": "Doc/DataMesh/CollaborativeEditing",
+    "author": "Roland B\u00FCrgi",
+    "text": "We should add benchmarks from the latest performance tests.",
+    "createdAt": "2026-02-19T10:33:59.5970718+00:00"
+  }
+}
