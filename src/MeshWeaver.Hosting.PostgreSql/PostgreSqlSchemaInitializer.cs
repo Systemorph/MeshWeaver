@@ -241,6 +241,27 @@ public static class PostgreSqlSchemaInitializer
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
+                -- Apply PartitionAccessPolicy caps: deny permissions not in MaxPermissions
+                -- For each policy, insert deny rows at the policy namespace for ALL users
+                -- for permissions that are not included in the policy's MaxPermissions bitmask.
+                -- The most-specific-prefix-wins query logic then correctly denies those permissions.
+                INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
+                SELECT DISTINCT
+                    uep.user_id,
+                    policy.namespace AS node_path_prefix,
+                    perm.permission,
+                    false
+                FROM mesh_nodes policy
+                CROSS JOIN (SELECT DISTINCT user_id FROM user_effective_permissions_shadow) uep
+                CROSS JOIN (
+                    SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
+                           unnest(ARRAY[1,2,4,8,16]) AS bit
+                ) perm
+                WHERE policy.node_type = 'PartitionAccessPolicy'
+                  AND policy.id = '_Policy'
+                  AND ((policy.content->>'maxPermissions')::int & perm.bit) = 0
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
+
                 -- Atomic swap
                 ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
                 ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
@@ -248,12 +269,12 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Trigger function: fires when AccessAssignment or GroupMembership nodes change
+            -- Trigger function: fires when AccessAssignment, GroupMembership, or PartitionAccessPolicy nodes change
             CREATE OR REPLACE FUNCTION trg_mesh_node_access_changed() RETURNS TRIGGER AS $$
             BEGIN
-                IF (TG_OP = 'DELETE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership'))
-                   OR (TG_OP IN ('INSERT', 'UPDATE') AND NEW.node_type IN ('AccessAssignment', 'GroupMembership'))
-                   OR (TG_OP = 'UPDATE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership'))
+                IF (TG_OP = 'DELETE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
+                   OR (TG_OP IN ('INSERT', 'UPDATE') AND NEW.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
+                   OR (TG_OP = 'UPDATE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
                 THEN
                     PERFORM rebuild_user_effective_permissions();
                 END IF;

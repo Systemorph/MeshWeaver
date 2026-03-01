@@ -153,4 +153,65 @@ public class PostgreSqlAccessControl
 
         await RebuildDenormalizedTableAsync(ct);
     }
+
+    /// <summary>
+    /// Sets a partition access policy at the specified namespace.
+    /// Upserts a _Policy MeshNode with PartitionAccessPolicy content.
+    /// </summary>
+    public async Task SetPolicyAsync(string targetNamespace, int maxPermissions, bool breaksInheritance = false, CancellationToken ct = default)
+    {
+        var ns = targetNamespace ?? "";
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            INSERT INTO mesh_nodes (namespace, id, name, node_type, content)
+            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy',
+                    jsonb_build_object('maxPermissions', $2, 'breaksInheritance', $3))
+            ON CONFLICT (namespace, id) DO UPDATE
+            SET content = jsonb_build_object('maxPermissions', $2, 'breaksInheritance', $3),
+                node_type = 'PartitionAccessPolicy',
+                name = 'Access Policy'
+            """);
+        cmd.Parameters.AddWithValue(ns);
+        cmd.Parameters.AddWithValue(maxPermissions);
+        cmd.Parameters.AddWithValue(breaksInheritance);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await RebuildDenormalizedTableAsync(ct);
+    }
+
+    /// <summary>
+    /// Gets the partition access policy at the specified namespace, if any.
+    /// Returns the MaxPermissions value or null if no policy is set.
+    /// </summary>
+    public async Task<int?> GetPolicyMaxPermissionsAsync(string targetNamespace, CancellationToken ct = default)
+    {
+        var ns = targetNamespace ?? "";
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            SELECT (content->>'maxPermissions')::int
+            FROM mesh_nodes
+            WHERE namespace = $1 AND id = '_Policy' AND node_type = 'PartitionAccessPolicy'
+            """);
+        cmd.Parameters.AddWithValue(ns);
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return result is int v ? v : null;
+    }
+
+    /// <summary>
+    /// Removes the partition access policy at the specified namespace.
+    /// </summary>
+    public async Task RemovePolicyAsync(string targetNamespace, CancellationToken ct = default)
+    {
+        var ns = targetNamespace ?? "";
+        await using var cmd = _dataSource.CreateCommand(
+            """
+            DELETE FROM mesh_nodes
+            WHERE namespace = $1 AND id = '_Policy' AND node_type = 'PartitionAccessPolicy'
+            """);
+        cmd.Parameters.AddWithValue(ns);
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        await RebuildDenormalizedTableAsync(ct);
+    }
 }

@@ -99,4 +99,33 @@ public interface ISecurityService
     Task RemoveUserRoleAsync(string userId, string roleId, string? targetNamespace, CancellationToken ct = default);
 
     #endregion
+
+    #region Partition Access Policies
+
+    /// <summary>
+    /// Gets the partition access policy at the specified namespace, if any.
+    /// </summary>
+    /// <param name="targetNamespace">The namespace to check</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The policy or null if none is set</returns>
+    Task<PartitionAccessPolicy?> GetPolicyAsync(string targetNamespace, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sets or updates the partition access policy at the specified namespace.
+    /// Creates/updates a MeshNode with nodeType "PartitionAccessPolicy" and id "_Policy".
+    /// </summary>
+    /// <param name="targetNamespace">The namespace to apply the policy to</param>
+    /// <param name="policy">The policy to set</param>
+    /// <param name="ct">Cancellation token</param>
+    Task SetPolicyAsync(string targetNamespace, PartitionAccessPolicy policy, CancellationToken ct = default);
+
+    /// <summary>
+    /// Removes the partition access policy at the specified namespace.
+    /// Deletes the "_Policy" MeshNode.
+    /// </summary>
+    /// <param name="targetNamespace">The namespace to remove the policy from</param>
+    /// <param name="ct">Cancellation token</param>
+    Task RemovePolicyAsync(string targetNamespace, CancellationToken ct = default);
+
+    #endregion
 }

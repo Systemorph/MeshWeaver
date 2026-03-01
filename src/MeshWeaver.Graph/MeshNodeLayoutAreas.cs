@@ -225,16 +225,8 @@ public static class MeshNodeLayoutAreas
         {
             if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
             {
-                if (iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
-                {
-                    titleContent = titleContent.WithView(Controls.Html(
-                        $"<span class=\"header-icon-svg\" style=\"--icon-url: url('{iconValue}'); display: inline-block; width: 48px; height: 48px; border-radius: 8px; background-color: currentColor; -webkit-mask-image: var(--icon-url); mask-image: var(--icon-url); -webkit-mask-size: contain; mask-size: contain; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-position: center; mask-position: center;\" role=\"img\"></span>"));
-                }
-                else
-                {
-                    titleContent = titleContent.WithView(Controls.Html(
-                        $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: cover;\" />"));
-                }
+                titleContent = titleContent.WithView(Controls.Html(
+                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />"));
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
@@ -762,26 +754,14 @@ public static class MeshNodeLayoutAreas
     private static UiControl RenderNodeIcon(MeshNode node, string _)
     {
         var imageUrl = GetNodeImageUrl(node);
+        var iconUrl = !string.IsNullOrEmpty(imageUrl) ? imageUrl : "/static/NodeTypeIcons/document.svg";
+        var name = node.Name ?? node.Id;
 
-        if (string.IsNullOrEmpty(imageUrl))
-        {
-            // No image - show a placeholder or the node type icon
-            var iconName = !string.IsNullOrEmpty(node.Icon) ? node.Icon : "Document";
-            return Controls.Html($@"
-                <div style=""display: flex; align-items: center; gap: 8px;"">
-                    <fluent-icon name=""{iconName}"" size=""24""></fluent-icon>
-                    <span>{node.Name ?? node.Id}</span>
-                </div>");
-        }
-
-        // Check if it's a data URI (inline SVG or base64 image)
-        if (imageUrl.StartsWith("data:"))
-        {
-            return Controls.Html($@"<img src=""{imageUrl}"" alt=""{node.Name ?? node.Id}"" style=""max-width: 100%; max-height: 200px; height: auto;"" />");
-        }
-
-        // External URL
-        return Controls.Html($@"<img src=""{imageUrl}"" alt=""{node.Name ?? node.Id}"" style=""max-width: 100%; max-height: 200px; height: auto;"" />");
+        return Controls.Html($@"
+            <div style=""display: flex; align-items: center; gap: 8px;"">
+                <img src=""{iconUrl}"" alt="""" style=""width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;"" />
+                <span>{name}</span>
+            </div>");
     }
 
     /// <summary>

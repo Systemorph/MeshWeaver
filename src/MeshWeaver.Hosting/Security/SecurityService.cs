@@ -42,6 +42,9 @@ public class SecurityService : ISecurityService
     private readonly ConcurrentDictionary<string, Role> _customRoleCache = new();
     private bool _customRolesLoaded;
 
+    // Cache for partition access policies (keyed by namespace)
+    private readonly ConcurrentDictionary<string, PartitionAccessPolicy?> _policyCache = new();
+
     public SecurityService(
         IPersistenceService persistence,
         AccessService accessService,
@@ -104,6 +107,9 @@ public class SecurityService : ISecurityService
         // Walk from root to target path, applying closest-wins semantics per role
         var roleAssignments = new Dictionary<string, (bool Denied, int Depth)>();
 
+        // Track accumulated permission cap from PartitionAccessPolicy nodes
+        var permissionCap = Permission.All;
+
         // Check all scopes: global (""), then each ancestor level, then self
         var scopes = GetScopeHierarchy(nodePath);
         for (var i = 0; i < scopes.Count; i++)
@@ -113,7 +119,25 @@ public class SecurityService : ISecurityService
 
             await foreach (var node in _persistence.GetChildrenAsync(scope).WithCancellation(ct))
             {
-                if (node.NodeType != "AccessAssignment" || node.Content == null)
+                if (node.Content == null)
+                    continue;
+
+                // Check for PartitionAccessPolicy nodes
+                if (node.NodeType == "PartitionAccessPolicy" && node.Id == "_Policy")
+                {
+                    var policy = DeserializePolicy(node);
+                    if (policy != null)
+                    {
+                        if (policy.BreaksInheritance)
+                            roleAssignments.Clear();
+
+                        // Tighten the cap (nested policies can only further restrict)
+                        permissionCap &= policy.MaxPermissions;
+                    }
+                    continue;
+                }
+
+                if (node.NodeType != "AccessAssignment")
                     continue;
 
                 var assignment = DeserializeAssignment(node);
@@ -165,8 +189,11 @@ public class SecurityService : ISecurityService
             effectivePermissions |= publicPermissions;
         }
 
-        _logger.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath}",
-            userId, effectivePermissions, nodePath);
+        // Apply the permission cap as final mask from PartitionAccessPolicy nodes
+        effectivePermissions &= permissionCap;
+
+        _logger.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath} (cap: {Cap})",
+            userId, effectivePermissions, nodePath, permissionCap);
 
         _permissionCache.Set(cacheKey, effectivePermissions, PermissionCacheOptions);
         return effectivePermissions;
@@ -202,6 +229,24 @@ public class SecurityService : ISecurityService
             try
             {
                 return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), _hub.JsonSerializerOptions);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private PartitionAccessPolicy? DeserializePolicy(MeshNode node)
+    {
+        if (node.Content is PartitionAccessPolicy policy)
+            return policy;
+        if (node.Content is System.Text.Json.JsonElement je)
+        {
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<PartitionAccessPolicy>(je.GetRawText(), _hub.JsonSerializerOptions);
             }
             catch
             {
@@ -374,6 +419,59 @@ public class SecurityService : ISecurityService
     public void ClearPermissionCache()
     {
         (_permissionCache as MemoryCache)?.Clear();
+        _policyCache.Clear();
+    }
+
+    #endregion
+
+    #region Partition Access Policies
+
+    /// <inheritdoc />
+    public async Task<PartitionAccessPolicy?> GetPolicyAsync(string targetNamespace, CancellationToken ct = default)
+    {
+        var ns = targetNamespace ?? "";
+        if (_policyCache.TryGetValue(ns, out var cached))
+            return cached;
+
+        var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
+        var node = await _persistence.GetNodeAsync(path, ct);
+        var policy = node != null ? DeserializePolicy(node) : null;
+        _policyCache[ns] = policy;
+        return policy;
+    }
+
+    /// <inheritdoc />
+    public async Task SetPolicyAsync(string targetNamespace, PartitionAccessPolicy policy, CancellationToken ct = default)
+    {
+        var ns = targetNamespace ?? "";
+
+        _logger.LogInformation("Setting partition access policy on namespace {Namespace}: MaxPermissions={MaxPermissions}, BreaksInheritance={BreaksInheritance}",
+            string.IsNullOrEmpty(ns) ? "(global)" : ns, policy.MaxPermissions, policy.BreaksInheritance);
+
+        var node = new MeshNode("_Policy", ns)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            Content = policy
+        };
+
+        await _persistence.SaveNodeAsync(node, ct);
+        _policyCache[ns] = policy;
+        ClearPermissionCache();
+    }
+
+    /// <inheritdoc />
+    public async Task RemovePolicyAsync(string targetNamespace, CancellationToken ct = default)
+    {
+        var ns = targetNamespace ?? "";
+
+        _logger.LogInformation("Removing partition access policy from namespace {Namespace}",
+            string.IsNullOrEmpty(ns) ? "(global)" : ns);
+
+        var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
+        await _persistence.DeleteNodeAsync(path, false, ct);
+        _policyCache.TryRemove(ns, out _);
+        ClearPermissionCache();
     }
 
     #endregion

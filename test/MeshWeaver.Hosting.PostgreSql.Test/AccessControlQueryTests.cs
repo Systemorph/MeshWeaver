@@ -279,4 +279,70 @@ public class AccessControlQueryTests
         paths.Should().NotContain("ACME", "Organization instances require explicit grants");
         paths.Should().NotContain("Private/Secret", "Regular nodes require explicit grants");
     }
+
+    [Fact]
+    public async Task PolicyCapsQuery_WriteDeniedByPolicy()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+        var ac = _fixture.AccessControl;
+
+        // Seed nodes
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+
+        // Grant full access to alice at ACME
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Set read-only policy on ACME (maxPermissions = 1 = Read)
+        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+
+        // alice can still read (query sees Doc1 node)
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants nodeType:Document", "alice");
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(1, "alice should still see Doc1 via Read permission");
+        results.Cast<MeshNode>().Single().Path.Should().Be("ACME/Docs/Doc1");
+
+        // But Update permission should be denied by the policy
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Update", TestContext.Current.CancellationToken)).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PolicyNodeVisibleButFilterableByNodeType()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+        var ac = _fixture.AccessControl;
+
+        // Seed a regular node and a policy node
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+
+        // Unfiltered query includes the _Policy node at the SQL level
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants", "alice");
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        var nodeTypes = results.Cast<MeshNode>().Select(n => n.NodeType).ToList();
+        nodeTypes.Should().Contain("PartitionAccessPolicy", "_Policy node is a regular mesh_node");
+        nodeTypes.Should().Contain("Document");
+
+        // Filtering by nodeType:Document excludes the _Policy node
+        // (context-based ExcludeFromContext filtering is applied at the application layer)
+        var filteredRequest = MeshQueryRequest.FromQuery("path:ACME scope:descendants nodeType:Document", "alice");
+        var filteredResults = new List<object>();
+        await foreach (var item in query.QueryAsync(filteredRequest, _options, TestContext.Current.CancellationToken))
+            filteredResults.Add(item);
+
+        filteredResults.Should().HaveCount(1);
+        filteredResults.Cast<MeshNode>().Single().NodeType.Should().Be("Document");
+    }
 }

@@ -186,4 +186,112 @@ public class AccessControlTests
         // Should still work
         (await ac.HasPermissionAsync("alice", "ACME/Project", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
     }
+
+    [Fact]
+    public async Task PolicyCapsPermissions_DenyNonReadPermissions()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        // Grant all permissions to alice at ACME
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Delete", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Set policy: Read only (MaxPermissions = 1 = Read)
+        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project", TestContext.Current.CancellationToken);
+        perms.Should().Contain("Read");
+        perms.Should().NotContain("Create");
+        perms.Should().NotContain("Update");
+        perms.Should().NotContain("Delete");
+        perms.Should().NotContain("Comment");
+    }
+
+    [Fact]
+    public async Task PolicyDoesNotAffectParentPath()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Policy at child namespace only
+        await ac.SetPolicyAsync("ACME/Project", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+
+        // ACME itself should still have Update
+        (await ac.HasPermissionAsync("alice", "ACME", "Update", TestContext.Current.CancellationToken)).Should().BeTrue();
+
+        // ACME/Project should only have Read
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Update", TestContext.Current.CancellationToken)).Should().BeFalse();
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task PolicyAffectsDescendants()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Policy at ACME caps to Read only
+        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+
+        // Descendant paths should be affected
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Update", TestContext.Current.CancellationToken)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PolicyRemoval_RestoresPermissions()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        (await ac.HasPermissionAsync("alice", "ACME/Project", "Update", TestContext.Current.CancellationToken)).Should().BeFalse();
+
+        // Remove policy
+        await ac.RemovePolicyAsync("ACME", TestContext.Current.CancellationToken);
+
+        // Permissions should be restored
+        (await ac.HasPermissionAsync("alice", "ACME/Project", "Update", TestContext.Current.CancellationToken)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MultiplePoliciesAccumulate()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Parent policy: Read + Comment (1 | 16 = 17)
+        await ac.SetPolicyAsync("ACME", maxPermissions: 17, ct: TestContext.Current.CancellationToken);
+        // Child policy: Read only (1)
+        await ac.SetPolicyAsync("ACME/Project", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+
+        // At ACME level: Read + Comment allowed
+        var acmePerms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Team", TestContext.Current.CancellationToken);
+        acmePerms.Should().Contain("Read");
+        acmePerms.Should().Contain("Comment");
+        acmePerms.Should().NotContain("Update");
+
+        // At ACME/Project level: only Read (further restricted by child policy)
+        var projectPerms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project/Story1", TestContext.Current.CancellationToken);
+        projectPerms.Should().Contain("Read");
+        projectPerms.Should().NotContain("Comment");
+        projectPerms.Should().NotContain("Update");
+    }
 }
