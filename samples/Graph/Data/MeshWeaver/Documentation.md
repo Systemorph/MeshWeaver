@@ -1,6 +1,7 @@
 ---
 Category: Documentation
 Description: Comprehensive documentation for MeshWeaver platform architecture, concepts, and operational guides
+Icon: /static/storage/content/MeshWeaver/logo.svg
 ---
 
 # MeshWeaver Documentation
