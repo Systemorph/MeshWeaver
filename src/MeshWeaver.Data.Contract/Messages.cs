@@ -13,11 +13,6 @@ public record DataChangeRequest
     public UpdateOptions? Options { get; init; }
     public string? ClientId { get; init; }
 
-    /// <summary>
-    /// When true, skips creating an Activity/ActivityLog for this change.
-    /// Use for high-frequency streaming updates where per-change activity tracking is unnecessary.
-    /// </summary>
-    public bool SuppressActivityLog { get; init; }
     public DataChangeRequest WithCreations(params IEnumerable<object> creations)
         => this with { Creations = Creations.Concat(creations).ToArray() };
 

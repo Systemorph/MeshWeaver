@@ -83,14 +83,14 @@ public class FileSystemDeletePropagationTest : IDisposable
             Name = "Test Node 1",
             NodeType = "TestType"
         };
-        await _persistence.SaveNodeAsync(node, _jsonOptions);
+        await _persistence.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify the file was created
         var filePath = Path.Combine(_testDirectory, "test", "node1.json");
         File.Exists(filePath).Should().BeTrue("file should be created");
 
         // Verify the node is accessible
-        var retrievedNode = await _persistence.GetNodeAsync("test/node1", _jsonOptions);
+        var retrievedNode = await _persistence.GetNodeAsync("test/node1", _jsonOptions, TestContext.Current.CancellationToken);
         retrievedNode.Should().NotBeNull();
         retrievedNode!.Name.Should().Be("Test Node 1");
 
@@ -100,13 +100,13 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start the file system watcher
         _watcher.Start();
-        await Task.Delay(500); // Wait for watcher to be ready
+        await Task.Delay(500, TestContext.Current.CancellationToken); // Wait for watcher to be ready
 
         // Act - Delete the file externally (simulating another process/editor)
         File.Delete(filePath);
 
         // Wait for file system events and processing
-        await Task.Delay(2000);
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
 
         // Assert - Verify delete notification was received
         receivedNotifications.Should().Contain(n =>
@@ -115,13 +115,13 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Assert - The node should no longer be accessible via persistence
         // THIS IS THE KEY TEST: Does the delete propagate to the in-memory cache?
-        var nodeAfterDelete = await _persistence.GetNodeAsync("test/node1", _jsonOptions);
+        var nodeAfterDelete = await _persistence.GetNodeAsync("test/node1", _jsonOptions, TestContext.Current.CancellationToken);
         nodeAfterDelete.Should().BeNull(
             "node should be null after external file deletion, " +
             "because the delete notification should have invalidated the in-memory cache");
 
         // Also verify ExistsAsync returns false
-        var exists = await _persistence.ExistsAsync("test/node1");
+        var exists = await _persistence.ExistsAsync("test/node1", TestContext.Current.CancellationToken);
         exists.Should().BeFalse(
             "ExistsAsync should return false after external file deletion");
     }
@@ -133,12 +133,12 @@ public class FileSystemDeletePropagationTest : IDisposable
     public async Task ExternalFileDeletion_ShouldPropagateToGetChildren()
     {
         // Arrange - Create multiple nodes
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child1") with { Name = "Child 1" }, _jsonOptions);
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child2") with { Name = "Child 2" }, _jsonOptions);
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child3") with { Name = "Child 3" }, _jsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child1") with { Name = "Child 1" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child2") with { Name = "Child 2" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("parent/child3") with { Name = "Child 3" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify all children exist
-        var childrenBefore = await _persistence.GetChildrenAsync("parent", _jsonOptions).ToListAsync();
+        var childrenBefore = await _persistence.GetChildrenAsync("parent", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         childrenBefore.Should().HaveCount(3);
 
         // Track notifications
@@ -147,17 +147,17 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Act - Delete child2 externally
         var child2Path = Path.Combine(_testDirectory, "parent", "child2.json");
         File.Delete(child2Path);
 
         // Wait for propagation
-        await Task.Delay(2000);
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
 
         // Assert - GetChildren should only return 2 children
-        var childrenAfter = await _persistence.GetChildrenAsync("parent", _jsonOptions).ToListAsync();
+        var childrenAfter = await _persistence.GetChildrenAsync("parent", _jsonOptions).ToListAsync(TestContext.Current.CancellationToken);
         childrenAfter.Should().HaveCount(2,
             "only 2 children should remain after external deletion");
         childrenAfter.Select(c => c.Name).Should().Contain("Child 1");
@@ -182,13 +182,13 @@ public class FileSystemDeletePropagationTest : IDisposable
             Name = "FS Cache Test Node",
             NodeType = "TestType"
         };
-        await fileSystemPersistence.SaveNodeAsync(node, _jsonOptions);
+        await fileSystemPersistence.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify the file was created and is accessible (which also warms the cache)
         var filePath = Path.Combine(_testDirectory, "fscache", "node1.json");
         File.Exists(filePath).Should().BeTrue();
 
-        var cachedNode = await fileSystemPersistence.GetNodeAsync("fscache/node1", _jsonOptions);
+        var cachedNode = await fileSystemPersistence.GetNodeAsync("fscache/node1", _jsonOptions, TestContext.Current.CancellationToken);
         cachedNode.Should().NotBeNull();
         cachedNode!.Name.Should().Be("FS Cache Test Node");
 
@@ -198,13 +198,13 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Act - Delete the file externally
         File.Delete(filePath);
 
         // Wait for propagation
-        await Task.Delay(2000);
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
 
         // Assert - Verify delete notification was received
         receivedNotifications.Should().Contain(n =>
@@ -212,7 +212,7 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Assert - The node should no longer be accessible via FileSystemPersistenceService
         // If the cache is not invalidated, this will still return the cached node
-        var nodeAfterDelete = await fileSystemPersistence.GetNodeAsync("fscache/node1", _jsonOptions);
+        var nodeAfterDelete = await fileSystemPersistence.GetNodeAsync("fscache/node1", _jsonOptions, TestContext.Current.CancellationToken);
         nodeAfterDelete.Should().BeNull(
             "FileSystemPersistenceService should return null after external file deletion, " +
             "because the MemoryCache should have been invalidated by the delete notification");
@@ -234,20 +234,20 @@ public class FileSystemDeletePropagationTest : IDisposable
                 "id": "node1",
                 "name": "Watcher Test Node"
             }
-            """);
+            """, TestContext.Current.CancellationToken);
 
         var receivedNotifications = new List<DataChangeNotification>();
         _changeNotifier.Subscribe(n => receivedNotifications.Add(n));
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Act - Delete the file
         File.Delete(filePath);
 
         // Wait for detection
-        await Task.Delay(2000);
+        await Task.Delay(2000, TestContext.Current.CancellationToken);
 
         // Assert - A Deleted notification should have been emitted
         receivedNotifications.Should().Contain(n =>
@@ -262,12 +262,12 @@ public class FileSystemDeletePropagationTest : IDisposable
     public async Task ExternalDirectoryDeletion_ShouldPropagateForAllNodes()
     {
         // Arrange - Create a hierarchy
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("group/item1") with { Name = "Item 1" }, _jsonOptions);
-        await _persistence.SaveNodeAsync(MeshNode.FromPath("group/item2") with { Name = "Item 2" }, _jsonOptions);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("group/item1") with { Name = "Item 1" }, _jsonOptions, TestContext.Current.CancellationToken);
+        await _persistence.SaveNodeAsync(MeshNode.FromPath("group/item2") with { Name = "Item 2" }, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify nodes exist
-        var item1 = await _persistence.GetNodeAsync("group/item1", _jsonOptions);
-        var item2 = await _persistence.GetNodeAsync("group/item2", _jsonOptions);
+        var item1 = await _persistence.GetNodeAsync("group/item1", _jsonOptions, TestContext.Current.CancellationToken);
+        var item2 = await _persistence.GetNodeAsync("group/item2", _jsonOptions, TestContext.Current.CancellationToken);
         item1.Should().NotBeNull();
         item2.Should().NotBeNull();
 
@@ -277,18 +277,18 @@ public class FileSystemDeletePropagationTest : IDisposable
 
         // Start watcher
         _watcher.Start();
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Act - Delete the entire group directory
         var groupDir = Path.Combine(_testDirectory, "group");
         Directory.Delete(groupDir, recursive: true);
 
         // Wait for propagation (may need longer for directory deletion)
-        await Task.Delay(3000);
+        await Task.Delay(3000, TestContext.Current.CancellationToken);
 
         // Assert - All nodes should be gone
-        var item1AfterDelete = await _persistence.GetNodeAsync("group/item1", _jsonOptions);
-        var item2AfterDelete = await _persistence.GetNodeAsync("group/item2", _jsonOptions);
+        var item1AfterDelete = await _persistence.GetNodeAsync("group/item1", _jsonOptions, TestContext.Current.CancellationToken);
+        var item2AfterDelete = await _persistence.GetNodeAsync("group/item2", _jsonOptions, TestContext.Current.CancellationToken);
 
         item1AfterDelete.Should().BeNull("item1 should be null after directory deletion");
         item2AfterDelete.Should().BeNull("item2 should be null after directory deletion");
@@ -307,17 +307,17 @@ public class FileSystemDeletePropagationTest : IDisposable
             Name = "Node to Delete",
             NodeType = "TestType"
         };
-        await _persistence.SaveNodeAsync(node, _jsonOptions);
+        await _persistence.SaveNodeAsync(node, _jsonOptions, TestContext.Current.CancellationToken);
 
         // Verify it exists
-        var nodeBeforeDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions);
+        var nodeBeforeDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions, TestContext.Current.CancellationToken);
         nodeBeforeDelete.Should().NotBeNull();
 
         // Act - Delete via API
-        await _persistence.DeleteNodeAsync("delete-test/node1");
+        await _persistence.DeleteNodeAsync("delete-test/node1", ct: TestContext.Current.CancellationToken);
 
         // Assert - Node should be gone
-        var nodeAfterDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions);
+        var nodeAfterDelete = await _persistence.GetNodeAsync("delete-test/node1", _jsonOptions, TestContext.Current.CancellationToken);
         nodeAfterDelete.Should().BeNull("node should be deleted via DeleteNodeAsync API");
 
         // File should also be gone

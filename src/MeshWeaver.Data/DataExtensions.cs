@@ -13,6 +13,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Namotion.Reflection;
 
@@ -88,7 +89,9 @@ public static class DataExtensions
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
                 })
                 .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
-                .AddScoped<IDataValidator, RlsDataValidator>())
+                .AddScoped<IDataValidator, RlsDataValidator>()
+                .AddScoped<ActivityLogBundler>())
+            .WithServices(sc => { sc.TryAddSingleton<IActivityLogStore, InMemoryActivityLogStore>(); return sc; })
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
@@ -491,20 +494,24 @@ public static class DataExtensions
             return request.Processed();
         }
 
-        var suppressActivity = changeRequest.SuppressActivityLog || hub.Address.Type == AddressExtensions.ActivityType;
-        var activity = suppressActivity ? null : new Activity(ActivityCategory.DataUpdate, hub);
-        hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity,
-            request);
+        // Record change in the bundler for debounced persistent logging.
+        // The Activity is still used for validation error reporting in the response.
+        var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
+        if (!isActivityHub)
+        {
+            var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
+            bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
+        }
+
+        var activity = isActivityHub ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity, request);
         if (activity is null)
             hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),
                 o => o.ResponseFor(request));
-        // Register completion action BEFORE starting work to avoid race condition
-        // where sub-activities complete and auto-dispose before the completion action is registered
         else activity.Complete(log =>
         {
             hub.Post(new DataChangeResponse(hub.Version, log),
                 o => o.ResponseFor(request));
-
         });
         return request.Processed();
     }
@@ -1285,7 +1292,10 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             ChangedBy = changedBy
         };
 
-        var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        // Use Activity for synchronization and validation feedback
+        var activity = hub.Address.Type == AddressExtensions.ActivityType
+            ? null
+            : new Activity(ActivityCategory.DataUpdate, hub);
         workspace.RequestChange(changeRequest, activity, null);
 
         if (activity != null)
@@ -1293,6 +1303,11 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             var tcs = new TaskCompletionSource<DataChangeResponse>();
             activity.Complete(log => tcs.SetResult(new DataChangeResponse(hub.Version, log)));
             var response = await tcs.Task;
+
+            // Record in bundler for persistent logging
+            var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
+            bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
+
             return response.Status == DataChangeStatus.Committed
                 ? UpdateUnifiedReferenceResponse.Ok(response.Version)
                 : UpdateUnifiedReferenceResponse.Fail(response.Log.Messages.LastOrDefault()?.Message ?? "Update failed");
@@ -1449,7 +1464,10 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             ChangedBy = changedBy
         };
 
-        var activity = hub.Address.Type == AddressExtensions.ActivityType ? null : new Activity(ActivityCategory.DataUpdate, hub);
+        // Use Activity for synchronization and validation feedback
+        var activity = hub.Address.Type == AddressExtensions.ActivityType
+            ? null
+            : new Activity(ActivityCategory.DataUpdate, hub);
         workspace.RequestChange(changeRequest, activity, null);
 
         if (activity != null)
@@ -1457,6 +1475,11 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             var tcs = new TaskCompletionSource<DataChangeResponse>();
             activity.Complete(log => tcs.SetResult(new DataChangeResponse(hub.Version, log)));
             var response = await tcs.Task;
+
+            // Record in bundler for persistent logging
+            var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
+            bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
+
             return response.Status == DataChangeStatus.Committed
                 ? DeleteUnifiedReferenceResponse.Ok()
                 : DeleteUnifiedReferenceResponse.Fail(response.Log.Messages.LastOrDefault()?.Message ?? "Delete failed");

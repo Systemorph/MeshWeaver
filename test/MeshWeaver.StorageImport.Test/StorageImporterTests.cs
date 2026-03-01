@@ -45,12 +45,12 @@ public class StorageImporterTests : IDisposable
         result.NodesImported.Should().BeGreaterThan(0, "sample data should contain nodes");
         result.Elapsed.Should().BeGreaterThan(TimeSpan.Zero);
 
-        // Verify known nodes were copied (use .md nodes which don't require polymorphic JSON)
-        var executorExists = await target.ExistsAsync("Agent/Executor", ct);
-        executorExists.Should().BeTrue("Agent/Executor.md node should exist in target");
+        // Verify known nodes were copied (use nodes still present in samples/Graph/Data)
+        var todoAgentExists = await target.ExistsAsync("ACME/Project/TodoAgent", ct);
+        todoAgentExists.Should().BeTrue("ACME/Project/TodoAgent.md node should exist in target");
 
-        var plannerExists = await target.ExistsAsync("Agent/Planner", ct);
-        plannerExists.Should().BeTrue("Agent/Planner.md node should exist in target");
+        var documentationExists = await target.ExistsAsync("MeshWeaver/Documentation", ct);
+        documentationExists.Should().BeTrue("MeshWeaver/Documentation.md node should exist in target");
     }
 
     [Fact]
@@ -140,24 +140,19 @@ public class StorageImporterTests : IDisposable
             RootPath = "MeshWeaver/Documentation"
         }, ct);
 
-        // Assert - DataMesh parent node should be imported
-        result.NodesImported.Should().BeGreaterThan(1, "DataMesh.md and its children should all be imported");
+        // Assert - Documentation subtree nodes should be imported
+        // Remaining nodes: Article.json + CollaborativeEditing comments (c1-c6 + reply1) + UnifiedPath/sample.md
+        result.NodesImported.Should().BeGreaterThan(1, "Documentation children should all be imported");
 
-        var dataMeshExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh", ct);
-        dataMeshExists.Should().BeTrue("DataMesh.md node should exist in target");
+        var articleExists = await target.ExistsAsync("MeshWeaver/Documentation/Article", ct);
+        articleExists.Should().BeTrue("Article.json node should exist in target");
 
-        // Children inside DataMesh/ folder should also be imported
-        var nodeTypeConfigExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration", ct);
-        nodeTypeConfigExists.Should().BeTrue("NodeTypeConfiguration.md child node should be imported");
+        // CollaborativeEditing comment nodes (JSON data, not moved)
+        var c1Exists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1", ct);
+        c1Exists.Should().BeTrue("c1.json comment node should be imported");
 
-        var querySyntaxExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct);
-        querySyntaxExists.Should().BeTrue("QuerySyntax.md child node should be imported");
-
-        var collaborativeEditingExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", ct);
-        collaborativeEditingExists.Should().BeTrue("CollaborativeEditing.md child node should be imported");
-
-        var unifiedPathExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath", ct);
-        unifiedPathExists.Should().BeTrue("UnifiedPath.md child node should be imported");
+        var sampleExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath/sample", ct);
+        sampleExists.Should().BeTrue("sample.md node should be imported");
     }
 
     [Fact]
@@ -177,34 +172,36 @@ public class StorageImporterTests : IDisposable
             RootPath = "MeshWeaver/Documentation/DataMesh"
         }, ct);
 
-        // Assert - should import DataMesh children AND their children
-        result.NodesImported.Should().BeGreaterThan(5, "DataMesh children + UnifiedPath sub-children should be imported");
+        // Assert - should import DataMesh children (comment JSONs + sample.md) and nested reply
+        // Remaining: c1-c6.json (6) + c1/reply1.json (1) + UnifiedPath/sample.md (1) = 8
+        result.NodesImported.Should().BeGreaterThan(5, "DataMesh comment nodes + sample should be imported");
 
-        // Level 1: DataMesh children
-        var unifiedPathExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath", ct);
-        unifiedPathExists.Should().BeTrue();
+        // Level 1: CollaborativeEditing comment nodes
+        var c1Exists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1", ct);
+        c1Exists.Should().BeTrue();
 
-        // Level 2: UnifiedPath children
-        var syntaxExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax", ct);
-        syntaxExists.Should().BeTrue("Syntax.md under UnifiedPath should be imported");
+        // Level 2: Nested reply under c1
+        var replyExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1/reply1", ct);
+        replyExists.Should().BeTrue("reply1.json under c1 should be imported");
 
-        var areaPrefixExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix", ct);
-        areaPrefixExists.Should().BeTrue("AreaPrefix.md under UnifiedPath should be imported");
+        // UnifiedPath child
+        var sampleExists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath/sample", ct);
+        sampleExists.Should().BeTrue("sample.md under UnifiedPath should be imported");
     }
 
     [Fact]
     public async Task DialogUploadFlow_SingleFileWithNamespace_ImportsCorrectly()
     {
-        // Arrange - simulate the dialog: user uploads DataMesh.md,
-        // it gets placed under importDir/{namespace}/DataMesh.md
+        // Arrange - simulate the dialog: user uploads Overview.md,
+        // it gets placed under importDir/{namespace}/Overview.md
         var importDir = Path.Combine(_targetDir, "dialog_import");
-        var namespaceDir = Path.Combine(importDir, "MeshWeaver", "Documentation");
+        var namespaceDir = Path.Combine(importDir, "ACME", "Documentation");
         Directory.CreateDirectory(namespaceDir);
 
-        // Copy DataMesh.md from samples into the namespace dir
-        var sampleFile = Path.Combine(_sourceDir, "MeshWeaver", "Documentation", "DataMesh.md");
+        // Copy Overview.md from samples into the namespace dir
+        var sampleFile = Path.Combine(_sourceDir, "ACME", "Documentation", "Overview.md");
         File.Exists(sampleFile).Should().BeTrue($"Sample file {sampleFile} must exist");
-        File.Copy(sampleFile, Path.Combine(namespaceDir, "DataMesh.md"));
+        File.Copy(sampleFile, Path.Combine(namespaceDir, "Overview.md"));
 
         var source = new FileSystemStorageAdapter(importDir);
         var targetDir2 = Path.Combine(_targetDir, "dialog_target");
@@ -216,18 +213,18 @@ public class StorageImporterTests : IDisposable
         // Act - import with no rootPath (dialog style)
         var result = await importer.ImportAsync(ct: ct);
 
-        // Assert - the node should be placed at MeshWeaver/Documentation/DataMesh
+        // Assert - the node should be placed at ACME/Documentation/Overview
         result.NodesImported.Should().Be(1);
 
-        var exists = await target.ExistsAsync("MeshWeaver/Documentation/DataMesh", ct);
-        exists.Should().BeTrue("DataMesh node should be at the correct namespace path");
+        var exists = await target.ExistsAsync("ACME/Documentation/Overview", ct);
+        exists.Should().BeTrue("Overview node should be at the correct namespace path");
 
         // Read the node and verify metadata
         var jsonOptions = StorageImporter.CreateDefaultImportOptions();
-        var node = await target.ReadAsync("MeshWeaver/Documentation/DataMesh", jsonOptions, ct);
+        var node = await target.ReadAsync("ACME/Documentation/Overview", jsonOptions, ct);
         node.Should().NotBeNull();
-        node!.Namespace.Should().Be("MeshWeaver/Documentation");
-        node.Id.Should().Be("DataMesh");
+        node!.Namespace.Should().Be("ACME/Documentation");
+        node.Id.Should().Be("Overview");
     }
 
     [Fact]
@@ -305,36 +302,36 @@ public class StorageImporterTests : IDisposable
 
         // Verify both top-level and subtree nodes exist
         (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct)).Should().BeTrue();
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", ct)).Should().BeTrue();
+        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1", ct)).Should().BeTrue();
+        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c2", ct)).Should().BeTrue();
 
-        // Create partial source with just one DataMesh child
+        // Create partial source with just one CollaborativeEditing child
         var partialSourceDir = Path.Combine(_targetDir, "partial_subtree");
-        var dataMeshDir = Path.Combine(partialSourceDir, "MeshWeaver", "Documentation", "DataMesh");
-        Directory.CreateDirectory(dataMeshDir);
-        // Copy just QuerySyntax.md
+        var collabDir = Path.Combine(partialSourceDir, "MeshWeaver", "Documentation", "DataMesh", "CollaborativeEditing");
+        Directory.CreateDirectory(collabDir);
+        // Copy just c1.json
         File.Copy(
-            Path.Combine(_sourceDir, "MeshWeaver", "Documentation", "DataMesh", "QuerySyntax.md"),
-            Path.Combine(dataMeshDir, "QuerySyntax.md"));
+            Path.Combine(_sourceDir, "MeshWeaver", "Documentation", "DataMesh", "CollaborativeEditing", "c1.json"),
+            Path.Combine(collabDir, "c1.json"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
 
-        // Act - re-import subtree with RemoveMissing, scoped to DataMesh
+        // Act - re-import subtree with RemoveMissing, scoped to CollaborativeEditing
         var result = await importer2.ImportAsync(new StorageImportOptions
         {
-            RootPath = "MeshWeaver/Documentation/DataMesh",
+            RootPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
             RemoveMissing = true
         }, ct);
 
         // Assert
         result.NodesImported.Should().Be(1);
-        result.NodesRemoved.Should().BeGreaterThan(0, "CollaborativeEditing and other DataMesh children should be removed");
+        result.NodesRemoved.Should().BeGreaterThan(0, "c2 and other comment children should be removed");
 
-        // QuerySyntax should still exist
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct)).Should().BeTrue();
-        // CollaborativeEditing should be removed (not in partial source)
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing", ct)).Should().BeFalse();
+        // c1 should still exist (was in partial source)
+        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1", ct)).Should().BeTrue();
+        // c2 should be removed (not in partial source)
+        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c2", ct)).Should().BeFalse();
         // Top-level nodes like Cornerstone should NOT be affected (outside scoped subtree)
         (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue("Cornerstone is outside the import subtree and should not be removed");
     }
@@ -376,11 +373,10 @@ public class StorageImporterTests : IDisposable
     public async Task DataMeshSubtree_ImportsAllNodesIncludingNestedChildren()
     {
         // Arrange - verify exact node count for DataMesh subtree
-        // DataMesh/ contains: CollaborativeEditing.md, CRUD.md, DataConfiguration.md,
-        // DataModeling.md, InteractiveMarkdown.md, NodeTypeConfiguration.md, QuerySyntax.md,
-        // UnifiedPath.md, What is a Data Mesh.md, plus:
+        // After documentation move, DataMesh/ contains only:
         // - CollaborativeEditing/{c1-c6}.json (6 comment nodes) + c1/reply1.json (1 reply)
-        // - UnifiedPath/{AreaPrefix,ContentPrefix,DataPrefix,sample,SchemaPrefix,Syntax}.md (6 children)
+        // - UnifiedPath/sample.md (1 child)
+        // (.md documentation files moved to MeshWeaver.Documentation embedded resources)
         Directory.Exists(_sourceDir).Should().BeTrue();
         var source = new FileSystemStorageAdapter(_sourceDir);
         var target = new FileSystemStorageAdapter(_targetDir);
@@ -394,17 +390,15 @@ public class StorageImporterTests : IDisposable
             RootPath = "MeshWeaver/Documentation/DataMesh"
         }, ct);
 
-        // Assert - 22 nodes total:
-        // - 9 direct .md children of DataMesh (including CollaborativeEditing.md, What is a Data Mesh.md)
+        // Assert - 8 nodes total:
         // - 7 nodes under CollaborativeEditing/ (c1-c6 + c1/reply1)
-        // - 6 UnifiedPath .md children (including sample.md)
-        result.NodesImported.Should().Be(22,
-            "DataMesh/ has 9 .md children + CollaborativeEditing/ has 7 comment nodes + UnifiedPath/ has 6 .md children = 22 total");
+        // - 1 UnifiedPath/sample.md
+        result.NodesImported.Should().Be(8,
+            "DataMesh/ has CollaborativeEditing/ comment nodes (7) + UnifiedPath/sample.md (1) = 8 total");
 
         // Verify key expected nodes
         var expectedNodes = new[]
         {
-            "MeshWeaver/Documentation/DataMesh/CollaborativeEditing",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1/reply1",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c2",
@@ -412,20 +406,7 @@ public class StorageImporterTests : IDisposable
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c4",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c5",
             "MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c6",
-            "MeshWeaver/Documentation/DataMesh/CRUD",
-            "MeshWeaver/Documentation/DataMesh/DataConfiguration",
-            "MeshWeaver/Documentation/DataMesh/DataModeling",
-            "MeshWeaver/Documentation/DataMesh/InteractiveMarkdown",
-            "MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration",
-            "MeshWeaver/Documentation/DataMesh/QuerySyntax",
-            "MeshWeaver/Documentation/DataMesh/UnifiedPath",
-            "MeshWeaver/Documentation/DataMesh/UnifiedPath/AreaPrefix",
-            "MeshWeaver/Documentation/DataMesh/UnifiedPath/ContentPrefix",
-            "MeshWeaver/Documentation/DataMesh/UnifiedPath/DataPrefix",
             "MeshWeaver/Documentation/DataMesh/UnifiedPath/sample",
-            "MeshWeaver/Documentation/DataMesh/UnifiedPath/SchemaPrefix",
-            "MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax",
-            "MeshWeaver/Documentation/DataMesh/What is a Data Mesh",
         };
 
         foreach (var nodePath in expectedNodes)
@@ -437,21 +418,21 @@ public class StorageImporterTests : IDisposable
     [Fact]
     public async Task DialogUploadFlow_FileWithSiblingFolder_ImportsAllChildren()
     {
-        // Arrange - simulate dialog uploading DataMesh.md AND its sibling DataMesh/ folder
+        // Arrange - simulate dialog uploading Documentation.md AND its sibling Documentation/ folder
         // (the dialog should copy sibling folders matching uploaded file names)
         var importDir = Path.Combine(_targetDir, "dialog_with_folder");
-        var namespaceDir = Path.Combine(importDir, "MeshWeaver", "Documentation");
+        var namespaceDir = Path.Combine(importDir, "MeshWeaver");
         Directory.CreateDirectory(namespaceDir);
 
-        // Copy DataMesh.md
-        var sampleFile = Path.Combine(_sourceDir, "MeshWeaver", "Documentation", "DataMesh.md");
+        // Copy Documentation.md
+        var sampleFile = Path.Combine(_sourceDir, "MeshWeaver", "Documentation.md");
         File.Exists(sampleFile).Should().BeTrue();
-        File.Copy(sampleFile, Path.Combine(namespaceDir, "DataMesh.md"));
+        File.Copy(sampleFile, Path.Combine(namespaceDir, "Documentation.md"));
 
-        // Copy DataMesh/ directory (the sibling folder)
+        // Copy Documentation/ directory (the sibling folder)
         CopyDirectory(
-            Path.Combine(_sourceDir, "MeshWeaver", "Documentation", "DataMesh"),
-            Path.Combine(namespaceDir, "DataMesh"));
+            Path.Combine(_sourceDir, "MeshWeaver", "Documentation"),
+            Path.Combine(namespaceDir, "Documentation"));
 
         var source = new FileSystemStorageAdapter(importDir);
         var targetDir2 = Path.Combine(_targetDir, "dialog_folder_target");
@@ -463,20 +444,20 @@ public class StorageImporterTests : IDisposable
         // Act
         var result = await importer.ImportAsync(ct: ct);
 
-        // Assert - should import DataMesh + all 22 children = 23 total
-        result.NodesImported.Should().Be(23,
-            "DataMesh.md (1) + DataMesh/ children (9) + CollaborativeEditing/ comments (7) + UnifiedPath/ children (6) = 23");
+        // Assert - Documentation.md (1) + Article.json (1) + Article/Code/*.cs (2) + CollaborativeEditing comments (7) + sample.md (1) = 12
+        result.NodesImported.Should().Be(12,
+            "Documentation.md (1) + Article.json (1) + Article/Code/*.cs (2) + CollaborativeEditing/ comments (7) + UnifiedPath/sample.md (1) = 12");
 
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh", ct)).Should().BeTrue();
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration", ct)).Should().BeTrue();
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/UnifiedPath/Syntax", ct)).Should().BeTrue();
+        (await target.ExistsAsync("MeshWeaver/Documentation", ct)).Should().BeTrue();
+        (await target.ExistsAsync("MeshWeaver/Documentation/Article", ct)).Should().BeTrue();
+        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1", ct)).Should().BeTrue();
 
         // Verify metadata
         var jsonOptions = StorageImporter.CreateDefaultImportOptions();
-        var node = await target.ReadAsync("MeshWeaver/Documentation/DataMesh", jsonOptions, ct);
+        var node = await target.ReadAsync("MeshWeaver/Documentation", jsonOptions, ct);
         node.Should().NotBeNull();
-        node!.Namespace.Should().Be("MeshWeaver/Documentation");
-        node.Id.Should().Be("DataMesh");
+        node!.Namespace.Should().Be("MeshWeaver");
+        node.Id.Should().Be("Documentation");
     }
 
     [Fact]
@@ -530,13 +511,13 @@ public class StorageImporterTests : IDisposable
         }, ct);
 
         // Assert
-        result.NodesImported.Should().Be(22, "DataMesh subtree has 22 nodes (9 .md + 7 comment .json + 6 UnifiedPath .md)");
+        result.NodesImported.Should().Be(8, "DataMesh subtree has 8 nodes (7 comment .json + 1 sample .md)");
         result.NodesRemoved.Should().Be(0,
             "re-importing same subtree should produce zero removals");
 
         // Nodes outside the subtree should still exist
         (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
-        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/QuerySyntax", ct)).Should().BeTrue();
+        (await target.ExistsAsync("MeshWeaver/Documentation/DataMesh/CollaborativeEditing/c1", ct)).Should().BeTrue();
     }
 
     /// <summary>

@@ -3,7 +3,16 @@ using System.ComponentModel.DataAnnotations;
 
 namespace MeshWeaver.Mesh;
 
-public enum ApprovalStatus { Pending, Approved, Rejected }
+/// <summary>Status of an approval request.</summary>
+public enum ApprovalStatus
+{
+    /// <summary>Awaiting decision.</summary>
+    Pending,
+    /// <summary>Approved by the approver.</summary>
+    Approved,
+    /// <summary>Rejected by the approver.</summary>
+    Rejected
+}
 
 /// <summary>
 /// Represents an approval request on a mesh node.
@@ -11,6 +20,7 @@ public enum ApprovalStatus { Pending, Approved, Rejected }
 /// </summary>
 public record Approval : ISatelliteContent
 {
+    /// <summary>Unique identifier for the approval.</summary>
     [Browsable(false)]
     [Key]
     public string Id { get; init; } = Guid.NewGuid().ToString();

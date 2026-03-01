@@ -21,6 +21,16 @@
             <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
+        <!-- Test-specific .md files overlaying SamplesGraph/Data for moved documentation nodes -->
+        <Content Include="TestData\**">
+            <Link>SamplesGraph\Data\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+        <!-- Test-specific content files overlaying SamplesGraph/content for moved documentation assets -->
+        <Content Include="TestContent\**">
+            <Link>SamplesGraph\content\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
 
     <ItemGroup>

@@ -384,9 +384,9 @@ public static UiControl OrdersSummaryReport(data) => new MarkdownControl
 
 For related MeshWeaver architecture concepts:
 
-- **[Mesh Graph Architecture](MeshWeaver/Documentation/Architecture/MeshGraph)**: Node structure and namespaces
-- **[Layout System](MeshWeaver/Documentation/GUI)**: View registration and rendering
-- **[Data Mesh](MeshWeaver/Documentation/DataMesh)**: Data source patterns
+- **[Mesh Graph Architecture](Doc/Architecture/MeshGraph)**: Node structure and namespaces
+- **[Layout System](Doc/GUI)**: View registration and rendering
+- **[Data Mesh](Doc/DataMesh)**: Data source patterns
 - **[AI Agent Integration](Northwind/Documentation/AIAgentIntegration)**: NorthwindAgent usage
 
 # Conclusion
