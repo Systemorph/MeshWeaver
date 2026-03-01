@@ -35,6 +35,7 @@ public static class GraphConfigurationExtensions
                 .AddThreadMessageType()
                 .AddCommentType()
                 .AddAccessAssignmentType()
+                .AddPartitionAccessPolicyType()
                 .AddUserType()
                 .AddVUserType()
                 .AddGroupType()

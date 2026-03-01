@@ -35,3 +35,27 @@ public record RoleAssignment
     [UiControl(typeof(SwitchControl))]
     public bool Denied { get; init; }
 }
+
+/// <summary>
+/// Caps the maximum effective permissions at a namespace scope for ALL users.
+/// When present, all users (including Admins) have their permissions
+/// masked to MaxPermissions at this scope and all descendants.
+/// Stored as a MeshNode with nodeType = "PartitionAccessPolicy",
+/// id = "_Policy", namespace = target scope.
+/// </summary>
+public record PartitionAccessPolicy
+{
+    /// <summary>
+    /// The maximum permissions allowed at this namespace and below.
+    /// Effective permissions are masked: result &amp;= MaxPermissions.
+    /// E.g., Permission.Read means this namespace is read-only.
+    /// </summary>
+    public Permission MaxPermissions { get; init; } = Permission.All;
+
+    /// <summary>
+    /// When true, role assignments from ancestor scopes are discarded at this
+    /// namespace boundary. Only roles assigned at this scope or deeper take effect
+    /// (still subject to MaxPermissions cap).
+    /// </summary>
+    public bool BreaksInheritance { get; init; }
+}

@@ -91,7 +91,15 @@ public static class AccessControlLayoutArea
                     }
                 }
 
-                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, userNodeLookup);
+                // Load partition access policy for this namespace
+                PartitionAccessPolicy? activePolicy = null;
+                if (securityService != null)
+                {
+                    try { activePolicy = await securityService.GetPolicyAsync(hubPath); }
+                    catch { }
+                }
+
+                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, userNodeLookup, securityService, activePolicy);
             });
     }
 
@@ -116,13 +124,45 @@ public static class AccessControlLayoutArea
         string nodePath,
         bool isAdmin,
         IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
-        Dictionary<string, MeshNode> userNodeLookup)
+        Dictionary<string, MeshNode> userNodeLookup,
+        ISecurityService? securityService,
+        PartitionAccessPolicy? activePolicy)
     {
         var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px; width: 100%;");
 
         // Header
         var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
         stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
+
+        // Policy Banner
+        if (activePolicy != null)
+        {
+            var permNames = FormatPermissions(activePolicy.MaxPermissions);
+            var breakText = activePolicy.BreaksInheritance ? " Inheritance is broken." : "";
+            stack = stack.WithView(Controls.Html(
+                $"<div style=\"padding: 12px 16px; background: var(--neutral-fill-secondary-rest); border-left: 4px solid var(--accent-fill-rest); border-radius: 4px;\">" +
+                $"<strong>Partition Policy Active</strong> — Max permissions: <strong>{permNames}</strong>.{breakText}</div>"));
+        }
+
+        if (isAdmin && securityService != null)
+        {
+            var buttonLabel = activePolicy != null ? "Edit Policy" : "Set Policy";
+            stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px;")
+                .WithView(Controls.Button(buttonLabel)
+                    .WithAppearance(Appearance.Accent)
+                    .WithStyle("align-self: flex-start;")
+                    .WithClickAction(async ctx => await ShowSetPolicyDialog(ctx, nodePath, securityService, activePolicy)))
+                .WithView(activePolicy != null
+                    ? Controls.Button("Remove Policy")
+                        .WithAppearance(Appearance.Neutral)
+                        .WithStyle("align-self: flex-start;")
+                        .WithClickAction(async ctx =>
+                        {
+                            await securityService.RemovePolicyAsync(nodePath);
+                            ctx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                        })
+                    : (UiControl)Controls.Html("")));
+        }
 
         // Section 1: Inherited Permissions (merged per person, using builder)
         stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
@@ -375,5 +415,78 @@ public static class AccessControlLayoutArea
             "Validation Error"
         ).WithSize("S").WithClosable(true);
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+    }
+
+    private static string FormatPermissions(Permission permissions)
+    {
+        if (permissions == Permission.All) return "All";
+        if (permissions == Permission.None) return "None";
+        var names = new List<string>();
+        if (permissions.HasFlag(Permission.Read)) names.Add("Read");
+        if (permissions.HasFlag(Permission.Create)) names.Add("Create");
+        if (permissions.HasFlag(Permission.Update)) names.Add("Update");
+        if (permissions.HasFlag(Permission.Delete)) names.Add("Delete");
+        if (permissions.HasFlag(Permission.Comment)) names.Add("Comment");
+        return string.Join(", ", names);
+    }
+
+    private static Task ShowSetPolicyDialog(UiActionContext ctx, string nodePath, ISecurityService securityService, PartitionAccessPolicy? existing)
+    {
+        var formId = $"set_policy_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
+        {
+            ["readOnly"] = existing != null ? existing.MaxPermissions == Permission.Read : true,
+            ["breaksInheritance"] = existing?.BreaksInheritance ?? false
+        });
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView(Controls.Markdown("Set a partition access policy to cap permissions for **all users** at this namespace."))
+            .WithView(new SwitchControl(new JsonPointerReference("readOnly"))
+            {
+                Label = "Read-only (caps to Read permission only)",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("breaksInheritance"))
+            {
+                Label = "Break inheritance (discard roles from parent scopes)",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            });
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Save")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async saveCtx =>
+                {
+                    var formValues = await saveCtx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+
+                    var readOnly = formValues.GetValueOrDefault("readOnly") is true;
+                    var breaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true;
+
+                    var policy = new PartitionAccessPolicy
+                    {
+                        MaxPermissions = readOnly ? Permission.Read : Permission.All,
+                        BreaksInheritance = breaksInheritance
+                    };
+
+                    await securityService.SetPolicyAsync(nodePath, policy);
+                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                }));
+
+        var dialog = Controls.Dialog(formContent, "Partition Access Policy")
+            .WithSize("M")
+            .WithActions(actions);
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+        return Task.CompletedTask;
     }
 }

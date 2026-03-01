@@ -410,4 +410,209 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canRead.Should().BeTrue("Public user should be able to read MeshWeaver content");
         canEdit.Should().BeFalse("Public user should NOT be able to edit MeshWeaver content");
     }
+
+    [Fact(Timeout = 10000)]
+    public async Task Roland_AdminCappedByDocPolicy_ReadOnlyOnDocs()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "Roland";
+        const string nodePath = "MeshWeaver/Documentation/Architecture";
+
+        // Verify Roland has full access before policy
+        var canEditBefore = await securityService.HasPermissionAsync(nodePath, userId, Permission.Update, TestTimeout);
+        canEditBefore.Should().BeTrue("Roland should be able to edit before policy is set");
+
+        // Set read-only policy on Documentation
+        await securityService.SetPolicyAsync("MeshWeaver/Documentation",
+            new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        var canEdit = await securityService.HasPermissionAsync(nodePath, userId, Permission.Update, TestTimeout);
+        var canRead = await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, TestTimeout);
+
+        canRead.Should().BeTrue("Roland should still be able to read Documentation");
+        canEdit.Should().BeFalse("Roland should NOT be able to edit Documentation when policy is active");
+
+        // Cleanup
+        await securityService.RemovePolicyAsync("MeshWeaver/Documentation", TestTimeout);
+    }
+}
+
+/// <summary>
+/// Tests for PartitionAccessPolicy feature.
+/// </summary>
+public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PolicyCapsPermissions_EditorCappedToRead()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "editor1";
+        const string ns = "org/docs";
+
+        await securityService.AddUserRoleAsync(userId, "Editor", ns, "system", TestTimeout);
+        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
+        permissions.Should().Be(Permission.Read);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PolicyCapsAdmin_GlobalAdminCappedToRead()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "admin1";
+        const string globalNs = "";
+        const string docNs = "platform/docs";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", globalNs, "system", TestTimeout);
+        await securityService.SetPolicyAsync(docNs, new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        // At the policy namespace, admin should only have Read
+        var docPermissions = await securityService.GetEffectivePermissionsAsync(docNs, userId, TestTimeout);
+        docPermissions.Should().Be(Permission.Read);
+
+        // At a child path, admin should also only have Read (policy applies to descendants)
+        var childPermissions = await securityService.GetEffectivePermissionsAsync("platform/docs/readme", userId, TestTimeout);
+        childPermissions.Should().Be(Permission.Read);
+
+        // Outside the policy scope, admin still has full access
+        var otherPermissions = await securityService.GetEffectivePermissionsAsync("platform/code", userId, TestTimeout);
+        otherPermissions.Should().Be(Permission.All);
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PolicyDoesNotAffectSiblingNamespace()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "user2";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", "ACME", "system", TestTimeout);
+        await securityService.SetPolicyAsync("Doc", new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        var acmePermissions = await securityService.GetEffectivePermissionsAsync("ACME/Project", userId, TestTimeout);
+        acmePermissions.Should().Be(Permission.All, "ACME should not be affected by Doc policy");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task NestedPoliciesAccumulate()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "user3";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
+        await securityService.SetPolicyAsync("org", new PartitionAccessPolicy { MaxPermissions = Permission.Read | Permission.Comment }, TestTimeout);
+        await securityService.SetPolicyAsync("org/restricted", new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        var orgPermissions = await securityService.GetEffectivePermissionsAsync("org/general", userId, TestTimeout);
+        orgPermissions.Should().Be(Permission.Read | Permission.Comment, "org level allows Read + Comment");
+
+        var restrictedPermissions = await securityService.GetEffectivePermissionsAsync("org/restricted/item", userId, TestTimeout);
+        restrictedPermissions.Should().Be(Permission.Read, "nested policy further restricts to Read only");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task BreaksInheritance_DiscardsParentRoles()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "user4";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
+        await securityService.SetPolicyAsync("isolated",
+            new PartitionAccessPolicy { MaxPermissions = Permission.All, BreaksInheritance = true }, TestTimeout);
+
+        // No local role at "isolated", and inheritance is broken, so no permissions
+        var permissions = await securityService.GetEffectivePermissionsAsync("isolated/item", userId, TestTimeout);
+        permissions.Should().Be(Permission.None, "inherited Admin from global should be discarded");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task BreaksInheritance_KeepsLocalRoles()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "user5";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
+        await securityService.SetPolicyAsync("scoped",
+            new PartitionAccessPolicy { MaxPermissions = Permission.All, BreaksInheritance = true }, TestTimeout);
+        await securityService.AddUserRoleAsync(userId, "Editor", "scoped", "system", TestTimeout);
+
+        var permissions = await securityService.GetEffectivePermissionsAsync("scoped/item", userId, TestTimeout);
+        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment,
+            "local Editor role should survive, inherited Admin should be discarded");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PolicyRemoval_RestoresPermissions()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "user6";
+        const string ns = "org/removable";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", ns, "system", TestTimeout);
+        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        var cappedPerms = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
+        cappedPerms.Should().Be(Permission.Read, "permissions should be capped");
+
+        await securityService.RemovePolicyAsync(ns, TestTimeout);
+
+        var restoredPerms = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
+        restoredPerms.Should().Be(Permission.All, "permissions should be restored after policy removal");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task SetGetPolicy_RoundTrip()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string ns = "org/roundtrip";
+
+        var policy = new PartitionAccessPolicy
+        {
+            MaxPermissions = Permission.Read | Permission.Comment,
+            BreaksInheritance = true
+        };
+
+        await securityService.SetPolicyAsync(ns, policy, TestTimeout);
+
+        var retrieved = await securityService.GetPolicyAsync(ns, TestTimeout);
+        retrieved.Should().NotBeNull();
+        retrieved!.MaxPermissions.Should().Be(Permission.Read | Permission.Comment);
+        retrieved.BreaksInheritance.Should().BeTrue();
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PolicyAppliesToPublicUser()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string ns = "org/public_capped";
+
+        await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", ns, "system", TestTimeout);
+        await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { MaxPermissions = Permission.None }, TestTimeout);
+
+        var permissions = await securityService.GetEffectivePermissionsAsync(ns, WellKnownUsers.Public, TestTimeout);
+        permissions.Should().Be(Permission.None, "Public user permissions should be capped to None");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task PolicyAtGlobalScope_CapsEverything()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        const string userId = "user7";
+
+        await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
+        await securityService.SetPolicyAsync("", new PartitionAccessPolicy { MaxPermissions = Permission.Read }, TestTimeout);
+
+        var permissions = await securityService.GetEffectivePermissionsAsync("any/random/path", userId, TestTimeout);
+        permissions.Should().Be(Permission.Read, "global policy should cap all namespaces to Read");
+
+        // Cleanup global policy
+        await securityService.RemovePolicyAsync("", TestTimeout);
+    }
 }
