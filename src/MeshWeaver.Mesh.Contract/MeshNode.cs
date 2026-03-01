@@ -160,6 +160,13 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public int? Order { get; init; }
 
     /// <summary>
+    /// Timestamp when this node was first created.
+    /// Set once at creation time; never updated thereafter.
+    /// </summary>
+    [Editable(false)]
+    public DateTimeOffset CreatedDate { get; init; }
+
+    /// <summary>
     /// Timestamp when this node was last modified.
     /// Used for cache invalidation of dynamically compiled assemblies.
     /// When reading from file system, defaults to file's last modified time if not specified in JSON.

@@ -436,6 +436,7 @@ public static class ContentCollectionsExtensions
                         Name = collectionName,
                         SourceType = "EmbeddedResource",
                         IsEditable = false,
+                        ExposeInChildren = false,
                         Settings = new Dictionary<string, string>
                         {
                             ["AssemblyName"] = assembly.GetName().Name ?? "",
