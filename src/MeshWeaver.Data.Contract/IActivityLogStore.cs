@@ -16,4 +16,12 @@ public interface IActivityLogStore
         DateTime? to = null,
         int limit = 50,
         CancellationToken ct = default);
+
+    /// <summary>Retrieve recent activity logs across all hub paths for a system-wide feed.</summary>
+    Task<IReadOnlyList<ActivityLog>> GetRecentActivityLogsAsync(
+        string? user = null,
+        DateTime? from = null,
+        DateTime? to = null,
+        int limit = 20,
+        CancellationToken ct = default);
 }

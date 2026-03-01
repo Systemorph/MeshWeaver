@@ -103,4 +103,66 @@ public class PostgreSqlActivityLogStore : IActivityLogStore
 
         return results;
     }
+
+    public async Task<IReadOnlyList<ActivityLog>> GetRecentActivityLogsAsync(
+        string? user = null,
+        DateTime? from = null,
+        DateTime? to = null,
+        int limit = 20,
+        CancellationToken ct = default)
+    {
+        var sql = "SELECT id, hub_path, changed_by, category, start_time, end_time, change_count, status, messages FROM change_logs WHERE 1=1";
+        var paramIndex = 1;
+        var conditions = new List<string>();
+        var parameters = new List<NpgsqlParameter>();
+
+        if (user != null)
+        {
+            conditions.Add($"changed_by = ${paramIndex++}");
+            parameters.Add(new NpgsqlParameter { Value = user });
+        }
+        if (from.HasValue)
+        {
+            conditions.Add($"start_time >= ${paramIndex++}");
+            parameters.Add(new NpgsqlParameter { Value = from.Value });
+        }
+        if (to.HasValue)
+        {
+            conditions.Add($"end_time <= ${paramIndex++}");
+            parameters.Add(new NpgsqlParameter { Value = to.Value });
+        }
+
+        if (conditions.Count > 0)
+            sql += " AND " + string.Join(" AND ", conditions);
+
+        sql += $" ORDER BY start_time DESC LIMIT ${paramIndex}";
+        parameters.Add(new NpgsqlParameter { Value = limit });
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        foreach (var param in parameters)
+            cmd.Parameters.Add(param);
+
+        var results = new List<ActivityLog>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var messages = reader.IsDBNull(8)
+                ? ImmutableList<LogMessage>.Empty
+                : JsonSerializer.Deserialize<ImmutableList<LogMessage>>(reader.GetString(8), JsonOptions)
+                    ?? ImmutableList<LogMessage>.Empty;
+
+            results.Add(new ActivityLog(reader.GetString(3))
+            {
+                Id = reader.GetString(0),
+                HubPath = reader.GetString(1),
+                User = reader.IsDBNull(2) ? null : new UserInfo(reader.GetString(2), reader.GetString(2)),
+                Start = reader.GetDateTime(4),
+                End = reader.IsDBNull(5) ? null : reader.GetDateTime(5),
+                Status = (ActivityStatus)reader.GetInt16(7),
+                Messages = messages
+            });
+        }
+
+        return results;
+    }
 }

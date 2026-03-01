@@ -21,6 +21,7 @@ public class NavigationService : INavigationService
     private readonly NavigationManager _navigationManager;
     private readonly IMeshCatalog _meshCatalog;
     private readonly IMessageHub _hub;
+    private readonly ILogger<NavigationService>? _logger;
 
     private NavigationContext? _context;
     private readonly BehaviorSubject<CreatableTypesSnapshot> _creatableTypes = new(CreatableTypesSnapshot.Empty);
@@ -37,6 +38,7 @@ public class NavigationService : INavigationService
         _navigationManager = navigationManager;
         _meshCatalog = meshCatalog;
         _hub = hub;
+        _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
     }
 
     /// <inheritdoc />
@@ -247,18 +249,35 @@ public class NavigationService : INavigationService
     {
         var activityStore = _hub.ServiceProvider.GetService<IActivityStore>();
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        if (activityStore == null || accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
+        if (activityStore == null)
+        {
+            _logger?.LogDebug("Activity tracking skipped for {Path}: no IActivityStore registered", node.Path);
             return;
+        }
+        if (accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
+        {
+            _logger?.LogDebug("Activity tracking skipped for {Path}: no user context (AccessService.Context.ObjectId is null/empty)", node.Path);
+            return;
+        }
 
         // Skip system/internal paths
         if (string.IsNullOrEmpty(node.Path) || node.Path.StartsWith('_'))
+        {
+            _logger?.LogDebug("Activity tracking skipped for {Path}: system/internal path", node.Path);
             return;
+        }
 
         // Skip satellite content (Threads, AccessAssignments, etc.) and excluded node types
         if (node.Content is ISatelliteContent)
+        {
+            _logger?.LogDebug("Activity tracking skipped for {Path}: satellite content", node.Path);
             return;
+        }
         if (node.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
+        {
+            _logger?.LogDebug("Activity tracking skipped for {Path}: excluded node type {NodeType}", node.Path, node.NodeType);
             return;
+        }
 
         var now = DateTimeOffset.UtcNow;
         var record = new UserActivityRecord
@@ -274,7 +293,19 @@ public class NavigationService : INavigationService
             NodeType = node.NodeType,
             Namespace = node.Namespace
         };
-        _ = activityStore.SaveActivitiesAsync(userId, [record]);
+
+        _logger?.LogDebug("Recording activity: user={UserId} path={Path} type={NodeType}", userId, node.Path, node.NodeType);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await activityStore.SaveActivitiesAsync(userId, [record]);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to save activity for user={UserId} path={Path}", userId, node.Path);
+            }
+        });
     }
 
     private static (string? Area, string? Id) ParseRemainder(string? remainder)

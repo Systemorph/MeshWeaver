@@ -37,4 +37,24 @@ public class InMemoryActivityLogStore : IActivityLogStore
         return Task.FromResult<IReadOnlyList<ActivityLog>>(
             query.OrderByDescending(l => l.Start).Take(limit).ToList());
     }
+
+    public Task<IReadOnlyList<ActivityLog>> GetRecentActivityLogsAsync(
+        string? user = null,
+        DateTime? from = null,
+        DateTime? to = null,
+        int limit = 20,
+        CancellationToken ct = default)
+    {
+        var query = _logs.Select(l => l.Log with { HubPath = l.HubPath });
+
+        if (user != null)
+            query = query.Where(l => l.User?.Email == user || l.User?.DisplayName == user);
+        if (from.HasValue)
+            query = query.Where(l => l.Start >= from.Value);
+        if (to.HasValue)
+            query = query.Where(l => l.End <= to.Value);
+
+        return Task.FromResult<IReadOnlyList<ActivityLog>>(
+            query.OrderByDescending(l => l.Start).Take(limit).ToList());
+    }
 }

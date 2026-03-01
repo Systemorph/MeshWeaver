@@ -412,13 +412,8 @@ public static class MemexConfiguration
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })
-                // Register in-memory activity store for non-database scenarios
-                .ConfigureServices(services =>
-                {
-                    services.AddSingleton<IActivityStore, InMemoryActivityStore>();
-                    return services;
-                })
                 // Add activity tracking to record user access patterns
+                // Uses PersistenceActivityStore when persistence is available, InMemory fallback otherwise
                 .AddActivityTracking();
         }
 
