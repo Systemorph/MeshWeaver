@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -27,28 +29,44 @@ public class MeshQuery(
         // support it (e.g. PostgreSQL) will handle activity ordering via SQL JOIN.
         // Providers that don't understand it will return normal results (source: is
         // a reserved qualifier stripped by the parser, so it doesn't affect filters).
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         // Parse query once to extract select: projection (applied uniformly after dedup)
         var parsedQuery = new QueryParser().Parse(request.Query);
 
-        foreach (var provider in providers)
-        {
-            await foreach (var item in provider.QueryAsync(request, Options, ct))
-            {
-                if (item is MeshNode node)
-                {
-                    if (!seen.Add(node.Path))
-                        continue; // deduplicate by path, first provider wins
-                }
+        var channel = Channel.CreateUnbounded<object>();
 
-                // Apply select: projection only if item is still a MeshNode
-                // (providers that already projected will return dictionaries)
-                yield return parsedQuery.Select != null && item is MeshNode
-                    ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
-                    : item;
+        _ = FanOutProvidersAsync();
+        async Task FanOutProvidersAsync()
+        {
+            try
+            {
+                await Task.WhenAll(providers.Select(async provider =>
+                {
+                    await foreach (var item in provider.QueryAsync(request, Options, ct))
+                    {
+                        if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
+                            continue; // deduplicate by path
+
+                        // Apply select: projection only if item is still a MeshNode
+                        // (providers that already projected will return dictionaries)
+                        var result = parsedQuery.Select != null && item is MeshNode
+                            ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
+                            : item;
+                        await channel.Writer.WriteAsync(result, ct);
+                    }
+                }));
             }
+            catch (Exception ex)
+            {
+                channel.Writer.Complete(ex);
+                return;
+            }
+            channel.Writer.Complete();
         }
+
+        await foreach (var item in channel.Reader.ReadAllAsync(ct))
+            yield return item;
     }
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -57,13 +75,13 @@ public class MeshQuery(
         int limit = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var all = new List<QuerySuggestion>();
+        var all = new ConcurrentBag<QuerySuggestion>();
 
-        foreach (var provider in providers)
+        await Task.WhenAll(providers.Select(async provider =>
         {
             await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
                 all.Add(suggestion);
-        }
+        }));
 
         foreach (var suggestion in all
             .OrderBy(s => s.Path.Length)
@@ -84,13 +102,13 @@ public class MeshQuery(
         string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var all = new List<QuerySuggestion>();
+        var all = new ConcurrentBag<QuerySuggestion>();
 
-        foreach (var provider in providers)
+        await Task.WhenAll(providers.Select(async provider =>
         {
             await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
                 all.Add(suggestion);
-        }
+        }));
 
         IEnumerable<QuerySuggestion> ordered = mode switch
         {
@@ -170,12 +188,8 @@ public class MeshQuery(
 
     public async Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
     {
-        foreach (var provider in providers)
-        {
-            var result = await provider.SelectAsync<T>(path, property, Options, ct);
-            if (result != null)
-                return result;
-        }
-        return default;
+        var results = await Task.WhenAll(
+            providers.Select(p => p.SelectAsync<T>(path, property, Options, ct)));
+        return results.FirstOrDefault(r => r != null);
     }
 }

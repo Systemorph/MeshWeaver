@@ -78,6 +78,12 @@ public sealed class MeshCatalog(
 
         // Try loading from persistence
         var persistenceNode = await Persistence.GetNodeAsync(address.ToString());
+
+        // Fallback to static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
+        persistenceNode ??= hub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, address.ToString(), StringComparison.OrdinalIgnoreCase));
+
         if (persistenceNode != null)
         {
             // Enrich with HubConfiguration based on NodeType (NOT the address - that would cause circular dependency)
@@ -380,6 +386,23 @@ public sealed class MeshCatalog(
             if (node != null)
             {
                 logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", testPath);
+                return (node, depth);
+            }
+        }
+
+        // Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
+        var staticNodes = hub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .ToArray();
+
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            var node = staticNodes.FirstOrDefault(n =>
+                string.Equals(n.Path, testPath, StringComparison.OrdinalIgnoreCase));
+            if (node != null)
+            {
+                logger.LogDebug("FindBestPersistenceMatchAsync: found static node at path={Path}", testPath);
                 return (node, depth);
             }
         }

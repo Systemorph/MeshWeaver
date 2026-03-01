@@ -1,7 +1,9 @@
+using System.Collections.Concurrent;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -38,20 +40,35 @@ public class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out to all partitions, deduplicate by path
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var p in _router.QueryProviders.Values)
+        // Fan out to all partitions in parallel, deduplicate by path, stream results as available
+        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+        var channel = Channel.CreateUnbounded<object>();
+
+        _ = FanOutQueryAsync();
+        async Task FanOutQueryAsync()
         {
-            await foreach (var item in p.QueryAsync(request, options, ct))
+            try
             {
-                if (item is MeshNode node)
+                await Task.WhenAll(_router.QueryProviders.Values.Select(async p =>
                 {
-                    if (!seen.Add(node.Path))
-                        continue;
-                }
-                yield return item;
+                    await foreach (var item in p.QueryAsync(request, options, ct))
+                    {
+                        if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
+                            continue;
+                        await channel.Writer.WriteAsync(item, ct);
+                    }
+                }));
             }
+            catch (Exception ex)
+            {
+                channel.Writer.Complete(ex);
+                return;
+            }
+            channel.Writer.Complete();
         }
+
+        await foreach (var item in channel.Reader.ReadAllAsync(ct))
+            yield return item;
     }
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -70,13 +87,13 @@ public class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out to all partitions
-        var all = new List<QuerySuggestion>();
-        foreach (var p in _router.QueryProviders.Values)
+        // Fan out to all partitions in parallel
+        var all = new ConcurrentBag<QuerySuggestion>();
+        await Task.WhenAll(_router.QueryProviders.Values.Select(async p =>
         {
             await foreach (var s in p.AutocompleteAsync(basePath, prefix, options, limit, ct))
                 all.Add(s);
-        }
+        }));
 
         foreach (var s in all.OrderBy(s => s.Path.Length).ThenByDescending(s => s.Score).ThenBy(s => s.Name).Take(limit))
             yield return s;
@@ -101,13 +118,13 @@ public class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out to all partitions
-        var all = new List<QuerySuggestion>();
-        foreach (var p in _router.QueryProviders.Values)
+        // Fan out to all partitions in parallel
+        var all = new ConcurrentBag<QuerySuggestion>();
+        await Task.WhenAll(_router.QueryProviders.Values.Select(async p =>
         {
             await foreach (var s in p.AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, ct))
                 all.Add(s);
-        }
+        }));
 
         IEnumerable<QuerySuggestion> ordered = mode switch
         {
@@ -197,13 +214,9 @@ public class RoutingMeshQueryProvider : IMeshQueryProvider
             return await provider.SelectAsync<T>(path, property, options, ct);
         }
 
-        // Fan out
-        foreach (var p in _router.QueryProviders.Values)
-        {
-            var result = await p.SelectAsync<T>(path, property, options, ct);
-            if (result != null)
-                return result;
-        }
-        return default;
+        // Fan out to all partitions in parallel
+        var results = await Task.WhenAll(
+            _router.QueryProviders.Values.Select(p => p.SelectAsync<T>(path, property, options, ct)));
+        return results.FirstOrDefault(r => r != null);
     }
 }

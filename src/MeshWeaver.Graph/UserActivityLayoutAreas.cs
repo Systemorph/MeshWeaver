@@ -3,7 +3,9 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -68,15 +70,15 @@ public static class UserActivityLayoutAreas
             grid = grid.WithView(sidebar, skin => skin.WithXs(12).WithSm(4));
             contentArea = contentArea.WithView(grid);
 
-            dashboard = dashboard.WithView(contentArea);
-
-            // Chat pinned to bottom
-            dashboard = dashboard.WithView(
+            // Chat pinned to bottom of scroll area
+            contentArea = contentArea.WithView(
                 Controls.Stack
                     .WithWidth("100%")
-                    .WithStyle("flex-shrink: 0; border-top: 1px solid var(--neutral-stroke-divider-rest); padding-top: 8px;")
+                    .WithStyle("position: sticky; bottom: 0; background: var(--neutral-layer-1); border-top: 1px solid var(--neutral-stroke-divider-rest); padding-top: 8px; z-index: 1;")
                     .WithView(BuildChatEntry(host, nodePath))
             );
+
+            dashboard = dashboard.WithView(contentArea);
 
             return (UiControl?)dashboard;
         });
@@ -165,7 +167,12 @@ public static class UserActivityLayoutAreas
         if (feedItems.Count == 0)
         {
             section = section.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint); font-style: italic; padding: 16px;\">No activity yet. Browse the system to see your feed populate.</p>"));
+                "<div style=\"padding: 24px; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 8px;\">" +
+                "<div style=\"font-weight: 500; margin-bottom: 8px;\">Your activity feed is empty</div>" +
+                "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">Start exploring — your recent views and edits will appear here.</div>" +
+                "</div>"));
+
+            section = section.WithView(await BuildSuggestedContent(host));
             return section;
         }
 
@@ -189,8 +196,7 @@ public static class UserActivityLayoutAreas
         var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
         if (activityStore == null || string.IsNullOrEmpty(userId))
         {
-            section = section.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No recent activity.</p>"));
+            section = section.WithView(BuildQuickLinks(host));
             return section;
         }
 
@@ -202,8 +208,7 @@ public static class UserActivityLayoutAreas
 
         if (recent.Count == 0)
         {
-            section = section.WithView(Controls.Html(
-                "<p style=\"color: var(--neutral-foreground-hint); font-style: italic;\">No recent activity.</p>"));
+            section = section.WithView(BuildQuickLinks(host));
             return section;
         }
 
@@ -261,6 +266,73 @@ public static class UserActivityLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithSortBy("CreatedAt", ascending: false)
             .WithReactiveMode(true)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false);
+
+        section = section.WithView(searchControl);
+        return section;
+    }
+
+    /// <summary>
+    /// Builds a "Discover Content" section with a search box for new users.
+    /// </summary>
+    private static async Task<UiControl> BuildSuggestedContent(LayoutAreaHost host)
+    {
+        var section = Controls.Stack.WithVerticalGap(8);
+        section = section.WithView(Controls.PaneHeader("Discover"));
+
+        // Show a search control so users can explore the mesh
+        var searchControl = Controls.MeshSearch
+            .WithPlaceholder("Search for content to explore...")
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithMaxColumns(2)
+            .WithShowEmptyMessage(false)
+            .WithShowLoadingIndicator(false);
+
+        // Try to find documentation namespace to pre-populate
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        if (meshCatalog != null)
+        {
+            // Query root-level nodes to find documentation
+            var rootNodes = new List<MeshNode>();
+            await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
+            {
+                rootNodes.Add(node);
+            }
+
+            // Find the documentation node specifically
+            var docNode = rootNodes.FirstOrDefault(n =>
+                n.Category?.Contains("Documentation", StringComparison.OrdinalIgnoreCase) == true
+                || n.Name?.Contains("Documentation", StringComparison.OrdinalIgnoreCase) == true);
+
+            if (docNode != null)
+            {
+                searchControl = searchControl
+                    .WithHiddenQuery($"namespace:{docNode.Path} scope:descendants")
+                    .WithShowSearchBox(true);
+            }
+        }
+
+        section = section.WithView(searchControl);
+        return section;
+    }
+
+    /// <summary>
+    /// Builds quick links to root-level content as a replacement for empty "Recently Viewed".
+    /// </summary>
+    private static UiControl BuildQuickLinks(LayoutAreaHost host)
+    {
+        var section = Controls.Stack.WithVerticalGap(4);
+        section = section.WithView(Controls.Html(
+            "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;\">Suggested pages:</div>"));
+
+        var searchControl = Controls.MeshSearch
+            .WithShowSearchBox(false)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithItemLimit(5)
+            .WithMaxColumns(1)
+            .WithShowEmptyMessage(false)
+            .WithShowLoadingIndicator(false)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false);
 
