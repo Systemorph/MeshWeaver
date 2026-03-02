@@ -345,4 +345,80 @@ public class AccessControlQueryTests
         filteredResults.Should().HaveCount(1);
         filteredResults.Cast<MeshNode>().Single().NodeType.Should().Be("Document");
     }
+
+    [Fact]
+    public async Task PolicyDeniesOnlyUpdate_ReadQueryStillWorks()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+        var ac = _fixture.AccessControl;
+
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Deny only Update — Read should still work
+        await ac.SetPolicyAsync("ACME", update: false, ct: TestContext.Current.CancellationToken);
+
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants nodeType:Document", "alice");
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(1, "alice should still see Doc1 via Read permission");
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Update", TestContext.Current.CancellationToken)).Should().BeFalse("Update denied by policy");
+    }
+
+    [Fact]
+    public async Task PolicyDeniesRead_QueryReturnsNoResults()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+        var ac = _fixture.AccessControl;
+
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Deny Read — query should return nothing
+        await ac.SetPolicyAsync("ACME", read: false, ct: TestContext.Current.CancellationToken);
+
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants nodeType:Document", "alice");
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().BeEmpty("Read denied by policy — alice cannot see any nodes");
+    }
+
+    [Fact]
+    public async Task PerPermissionPolicy_GranularDenyPreservesOtherPermissions()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+        var ac = _fixture.AccessControl;
+
+        await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
+
+        // Grant full access
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Delete", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Deny only Delete and Comment
+        await ac.SetPolicyAsync("ACME", delete: false, comment: false, ct: TestContext.Current.CancellationToken);
+
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Create", TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Update", TestContext.Current.CancellationToken)).Should().BeTrue();
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Delete", TestContext.Current.CancellationToken)).Should().BeFalse("Delete denied by policy");
+        (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Comment", TestContext.Current.CancellationToken)).Should().BeFalse("Comment denied by policy");
+    }
 }

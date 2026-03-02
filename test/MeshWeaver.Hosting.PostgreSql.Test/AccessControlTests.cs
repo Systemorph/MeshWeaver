@@ -294,4 +294,112 @@ public class AccessControlTests
         projectPerms.Should().NotContain("Comment");
         projectPerms.Should().NotContain("Update");
     }
+
+    [Fact]
+    public async Task PolicyDeniesOnlySinglePermission()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        // Grant all permissions
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Delete", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Policy denies only Delete — all other permissions inherited (null = allowed)
+        await ac.SetPolicyAsync("ACME", delete: false, ct: TestContext.Current.CancellationToken);
+
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project", TestContext.Current.CancellationToken);
+        perms.Should().Contain("Read");
+        perms.Should().Contain("Create");
+        perms.Should().Contain("Update");
+        perms.Should().Contain("Comment");
+        perms.Should().NotContain("Delete", "only Delete was denied by policy");
+    }
+
+    [Fact]
+    public async Task PolicyDeniesCommentButKeepsCreateAndUpdate()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Deny only Comment
+        await ac.SetPolicyAsync("ACME", comment: false, ct: TestContext.Current.CancellationToken);
+
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Docs", TestContext.Current.CancellationToken);
+        perms.Should().Contain("Read");
+        perms.Should().Contain("Create");
+        perms.Should().Contain("Update");
+        perms.Should().NotContain("Comment", "Comment was denied by policy");
+    }
+
+    [Fact]
+    public async Task PolicyNullFieldsDoNotDeny()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Policy with only update:false — read and create are null (inherit = allowed)
+        await ac.SetPolicyAsync("ACME", update: false, ct: TestContext.Current.CancellationToken);
+
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project", TestContext.Current.CancellationToken);
+        perms.Should().Contain("Read", "null Read field means inherit (allowed)");
+        perms.Should().Contain("Create", "null Create field means inherit (allowed)");
+        perms.Should().NotContain("Update", "Update was explicitly set to false");
+    }
+
+    [Fact]
+    public async Task PolicyDeniesReadBlocksAllAccess()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Deny even Read
+        await ac.SetPolicyAsync("ACME", read: false, create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
+
+        var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project", TestContext.Current.CancellationToken);
+        perms.Should().BeEmpty("all permissions denied by policy");
+    }
+
+    [Fact]
+    public async Task ChildPolicyFurtherRestrictsSinglePermission()
+    {
+        await _fixture.CleanDataAsync();
+        var ac = _fixture.AccessControl;
+
+        await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Create", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
+
+        // Parent: deny Create
+        await ac.SetPolicyAsync("ACME", create: false, ct: TestContext.Current.CancellationToken);
+        // Child: additionally deny Comment
+        await ac.SetPolicyAsync("ACME/Project", comment: false, ct: TestContext.Current.CancellationToken);
+
+        // At ACME level: Read + Comment (Create denied)
+        var acmePerms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Team", TestContext.Current.CancellationToken);
+        acmePerms.Should().Contain("Read");
+        acmePerms.Should().Contain("Comment");
+        acmePerms.Should().NotContain("Create");
+
+        // At ACME/Project level: Read only (Create from parent + Comment from child denied)
+        var projectPerms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project/Story1", TestContext.Current.CancellationToken);
+        projectPerms.Should().Contain("Read");
+        projectPerms.Should().NotContain("Create", "denied by parent policy");
+        projectPerms.Should().NotContain("Comment", "denied by child policy");
+    }
 }
