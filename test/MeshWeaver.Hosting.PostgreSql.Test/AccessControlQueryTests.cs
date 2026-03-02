@@ -294,8 +294,8 @@ public class AccessControlQueryTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Set read-only policy on ACME (maxPermissions = 1 = Read)
-        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        // Set read-only policy on ACME (deny Create, Update, Delete, Comment)
+        await ac.SetPolicyAsync("ACME", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
 
         // alice can still read (query sees Doc1 node)
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
@@ -322,7 +322,7 @@ public class AccessControlQueryTests
         // Seed a regular node and a policy node
         await adapter.WriteAsync(new MeshNode("Doc1", "ACME/Docs") { Name = "Doc One", NodeType = "Document" }, _options, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
-        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        await ac.SetPolicyAsync("ACME", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
 
         // Unfiltered query includes the _Policy node at the SQL level
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);

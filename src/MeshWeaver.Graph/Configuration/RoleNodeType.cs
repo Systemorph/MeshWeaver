@@ -52,6 +52,19 @@ public static class RoleNodeType
     {
         private static readonly MeshNode[] Nodes =
         [
+            // Read-only policy for the Role namespace — built-in roles are unmodifiable
+            new("_Policy", "Role")
+            {
+                NodeType = "PartitionAccessPolicy",
+                Name = "Access Policy",
+                Content = new PartitionAccessPolicy
+                {
+                    Create = false,
+                    Update = false,
+                    Delete = false,
+                    Comment = false
+                }
+            },
             new("Admin", "Role") { Name = "Admin", NodeType = NodeType, Content = Role.Admin },
             new("Editor", "Role") { Name = "Editor", NodeType = NodeType, Content = Role.Editor },
             new("Viewer", "Role") { Name = "Viewer", NodeType = NodeType, Content = Role.Viewer },

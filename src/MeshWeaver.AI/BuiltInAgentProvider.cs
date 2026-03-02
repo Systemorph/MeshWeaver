@@ -4,6 +4,7 @@ using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -33,7 +34,27 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         .IgnoreUnmatchedProperties()
         .Build();
 
-    public IEnumerable<MeshNode> GetStaticNodes() => LazyNodes.Value;
+    private const string RootNamespace = "Agent";
+
+    public IEnumerable<MeshNode> GetStaticNodes()
+    {
+        // Read-only policy for the Agent namespace — built-in agents are unmodifiable
+        yield return new MeshNode("_Policy", RootNamespace)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
+            {
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false
+            }
+        };
+
+        foreach (var node in LazyNodes.Value)
+            yield return node;
+    }
 
     private static MeshNode[] LoadAllNodes()
     {

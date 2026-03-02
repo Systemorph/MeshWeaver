@@ -200,8 +200,8 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Delete", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Set policy: Read only (MaxPermissions = 1 = Read)
-        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        // Set policy: Read only (deny Create, Update, Delete, Comment)
+        await ac.SetPolicyAsync("ACME", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
 
         var perms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Project", TestContext.Current.CancellationToken);
         perms.Should().Contain("Read");
@@ -220,8 +220,8 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Policy at child namespace only
-        await ac.SetPolicyAsync("ACME/Project", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        // Policy at child namespace only — deny all except Read
+        await ac.SetPolicyAsync("ACME/Project", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
 
         // ACME itself should still have Update
         (await ac.HasPermissionAsync("alice", "ACME", "Update", TestContext.Current.CancellationToken)).Should().BeTrue();
@@ -241,7 +241,7 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
         // Policy at ACME caps to Read only
-        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        await ac.SetPolicyAsync("ACME", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
 
         // Descendant paths should be affected
         (await ac.HasPermissionAsync("alice", "ACME/Project/Story1", "Read", TestContext.Current.CancellationToken)).Should().BeTrue();
@@ -257,7 +257,7 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
-        await ac.SetPolicyAsync("ACME", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        await ac.SetPolicyAsync("ACME", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
         (await ac.HasPermissionAsync("alice", "ACME/Project", "Update", TestContext.Current.CancellationToken)).Should().BeFalse();
 
         // Remove policy
@@ -277,10 +277,10 @@ public class AccessControlTests
         await ac.GrantAsync("ACME", "alice", "Comment", isAllow: true, TestContext.Current.CancellationToken);
         await ac.GrantAsync("ACME", "alice", "Update", isAllow: true, TestContext.Current.CancellationToken);
 
-        // Parent policy: Read + Comment (1 | 16 = 17)
-        await ac.SetPolicyAsync("ACME", maxPermissions: 17, ct: TestContext.Current.CancellationToken);
-        // Child policy: Read only (1)
-        await ac.SetPolicyAsync("ACME/Project", maxPermissions: 1, ct: TestContext.Current.CancellationToken);
+        // Parent policy: deny Create, Update, Delete (allow Read + Comment)
+        await ac.SetPolicyAsync("ACME", create: false, update: false, delete: false, ct: TestContext.Current.CancellationToken);
+        // Child policy: deny all except Read
+        await ac.SetPolicyAsync("ACME/Project", create: false, update: false, delete: false, comment: false, ct: TestContext.Current.CancellationToken);
 
         // At ACME level: Read + Comment allowed
         var acmePerms = await ac.GetEffectivePermissionsAsync("alice", "ACME/Team", TestContext.Current.CancellationToken);

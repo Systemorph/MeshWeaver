@@ -45,16 +45,26 @@ public class SecurityService : ISecurityService
     // Cache for partition access policies (keyed by namespace)
     private readonly ConcurrentDictionary<string, PartitionAccessPolicy?> _policyCache = new();
 
+    // Static policies from IStaticNodeProvider (e.g., Doc, Agent, Role namespaces are read-only)
+    private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
+
     public SecurityService(
         IPersistenceService persistence,
         AccessService accessService,
         IMessageHub hub,
-        ILogger<SecurityService> logger)
+        ILogger<SecurityService> logger,
+        IEnumerable<IStaticNodeProvider> staticNodeProviders)
     {
         _persistence = persistence;
         _accessService = accessService;
         _hub = hub;
         _logger = logger;
+
+        // Collect PartitionAccessPolicy nodes from static providers
+        _staticPolicies = staticNodeProviders
+            .SelectMany(p => p.GetStaticNodes())
+            .Where(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy" && n.Content is PartitionAccessPolicy)
+            .ToDictionary(n => n.Namespace ?? "", n => (PartitionAccessPolicy)n.Content!);
     }
 
     #region Permission Evaluation
@@ -117,12 +127,20 @@ public class SecurityService : ISecurityService
             var scope = scopes[i];
             var depth = i; // deeper = higher index
 
+            // Check static policies from IStaticNodeProvider (e.g., Doc, Agent, Role are read-only)
+            if (_staticPolicies.TryGetValue(scope, out var staticPolicy))
+            {
+                if (staticPolicy.BreaksInheritance)
+                    roleAssignments.Clear();
+                permissionCap &= staticPolicy.GetPermissionCap();
+            }
+
             await foreach (var node in _persistence.GetChildrenAsync(scope).WithCancellation(ct))
             {
                 if (node.Content == null)
                     continue;
 
-                // Check for PartitionAccessPolicy nodes
+                // Check for PartitionAccessPolicy nodes (persisted policies)
                 if (node.NodeType == "PartitionAccessPolicy" && node.Id == "_Policy")
                 {
                     var policy = DeserializePolicy(node);
@@ -132,7 +150,7 @@ public class SecurityService : ISecurityService
                             roleAssignments.Clear();
 
                         // Tighten the cap (nested policies can only further restrict)
-                        permissionCap &= policy.MaxPermissions;
+                        permissionCap &= policy.GetPermissionCap();
                     }
                     continue;
                 }
@@ -445,8 +463,8 @@ public class SecurityService : ISecurityService
     {
         var ns = targetNamespace ?? "";
 
-        _logger.LogInformation("Setting partition access policy on namespace {Namespace}: MaxPermissions={MaxPermissions}, BreaksInheritance={BreaksInheritance}",
-            string.IsNullOrEmpty(ns) ? "(global)" : ns, policy.MaxPermissions, policy.BreaksInheritance);
+        _logger.LogInformation("Setting partition access policy on namespace {Namespace}: PermissionCap={PermissionCap}, BreaksInheritance={BreaksInheritance}",
+            string.IsNullOrEmpty(ns) ? "(global)" : ns, policy.GetPermissionCap(), policy.BreaksInheritance);
 
         var node = new MeshNode("_Policy", ns)
         {

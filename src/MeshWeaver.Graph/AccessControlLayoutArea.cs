@@ -137,11 +137,11 @@ public static class AccessControlLayoutArea
         // Policy Banner
         if (activePolicy != null)
         {
-            var permNames = FormatPermissions(activePolicy.MaxPermissions);
+            var allowed = FormatPermissions(activePolicy.GetPermissionCap());
             var breakText = activePolicy.BreaksInheritance ? " Inheritance is broken." : "";
             stack = stack.WithView(Controls.Html(
                 $"<div style=\"padding: 12px 16px; background: var(--neutral-fill-secondary-rest); border-left: 4px solid var(--accent-fill-rest); border-radius: 4px;\">" +
-                $"<strong>Partition Policy Active</strong> — Max permissions: <strong>{permNames}</strong>.{breakText}</div>"));
+                $"<strong>Partition Policy Active</strong> — Allowed: <strong>{allowed}</strong>.{breakText}</div>"));
         }
 
         if (isAdmin && securityService != null)
@@ -435,15 +435,39 @@ public static class AccessControlLayoutArea
         var formId = $"set_policy_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?>
         {
-            ["readOnly"] = existing != null ? existing.MaxPermissions == Permission.Read : true,
+            ["allowRead"] = existing?.Read != false,
+            ["allowCreate"] = existing?.Create != false,
+            ["allowUpdate"] = existing?.Update != false,
+            ["allowDelete"] = existing?.Delete != false,
+            ["allowComment"] = existing?.Comment != false,
             ["breaksInheritance"] = existing?.BreaksInheritance ?? false
         });
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
-            .WithView(Controls.Markdown("Set a partition access policy to cap permissions for **all users** at this namespace."))
-            .WithView(new SwitchControl(new JsonPointerReference("readOnly"))
+            .WithView(Controls.Markdown("Set a partition access policy to restrict permissions for **all users** at this namespace. Turn off permissions to deny them."))
+            .WithView(new SwitchControl(new JsonPointerReference("allowRead"))
             {
-                Label = "Read-only (caps to Read permission only)",
+                Label = "Read",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowCreate"))
+            {
+                Label = "Create",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowUpdate"))
+            {
+                Label = "Update",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowDelete"))
+            {
+                Label = "Delete",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowComment"))
+            {
+                Label = "Comment",
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
             })
             .WithView(new SwitchControl(new JsonPointerReference("breaksInheritance"))
@@ -469,13 +493,14 @@ public static class AccessControlLayoutArea
                     var formValues = await saveCtx.Host.Stream
                         .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
 
-                    var readOnly = formValues.GetValueOrDefault("readOnly") is true;
-                    var breaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true;
-
                     var policy = new PartitionAccessPolicy
                     {
-                        MaxPermissions = readOnly ? Permission.Read : Permission.All,
-                        BreaksInheritance = breaksInheritance
+                        Read = formValues.GetValueOrDefault("allowRead") is true ? null : false,
+                        Create = formValues.GetValueOrDefault("allowCreate") is true ? null : false,
+                        Update = formValues.GetValueOrDefault("allowUpdate") is true ? null : false,
+                        Delete = formValues.GetValueOrDefault("allowDelete") is true ? null : false,
+                        Comment = formValues.GetValueOrDefault("allowComment") is true ? null : false,
+                        BreaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true
                     };
 
                     await securityService.SetPolicyAsync(nodePath, policy);

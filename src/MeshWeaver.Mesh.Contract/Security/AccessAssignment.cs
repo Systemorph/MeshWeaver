@@ -37,25 +37,49 @@ public record RoleAssignment
 }
 
 /// <summary>
-/// Caps the maximum effective permissions at a namespace scope for ALL users.
-/// When present, all users (including Admins) have their permissions
-/// masked to MaxPermissions at this scope and all descendants.
+/// Caps effective permissions at a namespace scope for ALL users (including Admins).
+/// Each permission can be individually switched off (false = denied at this scope and below).
+/// null = inherit from parent scope (default = allowed).
+/// Multiple policies accumulate: parent denials carry to descendants.
 /// Stored as a MeshNode with nodeType = "PartitionAccessPolicy",
 /// id = "_Policy", namespace = target scope.
 /// </summary>
 public record PartitionAccessPolicy
 {
-    /// <summary>
-    /// The maximum permissions allowed at this namespace and below.
-    /// Effective permissions are masked: result &amp;= MaxPermissions.
-    /// E.g., Permission.Read means this namespace is read-only.
-    /// </summary>
-    public Permission MaxPermissions { get; init; } = Permission.All;
+    /// <summary>false = deny Read at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Read { get; init; }
+
+    /// <summary>false = deny Create at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Create { get; init; }
+
+    /// <summary>false = deny Update at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Update { get; init; }
+
+    /// <summary>false = deny Delete at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Delete { get; init; }
+
+    /// <summary>false = deny Comment at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Comment { get; init; }
 
     /// <summary>
     /// When true, role assignments from ancestor scopes are discarded at this
     /// namespace boundary. Only roles assigned at this scope or deeper take effect
-    /// (still subject to MaxPermissions cap).
+    /// (still subject to permission caps).
     /// </summary>
     public bool BreaksInheritance { get; init; }
+
+    /// <summary>
+    /// Computes the permission cap mask from individual switches.
+    /// Permissions set to false are removed; null (inherit) and true are kept.
+    /// </summary>
+    public Permission GetPermissionCap()
+    {
+        var cap = Permission.All;
+        if (Read == false) cap &= ~Permission.Read;
+        if (Create == false) cap &= ~Permission.Create;
+        if (Update == false) cap &= ~Permission.Update;
+        if (Delete == false) cap &= ~Permission.Delete;
+        if (Comment == false) cap &= ~Permission.Comment;
+        return cap;
+    }
 }

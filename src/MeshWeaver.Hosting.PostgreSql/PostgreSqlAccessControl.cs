@@ -156,46 +156,38 @@ public class PostgreSqlAccessControl
 
     /// <summary>
     /// Sets a partition access policy at the specified namespace.
-    /// Upserts a _Policy MeshNode with PartitionAccessPolicy content.
+    /// Upserts a _Policy MeshNode with per-permission switches.
+    /// Pass false for permissions to deny, null to inherit.
     /// </summary>
-    public async Task SetPolicyAsync(string targetNamespace, int maxPermissions, bool breaksInheritance = false, CancellationToken ct = default)
+    public async Task SetPolicyAsync(string targetNamespace, bool? read = null, bool? create = null, bool? update = null, bool? delete = null, bool? comment = null, bool breaksInheritance = false, CancellationToken ct = default)
     {
         var ns = targetNamespace ?? "";
+        // Build the JSON content with per-permission fields
+        var contentParts = new List<string>();
+        if (read.HasValue) contentParts.Add($"'read', {(read.Value ? "true" : "false")}");
+        if (create.HasValue) contentParts.Add($"'create', {(create.Value ? "true" : "false")}");
+        if (update.HasValue) contentParts.Add($"'update', {(update.Value ? "true" : "false")}");
+        if (delete.HasValue) contentParts.Add($"'delete', {(delete.Value ? "true" : "false")}");
+        if (comment.HasValue) contentParts.Add($"'comment', {(comment.Value ? "true" : "false")}");
+        if (breaksInheritance) contentParts.Add("'breaksInheritance', true");
+
+        var jsonBuild = contentParts.Count > 0
+            ? $"jsonb_build_object({string.Join(", ", contentParts)})"
+            : "'{}'::jsonb";
+
         await using var cmd = _dataSource.CreateCommand(
-            """
+            $"""
             INSERT INTO mesh_nodes (namespace, id, name, node_type, content)
-            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy',
-                    jsonb_build_object('maxPermissions', $2, 'breaksInheritance', $3))
+            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild})
             ON CONFLICT (namespace, id) DO UPDATE
-            SET content = jsonb_build_object('maxPermissions', $2, 'breaksInheritance', $3),
+            SET content = {jsonBuild},
                 node_type = 'PartitionAccessPolicy',
                 name = 'Access Policy'
             """);
         cmd.Parameters.AddWithValue(ns);
-        cmd.Parameters.AddWithValue(maxPermissions);
-        cmd.Parameters.AddWithValue(breaksInheritance);
         await cmd.ExecuteNonQueryAsync(ct);
 
         await RebuildDenormalizedTableAsync(ct);
-    }
-
-    /// <summary>
-    /// Gets the partition access policy at the specified namespace, if any.
-    /// Returns the MaxPermissions value or null if no policy is set.
-    /// </summary>
-    public async Task<int?> GetPolicyMaxPermissionsAsync(string targetNamespace, CancellationToken ct = default)
-    {
-        var ns = targetNamespace ?? "";
-        await using var cmd = _dataSource.CreateCommand(
-            """
-            SELECT (content->>'maxPermissions')::int
-            FROM mesh_nodes
-            WHERE namespace = $1 AND id = '_Policy' AND node_type = 'PartitionAccessPolicy'
-            """);
-        cmd.Parameters.AddWithValue(ns);
-
-        var result = await cmd.ExecuteScalarAsync(ct);
-        return result is int v ? v : null;
     }
 
     /// <summary>

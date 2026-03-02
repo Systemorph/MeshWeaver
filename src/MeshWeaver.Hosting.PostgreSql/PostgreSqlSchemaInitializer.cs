@@ -241,9 +241,9 @@ public static class PostgreSqlSchemaInitializer
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
-                -- Apply PartitionAccessPolicy caps: deny permissions not in MaxPermissions
+                -- Apply PartitionAccessPolicy caps: deny permissions set to false
                 -- For each policy, insert deny rows at the policy namespace for ALL users
-                -- for permissions that are not included in the policy's MaxPermissions bitmask.
+                -- for permissions that the policy explicitly denies (field value = false).
                 -- The most-specific-prefix-wins query logic then correctly denies those permissions.
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 SELECT DISTINCT
@@ -255,11 +255,11 @@ public static class PostgreSqlSchemaInitializer
                 CROSS JOIN (SELECT DISTINCT user_id FROM user_effective_permissions_shadow) uep
                 CROSS JOIN (
                     SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
-                           unnest(ARRAY[1,2,4,8,16]) AS bit
+                           unnest(ARRAY['read','create','update','delete','comment']) AS field
                 ) perm
                 WHERE policy.node_type = 'PartitionAccessPolicy'
                   AND policy.id = '_Policy'
-                  AND ((policy.content->>'maxPermissions')::int & perm.bit) = 0
+                  AND (policy.content->>perm.field)::boolean = false
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
 
                 -- Atomic swap
