@@ -4,6 +4,7 @@ using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using YamlDotNet.Serialization;
 
@@ -27,7 +28,25 @@ public class DocumentationNodeProvider : IStaticNodeProvider
         .IgnoreUnmatchedProperties()
         .Build();
 
-    public IEnumerable<MeshNode> GetStaticNodes() => LazyNodes.Value;
+    public IEnumerable<MeshNode> GetStaticNodes()
+    {
+        // Read-only policy for the Doc namespace — all documentation is unmodifiable
+        yield return new MeshNode("_Policy", RootNamespace)
+        {
+            NodeType = "PartitionAccessPolicy",
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
+            {
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false
+            }
+        };
+
+        foreach (var node in LazyNodes.Value)
+            yield return node;
+    }
 
     private static MeshNode[] LoadNodes()
     {
