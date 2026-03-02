@@ -3,10 +3,10 @@ using System.Text.Json.Serialization;
 namespace Memex.Portal.Shared.Admin;
 
 /// <summary>
-/// Content for the Admin/Initialization node.
-/// Tracks the application version and setup state.
+/// Unified content model for the Admin node (nodeType "Platform").
+/// Combines initialization state and authentication provider configuration.
 /// </summary>
-public record InitializationContent
+public record PlatformSettings
 {
     /// <summary>Current application schema version.</summary>
     public string Version { get; init; } = "3.0";
@@ -16,14 +16,7 @@ public record InitializationContent
 
     /// <summary>Who performed the initialization (user ObjectId).</summary>
     public string? InitializedBy { get; init; }
-}
 
-/// <summary>
-/// Content for the Admin/AuthProviders node.
-/// Maps each provider to its App ID and KeyVault secret name.
-/// </summary>
-public record AuthProviderSettings
-{
     /// <summary>Whether developer login is enabled.</summary>
     public bool EnableDevLogin { get; init; } = true;
 
@@ -34,7 +27,10 @@ public record AuthProviderSettings
     /// </summary>
     public string? KeyVaultUri { get; init; }
 
-    /// <summary>Provider configurations indexed by provider name (Microsoft, Google, LinkedIn, Apple).</summary>
+    /// <summary>
+    /// Enabled provider configurations indexed by provider name.
+    /// Only populated (enabled + configured) providers are persisted.
+    /// </summary>
     public Dictionary<string, AuthProviderEntry> Providers { get; init; } = new();
 }
 
@@ -45,9 +41,6 @@ public record AuthProviderSettings
 /// </summary>
 public record AuthProviderEntry
 {
-    /// <summary>Whether this provider is enabled.</summary>
-    public bool Enabled { get; init; }
-
     /// <summary>The OAuth App/Client ID.</summary>
     public string AppId { get; init; } = "";
 
@@ -61,4 +54,3 @@ public record AuthProviderEntry
     /// <summary>Tenant ID (Microsoft-specific, defaults to "common").</summary>
     public string? TenantId { get; init; }
 }
-

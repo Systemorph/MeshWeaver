@@ -1,9 +1,15 @@
 {
+  "$type": "MeshNode",
   "id": "Admin",
+  "path": "Admin",
   "name": "Platform",
-  "icon": "/static/NodeTypeIcons/rocket.svg",
   "nodeType": "Platform",
-  "description": "Platform administration and configuration",
-  "isPersistent": true,
-  "state": "Active"
+  "lastModified": "2026-03-02T20:28:57.9341111+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "PlatformSettings",
+    "version": "3.0",
+    "enableDevLogin": true,
+    "providers": {}
+  }
 }
