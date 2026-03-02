@@ -67,13 +67,20 @@ public static class SettingsMenuItemsExtensions
         var items = new List<SettingsMenuItemDefinition>();
         foreach (var provider in collection.Providers)
         {
-            await foreach (var item in provider(host, ctx))
+            try
             {
-                if (item.RequiredPermission != Permission.None
-                    && !userPermissions.HasFlag(item.RequiredPermission))
-                    continue;
+                await foreach (var item in provider(host, ctx))
+                {
+                    if (item.RequiredPermission != Permission.None
+                        && !userPermissions.HasFlag(item.RequiredPermission))
+                        continue;
 
-                items.Add(item);
+                    items.Add(item);
+                }
+            }
+            catch
+            {
+                // Skip failing providers to prevent one broken tab from crashing all settings
             }
         }
 

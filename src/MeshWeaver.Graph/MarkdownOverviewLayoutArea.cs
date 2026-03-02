@@ -25,11 +25,12 @@ public static class MarkdownOverviewLayoutArea
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
-            return (UiControl?)BuildOverview(host, node, canComment);
+            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            return (UiControl?)BuildOverview(host, node, canComment, canEdit);
         });
     }
 
-    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment)
+    private static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, bool canComment, bool canEdit)
     {
         var nodePath = node?.Path ?? host.Hub.Address.ToString();
         var rawContent = GetMarkdownContent(node);
@@ -40,7 +41,7 @@ public static class MarkdownOverviewLayoutArea
         container = container.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
 
         // Read-only markdown content
-        container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment));
+        container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment, canEdit));
 
         // Standard children section
         container = container.WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false));
@@ -59,7 +60,7 @@ public static class MarkdownOverviewLayoutArea
     }
 
     private static UiControl BuildReadOnlyView(
-        LayoutAreaHost host, string nodePath, string rawContent, bool canComment)
+        LayoutAreaHost host, string nodePath, string rawContent, bool canComment, bool canEdit)
     {
         var view = Controls.Stack.WithWidth("100%");
 
@@ -70,7 +71,8 @@ public static class MarkdownOverviewLayoutArea
                     .WithValue(rawContent)
                     .WithNodePath(nodePath)
                     .WithHubAddress(host.Hub.Address.ToString())
-                    .WithCanComment(canComment));
+                    .WithCanComment(canComment)
+                    .WithCanEdit(canEdit));
         }
         else
         {
