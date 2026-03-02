@@ -193,6 +193,8 @@ public static class PlatformLayoutAreas
         return stack;
     }
 
+    private const string SecretsOptionsId = "kvSecretOptions";
+
     private static UiControl BuildAuthProvidersForm(
         LayoutAreaHost host,
         AuthProviderSettings settings,
@@ -213,11 +215,14 @@ public static class PlatformLayoutAreas
             var entry = settings.Providers.GetValueOrDefault(name);
             formData[$"{name}_enabled"] = entry?.Enabled ?? false;
             formData[$"{name}_appId"] = entry?.AppId ?? "";
-            formData[$"{name}_secretName"] = entry?.KeyVaultSecretName ?? "";
+            formData[$"{name}_clientSecretName"] = entry?.KeyVaultClientSecretName ?? "";
             formData[$"{name}_tenantId"] = entry?.TenantId ?? "";
         }
 
         host.UpdateData(dataId, formData);
+
+        // Initialize empty secret options (populated by Load Secrets button)
+        host.UpdateData(SecretsOptionsId, Array.Empty<Option>());
 
         var form = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
 
@@ -230,60 +235,69 @@ public static class PlatformLayoutAreas
             })
         );
 
-        // KeyVault URI
-        form = form.WithView(new TextFieldControl(new JsonPointerReference("keyVaultUri"))
-        {
-            Label = "Azure KeyVault URI",
-            Placeholder = "https://my-vault.vault.azure.net/",
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
-        });
+        // KeyVault URI + Load Secrets button
+        form = form.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("align-items: flex-end; gap: 12px;")
+            .WithView(new TextFieldControl(new JsonPointerReference("keyVaultUri"))
+            {
+                Label = "Azure KeyVault URI",
+                Placeholder = "https://my-vault.vault.azure.net/",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("flex: 1;"))
+            .WithView(Controls.Button("Load Secrets")
+                .WithClickAction(ctx =>
+                {
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(dataId)
+                        .Take(1)
+                        .Subscribe(async data =>
+                        {
+                            var vaultUri = GetString(data, "keyVaultUri");
+                            if (string.IsNullOrWhiteSpace(vaultUri))
+                            {
+                                ctx.Host.UpdateData("platformSaveResult",
+                                    "<p style=\"color: #f87171;\">Enter a KeyVault URI first.</p>");
+                                return;
+                            }
+
+                            try
+                            {
+                                var kvService = ctx.Hub.ServiceProvider.GetService<IKeyVaultService>();
+                                if (kvService == null)
+                                {
+                                    ctx.Host.UpdateData("platformSaveResult",
+                                        "<p style=\"color: #f87171;\">KeyVault service not available.</p>");
+                                    return;
+                                }
+
+                                var secrets = await kvService.ListSecretsAsync(vaultUri);
+                                var options = secrets
+                                    .Select(s => (Option)new Option<string>(s, s))
+                                    .ToArray();
+                                ctx.Host.UpdateData(SecretsOptionsId, options);
+                                ctx.Host.UpdateData("platformSaveResult",
+                                    $"<p style=\"color: #4ade80;\">Loaded {secrets.Count} secrets from KeyVault.</p>");
+                            }
+                            catch (Exception ex)
+                            {
+                                ctx.Host.UpdateData("platformSaveResult",
+                                    $"<p style=\"color: #f87171;\">Failed to load secrets: {Escape(ex.Message)}</p>");
+                            }
+                        });
+                })));
 
         // Divider
         form = form.WithView(Controls.Html("<hr style=\"border: none; border-top: 1px solid var(--neutral-stroke-rest); margin: 8px 0;\"/>"));
         form = form.WithView(Controls.H3("External Providers").WithStyle("margin: 0;"));
+        form = form.WithView(Controls.Html(
+            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin: 0;\">" +
+            "Enter KeyVault secret names for each field, or load secrets from the vault to pick from a list.</p>"));
 
-        // Provider sections
+        // Provider sections — reactive: text fields when no secrets loaded, comboboxes when loaded
         foreach (var def in OAuthProviderDefinitions.All.Values)
         {
-            var name = def.Name;
-            var providerStack = Controls.Stack.WithWidth("100%")
-                .WithStyle("padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; gap: 8px;");
-
-            providerStack = providerStack.WithView(
-                new CheckBoxControl(new JsonPointerReference($"{name}_enabled"))
-                {
-                    Label = def.DisplayName,
-                    DataContext = LayoutAreaReference.GetDataPointer(dataId)
-                });
-
-            providerStack = providerStack.WithView(
-                new TextFieldControl(new JsonPointerReference($"{name}_appId"))
-                {
-                    Label = "App ID (Client ID)",
-                    Placeholder = "e.g., 12345678-abcd-...",
-                    DataContext = LayoutAreaReference.GetDataPointer(dataId)
-                });
-
-            providerStack = providerStack.WithView(
-                new TextFieldControl(new JsonPointerReference($"{name}_secretName"))
-                {
-                    Label = "KeyVault Secret Name",
-                    Placeholder = $"e.g., memex-{name.ToLowerInvariant()}-client-secret",
-                    DataContext = LayoutAreaReference.GetDataPointer(dataId)
-                });
-
-            if (def.HasTenantId)
-            {
-                providerStack = providerStack.WithView(
-                    new TextFieldControl(new JsonPointerReference($"{name}_tenantId"))
-                    {
-                        Label = "Tenant ID",
-                        Placeholder = "common (for multi-tenant)",
-                        DataContext = LayoutAreaReference.GetDataPointer(dataId)
-                    });
-            }
-
-            form = form.WithView(providerStack);
+            var capturedDef = def;
+            form = form.WithView((h, _) =>
+                h.Stream.GetDataStream<Option[]>(SecretsOptionsId)
+                    .Select(options => (UiControl?)BuildProviderSection(capturedDef, dataId, options)));
         }
 
         // Save button
@@ -338,7 +352,7 @@ public static class PlatformLayoutAreas
                 {
                     Enabled = true,
                     AppId = GetString(data, $"{name}_appId"),
-                    KeyVaultSecretName = GetString(data, $"{name}_secretName"),
+                    KeyVaultClientSecretName = GetString(data, $"{name}_clientSecretName"),
                     TenantId = NullIfEmpty(GetString(data, $"{name}_tenantId"))
                 };
             }
@@ -350,6 +364,64 @@ public static class PlatformLayoutAreas
             KeyVaultUri = NullIfEmpty(GetString(data, "keyVaultUri")),
             Providers = providers
         };
+    }
+
+    private static UiControl BuildProviderSection(
+        OAuthProviderDefinition def, string dataId, Option[]? options)
+    {
+        var name = def.Name;
+        var hasSecrets = options is { Length: > 0 };
+
+        var providerStack = Controls.Stack.WithWidth("100%")
+            .WithStyle("padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; gap: 8px;");
+
+        providerStack = providerStack.WithView(
+            new CheckBoxControl(new JsonPointerReference($"{name}_enabled"))
+            {
+                Label = def.DisplayName,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            });
+
+        // App ID (always plain text)
+        providerStack = providerStack.WithView(
+            new TextFieldControl(new JsonPointerReference($"{name}_appId"))
+            {
+                Label = "App ID (Client ID)",
+                Placeholder = "e.g., 12345678-abcd-...",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            });
+
+        // Client Secret — combobox if secrets loaded, text field otherwise
+        providerStack = providerStack.WithView(hasSecrets
+            ? (UiControl)new ComboboxControl(
+                new JsonPointerReference($"{name}_clientSecretName"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(SecretsOptionsId)))
+            {
+                Label = "Client Secret (KeyVault Secret)",
+                Placeholder = $"e.g., memex-{name.ToLowerInvariant()}-client-secret",
+                Autocomplete = ComboboxAutocomplete.Both,
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }
+            : new TextFieldControl(new JsonPointerReference($"{name}_clientSecretName"))
+            {
+                Label = "Client Secret (KeyVault Secret Name)",
+                Placeholder = $"e.g., memex-{name.ToLowerInvariant()}-client-secret",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            });
+
+        // Tenant ID (always plain text, Microsoft-specific)
+        if (def.HasTenantId)
+        {
+            providerStack = providerStack.WithView(
+                new TextFieldControl(new JsonPointerReference($"{name}_tenantId"))
+                {
+                    Label = "Tenant ID",
+                    Placeholder = "common (for multi-tenant)",
+                    DataContext = LayoutAreaReference.GetDataPointer(dataId)
+                });
+        }
+
+        return providerStack;
     }
 
     // ── Administrators Tab ─────────────────────────────────────────────
@@ -373,8 +445,7 @@ public static class PlatformLayoutAreas
             return Observable.FromAsync(async ct =>
             {
                 var adminService = new AdminService(persistence);
-                var settings = await adminService.GetAdminSettingsAsync(ct);
-                return (UiControl?)BuildAdministratorsForm(h, settings, adminService);
+                return (UiControl?)BuildAdministratorsForm(h, adminService);
             });
         });
 
@@ -383,26 +454,29 @@ public static class PlatformLayoutAreas
 
     private static UiControl BuildAdministratorsForm(
         LayoutAreaHost host,
-        AdminSettings settings,
         AdminService adminService)
     {
-        const string dataId = "platformAdminUsers";
-        var adminUsersText = string.Join("\n", settings.AdminUsers);
+        const string dataId = "platformAdminAdd";
 
-        host.UpdateData(dataId, new Dictionary<string, object?> { ["adminUsers"] = adminUsersText });
+        host.UpdateData(dataId, new Dictionary<string, object?> { ["userId"] = "" });
 
         var form = Controls.Stack.WithWidth("100%").WithStyle("gap: 12px;");
 
-        form = form.WithView(new TextFieldControl(new JsonPointerReference("adminUsers"))
-        {
-            Label = "Admin User IDs",
-            Placeholder = "e.g., Roland\nAlice\nadmin@company.com",
-            DataContext = LayoutAreaReference.GetDataPointer(dataId)
-        });
+        form = form.WithView(Controls.Html(
+            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin: 0;\">" +
+            "Platform admins are managed via AccessAssignment nodes in the Admin namespace " +
+            "with the <strong>PlatformAdmin</strong> role. Use the Access Control settings on the Admin node, " +
+            "or add a new admin below.</p>"));
 
-        // Save button
-        form = form.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("margin-top: 12px; gap: 8px;")
-            .WithView(Controls.Button("Save Administrators")
+        // Add new admin
+        form = form.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("align-items: flex-end; gap: 12px;")
+            .WithView(new TextFieldControl(new JsonPointerReference("userId"))
+            {
+                Label = "User ID",
+                Placeholder = "e.g., Roland",
+                DataContext = LayoutAreaReference.GetDataPointer(dataId)
+            }.WithStyle("flex: 1;"))
+            .WithView(Controls.Button("Add Platform Admin")
                 .WithAppearance(Appearance.Accent)
                 .WithClickAction(ctx =>
                 {
@@ -412,20 +486,23 @@ public static class PlatformLayoutAreas
                         {
                             try
                             {
-                                var text = GetString(data, "adminUsers");
-                                var adminUsers = text
-                                    .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                                    .ToList();
+                                var userId = GetString(data, "userId").Trim();
+                                if (string.IsNullOrWhiteSpace(userId))
+                                {
+                                    ctx.Host.UpdateData("adminSaveResult",
+                                        "<p style=\"color: #f87171;\">Enter a user ID.</p>");
+                                    return;
+                                }
 
-                                await adminService.SaveAdminSettingsAsync(new AdminSettings { AdminUsers = adminUsers });
+                                await adminService.SavePlatformAdminAccessAsync(userId);
+                                ctx.Host.UpdateData(dataId, new Dictionary<string, object?> { ["userId"] = "" });
                                 ctx.Host.UpdateData("adminSaveResult",
-                                    "<p style=\"color: #4ade80;\">Administrators saved successfully.</p>");
+                                    $"<p style=\"color: #4ade80;\">PlatformAdmin role assigned to {Escape(userId)}.</p>");
                             }
                             catch (Exception ex)
                             {
                                 ctx.Host.UpdateData("adminSaveResult",
-                                    $"<p style=\"color: #f87171;\">Save failed: {Escape(ex.Message)}</p>");
+                                    $"<p style=\"color: #f87171;\">Failed: {Escape(ex.Message)}</p>");
                             }
                         });
                 })));

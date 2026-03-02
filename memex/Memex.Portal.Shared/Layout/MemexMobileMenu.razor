@@ -1,6 +1,7 @@
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
 @using Memex.Portal.Shared.Admin
 @using MeshWeaver.Blazor.Infrastructure
+@using MeshWeaver.Mesh.Security
 @using MeshWeaver.Mesh.Services
 @using Microsoft.Extensions.DependencyInjection
 @implements IDisposable
@@ -52,8 +53,8 @@
         try
         {
             var portalApp = ServiceProvider.GetService<PortalApplication>();
-            var persistence = portalApp?.Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
+            var securityService = portalApp?.Hub.ServiceProvider.GetService<ISecurityService>();
+            if (securityService == null)
                 return;
 
             var authState = AuthState != null ? await AuthState : null;
@@ -63,8 +64,7 @@
             if (string.IsNullOrEmpty(userId))
                 return;
 
-            var adminService = new AdminService(persistence);
-            isAdmin = await adminService.IsAdminAsync(userId, cts.Token);
+            isAdmin = await AdminService.IsAdminAsync(securityService, userId, cts.Token);
         }
         catch
         {

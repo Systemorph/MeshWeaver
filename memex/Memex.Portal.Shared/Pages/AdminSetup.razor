@@ -3,7 +3,6 @@
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Mesh.Services
 @using Microsoft.Extensions.DependencyInjection
-@using AdminSettingsModel = Memex.Portal.Shared.Admin.AdminSettings
 @inject NavigationManager Navigation
 @inject IServiceProvider ServiceProvider
 
@@ -79,8 +78,8 @@
                                     <FluentTextField @bind-Value="entry.AppId" Placeholder="e.g., 12345678-abcd-..." Style="width: 100%;" />
                                 </div>
                                 <div class="field-group">
-                                    <label>KeyVault Secret Name</label>
-                                    <FluentTextField @bind-Value="entry.KeyVaultSecretName" Placeholder="@($"e.g., memex-{providerName.ToLowerInvariant()}-client-secret")" Style="width: 100%;" />
+                                    <label>Client Secret (KeyVault Secret Name)</label>
+                                    <FluentTextField @bind-Value="entry.KeyVaultClientSecretName" Placeholder="@($"e.g., memex-{providerName.ToLowerInvariant()}-client-secret")" Style="width: 100%;" />
                                 </div>
                                 @if (def.HasTenantId)
                                 {
@@ -191,7 +190,7 @@
                     {
                         Enabled = true,
                         AppId = entry.AppId ?? "",
-                        KeyVaultSecretName = entry.KeyVaultSecretName ?? "",
+                        KeyVaultClientSecretName = entry.KeyVaultClientSecretName ?? "",
                         TenantId = string.IsNullOrWhiteSpace(entry.TenantId) ? null : entry.TenantId
                     };
                 }
@@ -210,11 +209,9 @@
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var adminSettingsObj = new AdminSettingsModel { AdminUsers = adminUsers };
-
             // Use "setup" as the initializer ID (no user may be logged in yet)
             var userId = "setup";
-            await adminService.InitializeAsync(userId, authSettings, adminSettingsObj);
+            await adminService.InitializeAsync(userId, authSettings, adminUsers);
 
             successMessage = "Setup complete! Redirecting...";
             StateHasChanged();
@@ -249,7 +246,7 @@
     {
         public bool Enabled { get; set; }
         public string? AppId { get; set; }
-        public string? KeyVaultSecretName { get; set; }
+        public string? KeyVaultClientSecretName { get; set; }
         public string? TenantId { get; set; }
     }
 }

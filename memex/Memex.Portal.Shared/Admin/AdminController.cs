@@ -1,5 +1,3 @@
-using Azure.Identity;
-using Azure.Security.KeyVault.Secrets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -14,14 +12,17 @@ namespace Memex.Portal.Shared.Admin;
 [ApiController]
 [Route("api/admin")]
 [Authorize]
-public class AdminController(IConfiguration configuration, ILogger<AdminController> logger) : ControllerBase
+public class AdminController(
+    IConfiguration configuration,
+    IKeyVaultService keyVaultService,
+    ILogger<AdminController> logger) : ControllerBase
 {
     /// <summary>
     /// Lists secret names from the configured Azure KeyVault.
     /// Used by the setup wizard to let admins pick secret names for auth providers.
     /// </summary>
     [HttpGet("keyvault/secrets")]
-    public IActionResult ListKeyVaultSecrets([FromQuery] string? vaultUri = null)
+    public async Task<IActionResult> ListKeyVaultSecrets([FromQuery] string? vaultUri = null)
     {
         var effectiveUri = vaultUri ?? configuration["KeyVault:Uri"];
         if (string.IsNullOrWhiteSpace(effectiveUri))
@@ -35,16 +36,7 @@ public class AdminController(IConfiguration configuration, ILogger<AdminControll
 
         try
         {
-            var client = new SecretClient(new Uri(effectiveUri), new DefaultAzureCredential());
-            var secretNames = new List<string>();
-
-            foreach (var secret in client.GetPropertiesOfSecrets())
-            {
-                if (secret.Enabled == true)
-                    secretNames.Add(secret.Name);
-            }
-
-            secretNames.Sort(StringComparer.OrdinalIgnoreCase);
+            var secretNames = await keyVaultService.ListSecretsAsync(effectiveUri);
 
             return Ok(new KeyVaultSecretsResponse
             {

@@ -35,7 +35,8 @@ public class SecurityService : ISecurityService
         { "Admin", Role.Admin },
         { "Editor", Role.Editor },
         { "Viewer", Role.Viewer },
-        { "Commenter", Role.Commenter }
+        { "Commenter", Role.Commenter },
+        { "PlatformAdmin", Role.PlatformAdmin }
     };
 
     // Cache for custom roles

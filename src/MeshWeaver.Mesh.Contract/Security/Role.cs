@@ -80,4 +80,18 @@ public record Role
         Permissions = Permission.Read | Permission.Comment,
         IsInheritable = true
     };
+
+    /// <summary>
+    /// Built-in Platform Administrator role.
+    /// Grants access to platform-level settings (auth providers, admin configuration).
+    /// Assigned in the Admin namespace via standard AccessAssignment nodes.
+    /// </summary>
+    public static Role PlatformAdmin => new()
+    {
+        Id = "PlatformAdmin",
+        DisplayName = "Platform Admin",
+        Description = "Full access to platform settings and administration",
+        Permissions = Permission.All,
+        IsInheritable = true
+    };
 }

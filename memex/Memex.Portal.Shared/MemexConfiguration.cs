@@ -109,6 +109,9 @@ public static class MemexConfiguration
         services.AddSignalR();
         services.AddControllers();
 
+        // Azure Key Vault service for secret browsing and resolution
+        services.AddSingleton<IKeyVaultService, KeyVaultService>();
+
         services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
 
@@ -373,7 +376,6 @@ public static class MemexConfiguration
                         typeRegistry.WithType(typeof(InitializationContent), nameof(InitializationContent));
                         typeRegistry.WithType(typeof(AuthProviderSettings), nameof(AuthProviderSettings));
                         typeRegistry.WithType(typeof(AuthProviderEntry), nameof(AuthProviderEntry));
-                        typeRegistry.WithType(typeof(AdminSettings), nameof(AdminSettings));
                     }
                     return services;
                 })

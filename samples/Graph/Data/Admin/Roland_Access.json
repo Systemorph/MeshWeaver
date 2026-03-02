@@ -1,0 +1,18 @@
+{
+  "id": "Roland_Access",
+  "namespace": "Admin",
+  "name": "Roland Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "state": "Active",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Roland",
+    "displayName": "Roland Buergi",
+    "roles": [
+      {
+        "role": "PlatformAdmin"
+      }
+    ]
+  }
+}
