@@ -6,16 +6,14 @@ using MeshWeaver.Mesh.Services;
 namespace Memex.Portal.Shared.Admin;
 
 /// <summary>
-/// Service providing typed access to Admin namespace nodes via IPersistenceService.
-/// Platform admin checks use standard AccessAssignment nodes with the PlatformAdmin role.
+/// Service providing typed access to the Admin node (nodeType "Platform")
+/// and its PlatformSettings content via IPersistenceService.
 /// </summary>
 public class AdminService
 {
     private readonly IPersistenceService _persistence;
 
-    public const string AdminNamespace = "Admin";
-    public const string InitializationPath = "Admin/Initialization";
-    public const string AuthProvidersPath = "Admin/AuthProviders";
+    public const string AdminPath = "Admin";
 
     public AdminService(IPersistenceService persistence)
     {
@@ -24,51 +22,47 @@ public class AdminService
 
     public async Task<bool> IsInitializedAsync(CancellationToken ct = default)
     {
-        return await _persistence.ExistsAsync(InitializationPath, ct);
+        var node = await _persistence.GetNodeAsync(AdminPath, ct);
+        return node?.Content != null;
     }
 
-    public async Task<InitializationContent?> GetInitializationAsync(CancellationToken ct = default)
+    public async Task<PlatformSettings> GetPlatformSettingsAsync(CancellationToken ct = default)
     {
-        var node = await _persistence.GetNodeAsync(InitializationPath, ct);
-        return DeserializeContent<InitializationContent>(node?.Content);
+        var node = await _persistence.GetNodeAsync(AdminPath, ct);
+        return DeserializeContent<PlatformSettings>(node?.Content) ?? new PlatformSettings();
+    }
+
+    public async Task SavePlatformSettingsAsync(PlatformSettings settings, CancellationToken ct = default)
+    {
+        // Only persist providers that are actually configured
+        var filteredProviders = settings.Providers
+            .Where(kv => !string.IsNullOrWhiteSpace(kv.Value.AppId))
+            .ToDictionary(kv => kv.Key, kv => kv.Value);
+
+        var filtered = settings with { Providers = filteredProviders };
+
+        await _persistence.SaveNodeAsync(new MeshNode(AdminPath)
+        {
+            Name = "Platform",
+            NodeType = PlatformNodeType.NodeType,
+            State = MeshNodeState.Active,
+            Content = filtered
+        }, ct);
     }
 
     public async Task InitializeAsync(
         string userId,
-        AuthProviderSettings? authProviders = null,
+        PlatformSettings? settings = null,
         List<string>? adminUsers = null,
         CancellationToken ct = default)
     {
-        // Create Admin namespace node if it doesn't exist
-        if (!await _persistence.ExistsAsync(AdminNamespace, ct))
+        var platformSettings = (settings ?? new PlatformSettings()) with
         {
-            await _persistence.SaveNodeAsync(new MeshNode(AdminNamespace)
-            {
-                Name = "Admin",
-                NodeType = "Markdown",
-                State = MeshNodeState.Active
-            }, ct);
-        }
-
-        // Create Initialization node
-        var content = new InitializationContent
-        {
-            Version = "3.0",
             InitializedAt = DateTimeOffset.UtcNow,
             InitializedBy = userId
         };
 
-        await _persistence.SaveNodeAsync(new MeshNode("Initialization", AdminNamespace)
-        {
-            Name = "Initialization",
-            NodeType = "Markdown",
-            State = MeshNodeState.Active,
-            Content = content
-        }, ct);
-
-        // Create AuthProviders node
-        await SaveAuthProviderSettingsAsync(
-            authProviders ?? new AuthProviderSettings { EnableDevLogin = true }, ct);
+        await SavePlatformSettingsAsync(platformSettings, ct);
 
         // Create PlatformAdmin access assignments for admin users
         var users = adminUsers ?? [userId];
@@ -78,32 +72,12 @@ public class AdminService
         }
     }
 
-    public async Task<AuthProviderSettings> GetAuthProviderSettingsAsync(CancellationToken ct = default)
-    {
-        var node = await _persistence.GetNodeAsync(AuthProvidersPath, ct);
-        return DeserializeContent<AuthProviderSettings>(node?.Content)
-               ?? new AuthProviderSettings();
-    }
-
-    public async Task SaveAuthProviderSettingsAsync(AuthProviderSettings settings, CancellationToken ct = default)
-    {
-        await _persistence.SaveNodeAsync(new MeshNode("AuthProviders", AdminNamespace)
-        {
-            Name = "Auth Providers",
-            NodeType = "Markdown",
-            State = MeshNodeState.Active,
-            Content = settings
-        }, ct);
-    }
-
     /// <summary>
-    /// Checks if a user is a platform admin by looking for a PlatformAdmin role
-    /// assignment in the Admin namespace via ISecurityService.
+    /// Checks if a user is a platform admin via ISecurityService.
     /// </summary>
     public static async Task<bool> IsAdminAsync(ISecurityService securityService, string userId, CancellationToken ct = default)
     {
-        var permissions = await securityService.HasPermissionAsync(AdminNamespace, userId, Permission.All, ct);
-        return permissions;
+        return await securityService.HasPermissionAsync(AdminPath, userId, Permission.All, ct);
     }
 
     /// <summary>
@@ -112,7 +86,7 @@ public class AdminService
     public async Task SavePlatformAdminAccessAsync(string userId, CancellationToken ct = default)
     {
         var nodeId = $"{userId}_Access";
-        await _persistence.SaveNodeAsync(new MeshNode(nodeId, AdminNamespace)
+        await _persistence.SaveNodeAsync(new MeshNode(nodeId, AdminPath)
         {
             Name = $"{userId} Access",
             NodeType = "AccessAssignment",

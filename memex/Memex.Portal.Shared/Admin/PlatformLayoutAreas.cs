@@ -141,18 +141,18 @@ public static class PlatformLayoutAreas
             return Observable.FromAsync(async ct =>
             {
                 var adminService = new AdminService(persistence);
-                var init = await adminService.GetInitializationAsync(ct);
+                var settings = await adminService.GetPlatformSettingsAsync(ct);
 
                 var html = "<div style=\"display: grid; grid-template-columns: auto 1fr; gap: 8px 24px; max-width: 500px;\">";
 
                 html += "<span style=\"font-weight: 600; color: var(--neutral-foreground-hint);\">Version</span>";
-                html += $"<span>{init?.Version ?? "Unknown"}</span>";
+                html += $"<span>{settings.Version}</span>";
 
                 html += "<span style=\"font-weight: 600; color: var(--neutral-foreground-hint);\">Initialized At</span>";
-                html += $"<span>{(init is { InitializedAt: var ts } && ts != default ? ts.ToString("yyyy-MM-dd HH:mm:ss UTC") : "N/A")}</span>";
+                html += $"<span>{(settings.InitializedAt != default ? settings.InitializedAt.ToString("yyyy-MM-dd HH:mm:ss UTC") : "N/A")}</span>";
 
                 html += "<span style=\"font-weight: 600; color: var(--neutral-foreground-hint);\">Initialized By</span>";
-                html += $"<span>{init?.InitializedBy ?? "N/A"}</span>";
+                html += $"<span>{settings.InitializedBy ?? "N/A"}</span>";
 
                 html += "<span style=\"font-weight: 600; color: var(--neutral-foreground-hint);\">Storage Type</span>";
                 html += $"<span>{h.Hub.ServiceProvider.GetService<Microsoft.Extensions.Configuration.IConfiguration>()?["Graph:Storage:Type"] ?? "FileSystem"}</span>";
@@ -185,8 +185,8 @@ public static class PlatformLayoutAreas
             return Observable.FromAsync(async ct =>
             {
                 var adminService = new AdminService(persistence);
-                var settings = await adminService.GetAuthProviderSettingsAsync(ct);
-                return (UiControl?)BuildAuthProvidersForm(h, settings, adminService);
+                var platformSettings = await adminService.GetPlatformSettingsAsync(ct);
+                return (UiControl?)BuildAuthProvidersForm(h, platformSettings, adminService);
             });
         });
 
@@ -197,7 +197,7 @@ public static class PlatformLayoutAreas
 
     private static UiControl BuildAuthProvidersForm(
         LayoutAreaHost host,
-        AuthProviderSettings settings,
+        PlatformSettings settings,
         AdminService adminService)
     {
         const string dataId = "platformAuthProviders";
@@ -213,7 +213,7 @@ public static class PlatformLayoutAreas
         {
             var name = def.Name;
             var entry = settings.Providers.GetValueOrDefault(name);
-            formData[$"{name}_enabled"] = entry?.Enabled ?? false;
+            formData[$"{name}_enabled"] = entry != null;
             formData[$"{name}_appId"] = entry?.AppId ?? "";
             formData[$"{name}_clientSecretName"] = entry?.KeyVaultClientSecretName ?? "";
             formData[$"{name}_tenantId"] = entry?.TenantId ?? "";
@@ -312,8 +312,8 @@ public static class PlatformLayoutAreas
                         {
                             try
                             {
-                                var updated = BuildAuthProviderSettings(data);
-                                await adminService.SaveAuthProviderSettingsAsync(updated);
+                                var updated = BuildPlatformSettingsFromForm(data);
+                                await adminService.SavePlatformSettingsAsync(updated);
                                 ctx.Host.UpdateData("platformSaveResult",
                                     "<p style=\"color: #4ade80;\">Auth providers saved. Restart the application for changes to take effect.</p>");
                             }
@@ -336,10 +336,10 @@ public static class PlatformLayoutAreas
         return form;
     }
 
-    private static AuthProviderSettings BuildAuthProviderSettings(Dictionary<string, object?>? data)
+    private static PlatformSettings BuildPlatformSettingsFromForm(Dictionary<string, object?>? data)
     {
         if (data == null)
-            return new AuthProviderSettings();
+            return new PlatformSettings();
 
         var providers = new Dictionary<string, AuthProviderEntry>();
         foreach (var def in OAuthProviderDefinitions.All.Values)
@@ -350,7 +350,6 @@ public static class PlatformLayoutAreas
             {
                 providers[name] = new AuthProviderEntry
                 {
-                    Enabled = true,
                     AppId = GetString(data, $"{name}_appId"),
                     KeyVaultClientSecretName = GetString(data, $"{name}_clientSecretName"),
                     TenantId = NullIfEmpty(GetString(data, $"{name}_tenantId"))
@@ -358,7 +357,7 @@ public static class PlatformLayoutAreas
             }
         }
 
-        return new AuthProviderSettings
+        return new PlatformSettings
         {
             EnableDevLogin = GetBool(data, "enableDevLogin"),
             KeyVaultUri = NullIfEmpty(GetString(data, "keyVaultUri")),

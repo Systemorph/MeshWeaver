@@ -139,14 +139,14 @@ public static class MemexConfiguration
 #pragma warning disable CA1416
         var startupLogger = LoggerFactory.Create(lb => lb.AddConsole()).CreateLogger("AdminStartup");
 #pragma warning restore CA1416
-        var adminAuthProviders = AdminStartupReader.ReadAuthProviders(builder.Configuration, startupLogger);
-        if (adminAuthProviders != null)
+        var platformSettings = AdminStartupReader.ReadPlatformSettings(builder.Configuration, startupLogger);
+        if (platformSettings != null)
         {
-            enableDevLogin = adminAuthProviders.EnableDevLogin;
+            enableDevLogin = platformSettings.EnableDevLogin;
 
             // Resolve KeyVault secrets into ExternalProviderConfig list
             var keyVaultUri = builder.Configuration["KeyVault:Uri"];
-            externalProviders = AdminStartupReader.ResolveProviders(adminAuthProviders, keyVaultUri, startupLogger);
+            externalProviders = AdminStartupReader.ResolveProviders(platformSettings, keyVaultUri, startupLogger);
 
             if (externalProviders.Count > 0)
                 provider = AuthenticationProviders.Custom; // Force unified cookie-based auth
@@ -373,8 +373,7 @@ public static class MemexConfiguration
                     var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
                     if (typeRegistry != null)
                     {
-                        typeRegistry.WithType(typeof(InitializationContent), nameof(InitializationContent));
-                        typeRegistry.WithType(typeof(AuthProviderSettings), nameof(AuthProviderSettings));
+                        typeRegistry.WithType(typeof(PlatformSettings), nameof(PlatformSettings));
                         typeRegistry.WithType(typeof(AuthProviderEntry), nameof(AuthProviderEntry));
                     }
                     return services;

@@ -180,23 +180,22 @@
 
             var adminService = new AdminService(persistence);
 
-            // Build auth provider settings
+            // Build platform settings with auth providers
             var providers = new Dictionary<string, AuthProviderEntry>();
             foreach (var (name, entry) in providerEntries)
             {
-                if (entry.Enabled)
+                if (entry.Enabled && !string.IsNullOrWhiteSpace(entry.AppId))
                 {
                     providers[name] = new AuthProviderEntry
                     {
-                        Enabled = true,
-                        AppId = entry.AppId ?? "",
+                        AppId = entry.AppId,
                         KeyVaultClientSecretName = entry.KeyVaultClientSecretName ?? "",
                         TenantId = string.IsNullOrWhiteSpace(entry.TenantId) ? null : entry.TenantId
                     };
                 }
             }
 
-            var authSettings = new AuthProviderSettings
+            var platformSettings = new PlatformSettings
             {
                 EnableDevLogin = enableDevLogin,
                 KeyVaultUri = string.IsNullOrWhiteSpace(keyVaultUri) ? null : keyVaultUri.Trim(),
@@ -211,7 +210,7 @@
 
             // Use "setup" as the initializer ID (no user may be logged in yet)
             var userId = "setup";
-            await adminService.InitializeAsync(userId, authSettings, adminUsers);
+            await adminService.InitializeAsync(userId, platformSettings, adminUsers);
 
             successMessage = "Setup complete! Redirecting...";
             StateHasChanged();
