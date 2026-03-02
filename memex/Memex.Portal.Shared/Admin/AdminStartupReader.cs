@@ -75,19 +75,11 @@ public static class AdminStartupReader
             if (!entry.Enabled || string.IsNullOrWhiteSpace(entry.AppId))
                 continue;
 
+            // Resolve Client Secret from KeyVault
             var clientSecret = "";
-            if (secretClient != null && !string.IsNullOrWhiteSpace(entry.KeyVaultSecretName))
+            if (secretClient != null && !string.IsNullOrWhiteSpace(entry.KeyVaultClientSecretName))
             {
-                try
-                {
-                    var response = secretClient.GetSecret(entry.KeyVaultSecretName);
-                    clientSecret = response.Value.Value;
-                    logger?.LogInformation("Resolved KeyVault secret '{SecretName}' for provider {Provider}.", entry.KeyVaultSecretName, name);
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogWarning(ex, "Failed to resolve KeyVault secret '{SecretName}' for provider {Provider}. Provider will be registered without a client secret.", entry.KeyVaultSecretName, name);
-                }
+                clientSecret = ResolveSecret(secretClient, entry.KeyVaultClientSecretName, name, "ClientSecret", logger) ?? "";
             }
 
             result.Add(new ExternalProviderConfig
@@ -101,6 +93,21 @@ public static class AdminStartupReader
         }
 
         return result;
+    }
+
+    private static string? ResolveSecret(SecretClient secretClient, string secretName, string providerName, string fieldName, ILogger? logger)
+    {
+        try
+        {
+            var response = secretClient.GetSecret(secretName);
+            logger?.LogInformation("Resolved KeyVault secret '{SecretName}' for provider {Provider} ({Field}).", secretName, providerName, fieldName);
+            return response.Value.Value;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Failed to resolve KeyVault secret '{SecretName}' for provider {Provider} ({Field}).", secretName, providerName, fieldName);
+            return null;
+        }
     }
 
     private static AuthProviderSettings? ReadFromFileSystem(IConfiguration config, ILogger? logger)

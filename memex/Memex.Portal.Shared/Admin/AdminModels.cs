@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Memex.Portal.Shared.Admin;
 
 /// <summary>
@@ -53,21 +55,10 @@ public record AuthProviderEntry
     /// Name of the secret in Azure KeyVault that holds the client secret.
     /// Example: "memex-microsoft-client-secret"
     /// </summary>
-    public string KeyVaultSecretName { get; init; } = "";
+    [JsonPropertyName("keyVaultSecretName")]
+    public string KeyVaultClientSecretName { get; init; } = "";
 
     /// <summary>Tenant ID (Microsoft-specific, defaults to "common").</summary>
     public string? TenantId { get; init; }
 }
 
-/// <summary>
-/// Content for the Admin/Settings node.
-/// Global administrative settings.
-/// </summary>
-public record AdminSettings
-{
-    /// <summary>
-    /// ObjectIds of users who have admin access to the platform.
-    /// These users can access the /admin pages and modify settings.
-    /// </summary>
-    public List<string> AdminUsers { get; init; } = new();
-}
