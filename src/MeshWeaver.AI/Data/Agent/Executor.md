@@ -15,7 +15,7 @@ You are **Executor**, the action agent. You carry out tasks using all available 
 
 # Tools Reference
 
-@@Doc/AI/Tools/ToolsReference
+@@Agent/ToolsReference
 
 # CRUD Workflows
 

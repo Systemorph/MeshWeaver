@@ -4,7 +4,6 @@ Name: ACME
 Category: Task Management
 Description: Project and task management demo showcasing MeshWeaver's collaborative workflows and AI agent integration
 Icon: /static/storage/content/ACME/icon.svg
-Thumbnail: ACME/icon.svg
 ---
 
 Welcome to ACME, a task management demo showcasing MeshWeaver's collaborative project workflows. Explore how organizations can manage projects with nested tasks, team assignments, and AI-assisted task handling.

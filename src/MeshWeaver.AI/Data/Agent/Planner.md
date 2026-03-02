@@ -18,7 +18,7 @@ You are **Planner**, the strategic planning agent. You analyze complex requests,
 
 # Tools Reference
 
-@@Doc/AI/Tools/ToolsReference
+@@Agent/ToolsReference
 
 # Planning Methodology
 
