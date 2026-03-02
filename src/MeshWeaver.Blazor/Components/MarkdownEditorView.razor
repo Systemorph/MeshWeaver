@@ -1,5 +1,6 @@
 @using MeshWeaver.Blazor
 @using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Data
 @using MeshWeaver.Data.Completion
 @using MeshWeaver.Layout.Client
 @using MeshWeaver.Markdown
@@ -481,13 +482,18 @@
 
     private void AutoSaveContent(string content)
     {
+        _ = AutoSaveContentAsync(content);
+    }
+
+    private async Task<bool> AutoSaveContentAsync(string content)
+    {
         if (ValuePointer != null)
         {
             UpdatePointer(content, ValuePointer);
         }
 
         if (string.IsNullOrEmpty(BoundAutoSaveAddress) || string.IsNullOrEmpty(BoundNodePath))
-            return;
+            return true;
 
         try
         {
@@ -497,15 +503,25 @@
                 Content = new MarkdownContent { Content = content }
             };
 
-            Hub.Post(
+            var response = await Hub.AwaitResponse(
                 new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
-                o => o.WithTarget(new Address(BoundAutoSaveAddress)));
+                o => o.WithTarget(new Address(BoundAutoSaveAddress)),
+                default);
+
+            if (response.Message is DataChangeResponse dcr && dcr.Status != DataChangeStatus.Committed)
+            {
+                Logger.LogWarning("Auto-save rejected for node {Path}: {Message}",
+                    BoundNodePath, dcr.Log.Messages.LastOrDefault()?.Message);
+                return false;
+            }
 
             Logger.LogDebug("Auto-saved content to {Address} for node {Path}", BoundAutoSaveAddress, BoundNodePath);
+            return true;
         }
         catch (Exception ex)
         {
             Logger.LogWarning(ex, "Failed to auto-save content to {Address}", BoundAutoSaveAddress);
+            return false;
         }
     }
 
@@ -566,6 +582,8 @@
 
     private async Task UpdateContent(string newAnnotatedContent)
     {
+        var previousContent = AnnotatedContent;
+
         SetAnnotatedContent(newAnnotatedContent);
         ExtractAnnotations(newAnnotatedContent);
         UpdatePreview(newAnnotatedContent);
@@ -584,7 +602,23 @@
         }
 
         // Auto-save immediately for annotation operations (no debounce)
-        AutoSaveContent(newAnnotatedContent);
+        var success = await AutoSaveContentAsync(newAnnotatedContent);
+        if (!success)
+        {
+            // Revert to previous state on server rejection
+            SetAnnotatedContent(previousContent);
+            ExtractAnnotations(previousContent);
+            UpdatePreview(previousContent);
+
+            if (ValuePointer != null)
+                UpdatePointer(previousContent, ValuePointer);
+
+            if (editorRef != null)
+            {
+                await editorRef.SetValueSuppressTrackingAsync(BoundValue);
+                await editorRef.UpdateAnnotationDecorationsAsync(BuildJsRanges());
+            }
+        }
 
         StateHasChanged();
     }

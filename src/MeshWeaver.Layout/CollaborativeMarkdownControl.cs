@@ -28,8 +28,14 @@ public record CollaborativeMarkdownControl()
     /// </summary>
     public bool CanComment { get; init; }
 
+    /// <summary>
+    /// Whether the current user can accept/reject tracked changes.
+    /// </summary>
+    public bool CanEdit { get; init; }
+
     public CollaborativeMarkdownControl WithValue(string value) => this with { Value = value };
     public CollaborativeMarkdownControl WithNodePath(string nodePath) => this with { NodePath = nodePath };
     public CollaborativeMarkdownControl WithHubAddress(string hubAddress) => this with { HubAddress = hubAddress };
     public CollaborativeMarkdownControl WithCanComment(bool canComment) => this with { CanComment = canComment };
+    public CollaborativeMarkdownControl WithCanEdit(bool canEdit) => this with { CanEdit = canEdit };
 }

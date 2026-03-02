@@ -90,14 +90,17 @@
                 <FluentOption Value="Original">Original</FluentOption>
             </FluentSelect>
 
-            <div class="collab-md-toolbar-separator"></div>
+            @if (BoundCanEdit)
+            {
+                <div class="collab-md-toolbar-separator"></div>
 
-            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
-                          OnClick="@OnAcceptAll"
-                          Style="color: var(--annotation-insert-border); font-size: 0.85rem;">Accept All</FluentButton>
-            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
-                          OnClick="@OnRejectAll"
-                          Style="color: var(--annotation-delete-border); font-size: 0.85rem;">Reject All</FluentButton>
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                              OnClick="@OnAcceptAll"
+                              Style="color: var(--annotation-insert-border); font-size: 0.85rem;">Accept All</FluentButton>
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                              OnClick="@OnRejectAll"
+                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">Reject All</FluentButton>
+            }
         </div>
     }
 
@@ -133,10 +136,13 @@
                                     }
                                     <span class="collab-md-time">@GetTypeLabel(ann.Type)@(!string.IsNullOrEmpty(ann.Date) ? $" · {ann.Date}" : "")</span>
                                 </div>
-                                <div class="collab-md-card-actions">
-                                    <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(ann.Id)" @onclick:stopPropagation="true">✓</button>
-                                    <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(ann.Id)" @onclick:stopPropagation="true">✗</button>
-                                </div>
+                                @if (BoundCanEdit)
+                                {
+                                    <div class="collab-md-card-actions">
+                                        <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(ann.Id)" @onclick:stopPropagation="true">✓</button>
+                                        <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(ann.Id)" @onclick:stopPropagation="true">✗</button>
+                                    </div>
+                                }
                             </div>
                             @if (!string.IsNullOrEmpty(ann.HighlightedText))
                             {

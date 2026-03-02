@@ -169,7 +169,15 @@ public static class SettingsLayoutArea
         if (matchedItem == null)
             return stack.WithView(Controls.Html("<p><em>No settings tabs available.</em></p>"));
 
-        return matchedItem.ContentBuilder(host, stack, node);
+        try
+        {
+            return matchedItem.ContentBuilder(host, stack, node);
+        }
+        catch (Exception ex)
+        {
+            return stack.WithView(Controls.Html(
+                $"<p style=\"color: var(--warning-color);\">Failed to load tab: {System.Web.HttpUtility.HtmlEncode(ex.Message)}</p>"));
+        }
     }
 
     #region Default Tab Content Builders

@@ -770,6 +770,144 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
 
     #endregion
 
+    #region JSON + index.md Split Pattern Tests
+
+    [Fact]
+    public async Task Read_JsonWithIndexMd_MergesMarkdownContent()
+    {
+        // Arrange - Create X.json (registry) + X/index.md (content)
+        var dir = Path.Combine(_testDirectory, "org");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(_testDirectory, "org.json"), """
+            {
+                "id": "org",
+                "name": "My Organization",
+                "nodeType": "Organization",
+                "category": "Demo",
+                "isPersistent": true
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(dir, "index.md"), """
+            # Welcome to My Organization
+
+            This is the landing page content.
+            """);
+
+        // Act
+        var node = await _storageAdapter.ReadAsync("org", JsonOptions);
+
+        // Assert - JSON metadata preserved AND markdown content merged
+        node.Should().NotBeNull();
+        node!.Name.Should().Be("My Organization");
+        node.NodeType.Should().Be("Organization");
+        node.Category.Should().Be("Demo");
+        node.Content.Should().BeOfType<MarkdownContent>();
+        var mc = (MarkdownContent)node.Content!;
+        mc.Content.Should().Contain("# Welcome to My Organization");
+        node.PreRenderedHtml.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task Read_JsonWithTypedContent_IgnoresIndexMd()
+    {
+        // Arrange - JSON with any content (non-null) + index.md should NOT merge
+        var dir = Path.Combine(_testDirectory, "typed");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(_testDirectory, "typed.json"), """
+            {
+                "id": "typed",
+                "name": "Typed Node",
+                "nodeType": "Organization",
+                "content": {"name":"Typed Org","website":"https://example.com"}
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(dir, "index.md"), "# From index.md — should be ignored");
+
+        // Act
+        var node = await _storageAdapter.ReadAsync("typed", JsonOptions);
+
+        // Assert - Content should remain from JSON, not overwritten by index.md
+        node.Should().NotBeNull();
+        node!.Content.Should().NotBeNull();
+        node.Content.Should().NotBeOfType<MarkdownContent>();
+    }
+
+    [Fact]
+    public async Task ListChildren_SkipsIndexFiles()
+    {
+        // Arrange - Directory with index.md and other files
+        var dir = Path.Combine(_testDirectory, "parent");
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "index.md"), "# Parent content");
+        await File.WriteAllTextAsync(Path.Combine(dir, "child1.json"), """{"id":"child1","name":"Child 1"}""");
+        await File.WriteAllTextAsync(Path.Combine(dir, "child2.md"), "# Child 2");
+
+        // Act
+        var (nodePaths, _) = await _storageAdapter.ListChildPathsAsync("parent");
+
+        // Assert - index should NOT appear as a child
+        var paths = nodePaths.ToList();
+        paths.Should().Contain("parent/child1");
+        paths.Should().Contain("parent/child2");
+        paths.Should().NotContain("parent/index");
+    }
+
+    [Fact]
+    public async Task Write_SplitPattern_UpdatesBothFiles()
+    {
+        // Arrange - Create both X.json and X/index.md
+        var dir = Path.Combine(_testDirectory, "split");
+        Directory.CreateDirectory(dir);
+        var jsonPath = Path.Combine(_testDirectory, "split.json");
+        var indexPath = Path.Combine(dir, "index.md");
+        await File.WriteAllTextAsync(jsonPath, """
+            {
+                "id": "split",
+                "name": "Original Name",
+                "nodeType": "Organization"
+            }
+            """);
+        await File.WriteAllTextAsync(indexPath, "# Original content");
+
+        // Act - Write node with updated name and content
+        var node = MeshNode.FromPath("split") with
+        {
+            Name = "Updated Name",
+            NodeType = "Organization",
+            Content = new MarkdownContent { Content = "# Updated content" }
+        };
+        await _storageAdapter.WriteAsync(node, JsonOptions);
+
+        // Assert - both files should be updated
+        var jsonContent = await File.ReadAllTextAsync(jsonPath);
+        jsonContent.Should().Contain("Updated Name");
+        jsonContent.Should().NotContain("Updated content"); // Content goes to index.md
+
+        var mdContent = await File.ReadAllTextAsync(indexPath);
+        mdContent.Should().Contain("# Updated content");
+    }
+
+    [Fact]
+    public async Task Delete_SplitPattern_DeletesBothFiles()
+    {
+        // Arrange
+        var dir = Path.Combine(_testDirectory, "deltest");
+        Directory.CreateDirectory(dir);
+        var jsonPath = Path.Combine(_testDirectory, "deltest.json");
+        var indexPath = Path.Combine(dir, "index.md");
+        await File.WriteAllTextAsync(jsonPath, """{"id":"deltest","name":"To Delete"}""");
+        await File.WriteAllTextAsync(indexPath, "# Content to delete");
+
+        // Act
+        await _storageAdapter.DeleteAsync("deltest");
+
+        // Assert
+        File.Exists(jsonPath).Should().BeFalse();
+        File.Exists(indexPath).Should().BeFalse();
+    }
+
+    #endregion
+
     #region Format Priority Tests
 
     [Fact]

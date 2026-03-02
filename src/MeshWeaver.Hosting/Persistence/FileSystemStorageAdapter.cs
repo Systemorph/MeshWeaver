@@ -1,5 +1,6 @@
 ﻿using System.Text.Json;
 using MeshWeaver.Hosting.Persistence.Parsers;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -95,11 +96,39 @@ public class FileSystemStorageAdapter : IStorageAdapter
             node = node with { LastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero) };
         }
 
+        // Merge companion index.md content into JSON-sourced nodes that have no content
+        if (extension == ".json" && node.Content is null)
+        {
+            node = await MergeIndexMarkdownAsync(node, path, ct);
+        }
+
         return node;
     }
 
     public async Task WriteAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
+        // Check if this node uses the JSON + index.md split pattern
+        var existingJsonPath = GetFilePath(node.Path, ".json");
+        var splitNormalizedPath = node.Path.Trim('/');
+        var splitSegments = splitNormalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var splitRelativePath = string.Join(Path.DirectorySeparatorChar.ToString(), splitSegments);
+        var indexMdPath = Path.Combine(_baseDirectory, splitRelativePath, "index.md");
+
+        if (File.Exists(existingJsonPath) && File.Exists(indexMdPath) && node.Content is MarkdownContent mdContent)
+        {
+            // Split write: JSON registry (without markdown) + index.md (markdown body)
+            var jsonNode = node with { Content = null, PreRenderedHtml = null };
+            var jsonContent = JsonSerializer.Serialize(jsonNode, GetWriteOptions(options));
+            await File.WriteAllTextAsync(existingJsonPath, jsonContent, ct);
+
+            var indexDir = Path.GetDirectoryName(indexMdPath);
+            if (!string.IsNullOrEmpty(indexDir))
+                Directory.CreateDirectory(indexDir);
+            await File.WriteAllTextAsync(indexMdPath, mdContent.Content, ct);
+
+            return;
+        }
+
         string content;
         string extension;
 
@@ -142,6 +171,16 @@ public class FileSystemStorageAdapter : IStorageAdapter
             }
         }
 
+        // Also delete index.md if using split pattern
+        var delNormalizedPath = path.Trim('/');
+        var delSegments = delNormalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var delRelativePath = string.Join(Path.DirectorySeparatorChar.ToString(), delSegments);
+        var indexMdDelPath = Path.Combine(_baseDirectory, delRelativePath, "index.md");
+        if (File.Exists(indexMdDelPath))
+        {
+            File.Delete(indexMdDelPath);
+        }
+
         // Also try to clean up empty directories
         var basePath = GetFilePath(path, ".json");
         var directory = Path.GetDirectoryName(basePath);
@@ -175,6 +214,9 @@ public class FileSystemStorageAdapter : IStorageAdapter
             foreach (var file in Directory.GetFiles(directoryPath, $"*{ext}"))
             {
                 var name = Path.GetFileNameWithoutExtension(file);
+                // Skip index files — they represent the parent node's content, not a child
+                if (name.Equals("index", StringComparison.OrdinalIgnoreCase))
+                    continue;
                 var childPath = string.IsNullOrEmpty(parentPath) ? name : $"{parentPath}/{name}";
                 nodePaths.Add(childPath);
             }
@@ -244,6 +286,38 @@ public class FileSystemStorageAdapter : IStorageAdapter
         }
 
         return Task.FromResult<IEnumerable<string>>(partitionSubPaths);
+    }
+
+    /// <summary>
+    /// If a {path}/index.md file exists, parse it and set the node's Content
+    /// to MarkdownContent and populate PreRenderedHtml.
+    /// This supports the JSON registry + index.md split pattern.
+    /// </summary>
+    private async Task<MeshNode> MergeIndexMarkdownAsync(MeshNode node, string path, CancellationToken ct)
+    {
+        var normalizedPath = path.Trim('/');
+        var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var relativePath = string.Join(Path.DirectorySeparatorChar.ToString(), segments);
+        var indexMdPath = Path.Combine(_baseDirectory, relativePath, "index.md");
+
+        if (!File.Exists(indexMdPath))
+            return node;
+
+        var mdContent = await ReadFileWithSharingAsync(indexMdPath, ct);
+
+        var mdNode = await _parserRegistry.TryParseAsync(".md", indexMdPath, mdContent,
+            normalizedPath + "/index", ct);
+
+        if (mdNode?.Content is MarkdownContent markdownContent)
+        {
+            node = node with
+            {
+                Content = markdownContent,
+                PreRenderedHtml = markdownContent.PrerenderedHtml
+            };
+        }
+
+        return node;
     }
 
     #region Partition Storage

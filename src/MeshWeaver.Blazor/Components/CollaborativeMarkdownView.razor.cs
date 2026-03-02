@@ -30,6 +30,7 @@ public partial class CollaborativeMarkdownView
     private string? BoundNodePath;
     private string? BoundHubAddress;
     private bool BoundCanComment;
+    private bool BoundCanEdit;
 
     // Current user info
     private string CurrentAuthor = "";
@@ -63,6 +64,7 @@ public partial class CollaborativeMarkdownView
         BoundNodePath = ViewModel.NodePath;
         BoundHubAddress = ViewModel.HubAddress;
         BoundCanComment = ViewModel.CanComment;
+        BoundCanEdit = ViewModel.CanEdit;
 
         // Resolve current user for comment metadata
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
@@ -172,33 +174,41 @@ public partial class CollaborativeMarkdownView
     }
 
     // Accept/Reject individual changes
-    private void OnAcceptChange(string changeId)
+    private async Task OnAcceptChange(string changeId)
     {
         var newContent = AnnotationMarkdownExtension.AcceptChange(RawContent, changeId);
+        var previousContent = RawContent;
         UpdateContentLocally(newContent);
-        PostContentUpdate(newContent);
+        if (!await PostContentUpdateAsync(newContent))
+            RevertContent(previousContent);
     }
 
-    private void OnRejectChange(string changeId)
+    private async Task OnRejectChange(string changeId)
     {
         var newContent = AnnotationMarkdownExtension.RejectChange(RawContent, changeId);
+        var previousContent = RawContent;
         UpdateContentLocally(newContent);
-        PostContentUpdate(newContent);
+        if (!await PostContentUpdateAsync(newContent))
+            RevertContent(previousContent);
     }
 
     // Accept/Reject all
-    private void OnAcceptAll()
+    private async Task OnAcceptAll()
     {
         var newContent = AnnotationMarkdownExtension.GetAcceptedContent(RawContent);
+        var previousContent = RawContent;
         UpdateContentLocally(newContent);
-        PostContentUpdate(newContent);
+        if (!await PostContentUpdateAsync(newContent))
+            RevertContent(previousContent);
     }
 
-    private void OnRejectAll()
+    private async Task OnRejectAll()
     {
         var newContent = AnnotationMarkdownExtension.GetRejectedContent(RawContent);
+        var previousContent = RawContent;
         UpdateContentLocally(newContent);
-        PostContentUpdate(newContent);
+        if (!await PostContentUpdateAsync(newContent))
+            RevertContent(previousContent);
     }
 
     /// <summary>
@@ -211,11 +221,11 @@ public partial class CollaborativeMarkdownView
         StateHasChanged();
     }
 
-    // Post content update to hub
-    private void PostContentUpdate(string newContent)
+    // Post content update to hub and return success/failure
+    private async Task<bool> PostContentUpdateAsync(string newContent)
     {
         if (string.IsNullOrEmpty(BoundHubAddress))
-            return;
+            return false;
 
         var nodeUpdate = new MeshNode(BoundNodePath ?? "")
         {
@@ -223,11 +233,29 @@ public partial class CollaborativeMarkdownView
             Content = new MarkdownContent { Content = newContent }
         };
 
-        // Set ChangedBy to the stream's ClientId so the echo-filter suppresses
-        // our own change from being pushed back (avoiding unnecessary re-render).
-        Hub.Post(
-            new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
-            o => o.WithTarget(new Address(BoundHubAddress)));
+        try
+        {
+            var response = await Hub.AwaitResponse(
+                new DataChangeRequest { ChangedBy = Stream?.ClientId }.WithUpdates(nodeUpdate),
+                o => o.WithTarget(new Address(BoundHubAddress)),
+                default);
+
+            if (response.Message is DataChangeResponse dcr && dcr.Status != DataChangeStatus.Committed)
+                return false;
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void RevertContent(string previousContent)
+    {
+        RawContent = previousContent;
+        ProcessContent();
+        StateHasChanged();
     }
 
     // Highlight an annotation (Blazor state for card, JS for inline span)
@@ -244,7 +272,7 @@ public partial class CollaborativeMarkdownView
     /// Finds the selected text in the raw content and inserts comment markers.
     /// </summary>
     [JSInvokable]
-    public void OnCommentFromSelection(string selectedText)
+    public async Task OnCommentFromSelection(string selectedText)
     {
         if (string.IsNullOrWhiteSpace(selectedText) || string.IsNullOrEmpty(RawContent))
             return;
@@ -276,8 +304,10 @@ public partial class CollaborativeMarkdownView
         var closeTag = $"<!--/comment:{markerId}-->";
 
         var newContent = RawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
+        var previousContent = RawContent;
         UpdateContentLocally(newContent);
-        PostContentUpdate(newContent);
+        if (!await PostContentUpdateAsync(newContent))
+            RevertContent(previousContent);
     }
 
     /// <summary>
