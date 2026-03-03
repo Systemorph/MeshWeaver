@@ -1,0 +1,15 @@
+{
+  "id": "InternalCost",
+  "namespace": "FutuRe/AmountType",
+  "name": "Internal Cost",
+  "nodeType": "FutuRe/AmountType",
+  "isPersistent": true,
+  "content": {
+    "$type": "AmountType",
+    "systemName": "InternalCost",
+    "displayName": "Internal Cost",
+    "order": 2,
+    "sign": -1,
+    "hasActuals": false
+  }
+}

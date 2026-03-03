@@ -1,0 +1,18 @@
+{
+  "id": "AmountType",
+  "namespace": "FutuRe",
+  "name": "Amount Type",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Financial amount categories in the insurance P&L: Premium, Claims, Costs, and Profit",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "AmountType",
+    "namespace": "FutuRe",
+    "displayName": "Amount Type",
+    "iconName": "Money",
+    "description": "Amount type dimension for profitability analysis",
+    "configuration": "config => config.WithContentType<AmountType>()"
+  }
+}

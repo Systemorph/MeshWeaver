@@ -1,0 +1,15 @@
+{
+  "id": "USD",
+  "namespace": "FutuRe/Currency",
+  "name": "US Dollar",
+  "nodeType": "FutuRe/Currency",
+  "isPersistent": true,
+  "content": {
+    "$type": "Currency",
+    "id": "USD",
+    "name": "US Dollar",
+    "symbol": "$",
+    "decimalPlaces": 2,
+    "order": 0
+  }
+}
