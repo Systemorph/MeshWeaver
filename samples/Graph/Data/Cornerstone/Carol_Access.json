@@ -6,7 +6,7 @@
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "accessObject": "Carol",
+    "accessObject": "carol.martinez@example.com",
     "displayName": "Carol Johnson",
     "roles": [
       {

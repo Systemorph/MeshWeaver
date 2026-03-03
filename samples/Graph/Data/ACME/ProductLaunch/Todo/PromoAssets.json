@@ -19,7 +19,7 @@
     "description": "Design banner ads, social media graphics, email headers, and product screenshots. Ensure consistent branding across all touchpoints.",
     "category": "Design",
     "priority": "Medium",
-    "assignee": "David",
+    "assignee": "david.kim@example.com",
     "dueDate": "2026-02-21T00:00:00+01:00",
     "dueDateOffsetDays": 33,
     "status": "InReview",

@@ -1,9 +1,11 @@
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -540,6 +542,100 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         // Assert - Should find GlobalAgent because we search children of ancestors
         agentResults.Should().ContainSingle();
         agentResults.Cast<MeshNode>().Should().Contain(n => n.Name == "Global Agent");
+    }
+
+    #endregion
+
+    #region DevLogin User Query Tests
+
+    [Fact]
+    public async Task QueryAsync_DevLogin_FindsUserNodesUnderUserNamespace()
+    {
+        // Arrange - replicate the User folder from samples/Graph/Data
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Alice") with
+        {
+            Name = "Alice Chen",
+            NodeType = "User",
+            Content = new { name = "Alice Chen", email = "alice.chen@example.com", role = "Senior Software Engineer" }
+        });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Bob") with
+        {
+            Name = "Bob Wilson",
+            NodeType = "User",
+            Content = new { name = "Bob Wilson", email = "bob.wilson@example.com", role = "Product Manager" }
+        });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Carol") with
+        {
+            Name = "Carol Martinez",
+            NodeType = "User",
+            Content = new { name = "Carol Martinez", email = "carol.martinez@example.com" }
+        });
+        // Non-User node under User namespace (should be excluded by nodeType filter)
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Public_Access") with
+        {
+            Name = "Public Access",
+            NodeType = "AccessAssignment",
+            Content = new { accessObject = "Public", roles = new[] { new { role = "Viewer" } } }
+        });
+
+        // Act - this is the query used by DevLogin.razor
+        var query = "nodeType:User namespace:User scope:descendants";
+        var results = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+
+        // Assert
+        results.Should().HaveCount(3);
+        results.Select(n => n.Name).Should().Contain(["Alice Chen", "Bob Wilson", "Carol Martinez"]);
+        results.Select(n => n.Name).Should().NotContain("Public Access");
+    }
+
+    [Fact]
+    public async Task QueryAsync_DevLogin_NamespaceUserWithoutScope_FindsImmediateChildren()
+    {
+        // Arrange - same data but test without explicit scope (defaults to Children)
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Alice") with
+        {
+            Name = "Alice Chen",
+            NodeType = "User"
+        });
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Bob") with
+        {
+            Name = "Bob Wilson",
+            NodeType = "User"
+        });
+
+        // Act - namespace:User without scope defaults to Children
+        var query = "nodeType:User namespace:User";
+        var results = await MeshQuery.QueryAsync<MeshNode>(query).ToListAsync();
+
+        // Assert - Children scope should still find immediate children
+        results.Should().HaveCount(2);
+        results.Select(n => n.Name).Should().Contain(["Alice Chen", "Bob Wilson"]);
+    }
+
+    #endregion
+
+    #region DevLogin Signin Tests
+
+    [Fact]
+    public async Task DevLogin_Signin_FindsUserByPath()
+    {
+        // Arrange - save a User node like in samples/Graph/Data
+        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Roland") with
+        {
+            Name = "Roland Buergi",
+            NodeType = "User",
+            Content = new { name = "Roland Buergi", email = "roland@example.com", role = "Admin" }
+        });
+
+        // Act - this is the exact query from DevAuthController.Login
+        var personId = "Roland";
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:User/{personId} scope:self").FirstOrDefaultAsync();
+
+        // Assert
+        node.Should().NotBeNull();
+        node!.NodeType.Should().Be("User");
+        node.Id.Should().Be("Roland");
+        node.Content.Should().NotBeNull();
     }
 
     #endregion

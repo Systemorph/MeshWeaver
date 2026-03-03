@@ -1,4 +1,4 @@
-using MeshWeaver.Blazor.Infrastructure;
+﻿using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -49,13 +49,14 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 // Skip virtual users — they don't need onboarding
                 if (userContext is { IsVirtual: false } && !string.IsNullOrEmpty(userContext.ObjectId))
                 {
-                    var persistence = portalApp.Hub.ServiceProvider.GetService<IPersistenceService>();
-                    if (persistence != null)
+                    var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    if (meshQuery != null)
                     {
                         try
                         {
-                            var userPath = $"User/{userContext.ObjectId}";
-                            var node = await persistence.GetNodeAsync(userPath);
+                            // Use IMeshQuery to bypass security — user is not yet fully authenticated
+                            var node = await meshQuery.QueryAsync<MeshNode>(
+                                $"path:User/{userContext.ObjectId} scope:self").FirstOrDefaultAsync();
 
                             if (node == null)
                             {
@@ -64,19 +65,23 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                                     "OnboardingMiddleware: Creating transient user node for {UserId}",
                                     userContext.ObjectId);
 
-                                var transientNode = new MeshNode(userContext.ObjectId, "User")
+                                var persistence = portalApp.Hub.ServiceProvider.GetService<IPersistenceService>();
+                                if (persistence != null)
                                 {
-                                    Name = userContext.Name ?? userContext.ObjectId,
-                                    NodeType = "User",
-                                    State = MeshNodeState.Transient,
-                                    Content = new Dictionary<string, object?>
+                                    var transientNode = new MeshNode(userContext.ObjectId, "User")
                                     {
-                                        ["name"] = userContext.Name,
-                                        ["email"] = userContext.Email,
-                                    }
-                                };
+                                        Name = userContext.Name ?? userContext.ObjectId,
+                                        NodeType = "User",
+                                        State = MeshNodeState.Transient,
+                                        Content = new Dictionary<string, object?>
+                                        {
+                                            ["name"] = userContext.Name,
+                                            ["email"] = userContext.Email,
+                                        }
+                                    };
 
-                                await persistence.SaveNodeAsync(transientNode);
+                                    await persistence.SaveNodeAsync(transientNode);
+                                }
                                 context.Response.Redirect("/onboarding");
                                 return;
                             }

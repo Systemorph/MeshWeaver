@@ -13,7 +13,7 @@
     "description": "Create Starter, Professional, and Enterprise tiers. Model unit economics, analyze competitor pricing, and propose launch pricing with introductory discounts.",
     "category": "Strategy",
     "priority": "Critical",
-    "assignee": "Emma",
+    "assignee": "emma.johnson@example.com",
     "dueDateOffsetDays": -5,
     "status": "Pending"
   }

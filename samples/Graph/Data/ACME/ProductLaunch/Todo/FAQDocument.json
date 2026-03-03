@@ -13,7 +13,7 @@
     "description": "Compile FAQ covering pricing, integrations, security, data handling, migration, and support. Use input from beta customers and sales team.",
     "category": "Support",
     "priority": "Medium",
-    "assignee": "Alice",
+    "assignee": "alice.chen@example.com",
     "dueDateOffsetDays": 35,
     "status": "Pending"
   }

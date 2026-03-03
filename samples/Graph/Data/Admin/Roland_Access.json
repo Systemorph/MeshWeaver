@@ -7,7 +7,7 @@
   "state": "Active",
   "content": {
     "$type": "AccessAssignment",
-    "accessObject": "Roland",
+    "accessObject": "rbuergi@systemorph.com",
     "displayName": "Roland Buergi",
     "roles": [
       {

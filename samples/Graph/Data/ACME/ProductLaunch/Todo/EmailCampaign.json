@@ -13,7 +13,7 @@
     "description": "Design 6-email nurture sequence for demo requests. Include welcome email, product highlights, case study, pricing info, and trial offer.",
     "category": "Marketing",
     "priority": "High",
-    "assignee": "Alice",
+    "assignee": "alice.chen@example.com",
     "dueDateOffsetDays": 20,
     "status": "Pending"
   }

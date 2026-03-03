@@ -1,8 +1,10 @@
 @page "/dev/login"
 @using Memex.Portal.Shared.Authentication
 @using System.Text.Json
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
 @inject NavigationManager Navigation
-@inject IHttpClientFactory HttpClientFactory
+@inject IMeshQuery MeshQuery
 
 <PageTitle>Developer Login - Memex Portal</PageTitle>
 
@@ -84,21 +86,13 @@
     {
         try
         {
-            var client = HttpClientFactory.CreateClient();
-            var baseUri = new Uri(Navigation.BaseUri);
-            client.BaseAddress = baseUri;
-
-            var response = await client.GetAsync("/dev/persons");
-            if (response.IsSuccessStatusCode)
-            {
-                var json = await response.Content.ReadAsStringAsync();
-                persons = JsonSerializer.Deserialize<List<PersonInfo>>(json,
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
-            }
-            else
-            {
-                error = $"Failed to load persons: {response.StatusCode}";
-            }
+            var nodes = await MeshQuery.QueryAsync<MeshNode>("nodeType:User namespace:User").ToListAsync();
+            persons = nodes
+                .Select(n => ExtractPersonInfo(n))
+                .Where(p => p != null)
+                .Select(p => p!)
+                .OrderBy(p => p.Name)
+                .ToList();
         }
         catch (Exception ex)
         {
@@ -108,6 +102,21 @@
         {
             isLoading = false;
         }
+    }
+
+    private static PersonInfo? ExtractPersonInfo(MeshNode node)
+    {
+        if (node.Content is not JsonElement jsonElement)
+            return new PersonInfo { Id = node.Id, Name = node.Name ?? node.Id };
+
+        return new PersonInfo
+        {
+            Id = node.Id,
+            Name = jsonElement.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? node.Id : node.Name ?? node.Id,
+            Email = jsonElement.TryGetProperty("email", out var emailProp) ? emailProp.GetString() : null,
+            Role = jsonElement.TryGetProperty("role", out var roleProp) ? roleProp.GetString() : null,
+            Avatar = jsonElement.TryGetProperty("avatar", out var avatarProp) ? avatarProp.GetString() : null
+        };
     }
 
     private void LoginAs(PersonInfo person)
