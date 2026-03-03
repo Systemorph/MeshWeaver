@@ -90,6 +90,10 @@ graph TB
 
 **Example**: EuropeRe's *Household* line maps **90%** to group *Property* and **10%** to group *Casualty*. The original data never leaves the EuropeRe database — the group profitability cube reads it through a virtual transformation layer.
 
+## Reports
+
+- [Annual Profitability Report](@FutuRe/Profitability/AnnualReport) — KPIs, charts, and LoB breakdown with embedded live views from the profitability data cube
+
 ## Governance
 
 Each business unit maintains its own mapping rules document with an inline governance discussion — actuarial rationale for split percentages, validation requirements, and the annual review cycle — captured as comments from the team.
