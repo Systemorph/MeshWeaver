@@ -67,7 +67,7 @@ public static class CommentLayoutAreas
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
-        var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
+        var initialized = new[] { false, false, false }; // [0]=editState, [1]=repliesExpanded, [2]=replyPath
 
         // Initialize reply data area and subscribe to child Comment nodes
         var repliesDataId = $"replies_{hubPath.Replace("/", "_")}";
@@ -181,6 +181,14 @@ public static class CommentLayoutAreas
         rightGroup = rightGroup.WithView(Controls.Html(
             $"<span style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); white-space: nowrap;\">{relTime}</span>"));
 
+        if (canEdit)
+            rightGroup = rightGroup.WithView(
+                Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: var(--accent-fill-rest);\" title=\"Edit\">✎</span>")
+                    .WithClickAction(ctx =>
+                    {
+                        ctx.Host.UpdateData(editStateId, true);
+                        return Task.CompletedTask;
+                    }));
         if (canAct)
             rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
         if (canAct)
@@ -208,7 +216,7 @@ public static class CommentLayoutAreas
                     .DistinctUntilChanged()
                     .Select(isEditing => isEditing
                         ? BuildCommentEditor(h, hubPath, comment.Text, editStateId)
-                        : BuildCommentReadOnly(comment.Text, editStateId));
+                        : BuildCommentReadOnly(comment.Text));
             });
         }
         else
@@ -296,7 +304,11 @@ public static class CommentLayoutAreas
             var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
             container = container.WithView((h, _) =>
             {
-                h.UpdateData(replyPathStateId, "");
+                if (!initialized[2])
+                {
+                    h.UpdateData(replyPathStateId, "");
+                    initialized[2] = true;
+                }
                 return h.Stream.GetDataStream<string>(replyPathStateId)
                     .DistinctUntilChanged()
                     .Select(replyPath =>
@@ -313,11 +325,10 @@ public static class CommentLayoutAreas
     }
 
 
-    private static UiControl BuildCommentReadOnly(string text, string editStateId)
+    private static UiControl BuildCommentReadOnly(string text)
     {
         var view = Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("cursor: pointer;");
+            .WithWidth("100%");
 
         if (!string.IsNullOrWhiteSpace(text))
         {
@@ -327,14 +338,8 @@ public static class CommentLayoutAreas
         else
         {
             view = view.WithView(
-                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic; font-size: 0.85rem;\">Click to add comment text...</p>"));
+                Controls.Html("<p style=\"color: var(--neutral-foreground-hint); font-style: italic; font-size: 0.85rem;\">No comment text</p>"));
         }
-
-        view = view.WithClickAction(ctx =>
-        {
-            ctx.Host.UpdateData(editStateId, true);
-            return Task.CompletedTask;
-        });
 
         return view;
     }

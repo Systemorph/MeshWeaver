@@ -14,14 +14,13 @@ namespace MeshWeaver.Blazor.AI;
 
 /// <summary>
 /// MCP wrapper for MeshPlugin. Exposes mesh operations as MCP tools.
-/// Reuses logic patterns from MeshWeaver.AI.MeshPlugin but adapts for MCP context.
+/// All operations go through Hub messaging to enforce security via validators.
 /// </summary>
 [McpServerToolType]
 public class McpMeshPlugin
 {
     private readonly IMessageHub hub;
     private readonly ILogger<McpMeshPlugin> logger;
-    private readonly IPersistenceService? persistence;
     private readonly IMeshQuery? meshQuery;
     private readonly IMeshCatalog? meshCatalog;
     private readonly string baseUrl;
@@ -32,7 +31,6 @@ public class McpMeshPlugin
     {
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<McpMeshPlugin>>();
-        this.persistence = hub.ServiceProvider.GetService<IPersistenceService>();
         this.meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
         this.meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
         this.baseUrl = config?.Value.BaseUrl ?? "http://localhost:5000";
@@ -54,9 +52,6 @@ public class McpMeshPlugin
         [Description("Path to data (e.g., @graph/org1, @Agent/*, @Cornerstone/schema:, @Cornerstone/schema:TypeName, @Cornerstone/model:)")] string path)
     {
         logger.LogInformation("MCP Get called with path={Path}", path);
-
-        if (persistence == null)
-            return "Persistence service not available.";
 
         var resolvedPath = ResolvePath(path);
 
@@ -89,8 +84,12 @@ public class McpMeshPlugin
             if (unifiedResult != null)
                 return unifiedResult;
 
-            // Get single node
-            var meshNode = await persistence.GetNodeAsync(resolvedPath);
+            // Get single node via MeshCatalog (enforces security via ValidateReadAsync)
+            if (meshCatalog == null)
+                return "Mesh catalog service not available.";
+
+            var address = new Address(resolvedPath);
+            var meshNode = await meshCatalog.GetNodeAsync(address);
             if (meshNode == null)
                 return $"Not found: {resolvedPath}";
 
@@ -214,9 +213,6 @@ public class McpMeshPlugin
     {
         logger.LogInformation("MCP Update called");
 
-        if (persistence == null)
-            return "Persistence service not available.";
-
         try
         {
             var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(nodes, hub.JsonSerializerOptions);
@@ -226,8 +222,19 @@ public class McpMeshPlugin
             var results = new List<string>();
             foreach (var node in nodeList)
             {
-                var saved = await persistence.SaveNodeAsync(node);
-                results.Add($"Updated: {saved.Path}");
+                var tcs = new TaskCompletionSource<UpdateNodeResponse>();
+                var delivery = hub.Post(
+                    new UpdateNodeRequest(node),
+                    o => o.WithTarget(hub.Address));
+                hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
+                {
+                    tcs.TrySetResult(response.Message);
+                    return response;
+                });
+                var updateResponse = await tcs.Task;
+                if (!updateResponse.Success)
+                    throw new InvalidOperationException(updateResponse.Error ?? "Update failed");
+                results.Add($"Updated: {updateResponse.Node!.Path}");
             }
 
             return string.Join("\n", results);
@@ -250,9 +257,6 @@ public class McpMeshPlugin
     {
         logger.LogInformation("MCP Delete called");
 
-        if (meshCatalog == null)
-            return "Mesh catalog service not available.";
-
         try
         {
             var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
@@ -263,7 +267,18 @@ public class McpMeshPlugin
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                await meshCatalog.DeleteNodeAsync(resolvedPath);
+                var tcs = new TaskCompletionSource<DeleteNodeResponse>();
+                var delivery = hub.Post(
+                    new DeleteNodeRequest(resolvedPath),
+                    o => o.WithTarget(hub.Address));
+                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                {
+                    tcs.TrySetResult(response.Message);
+                    return response;
+                });
+                var deleteResponse = await tcs.Task;
+                if (!deleteResponse.Success)
+                    throw new InvalidOperationException(deleteResponse.Error ?? "Delete failed");
                 results.Add($"Deleted: {resolvedPath}");
             }
 

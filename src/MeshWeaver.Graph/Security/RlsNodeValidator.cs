@@ -22,12 +22,12 @@ public class RlsNodeValidator : INodeValidator
     }
 
     /// <summary>
-    /// This validator handles Create, Update, and Delete operations.
-    /// Read operations are handled separately via SecurePersistenceServiceDecorator
-    /// to avoid issues with internal reads during update/delete existence checks.
+    /// This validator handles all CRUD operations.
+    /// Read validation is enforced via MeshCatalog.ValidateReadAsync for node reads.
+    /// Write validation is enforced via HandleUpdateNodeRequest/HandleDeleteNodeRequest handlers.
     /// </summary>
     public IReadOnlyCollection<NodeOperation> SupportedOperations =>
-        [NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
+        [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
     public async Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
