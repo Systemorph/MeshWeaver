@@ -13,7 +13,7 @@
     "description": "Write and review press release announcing TaskFlow launch. Include customer quotes, key differentiators, and availability details for distribution to tech media.",
     "category": "PR",
     "priority": "Medium",
-    "assignee": "Carol",
+    "assignee": "carol.martinez@example.com",
     "dueDateOffsetDays": 15,
     "status": "Pending"
   }

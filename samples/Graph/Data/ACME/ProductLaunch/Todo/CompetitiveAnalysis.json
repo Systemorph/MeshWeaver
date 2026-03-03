@@ -13,7 +13,7 @@
     "description": "Deep-dive analysis of Zapier, Make, and Monday.com. Document feature gaps, pricing differences, and positioning opportunities for TaskFlow.",
     "category": "Research",
     "priority": "High",
-    "assignee": "Bob",
+    "assignee": "bob.wilson@example.com",
     "dueDateOffsetDays": -7,
     "status": "Completed",
     "completedAt": "2025-01-24T16:45:00Z"

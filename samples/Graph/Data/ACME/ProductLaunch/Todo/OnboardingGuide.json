@@ -13,7 +13,7 @@
     "description": "Write comprehensive onboarding playbook covering first-day setup, first workflow creation, integration setup, and success milestones. Include video tutorials.",
     "category": "Support",
     "priority": "High",
-    "assignee": "Alice",
+    "assignee": "alice.chen@example.com",
     "dueDateOffsetDays": 45,
     "status": "Pending"
   }

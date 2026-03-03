@@ -13,7 +13,7 @@
     "description": "Legal review of terms of service, privacy policy, GDPR compliance, and marketing claims. Obtain sign-off before public launch.",
     "category": "Legal",
     "priority": "Critical",
-    "assignee": "Emma",
+    "assignee": "emma.johnson@example.com",
     "dueDateOffsetDays": 37,
     "status": "Pending"
   }

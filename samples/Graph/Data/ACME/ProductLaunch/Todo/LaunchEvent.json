@@ -13,7 +13,7 @@
     "description": "Plan 1-hour launch webinar including product demo, customer testimonial, Q&A session. Target 500+ registrations. Set up event page and promotion.",
     "category": "Marketing",
     "priority": "High",
-    "assignee": "Emma",
+    "assignee": "emma.johnson@example.com",
     "dueDateOffsetDays": 50,
     "status": "Pending"
   }

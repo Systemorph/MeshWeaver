@@ -13,7 +13,7 @@
     "description": "Draft the positioning statement, key messages, and differentiation points. Include the 'Enterprise-grade automation, startup-simple setup' tagline.",
     "category": "Marketing",
     "priority": "Critical",
-    "assignee": "Carol",
+    "assignee": "carol.martinez@example.com",
     "dueDateOffsetDays": -3,
     "status": "InProgress"
   }

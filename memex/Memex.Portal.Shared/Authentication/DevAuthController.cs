@@ -1,7 +1,7 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using System.Text.Json;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
@@ -12,41 +12,12 @@ namespace Memex.Portal.Shared.Authentication;
 [Route("dev")]
 public class DevAuthController : ControllerBase
 {
-    private readonly IPersistenceService _persistence;
+    private readonly IMeshQuery _meshQuery;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public DevAuthController(IPersistenceService persistence)
+    public DevAuthController(IMeshQuery meshQuery)
     {
-        _persistence = persistence;
-    }
-
-    /// <summary>
-    /// Gets all available persons for the dev login UI.
-    /// </summary>
-    [HttpGet("persons")]
-    public async Task<ActionResult<List<PersonInfo>>> GetPersons()
-    {
-        var persons = await GetAllPersonsAsync();
-        return Ok(persons.OrderBy(p => p.Name).ToList());
-    }
-
-    private async Task<List<PersonInfo>> GetAllPersonsAsync()
-    {
-        var persons = new List<PersonInfo>();
-
-        await foreach (var node in _persistence.GetDescendantsAsync(null))
-        {
-            if (node.NodeType == "User" && node.Content != null)
-            {
-                var person = ExtractPersonInfo(node.Path, node.Content);
-                if (person != null)
-                {
-                    persons.Add(person);
-                }
-            }
-        }
-
-        return persons;
+        _meshQuery = meshQuery;
     }
 
     /// <summary>
@@ -55,8 +26,8 @@ public class DevAuthController : ControllerBase
     [HttpPost("signin")]
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
-        // Find the person node
-        var node = await _persistence.GetNodeAsync(personId);
+        // Fetch the person node via IMeshQuery (bypasses security)
+        var node = await _meshQuery.QueryAsync<MeshNode>($"path:User/{personId} scope:self").FirstOrDefaultAsync();
         if (node?.NodeType != "User" || node.Content == null)
         {
             return BadRequest("Person not found");
@@ -68,8 +39,7 @@ public class DevAuthController : ControllerBase
             return BadRequest("Could not extract person info");
         }
 
-        // Create claims matching what UserContextMiddleware expects
-        // ObjectId = email address (UPN), always
+        // Create claims: ObjectId = email address (UPN), always
         var email = person.Email ?? node.Id;
         var claims = new List<Claim>
         {

@@ -1,0 +1,17 @@
+{
+  "id": "Anonymous_Access",
+  "namespace": "User",
+  "name": "Anonymous Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Anonymous",
+    "displayName": "Anonymous Users",
+    "roles": [
+      {
+        "role": "Viewer"
+      }
+    ]
+  }
+}
