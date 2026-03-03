@@ -1,0 +1,18 @@
+{
+  "id": "CAS",
+  "namespace": "FutuRe/LineOfBusiness",
+  "name": "Casualty",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Casualty insurance covering general liability, workers compensation, and auto liability",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "CAS",
+    "displayName": "Casualty",
+    "description": "Casualty insurance addresses liability arising from bodily injury or property damage caused to third parties. This line encompasses general liability, automobile liability, workers compensation, employers liability, and umbrella/excess liability. Casualty risks are characterized by long-tail development patterns where claims may take years to fully emerge and settle. Reinsurance structures often include both proportional treaties and excess-of-loss layers to manage volatility in large or mass tort exposures.",
+    "order": 1,
+    "productExamples": "General liability, Workers compensation, Auto liability, Umbrella/excess, Employers liability, Products liability"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "BusinessUnit",
+  "namespace": "FutuRe",
+  "name": "Business Unit",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "FutuRe business unit with regional operations and reporting currency",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "BusinessUnit",
+    "namespace": "FutuRe",
+    "displayName": "Business Unit",
+    "iconName": "Building",
+    "description": "Business unit within the FutuRe insurance group",
+    "configuration": "config => config.WithContentType<BusinessUnit>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddBusinessUnitViews())"
+  }
+}

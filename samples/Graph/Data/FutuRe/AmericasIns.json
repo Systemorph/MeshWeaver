@@ -1,0 +1,18 @@
+{
+  "id": "AmericasIns",
+  "namespace": "FutuRe",
+  "name": "FutuRe Americas Insurance",
+  "nodeType": "FutuRe/BusinessUnit",
+  "category": "Business Units",
+  "description": "Americas primary insurance and reinsurance operations",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "BusinessUnit",
+    "id": "AmericasIns",
+    "name": "FutuRe Americas Insurance",
+    "description": "Americas insurance and reinsurance operations covering North and South American markets. Provides primary insurance, excess & surplus lines, and treaty reinsurance. Headquartered in New York with regional offices in Miami, Chicago, and Sao Paulo.",
+    "currency": "USD",
+    "region": "Americas"
+  }
+}

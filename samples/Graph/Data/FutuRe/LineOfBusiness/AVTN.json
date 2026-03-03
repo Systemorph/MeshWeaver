@@ -1,0 +1,18 @@
+{
+  "id": "AVTN",
+  "namespace": "FutuRe/LineOfBusiness",
+  "name": "Aviation",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Aviation insurance covering aircraft hull, liability, space, and airport operations",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "AVTN",
+    "displayName": "Aviation",
+    "description": "Aviation insurance covers risks related to aircraft operation, including hull damage, passenger and third-party liability, and airport operations. This highly specialized line requires deep technical expertise in aircraft types, pilot qualifications, and airworthiness standards. The aviation market also encompasses space risks, including satellite launch and in-orbit coverage. Due to the catastrophic potential of aviation losses, reinsurance plays a vital role in providing capacity. The market is concentrated among a small number of specialist underwriters worldwide.",
+    "order": 3,
+    "productExamples": "Aircraft hull, Aviation liability, Airport operators, Space launch, Satellite in-orbit, Manufacturers liability, War & terrorism"
+  }
+}

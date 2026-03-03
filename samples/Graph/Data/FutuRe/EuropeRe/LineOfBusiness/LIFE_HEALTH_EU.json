@@ -1,0 +1,18 @@
+{
+  "id": "LIFE_HEALTH_EU",
+  "namespace": "FutuRe/EuropeRe/LineOfBusiness",
+  "name": "Life & Health",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Life, disability, and health reinsurance for European social security supplement markets",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "LIFE_HEALTH_EU",
+    "displayName": "Life & Health",
+    "description": "European life and health reinsurance covering mortality, longevity, disability, and medical expense risks. Operates alongside mandatory social security systems, providing supplementary private coverage. Key products include group life and pension schemes, individual term and endowment policies, disability income protection, and private medical insurance. The market is characterized by long-term treaty relationships and increasing demand for longevity risk transfer as European populations age.",
+    "order": 6,
+    "productExamples": "Group life, Pension schemes, Disability income, Private medical, Critical illness, Longevity swaps, Accident & health"
+  }
+}

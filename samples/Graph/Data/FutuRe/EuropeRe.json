@@ -1,0 +1,18 @@
+{
+  "id": "EuropeRe",
+  "namespace": "FutuRe",
+  "name": "FutuRe Europe Reinsurance",
+  "nodeType": "FutuRe/BusinessUnit",
+  "category": "Business Units",
+  "description": "European reinsurance operations headquartered in Zurich",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "BusinessUnit",
+    "id": "EuropeRe",
+    "name": "FutuRe Europe Reinsurance",
+    "description": "European reinsurance operations covering treaty and facultative business across EMEA markets. Specializes in property catastrophe, casualty excess-of-loss, and specialty reinsurance lines. Headquartered in Zurich with underwriting offices in London, Paris, and Munich.",
+    "currency": "EUR",
+    "region": "EMEA"
+  }
+}

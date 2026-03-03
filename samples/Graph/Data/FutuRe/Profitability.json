@@ -1,0 +1,17 @@
+{
+  "id": "Profitability",
+  "namespace": "FutuRe",
+  "name": "Profitability Analysis",
+  "nodeType": "FutuRe/Analysis",
+  "category": "Analytics",
+  "description": "Monthly profitability analysis across all lines of business and business units",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "order": 1,
+  "isPersistent": true,
+  "content": {
+    "$type": "AnalysisContent",
+    "id": "Profitability",
+    "name": "Profitability Analysis",
+    "description": "Interactive profitability analysis with estimates vs actuals, loss ratios, and quarterly trends across 10 lines of business and 2 business units."
+  }
+}

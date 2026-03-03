@@ -1,0 +1,19 @@
+{
+  "id": "Analysis",
+  "namespace": "FutuRe",
+  "name": "Analysis",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "FutuRe profitability analysis hub with data cube, reference data, and charting views",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Analysis",
+    "namespace": "FutuRe",
+    "displayName": "Analysis",
+    "iconName": "DataTrending",
+    "description": "Profitability analysis hub sourcing line of business data via IMeshQuery and loading estimates/actuals from static data arrays",
+    "configuration": "config => config.WithContentType<AnalysisContent>().AddData(data => data.AddSource(source => source.WithType<AmountType>(t => t.WithInitialData(AmountType.All)).WithType<Currency>(t => t.WithInitialData(Currency.All)).WithType<Country>(t => t.WithInitialData(Country.All)).WithType<TransactionMapping>(t => t.WithInitialData(TransactionMapping.All))).WithVirtualDataSource(\"LineOfBusiness\", vs => vs.WithVirtualType<LineOfBusiness>(workspace => FutuReDataLoader.LoadLinesOfBusinessFromNodes(workspace))).WithVirtualDataSource(\"FutuReDataCube\", vs => vs.WithVirtualType<FutuReDataCube>(workspace => FutuReDataLoader.LoadDataCube(workspace)))).AddDefaultLayoutAreas().AddLayout(layout => layout.AddProfitabilityViews())"
+  }
+}
