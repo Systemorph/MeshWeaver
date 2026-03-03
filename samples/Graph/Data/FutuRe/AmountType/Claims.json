@@ -1,0 +1,15 @@
+{
+  "id": "Claims",
+  "namespace": "FutuRe/AmountType",
+  "name": "Claims",
+  "nodeType": "FutuRe/AmountType",
+  "isPersistent": true,
+  "content": {
+    "$type": "AmountType",
+    "systemName": "Claims",
+    "displayName": "Claims",
+    "order": 1,
+    "sign": -1,
+    "hasActuals": true
+  }
+}

@@ -121,22 +121,52 @@ public static class FutuReDataLoader
         [true, true, false, true, false, false];
 
     /// <summary>
-    /// Loads AmountType reference data as an observable stream.
+    /// Loads AmountType reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<AmountType>> LoadAmountTypes(IWorkspace workspace)
-        => Observable.Return(AmountTypeData.All.AsEnumerable());
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToAmountType)
+                .Where(a => a != null)
+                .Cast<AmountType>()
+                .OrderBy(a => a.Order));
+    }
 
     /// <summary>
-    /// Loads Currency reference data as an observable stream.
+    /// Loads Currency reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<Currency>> LoadCurrencies(IWorkspace workspace)
-        => Observable.Return(CurrencyData.All.AsEnumerable());
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToCurrency)
+                .Where(c => c != null)
+                .Cast<Currency>()
+                .OrderBy(c => c.Order));
+    }
 
     /// <summary>
-    /// Loads Country reference data as an observable stream.
+    /// Loads Country reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<Country>> LoadCountries(IWorkspace workspace)
-        => Observable.Return(CountryData.All.AsEnumerable());
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToCountry)
+                .Where(c => c != null)
+                .Cast<Country>()
+                .OrderBy(c => c.Order));
+    }
 
     /// <summary>
     /// Loads TransactionMapping instances from MeshNode graph via IMeshQuery.
@@ -327,4 +357,54 @@ public static class FutuReDataLoader
         json.TryGetProperty(property, out var val) && val.ValueKind == JsonValueKind.Number
             ? val.GetDouble()
             : 0.0;
+
+    private static bool GetBool(JsonElement json, string property) =>
+        json.TryGetProperty(property, out var val) &&
+        (val.ValueKind == JsonValueKind.True || val.ValueKind == JsonValueKind.False)
+            && val.GetBoolean();
+
+    private static AmountType? ConvertToAmountType(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new AmountType
+        {
+            SystemName = GetString(json, "systemName") ?? node.Id,
+            DisplayName = GetString(json, "displayName") ?? node.Name ?? node.Id,
+            Order = GetInt(json, "order"),
+            Sign = GetInt(json, "sign"),
+            HasActuals = GetBool(json, "hasActuals")
+        };
+    }
+
+    private static Currency? ConvertToCurrency(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new Currency
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            Name = GetString(json, "name") ?? node.Name ?? node.Id,
+            Symbol = GetString(json, "symbol"),
+            DecimalPlaces = GetInt(json, "decimalPlaces"),
+            Order = GetInt(json, "order")
+        };
+    }
+
+    private static Country? ConvertToCountry(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new Country
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            Name = GetString(json, "name") ?? node.Name ?? node.Id,
+            Alpha3Code = GetString(json, "alpha3Code"),
+            Region = GetString(json, "region"),
+            Order = GetInt(json, "order")
+        };
+    }
 }
