@@ -1,0 +1,17 @@
+{
+  "id": "EUR-LIFE_HEALTH_EU-LH",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Life & Health → Life & Health (100%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-LIFE_HEALTH_EU-LH",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "LIFE_HEALTH_EU",
+    "localLineOfBusinessName": "Life & Health",
+    "groupLineOfBusiness": "LH",
+    "groupLineOfBusinessName": "Life & Health",
+    "percentage": 1.00
+  }
+}

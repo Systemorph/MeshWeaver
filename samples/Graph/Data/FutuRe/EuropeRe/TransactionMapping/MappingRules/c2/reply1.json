@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "reply1",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping/MappingRules/c2",
+  "name": "Reply by Samuel",
+  "nodeType": "Comment",
+  "content": {
+    "$type": "Comment",
+    "id": "reply1",
+    "primaryNodePath": "FutuRe/EuropeRe/TransactionMapping/MappingRules",
+    "author": "sglauser@systemorph.com",
+    "text": "Correct. The reactive pipeline ensures the cube is recomputed whenever TransactionMapping nodes change. If the actuarial team adjusts a split percentage, the group profitability view updates automatically through the Observable chain — no ETL, no batch process.",
+    "createdAt": "2026-01-17T14:45:00+00:00"
+  }
+}

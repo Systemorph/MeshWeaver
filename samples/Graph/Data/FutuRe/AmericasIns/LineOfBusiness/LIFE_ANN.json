@@ -1,0 +1,18 @@
+{
+  "id": "LIFE_ANN",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Life & Annuity",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Individual and group life insurance, annuities, and retirement products for the Americas market",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "LIFE_ANN",
+    "displayName": "Life & Annuity",
+    "description": "Americas life and annuity reinsurance covering individual and group mortality, longevity, and accumulation risks. The US life market is the world's largest, with products including term life, universal life, variable life, fixed and variable annuities, and structured settlements. Group life covers employer-sponsored programs. Key reinsurance structures include yearly renewable term (YRT), coinsurance, and modified coinsurance. Regulatory frameworks include state-based regulation, NAIC model laws, and emerging LDTI accounting standards. Growing demand for longevity risk transfer from pension plans and annuity writers.",
+    "order": 5,
+    "productExamples": "Term life, Universal life, Fixed annuity, Variable annuity, Group life, Structured settlement, Pension risk transfer"
+  }
+}

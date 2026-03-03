@@ -56,7 +56,7 @@ public static class OrganizationViews
         // Main header row: logo + info + menu (menu on far right)
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 24px; align-items: flex-start; width: 100%;");
+            .WithStyle("gap: 24px; align-items: flex-start; width: 100%; max-width: 1280px; margin: 0 auto; padding: 0 24px;");
 
         // Logo (large, rounded square like GitHub)
         if (!string.IsNullOrEmpty(logo))
@@ -141,7 +141,7 @@ public static class OrganizationViews
         {
             container = container.WithView(
                 new MarkdownControl("") { Html = node.PreRenderedHtml }
-                    .WithStyle("max-width: 1280px; margin: 0 auto; padding: 0 24px;"));
+                    .WithStyle("max-width: 1280px; margin: 0 auto; padding: 0 24px 48px 24px;"));
         }
 
         // Use LayoutAreaControl to render the standard Catalog view for children

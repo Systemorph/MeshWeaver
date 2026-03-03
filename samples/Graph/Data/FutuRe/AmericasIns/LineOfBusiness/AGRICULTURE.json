@@ -1,0 +1,18 @@
+{
+  "id": "AGRICULTURE",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Agriculture",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Crop insurance, livestock coverage, and agricultural risk management for North and South American farming operations",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "AGRICULTURE",
+    "displayName": "Agriculture",
+    "description": "Agriculture insurance covering crop yield and revenue risks, livestock mortality, and farm property across the Americas. The US Federal Crop Insurance Program (FCIP) provides the framework for subsidized multi-peril crop insurance (MPCI), supplemented by private hail and named-peril products. Key crops include corn, soybeans, wheat, and cotton. In Brazil and Argentina, the market covers coffee, sugarcane, soybeans, and cattle ranching. Revenue protection products dominate the US market, while area-yield index products are growing in Latin America. Reinsurance structures include quota share treaties with government backstop through FCIC.",
+    "order": 8,
+    "productExamples": "Multi-peril crop (MPCI), Revenue protection, Crop hail, Livestock mortality, Pasture/rangeland, Farm property, Index-based"
+  }
+}
