@@ -69,20 +69,16 @@ public class DevAuthController : ControllerBase
         }
 
         // Create claims matching what UserContextMiddleware expects
-        // Use node.Id (e.g., "Roland") for preferred_username to match Access/{userId}.json
+        // ObjectId = email address (UPN), always
+        var email = person.Email ?? node.Id;
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, node.Id),
+            new(ClaimTypes.NameIdentifier, email),
             new(ClaimTypes.Name, person.Name),
             new("name", person.Name),
-            new("preferred_username", node.Id),
+            new(ClaimTypes.Email, email),
+            new("email", email),
         };
-
-        if (!string.IsNullOrEmpty(person.Email))
-        {
-            claims.Add(new Claim(ClaimTypes.Email, person.Email));
-            claims.Add(new Claim("email", person.Email));
-        }
 
         if (!string.IsNullOrEmpty(person.Role))
         {

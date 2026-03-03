@@ -2,10 +2,13 @@
 @attribute [Microsoft.AspNetCore.Authorization.Authorize]
 @using MeshWeaver.Blazor.Infrastructure
 @using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Security
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
 @inject AccessService AccessService
+@inject IMeshCatalog MeshCatalog
+@inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 
 <PageTitle>Complete Your Profile - Memex Portal</PageTitle>
@@ -74,8 +77,6 @@
     private bool isSaving;
     private string? errorMessage;
 
-    [Inject] private IServiceProvider ServiceProvider { get; set; } = default!;
-
     protected override void OnInitialized()
     {
         var context = AccessService?.Context;
@@ -99,29 +100,12 @@
 
         try
         {
-            var portalApp = ServiceProvider.GetService<PortalApplication>();
-            if (portalApp == null)
-            {
-                errorMessage = "Portal not available. Please try again.";
-                return;
-            }
-
-            var persistence = portalApp.Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
-            {
-                errorMessage = "Storage not available. Please try again.";
-                return;
-            }
-
             var userId = AccessService?.Context?.ObjectId;
             if (string.IsNullOrEmpty(userId))
             {
                 errorMessage = "Not authenticated. Please sign in again.";
                 return;
             }
-
-            var userPath = $"User/{userId}";
-            var node = await persistence.GetNodeAsync(userPath);
 
             var content = new Dictionary<string, object?>
             {
@@ -136,31 +120,33 @@
             if (!string.IsNullOrWhiteSpace(model.AvatarUrl))
                 content["avatar"] = model.AvatarUrl.Trim();
 
-            if (node != null)
+            // Check if this is the first user (no existing User nodes = platform admin)
+            var isFirstUser = true;
+            await foreach (var _ in MeshCatalog.QueryAsync("User", maxResults: 1))
             {
-                // Update existing node to Active
-                node = node with
-                {
-                    Name = model.Name.Trim(),
-                    State = MeshNodeState.Active,
-                    Content = content
-                };
-            }
-            else
-            {
-                // Create new Active node
-                node = new MeshNode(userId, "User")
-                {
-                    Name = model.Name.Trim(),
-                    NodeType = "User",
-                    State = MeshNodeState.Active,
-                    Content = content
-                };
+                isFirstUser = false;
+                break;
             }
 
-            await persistence.SaveNodeAsync(node);
+            var node = new MeshNode(userId, "User")
+            {
+                Name = model.Name.Trim(),
+                NodeType = "User",
+                State = MeshNodeState.Active,
+                Content = content
+            };
 
-            // Navigate to home
+            await MeshCatalog.CreateNodeAsync(node, userId);
+
+            // First user becomes PlatformAdmin
+            if (isFirstUser)
+            {
+                var securityService = PortalApplication.Hub.ServiceProvider
+                    .GetService<ISecurityService>();
+                if (securityService != null)
+                    await securityService.AddUserRoleAsync(userId, "PlatformAdmin", null, userId);
+            }
+
             Navigation.NavigateTo("/", forceLoad: true);
         }
         catch (Exception ex)

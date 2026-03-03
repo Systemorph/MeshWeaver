@@ -22,12 +22,12 @@
         <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
             @foreach (var provider in Providers)
             {
-                var loginUrl = GetProviderLoginUrl(provider.Name);
+                var url = GetProviderLoginUrl(provider.Name);
                 var cssClass = $"provider-btn provider-{provider.Name.ToLowerInvariant()}";
-                <a class="@cssClass" href="@loginUrl">
+                <button class="@cssClass" @onclick="() => Navigation.NavigateTo(url, forceLoad: true)">
                     <span class="provider-icon">@GetProviderIcon(provider.Name)</span>
                     <span>Continue with @(provider.DisplayName ?? provider.Name)</span>
-                </a>
+                </button>
             }
 
             @if (ShowDevLogin)
@@ -35,10 +35,10 @@
                 <div class="divider">
                     <span>Developer Mode</span>
                 </div>
-                <a class="provider-btn provider-dev" href="@DevLoginUrl">
+                <button class="provider-btn provider-dev" @onclick="NavigateToDevLogin">
                     <span class="provider-icon">&#x1F6E0;&#xFE0F;</span>
                     <span>Developer Login</span>
-                </a>
+                </button>
             }
         </FluentStack>
     </div>
@@ -54,8 +54,11 @@
     private IReadOnlyList<ExternalProviderConfig> Providers { get; set; } = [];
     private bool ShowDevLogin { get; set; }
 
-    private string DevLoginUrl =>
-        ReturnUrl != null ? $"/dev/login?ReturnUrl={Uri.EscapeDataString(ReturnUrl)}" : "/dev/login";
+    private void NavigateToDevLogin()
+    {
+        var url = ReturnUrl != null ? $"/dev/login?ReturnUrl={Uri.EscapeDataString(ReturnUrl)}" : "/dev/login";
+        Navigation.NavigateTo(url, forceLoad: true);
+    }
 
     protected override void OnInitialized()
     {

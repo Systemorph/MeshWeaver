@@ -1,23 +1,22 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using Memex.Portal.Shared.Authentication;
+using Memex.Portal.Shared.Settings;
 using MeshWeaver.AI;
 using MeshWeaver.AI.AzureFoundry;
-using MeshWeaver.Blazor.AI;
 using MeshWeaver.AI.AzureOpenAI;
 using MeshWeaver.AI.ClaudeCode;
 using MeshWeaver.AI.Copilot;
 using MeshWeaver.AI.Layout;
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Blazor.Portal.Chat;
+using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Blazor.Portal.Chat;
 using MeshWeaver.Blazor.Radzen;
-using Memex.Portal.Shared.Authentication;
-using Memex.Portal.Shared.Settings;
-using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
@@ -26,7 +25,6 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
-using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -46,6 +44,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
+using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
 
 namespace Memex.Portal.Shared;
 
@@ -105,8 +104,8 @@ public static class MemexConfiguration
         services.AddHttpContextAccessor();
         services.AddHttpClient();
         services.AddSignalR();
-        services.AddControllers();
-
+        services.AddControllers()
+                .AddApplicationPart(typeof(MemexConfiguration).Assembly);
         services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
 
