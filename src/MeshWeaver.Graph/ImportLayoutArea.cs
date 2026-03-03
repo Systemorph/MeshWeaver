@@ -75,7 +75,7 @@ public static class ImportLayoutArea
                     new("file", "Upload File"),
                     new("folder", "Upload Folder (ZIP)")
                 },
-                typeof(string))
+                nameof(String))
             {
                 DataContext = dataContext
             }.WithOrientation(Orientation.Vertical)));
