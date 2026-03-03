@@ -15,7 +15,6 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Radzen;
-using Memex.Portal.Shared.Admin;
 using Memex.Portal.Shared.Authentication;
 using Memex.Portal.Shared.Settings;
 using PortalAuthOptions = MeshWeaver.Blazor.Portal.Authentication.AuthenticationOptions;
@@ -32,7 +31,6 @@ using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Kernel.Hub;
-using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication;
@@ -109,9 +107,6 @@ public static class MemexConfiguration
         services.AddSignalR();
         services.AddControllers();
 
-        // Azure Key Vault service for secret browsing and resolution
-        services.AddSingleton<IKeyVaultService, KeyVaultService>();
-
         services.Configure<StylesConfiguration>(
             builder.Configuration.GetSection("Styles"));
 
@@ -122,35 +117,17 @@ public static class MemexConfiguration
         var authSection = builder.Configuration.GetSection(PortalAuthOptions.SectionName);
         var entraIdConfig = builder.Configuration.GetSection("EntraId");
 
-        // Determine provider: explicit config > EntraId presence > Dev default
+        // Determine provider mode from configuration
+        var hasExternalProviders = AuthenticationBuilderExtensions.HasExternalProviders(builder.Configuration);
+        var externalProviders = AuthenticationBuilderExtensions.GetConfiguredProviders(builder.Configuration);
+
         var provider = authSection["Provider"]
-            ?? (entraIdConfig.GetChildren().Any() ? AuthenticationProviders.MicrosoftIdentity : AuthenticationProviders.Dev);
+            ?? (hasExternalProviders ? AuthenticationProviders.Custom
+                : entraIdConfig.GetChildren().Any() ? AuthenticationProviders.MicrosoftIdentity
+                : AuthenticationProviders.Dev);
 
-        // Bind providers list from configuration (fallback)
-        var externalProviders = authSection.GetSection("Providers").Get<List<ExternalProviderConfig>>()
-                                ?? new List<ExternalProviderConfig>();
-
-        // Dev login is enabled explicitly or when provider is Dev (backward compat)
         var enableDevLogin = authSection.GetValue<bool?>("EnableDevLogin")
                              ?? (provider == AuthenticationProviders.Dev);
-
-        // Try to read auth providers from Admin nodes (graph storage)
-        // This overrides appsettings-based provider config when Admin nodes exist
-#pragma warning disable CA1416
-        var startupLogger = LoggerFactory.Create(lb => lb.AddConsole()).CreateLogger("AdminStartup");
-#pragma warning restore CA1416
-        var platformSettings = AdminStartupReader.ReadPlatformSettings(builder.Configuration, startupLogger);
-        if (platformSettings != null)
-        {
-            enableDevLogin = platformSettings.EnableDevLogin;
-
-            // Resolve KeyVault secrets into ExternalProviderConfig list
-            var keyVaultUri = builder.Configuration["KeyVault:Uri"];
-            externalProviders = AdminStartupReader.ResolveProviders(platformSettings, keyVaultUri, startupLogger);
-
-            if (externalProviders.Count > 0)
-                provider = AuthenticationProviders.Custom; // Force unified cookie-based auth
-        }
 
         // Register authentication navigation service
         services.AddAuthenticationNavigation(options =>
@@ -159,7 +136,6 @@ public static class MemexConfiguration
             options.Providers = externalProviders;
             options.EnableDevLogin = enableDevLogin;
 
-            // Allow custom paths from config
             if (authSection["LoginPath"] is { } loginPath)
                 options.LoginPath = loginPath;
             if (authSection["LogoutPath"] is { } logoutPath)
@@ -172,13 +148,12 @@ public static class MemexConfiguration
         services.AddDataProtection()
             .SetApplicationName("MemexPortal");
 
-        if (provider == AuthenticationProviders.MicrosoftIdentity && externalProviders.Count == 0)
+        if (provider == AuthenticationProviders.MicrosoftIdentity && !hasExternalProviders)
         {
             // Legacy single-provider MicrosoftIdentity mode (OIDC via EntraId section)
             JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-            var legacyAuthBuilder = services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
                 .AddMicrosoftIdentityWebApp(entraIdConfig);
-            // Add API token auth scheme (must use the underlying services, not the MSAL builder)
             services.AddAuthentication()
                 .AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
                     ApiTokenAuthenticationHandler.SchemeName, _ => { });
@@ -196,7 +171,7 @@ public static class MemexConfiguration
             .AddCookie(options =>
             {
                 options.LoginPath = "/login";
-                options.LogoutPath = externalProviders.Count > 0 ? "/auth/logout" : "/dev/logout";
+                options.LogoutPath = hasExternalProviders ? "/auth/logout" : "/dev/logout";
                 options.ExpireTimeSpan = TimeSpan.FromDays(14);
                 options.SlidingExpiration = true;
                 options.Cookie.Name = "MemexAuth";
@@ -205,77 +180,12 @@ public static class MemexConfiguration
                 options.Cookie.SameSite = SameSiteMode.Lax;
             });
 
-            // Register each configured external provider
-            foreach (var ep in externalProviders)
-            {
-                switch (ep.Name.ToLowerInvariant())
-                {
-                    case "microsoft":
-                        JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
-                        authBuilder.AddMicrosoftIdentityWebApp(options =>
-                        {
-                            options.ClientId = ep.ClientId;
-                            options.ClientSecret = ep.ClientSecret;
-                            options.TenantId = ep.TenantId ?? "common";
-                            options.Instance = "https://login.microsoftonline.com/";
-                            options.CallbackPath = "/signin-microsoft";
-                        }, cookieOptions => { }, "Microsoft");
-                        services.AddControllersWithViews().AddMicrosoftIdentityUI();
-                        break;
-
-                    case "google":
-                        authBuilder.AddOAuth("Google", options =>
-                        {
-                            options.ClientId = ep.ClientId;
-                            options.ClientSecret = ep.ClientSecret;
-                            options.CallbackPath = "/signin-google";
-                            options.AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
-                            options.TokenEndpoint = "https://oauth2.googleapis.com/token";
-                            options.UserInformationEndpoint = "https://www.googleapis.com/oauth2/v3/userinfo";
-                            options.Scope.Add("openid");
-                            options.Scope.Add("profile");
-                            options.Scope.Add("email");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
-                        });
-                        break;
-
-                    case "linkedin":
-                        authBuilder.AddOAuth("LinkedIn", options =>
-                        {
-                            options.ClientId = ep.ClientId;
-                            options.ClientSecret = ep.ClientSecret;
-                            options.CallbackPath = "/signin-linkedin";
-                            options.AuthorizationEndpoint = "https://www.linkedin.com/oauth/v2/authorization";
-                            options.TokenEndpoint = "https://www.linkedin.com/oauth/v2/accessToken";
-                            options.UserInformationEndpoint = "https://api.linkedin.com/v2/userinfo";
-                            options.Scope.Add("openid");
-                            options.Scope.Add("profile");
-                            options.Scope.Add("email");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
-                        });
-                        break;
-
-                    case "apple":
-                        authBuilder.AddOAuth("Apple", options =>
-                        {
-                            options.ClientId = ep.ClientId;
-                            options.ClientSecret = ep.ClientSecret;
-                            options.CallbackPath = "/signin-apple";
-                            options.AuthorizationEndpoint = "https://appleid.apple.com/auth/authorize";
-                            options.TokenEndpoint = "https://appleid.apple.com/auth/token";
-                            options.Scope.Add("name");
-                            options.Scope.Add("email");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
-                            options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
-                        });
-                        break;
-                }
-            }
+            // Register external providers from configuration
+            authBuilder
+                .AddMicrosoftAuthentication(builder.Configuration)
+                .AddGoogleAuthentication(builder.Configuration)
+                .AddLinkedInAuthentication(builder.Configuration)
+                .AddAppleAuthentication(builder.Configuration);
 
             // Add API token auth scheme for MCP bearer authentication
             authBuilder.AddScheme<AuthenticationSchemeOptions, ApiTokenAuthenticationHandler>(
@@ -366,18 +276,6 @@ public static class MemexConfiguration
                 // Configure graph from the same base path
                 .AddGraph()
                 .AddDocumentation()
-                .AddPlatformType()
-                // Register Admin namespace content types for polymorphic deserialization
-                .ConfigureServices(services =>
-                {
-                    var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
-                    if (typeRegistry != null)
-                    {
-                        typeRegistry.WithType(typeof(PlatformSettings), nameof(PlatformSettings));
-                        typeRegistry.WithType(typeof(AuthProviderEntry), nameof(AuthProviderEntry));
-                    }
-                    return services;
-                })
                 // Add kernel for interactive markdown code execution
                 .AddKernel()
                 // Register Azure Blob support for content collections.
@@ -471,7 +369,6 @@ public static class MemexConfiguration
         app.MapMeshWeaver();
         app.UseMiddleware<VirtualUserMiddleware>();
         app.UseMiddleware<UserContextMiddleware>();
-        app.UseMiddleware<InitializationMiddleware>();
         app.UseMiddleware<OnboardingMiddleware>();
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)

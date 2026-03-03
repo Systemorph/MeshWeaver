@@ -53,10 +53,16 @@ if (useDistributed)
     var embeddingKey = builder.AddParameter("embedding-key", secret: true);
     var embeddingModel = builder.AddParameter("embedding-model", secret: false);
 
-    // KeyVault URI for resolving auth provider secrets at startup
-    // Auth provider config (App IDs + KV secret names) is stored in Admin/AuthProviders graph nodes.
-    // At startup, AdminStartupReader reads these nodes and resolves secrets from KeyVault.
-    var keyVaultUri = builder.AddParameter("keyvault-uri", secret: false);
+    // Authentication provider parameters (Aspire prompts for values via dashboard/config)
+    // Empty values = provider not enabled
+    var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
+    var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
+    var googleClientId = builder.AddParameter("google-client-id", secret: false);
+    var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
+    var linkedinClientId = builder.AddParameter("linkedin-client-id", secret: false);
+    var linkedinClientSecret = builder.AddParameter("linkedin-client-secret", secret: true);
+    var appleClientId = builder.AddParameter("apple-client-id", secret: false);
+    var appleClientSecret = builder.AddParameter("apple-client-secret", secret: true);
 
     // Memex Distributed (co-hosted silo + web)
     builder
@@ -70,7 +76,16 @@ if (useDistributed)
         .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
         .WithEnvironment("Embedding__ApiKey", embeddingKey)
         .WithEnvironment("Embedding__Model", embeddingModel)
-        .WithEnvironment("KeyVault__Uri", keyVaultUri)
+        // Authentication providers (read by AuthenticationBuilderExtensions)
+        .WithEnvironment("Authentication__EnableDevLogin", "true")
+        .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
+        .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
+        .WithEnvironment("Authentication__Google__ClientId", googleClientId)
+        .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
+        .WithEnvironment("Authentication__LinkedIn__ClientId", linkedinClientId)
+        .WithEnvironment("Authentication__LinkedIn__ClientSecret", linkedinClientSecret)
+        .WithEnvironment("Authentication__Apple__ClientId", appleClientId)
+        .WithEnvironment("Authentication__Apple__ClientSecret", appleClientSecret)
         .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)
@@ -80,8 +95,7 @@ if (useDistributed)
 if (useMonolith)
 {
     // Memex Monolith (standalone, no Orleans)
-    // Auth provider config is read from Admin/AuthProviders graph nodes at startup.
-    // In monolith/dev mode (FileSystem storage), no KeyVault is needed.
+    // Auth providers configured via appsettings.json Authentication section
     builder
         .AddProject<Projects.Memex_Portal_Monolith>("memex-monolith")
         .WithExternalHttpEndpoints();

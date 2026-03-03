@@ -1,10 +1,6 @@
 @using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
-@using Memex.Portal.Shared.Admin
 @using MeshWeaver.Blazor.Infrastructure
-@using MeshWeaver.Mesh.Security
 @using MeshWeaver.Mesh.Services
-@using Microsoft.Extensions.DependencyInjection
-@implements IDisposable
 
 <FluentMenu Open="@IsOpen" Anchored="false" Style="grid-area: nav-menu; height: auto; max-height: 80vh; width: 100%;">
     <div style="padding: 8px;">
@@ -21,13 +17,6 @@
         <FluentIcon Value="@(new Icons.Regular.Size20.Settings())" Slot="start" />
         Settings
     </FluentMenuItem>
-    @if (isAdmin)
-    {
-        <FluentMenuItem OnClick="@HandleAdminClick">
-            <FluentIcon Value="@(new Icons.Regular.Size20.ShieldKeyhole())" Slot="start" />
-            Platform Settings
-        </FluentMenuItem>
-    }
 </FluentMenu>
 
 @code {
@@ -36,41 +25,9 @@
     [Parameter] public EventCallback<string> OnSearch { get; set; }
     [Parameter] public EventCallback OnOpenSettings { get; set; }
 
-    [CascadingParameter]
-    private Task<Microsoft.AspNetCore.Components.Authorization.AuthenticationState>? AuthState { get; set; }
-
     [Inject] NavigationManager NavigationManager { get; set; } = null!;
     [Inject] MeshWeaver.Mesh.Services.INavigationService NavigationService { get; set; } = null!;
-    [Inject] IServiceProvider ServiceProvider { get; set; } = null!;
-
     private string searchQuery = "";
-    private bool isAdmin;
-    private CancellationTokenSource? cts;
-
-    protected override async Task OnInitializedAsync()
-    {
-        cts = new CancellationTokenSource();
-        try
-        {
-            var portalApp = ServiceProvider.GetService<PortalApplication>();
-            var securityService = portalApp?.Hub.ServiceProvider.GetService<ISecurityService>();
-            if (securityService == null)
-                return;
-
-            var authState = AuthState != null ? await AuthState : null;
-            var userId = authState?.User?.FindFirst("preferred_username")?.Value
-                         ?? authState?.User?.Identity?.Name;
-
-            if (string.IsNullOrEmpty(userId))
-                return;
-
-            isAdmin = await AdminService.IsAdminAsync(securityService, userId, cts.Token);
-        }
-        catch
-        {
-            // Non-critical — just hide the menu item
-        }
-    }
 
     private async Task HandleSearchKeyDown(KeyboardEventArgs e)
     {
@@ -95,15 +52,4 @@
         await OnClose.InvokeAsync();
     }
 
-    private async Task HandleAdminClick()
-    {
-        NavigationManager.NavigateTo("/Admin");
-        await OnClose.InvokeAsync();
-    }
-
-    public void Dispose()
-    {
-        cts?.Cancel();
-        cts?.Dispose();
-    }
 }
