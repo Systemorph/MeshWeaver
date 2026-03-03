@@ -14,6 +14,7 @@ public static  class MarkdownExtensions
             .UseEmojiAndSmiley()
             .UseYamlFrontMatter()
             .Use(new ImgPathMarkdownExtension(path => ToStaticHref(path, collection)))
+            .Use(new LinkUrlCleanupExtension())
             .Use(new LayoutAreaMarkdownExtension())
             .Use(new ExecutableCodeBlockExtension())
             .Build();

@@ -1,0 +1,18 @@
+{
+  "id": "TransactionMapping",
+  "namespace": "FutuRe",
+  "name": "Transaction Mapping",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Maps local business unit lines of business to group lines with percentage splits",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "TransactionMapping",
+    "namespace": "FutuRe",
+    "displayName": "Transaction Mapping",
+    "iconName": "ArrowSplit",
+    "description": "Maps local LoB to group LoB with percentage split",
+    "configuration": "config => config.WithContentType<TransactionMapping>()"
+  }
+}

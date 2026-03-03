@@ -1,0 +1,17 @@
+{
+  "id": "AME-AGRICULTURE-AGRI",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Agriculture → Agriculture (100%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-AGRICULTURE-AGRI",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "AGRICULTURE",
+    "localLineOfBusinessName": "Agriculture",
+    "groupLineOfBusiness": "AGRI",
+    "groupLineOfBusinessName": "Agriculture",
+    "percentage": 1.00
+  }
+}

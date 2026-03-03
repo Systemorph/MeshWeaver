@@ -1,0 +1,17 @@
+{
+  "id": "AME-CYBER_TECH-CYBER",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Cyber & Technology → Cyber (70%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-CYBER_TECH-CYBER",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "CYBER_TECH",
+    "localLineOfBusinessName": "Cyber & Technology",
+    "groupLineOfBusiness": "CYBER",
+    "groupLineOfBusinessName": "Cyber",
+    "percentage": 0.70
+  }
+}

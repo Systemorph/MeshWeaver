@@ -1,0 +1,17 @@
+{
+  "id": "EUR-TRANSPORT-MARINE",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Transport → Marine (100%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-TRANSPORT-MARINE",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "TRANSPORT",
+    "localLineOfBusinessName": "Transport",
+    "groupLineOfBusiness": "MARINE",
+    "groupLineOfBusinessName": "Marine",
+    "percentage": 1.00
+  }
+}

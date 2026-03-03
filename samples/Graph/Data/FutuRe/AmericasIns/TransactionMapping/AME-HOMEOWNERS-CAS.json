@@ -1,0 +1,17 @@
+{
+  "id": "AME-HOMEOWNERS-CAS",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Homeowners → Casualty (15%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-HOMEOWNERS-CAS",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "HOMEOWNERS",
+    "localLineOfBusinessName": "Homeowners",
+    "groupLineOfBusiness": "CAS",
+    "groupLineOfBusinessName": "Casualty",
+    "percentage": 0.15
+  }
+}
