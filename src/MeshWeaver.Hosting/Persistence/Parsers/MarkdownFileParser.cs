@@ -235,6 +235,18 @@ public partial class MarkdownFileParser : IFileFormatParser
 
         var ns = pathWithoutExt[..lastSlash];
         var id = pathWithoutExt[(lastSlash + 1)..];
+
+        // index.md represents the parent directory node, not a child called "index"
+        // e.g. "FutuRe/index" → id="FutuRe", ns=null
+        // e.g. "ACME/Products/index" → id="Products", ns="ACME"
+        if (id.Equals("index", StringComparison.OrdinalIgnoreCase))
+        {
+            var parentSlash = ns.LastIndexOf('/');
+            if (parentSlash < 0)
+                return (ns, null);
+            return (ns[(parentSlash + 1)..], ns[..parentSlash]);
+        }
+
         return (id, ns);
     }
 

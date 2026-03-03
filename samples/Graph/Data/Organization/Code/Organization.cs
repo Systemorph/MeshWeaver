@@ -20,6 +20,7 @@ public record Organization
     /// <summary>
     /// Brief description of the organization.
     /// </summary>
+    [Markdown]
     public string? Description { get; init; }
 
     /// <summary>

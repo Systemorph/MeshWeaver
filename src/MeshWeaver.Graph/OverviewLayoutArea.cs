@@ -5,6 +5,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Layout.DataBinding;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -45,14 +46,26 @@ public static class OverviewLayoutArea
             SetupAutoSave(host, dataId, instance, node);
         }
 
+        var container = Controls.Stack.WithWidth("100%");
+
         // Build using unified content view - Overview mode: toggleable=true, no footer actions
-        return EditLayoutArea.BuildContentView(host, new ContentViewOptions
+        container = container.WithView(EditLayoutArea.BuildContentView(host, new ContentViewOptions
         {
             DataId = dataId,
             ContentType = contentType,
             CanEdit = canEdit,
             IsToggleable = true  // Overview: click-to-edit, blur back to read-only
-        });
+        }));
+
+        // Render markdown body from index.md if present (PreRenderedHtml is set by MarkdownFileParser)
+        if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
+        {
+            container = container.WithView(
+                new MarkdownControl("") { Html = node.PreRenderedHtml }
+                    .WithStyle("max-width: 1280px; margin: 0 auto; padding: 0 24px;"));
+        }
+
+        return container;
     }
 
     /// <summary>
