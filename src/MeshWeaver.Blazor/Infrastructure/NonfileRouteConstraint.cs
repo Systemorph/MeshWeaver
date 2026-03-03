@@ -10,14 +10,11 @@ namespace MeshWeaver.Blazor.Infrastructure;
 /// </summary>
 public class NonfileRouteConstraint : IRouteConstraint
 {
-    // Prefixes used by Blazor and Razor Class Libraries for static content
-    private static readonly string[] StaticPrefixes =
-    [
-        "_framework",
-        "_content",
-        "_blazor",
-        "favicon.ico"
-    ];
+    private static readonly HashSet<string> ExcludedPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "_framework", "_content", "_blazor", "favicon.ico",
+        "auth", "dev", "mcp"
+    };
 
     public bool Match(
         HttpContext? httpContext,
@@ -27,20 +24,14 @@ public class NonfileRouteConstraint : IRouteConstraint
         RouteDirection routeDirection)
     {
         if (!values.TryGetValue(routeKey, out var value) || value is not string path)
-            return true; // Allow empty paths
+            return true;
 
-        // Check if path starts with any static prefix
-        foreach (var prefix in StaticPrefixes)
-        {
-            if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                System.Diagnostics.Debug.WriteLine($"NonfileRouteConstraint: Rejecting '{path}' (matches prefix '{prefix}')");
-                return false; // Don't match - let static file middleware handle it
-            }
-        }
+        var firstSegment = path.AsSpan();
+        var slashIndex = path.IndexOf('/');
+        if (slashIndex >= 0)
+            firstSegment = firstSegment[..slashIndex];
 
-        System.Diagnostics.Debug.WriteLine($"NonfileRouteConstraint: Accepting '{path}'");
-        return true; // Allow the route to match
+        return !ExcludedPrefixes.Contains(firstSegment.ToString());
     }
 }
 

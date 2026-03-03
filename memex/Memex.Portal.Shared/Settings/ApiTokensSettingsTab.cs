@@ -58,7 +58,10 @@ public static class ApiTokensSettingsTab
             ["label"] = "",
             ["expiryDays"] = 0
         });
-        host.UpdateData(resultDataId, "");
+        // NOTE: Do NOT initialize resultDataId here — CreateTokenAsync saves a MeshNode
+        // which triggers the workspace stream, causing the Settings page to rebuild.
+        // If we set resultDataId="" here, the rebuild would overwrite the token display
+        // that the click handler just set. Instead, the reactive view uses .StartWith().
         host.UpdateData(tokenListRefreshId, DateTimeOffset.UtcNow.Ticks);
 
         // Create token form
@@ -139,7 +142,8 @@ public static class ApiTokensSettingsTab
             h.Stream.GetDataStream<string>(resultDataId)
                 .Select(html => string.IsNullOrEmpty(html)
                     ? (UiControl?)Controls.Stack
-                    : (UiControl?)Controls.Html(html)));
+                    : (UiControl?)Controls.Html(html))
+                .StartWith((UiControl?)Controls.Stack));
 
         // Token list
         stack = stack.WithView(

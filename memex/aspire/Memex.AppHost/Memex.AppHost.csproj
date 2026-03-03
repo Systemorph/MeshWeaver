@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Memex.Database.Migration\Memex.Database.Migration.csproj" />
     <ProjectReference Include="..\Memex.Portal.Distributed\Memex.Portal.Distributed.csproj" />
     <ProjectReference Include="..\..\Memex.Portal.Monolith\Memex.Portal.Monolith.csproj" />
   </ItemGroup>

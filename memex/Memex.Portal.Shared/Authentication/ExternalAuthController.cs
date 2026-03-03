@@ -98,50 +98,30 @@ public class ExternalAuthController : ControllerBase
         return Redirect(returnUrl ?? "/");
     }
 
+    /// <summary>
+    /// Normalizes claims from external providers.
+    /// ObjectId is always the primary email address (UPN).
+    /// </summary>
     private static (string objectId, string name, string email) NormalizeClaims(
         string provider, List<Claim> claims)
     {
-        string objectId;
         var name = claims.FirstOrDefault(c => c.Type == "name")?.Value
                    ?? claims.FirstOrDefault(c => c.Type == ClaimTypes.Name)?.Value
                    ?? "Unknown";
         var email = claims.FirstOrDefault(c => c.Type == "email")?.Value
                     ?? claims.FirstOrDefault(c => c.Type == ClaimTypes.Email)?.Value
+                    ?? claims.FirstOrDefault(c => c.Type == "preferred_username")?.Value
                     ?? "";
 
-        switch (provider.ToLowerInvariant())
+        // ObjectId = email address, always
+        var objectId = email;
+
+        if (string.IsNullOrEmpty(objectId))
         {
-            case "microsoft":
-                objectId = claims.FirstOrDefault(c => c.Type == "preferred_username")?.Value
-                           ?? claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value
-                           ?? email;
-                break;
-
-            case "google":
-                var googleSub = claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value
-                                ?? claims.FirstOrDefault(c => c.Type == "sub")?.Value
-                                ?? "";
-                objectId = $"google_{googleSub}";
-                break;
-
-            case "linkedin":
-                var linkedInSub = claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value
-                                  ?? claims.FirstOrDefault(c => c.Type == "sub")?.Value
-                                  ?? "";
-                objectId = $"linkedin_{linkedInSub}";
-                break;
-
-            case "apple":
-                var appleSub = claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value
-                               ?? claims.FirstOrDefault(c => c.Type == "sub")?.Value
-                               ?? "";
-                objectId = $"apple_{appleSub}";
-                break;
-
-            default:
-                objectId = claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value
-                           ?? email;
-                break;
+            // Fallback to sub/NameIdentifier only if no email available
+            objectId = claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier)?.Value
+                       ?? claims.FirstOrDefault(c => c.Type == "sub")?.Value
+                       ?? "unknown";
         }
 
         return (objectId, name, email);

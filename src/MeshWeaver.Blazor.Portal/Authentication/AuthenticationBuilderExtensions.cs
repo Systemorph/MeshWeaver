@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.Tokens;
 
 namespace MeshWeaver.Blazor.Portal.Authentication;
 
@@ -34,6 +35,14 @@ public static class AuthenticationBuilderExtensions
             options.Scope.Add("profile");
             options.Scope.Add("email");
             options.TokenValidationParameters.NameClaimType = "name";
+            // Multi-tenant: discovery doc has {tenantid} placeholder, actual token has real tenant ID
+            options.TokenValidationParameters.IssuerValidator = (issuer, _, _) =>
+            {
+                if (Uri.TryCreate(issuer, UriKind.Absolute, out var uri)
+                    && uri.Host == "login.microsoftonline.com")
+                    return issuer;
+                throw new SecurityTokenInvalidIssuerException($"Invalid issuer: {issuer}");
+            };
         });
 
         return builder;

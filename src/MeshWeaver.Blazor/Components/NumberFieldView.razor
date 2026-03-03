@@ -3,6 +3,18 @@
 @using Microsoft.AspNetCore.Components.Forms
 @typeparam TValue
 
+@if (!string.IsNullOrEmpty(Label))
+{
+    <label style="
+        display: block;
+        font-size: var(--type-ramp-minus-1-font-size);
+        line-height: var(--type-ramp-minus-1-line-height);
+        margin-bottom: 4px;
+        color: var(--neutral-foreground-rest);
+        cursor: pointer;
+    ">@Label</label>
+}
+
 <div class="root" part="root" style="
     display: flex;
     align-items: center;

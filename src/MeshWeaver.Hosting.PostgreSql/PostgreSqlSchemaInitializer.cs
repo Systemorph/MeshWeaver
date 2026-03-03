@@ -7,10 +7,31 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// </summary>
 public static class PostgreSqlSchemaInitializer
 {
+    /// <summary>
+    /// Ensures the vector extension exists and initializes the full schema.
+    /// Creates the extension as plain SQL first, then reloads types so the
+    /// UseVector() plugin can resolve the vector OID for parameterized queries.
+    /// </summary>
     public static async Task InitializeAsync(NpgsqlDataSource dataSource, PostgreSqlStorageOptions options, CancellationToken ct = default)
     {
-        await using var cmd = dataSource.CreateCommand(GetSchemaScript(options));
-        await cmd.ExecuteNonQueryAsync(ct);
+        // Step 1: Create the vector extension using plain SQL (no vector parameters).
+        // Even if UseVector() can't find the type yet, plain SQL commands work fine.
+        await using (var cmd = dataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        // Step 2: Reload the type catalog so UseVector() picks up the new vector type.
+        await using (var conn = await dataSource.OpenConnectionAsync(ct))
+        {
+            await conn.ReloadTypesAsync();
+        }
+
+        // Step 3: Run the full schema script (tables, indexes, triggers).
+        await using (var cmd = dataSource.CreateCommand(GetSchemaScript(options)))
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 
     private static string GetSchemaScript(PostgreSqlStorageOptions options)

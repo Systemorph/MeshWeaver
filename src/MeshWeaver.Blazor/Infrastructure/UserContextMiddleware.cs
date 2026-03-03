@@ -41,11 +41,17 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             return null;
         }
 
+        // ObjectId = email address (UPN), always
+        var email = user.FindFirstValue(ClaimTypes.Email)
+                    ?? user.FindFirstValue("email")
+                    ?? user.FindFirstValue("preferred_username")
+                    ?? string.Empty;
+
         return new AccessContext
         {
             Name = user.FindFirstValue(ClaimTypes.Name) ?? user.FindFirstValue("name") ?? string.Empty,
-            ObjectId = user.FindFirstValue("preferred_username") ?? string.Empty,
-            Email = user.FindFirstValue(ClaimTypes.Email) ?? user.FindFirstValue("email") ?? string.Empty,
+            ObjectId = email,
+            Email = email,
             Roles = user.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList()
         };
     }

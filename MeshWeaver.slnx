@@ -32,6 +32,7 @@
   </Folder>
   <Folder Name="/memex/aspire/">
     <Project Path="memex/aspire/Memex.AppHost/Memex.AppHost.csproj" />
+    <Project Path="memex/aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" />
     <Project Path="memex/aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" />
     <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
   </Folder>

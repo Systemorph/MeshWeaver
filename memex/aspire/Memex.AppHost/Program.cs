@@ -43,6 +43,12 @@ if (useDistributed)
         .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
     var postgresDb = postgres.AddDatabase("meshweaver");
 
+    // Database migration: creates vector extension + schema before portal starts
+    var dbMigration = builder
+        .AddProject<Projects.Memex_Database_Migration>("db-migration")
+        .WithReference(postgresDb)
+        .WaitFor(postgresDb);
+
     // Embedding configuration (Cohere embed-v4 via Azure Foundry)
     var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
     var embeddingKey = builder.AddParameter("embedding-key", secret: true);
@@ -84,7 +90,8 @@ if (useDistributed)
         .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)
-        .WaitFor(postgresDb);
+        .WaitFor(postgresDb)
+        .WaitForCompletion(dbMigration);
 }
 
 if (useMonolith)
