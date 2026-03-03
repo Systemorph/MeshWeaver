@@ -32,7 +32,7 @@ public sealed record Address
 
     /// <summary>
     /// Host address for hosted/nested addresses.
-    /// When set, ToFullString() returns "host@this" format.
+    /// When set, ToFullString() returns "host~this" format.
     /// </summary>
     public Address? Host { get; init; }
 
@@ -40,14 +40,14 @@ public sealed record Address
 
     public override string ToString() => Host is null
         ? string.Join("/", Segments)
-        : string.Join("/", Segments) + '@' + Host;
+        : string.Join("/", Segments) + '~' + Host;
 
     /// <summary>
     /// Returns full string representation including host if present.
-    /// Format: "outermost_host@...@inner_segments"
+    /// Format: "outermost_host~...~inner_segments"
     /// </summary>
     public string ToFullString() => Host != null
-        ? $"{Host.ToFullString()}@{string.Join("/", Segments)}"
+        ? $"{Host.ToFullString()}~{string.Join("/", Segments)}"
         : string.Join("/", Segments);
 
     public bool Equals(Address? other)
@@ -79,14 +79,14 @@ public sealed record Address
 
     public static implicit operator Address(string address)
     {
-        // First check for @ separator (hosted address format: "outermost_host@...@inner")
-        var atIndex = address.IndexOf('@');
-        if (atIndex > 0)
+        // First check for ~ separator (hosted address format: "outermost_host~...~inner")
+        var tildeIndex = address.IndexOf('~');
+        if (tildeIndex > 0)
         {
-            var hostPart = address[..atIndex];
-            var innerPart = address[(atIndex + 1)..];
+            var hostPart = address[..tildeIndex];
+            var innerPart = address[(tildeIndex + 1)..];
             Address host = Parse(hostPart);
-            Address inner = innerPart; // Recursive: handles nested @ via implicit operator
+            Address inner = innerPart; // Recursive: handles nested ~ via implicit operator
             return inner.WithHost(host);
         }
         return Parse(address);
