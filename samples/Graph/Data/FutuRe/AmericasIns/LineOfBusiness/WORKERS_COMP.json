@@ -1,0 +1,18 @@
+{
+  "id": "WORKERS_COMP",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Workers Compensation",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Statutory workers compensation and employers liability insurance across US states and territories",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "WORKERS_COMP",
+    "displayName": "Workers Compensation",
+    "description": "US workers compensation insurance providing statutory benefits for workplace injuries and occupational diseases. Coverage is mandatory in most states, with benefits including medical expenses, temporary and permanent disability income, vocational rehabilitation, and death benefits. Pricing is regulated by state rating bureaus (NCCI in most states, independent bureaus in monopolistic states). Key industry segments include construction, manufacturing, healthcare, and gig economy workers. Long-tail exposures include occupational disease claims and cumulative trauma.",
+    "order": 2,
+    "productExamples": "Standard WC, Large deductible, Self-insured retention, Excess WC, Employers liability, Monopolistic state fund"
+  }
+}

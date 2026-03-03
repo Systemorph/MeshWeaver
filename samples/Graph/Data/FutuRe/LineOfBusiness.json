@@ -1,0 +1,19 @@
+{
+  "id": "LineOfBusiness",
+  "namespace": "FutuRe",
+  "name": "Line of Business",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Insurance and reinsurance lines of business classification with product mapping",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "LineOfBusiness",
+    "namespace": "FutuRe",
+    "displayName": "Line of Business",
+    "iconName": "Grid",
+    "description": "Insurance line of business dimension with risk category descriptions and product mappings",
+    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessViews())"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "COMM_FIRE",
+  "namespace": "FutuRe/EuropeRe/LineOfBusiness",
+  "name": "Commercial Fire",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Commercial and industrial property insurance including engineering risks",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "COMM_FIRE",
+    "displayName": "Commercial Fire",
+    "description": "Commercial fire and engineering insurance covering industrial plants, office buildings, warehouses, and manufacturing facilities against fire, explosion, machinery breakdown, and construction risks. Includes business interruption extensions and engineering inspections. This line spans traditional fire policies and modern multi-peril commercial packages, often incorporating elements of energy risk for industrial clients with power generation facilities.",
+    "order": 2,
+    "productExamples": "Commercial fire, Industrial all risks, Machinery breakdown, Construction all risks, Business interruption, Erection all risks"
+  }
+}
