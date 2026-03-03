@@ -15,6 +15,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -40,7 +41,9 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
             .AddLayout(layout => layout
                 .WithView(OverviewView, BuildOverviewView)
                 .WithView(nameof(MarkdownOverviewView), MarkdownOverviewView)
-                .WithView(nameof(EditToggleView), EditToggleView));
+                .WithView(nameof(EditToggleView), EditToggleView)
+                .WithView(nameof(PreRenderedHtmlView), PreRenderedHtmlView)
+                .WithView(nameof(NoPreRenderedHtmlView), NoPreRenderedHtmlView));
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -202,6 +205,59 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
     }
 
     [HubFact]
+    public async Task PreRenderedHtml_RendersMarkdownControl()
+    {
+        var reference = new LayoutAreaReference(nameof(PreRenderedHtmlView));
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), reference);
+
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(5.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Root should be a Stack
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
+            "should have property grid + markdown body");
+
+        // The last area should contain a MarkdownControl with Html set
+        var lastAreaName = stack.Areas.Last().Area?.ToString();
+        lastAreaName.Should().NotBeNullOrEmpty();
+
+        var markdownControl = await stream
+            .GetControlStream(lastAreaName!)
+            .Timeout(5.Seconds())
+            .FirstAsync(x => x != null);
+
+        markdownControl.Should().BeOfType<MarkdownControl>()
+            .Which.Html.Should().NotBeNull();
+        ((MarkdownControl)markdownControl!).Html!.ToString()
+            .Should().Contain("mermaid")
+            .And.Contain("FutuRe Group");
+    }
+
+    [HubFact]
+    public async Task NoPreRenderedHtml_DoesNotAddMarkdownControl()
+    {
+        var reference = new LayoutAreaReference(nameof(NoPreRenderedHtmlView));
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(), reference);
+
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(5.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Root should be a Stack with just the property grid (no markdown area)
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCount(1,
+            "should only have property grid when PreRenderedHtml is null");
+    }
+
+    [HubFact]
     public async Task IsTitleProperty_FiltersCorrectly()
     {
         // Unit test for the static helper
@@ -222,6 +278,38 @@ public class OverviewLayoutAreaTest(ITestOutputHelper output) : HubTestBase(outp
         EditLayoutArea.GetDataId("path/with/slashes").Should().Be("content_path_with_slashes");
 
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// View that uses BuildPropertyOverview with a MeshNode that has PreRenderedHtml set.
+    /// </summary>
+    private static UiControl PreRenderedHtmlView(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var content = new TestTodo("1", "Work", 1, false, DateTime.Today.AddDays(7));
+        var node = new MeshNode("TestNode", "test/namespace")
+        {
+            Name = "Test Node",
+            Content = content,
+            PreRenderedHtml = "<h1>FutuRe Group</h1><pre class=\"mermaid\">graph TD\n    A-->B</pre>"
+        };
+
+        return OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true);
+    }
+
+    /// <summary>
+    /// View that uses BuildPropertyOverview with a MeshNode that has no PreRenderedHtml.
+    /// </summary>
+    private static UiControl NoPreRenderedHtmlView(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var content = new TestTodo("2", "Personal", 2, true, null);
+        var node = new MeshNode("TestNode2", "test/namespace2")
+        {
+            Name = "Test Node 2",
+            Content = content,
+            PreRenderedHtml = null
+        };
+
+        return OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit: true);
     }
 }
 

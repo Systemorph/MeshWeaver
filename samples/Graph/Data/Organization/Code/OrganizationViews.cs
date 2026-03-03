@@ -80,11 +80,11 @@ public static class OrganizationViews
         infoColumn = infoColumn.WithView(Controls.Html(
             $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(name)}</h1>"));
 
-        // Description/tagline
+        // Description/tagline (rendered as markdown for rich formatting)
         if (!string.IsNullOrEmpty(description))
         {
-            infoColumn = infoColumn.WithView(Controls.Html(
-                $"<div style=\"color: var(--neutral-foreground-hint); font-size: 1rem;\">{System.Web.HttpUtility.HtmlEncode(description)}</div>"));
+            infoColumn = infoColumn.WithView(
+                Controls.Markdown(description).WithStyle("color: var(--neutral-foreground-hint); font-size: 1rem;"));
         }
 
         // Verified badge
@@ -135,20 +135,13 @@ public static class OrganizationViews
         container = container.WithView(Controls.Html(
             "<hr style=\"border: none; border-top: 1px solid var(--neutral-stroke-rest); margin: 24px 0;\" />"));
 
-        // Markdown content (if any)
-        var markdownContent = GetMarkdownContent(node);
-        if (!string.IsNullOrWhiteSpace(markdownContent))
+        // Markdown body from index.md — PreRenderedHtml is set by MarkdownFileParser
+        // for any .md file; MarkdownView handles mermaid, code blocks, math, UCR links
+        if (!string.IsNullOrWhiteSpace(node?.PreRenderedHtml))
         {
             container = container.WithView(
-                new CollaborativeMarkdownControl()
-                    .WithValue(markdownContent)
-                    .WithNodePath(hubPath)
-                    .WithHubAddress(host.Hub.Address.ToString())
-                    .WithCanComment(false));
-
-            // Add spacing before children
-            container = container.WithView(Controls.Html(
-                "<div style=\"margin-top: 24px;\"></div>"));
+                new MarkdownControl("") { Html = node.PreRenderedHtml }
+                    .WithStyle("max-width: 1280px; margin: 0 auto; padding: 0 24px;"));
         }
 
         // Use LayoutAreaControl to render the standard Catalog view for children
@@ -172,17 +165,4 @@ public static class OrganizationViews
         return name.Length >= 2 ? $"{char.ToUpper(name[0])}{char.ToUpper(name[1])}" : char.ToUpper(name[0]).ToString();
     }
 
-    private static string GetMarkdownContent(MeshNode? node)
-    {
-        if (node?.Content == null)
-            return string.Empty;
-
-        if (node.Content is MarkdownContent markdownContent)
-            return markdownContent.Content;
-
-        if (node.Content is string stringContent)
-            return stringContent;
-
-        return string.Empty;
-    }
 }
