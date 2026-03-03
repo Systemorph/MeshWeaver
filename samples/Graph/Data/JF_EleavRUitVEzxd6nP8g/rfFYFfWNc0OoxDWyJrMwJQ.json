@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/rfFYFfWNc0OoxDWyJrMwJQ",
+  "path": "JF_EleavRUitVEzxd6nP8g/rfFYFfWNc0OoxDWyJrMwJQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:09:06.01889+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "rfFYFfWNc0OoxDWyJrMwJQ",
+    "role": "user",
+    "text": "Hello, who am I talking to?",
+    "timestamp": "2026-03-02T14:09:06.018548Z",
+    "type": "ExecutedInput"
+  }
+}

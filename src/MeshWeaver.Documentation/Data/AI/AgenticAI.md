@@ -2,7 +2,7 @@
 NodeType: "Doc/Article"
 Title: "Agents are also just Humans"
 Abstract: "Agentic AI represents a paradigm shift in artificial intelligence, moving beyond passive response systems to proactive, goal-oriented agents capable of autonomous decision-making and action."
-Icon: "Document"
+Icon: "/static/DocContent/AI/AgenticAI/icon.svg"
 Published: "2025-11-09"
 Thumbnail: "images/agenticai.svg"
 Authors:

@@ -1,26 +1,18 @@
 <svg width="100%" height="200" viewBox="0 0 700 200" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="dataGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#2196f3"/>
-      <stop offset="100%" stop-color="#1565c0"/>
-    </linearGradient>
-    <linearGradient id="compressGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4caf50"/>
-      <stop offset="100%" stop-color="#2e7d32"/>
-    </linearGradient>
     <filter id="shadowSmall" x="-10%" y="-10%" width="120%" height="120%">
       <feDropShadow dx="1" dy="1" stdDeviation="2" flood-opacity="0.15"/>
     </filter>
   </defs>
 
   <!-- Background -->
-  <rect width="700" height="200" fill="#fafafa"/>
+  <rect width="700" height="200" fill="var(--neutral-layer-1, #fafafa)"/>
 
   <!-- Large data grid (left side) -->
   <g filter="url(#shadowSmall)" transform="translate(30, 30)">
-    <rect width="200" height="140" rx="6" fill="url(#dataGrad)" opacity="0.1" stroke="#2196f3" stroke-width="2"/>
+    <rect width="200" height="140" rx="6" fill="var(--accent-fill-rest, #0078d4)" opacity="0.1" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="2"/>
     <!-- Grid lines to represent many rows -->
-    <g stroke="#2196f3" stroke-width="0.5" opacity="0.4">
+    <g stroke="var(--accent-fill-rest, #0078d4)" stroke-width="0.5" opacity="0.4">
       <!-- Horizontal lines -->
       <line x1="0" y1="14" x2="200" y2="14"/>
       <line x1="0" y1="28" x2="200" y2="28"/>
@@ -37,32 +29,32 @@
       <line x1="150" y1="0" x2="150" y2="140"/>
     </g>
     <!-- More dots to indicate more data -->
-    <text x="100" y="85" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="#1565c0" opacity="0.5">...</text>
+    <text x="100" y="85" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" fill="var(--accent-fill-rest, #0078d4)" opacity="0.5">...</text>
   </g>
 
   <!-- Label for large data -->
-  <text x="130" y="185" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#1565c0">1,000,000 rows</text>
-  <text x="130" y="22" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">Full Dataset</text>
+  <text x="130" y="185" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="var(--accent-fill-rest, #0078d4)">1,000,000 rows</text>
+  <text x="130" y="22" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="var(--neutral-foreground-rest, #666)">Full Dataset</text>
 
   <!-- Arrow with "Aggregate" label -->
   <g transform="translate(270, 100)">
-    <path d="M0,0 L100,0" fill="none" stroke="#9c27b0" stroke-width="3" marker-end="url(#arrowTransfer)"/>
-    <text x="50" y="-10" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#9c27b0">Aggregate</text>
-    <text x="50" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#7b1fa2">Server-side</text>
+    <path d="M0,0 L100,0" fill="none" stroke="var(--info-fill-rest, #9c27b0)" stroke-width="3" marker-end="url(#arrowTransfer)"/>
+    <text x="50" y="-10" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="var(--info-fill-rest, #9c27b0)">Aggregate</text>
+    <text x="50" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="var(--info-fill-rest, #9c27b0)">Server-side</text>
   </g>
 
   <!-- Arrow marker -->
   <defs>
     <marker id="arrowTransfer" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#9c27b0"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="var(--info-fill-rest, #9c27b0)"/>
     </marker>
   </defs>
 
   <!-- Small summary grid (right side) -->
   <g filter="url(#shadowSmall)" transform="translate(420, 50)">
-    <rect width="100" height="100" rx="6" fill="url(#compressGrad)" opacity="0.15" stroke="#4caf50" stroke-width="2"/>
+    <rect width="100" height="100" rx="6" fill="var(--success-fill-rest, #4caf50)" opacity="0.15" stroke="var(--success-fill-rest, #4caf50)" stroke-width="2"/>
     <!-- 10x10 grid -->
-    <g stroke="#4caf50" stroke-width="0.5" opacity="0.6">
+    <g stroke="var(--success-fill-rest, #4caf50)" stroke-width="0.5" opacity="0.6">
       <line x1="10" y1="0" x2="10" y2="100"/>
       <line x1="20" y1="0" x2="20" y2="100"/>
       <line x1="30" y1="0" x2="30" y2="100"/>
@@ -85,14 +77,14 @@
   </g>
 
   <!-- Label for small data -->
-  <text x="470" y="185" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#2e7d32">100 cells</text>
-  <text x="470" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">Summary View</text>
+  <text x="470" y="185" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="var(--success-fill-rest, #4caf50)">100 cells</text>
+  <text x="470" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="var(--neutral-foreground-rest, #666)">Summary View</text>
 
   <!-- Network icon and transfer indicator -->
   <g transform="translate(560, 85)">
-    <rect x="0" y="0" width="110" height="55" rx="6" fill="#fff3e0" stroke="#ff9800" stroke-width="1"/>
-    <text x="55" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="#e65100">Network Transfer</text>
-    <text x="55" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#4caf50">~100 bytes</text>
-    <text x="55" y="50" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="#666">vs ~10MB raw data</text>
+    <rect x="0" y="0" width="110" height="55" rx="6" fill="var(--neutral-layer-2, #fff3e0)" stroke="var(--warning-fill-rest, #ff9800)" stroke-width="1"/>
+    <text x="55" y="20" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="var(--warning-fill-rest, #ff9800)">Network Transfer</text>
+    <text x="55" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="var(--warning-fill-rest, #ff9800)">~100 bytes</text>
+    <text x="55" y="50" text-anchor="middle" font-family="Arial, sans-serif" font-size="8" fill="var(--neutral-foreground-rest, #666)">vs ~10MB raw data</text>
   </g>
 </svg>

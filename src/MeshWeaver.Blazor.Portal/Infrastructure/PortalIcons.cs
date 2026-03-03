@@ -95,7 +95,7 @@ public static class PortalIcons
                 <g font-family='Arial, sans-serif' font-weight='bold' font-size='22' text-anchor='middle' fill='currentColor'>
                     <text x='60' y='110' style='letter-spacing:1px'>NORTHWIND</text>
                 </g>
-                <rect x='80' y='60' width='28' height='36' rx='4' fill='white' stroke='currentColor' stroke-width='3'/>
+                <rect x='80' y='60' width='28' height='36' rx='4' fill='var(--neutral-layer-1, white)' stroke='currentColor' stroke-width='3'/>
                 <line x1='85' y1='70' x2='102' y2='70' stroke='currentColor' stroke-width='2'/>
                 <line x1='85' y1='78' x2='102' y2='78' stroke='currentColor' stroke-width='2'/>
             </g>");
@@ -126,7 +126,7 @@ public static class PortalIcons
             @"<g transform='scale(0.2)'>
                 <rect x='40' y='40' width='40' height='40' rx='8' fill='currentColor' fill-opacity='0.2' stroke='currentColor' stroke-width='6'/>
                 <polyline points='50,60 60,80 80,50' fill='none' stroke='currentColor' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/>
-                <rect x='80' y='60' width='28' height='36' rx='4' fill='white' stroke='currentColor' stroke-width='3'/>
+                <rect x='80' y='60' width='28' height='36' rx='4' fill='var(--neutral-layer-1, white)' stroke='currentColor' stroke-width='3'/>
                 <line x1='85' y1='70' x2='102' y2='70' stroke='currentColor' stroke-width='2'/>
                 <line x1='85' y1='78' x2='102' y2='78' stroke='currentColor' stroke-width='2'/>
             </g>");
@@ -146,7 +146,7 @@ public static class PortalIcons
                 <line x1='50' y1='50' x2='50' y2='80' stroke='currentColor' stroke-width='4'/>
                 <line x1='70' y1='50' x2='70' y2='80' stroke='currentColor' stroke-width='4'/>
                 <line x1='50' y1='65' x2='70' y2='65' stroke='currentColor' stroke-width='2'/>
-                <rect x='80' y='60' width='28' height='36' rx='4' fill='white' stroke='currentColor' stroke-width='3'/>
+                <rect x='80' y='60' width='28' height='36' rx='4' fill='var(--neutral-layer-1, white)' stroke='currentColor' stroke-width='3'/>
                 <line x1='85' y1='70' x2='102' y2='70' stroke='currentColor' stroke-width='2'/>
                 <line x1='85' y1='78' x2='102' y2='78' stroke='currentColor' stroke-width='2'/>
             </g>");

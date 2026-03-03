@@ -1,13 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="data-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#14b8a6"/>
-      <stop offset="100%" stop-color="#0d9488"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#data-grad)"/>
-  <ellipse cx="24" cy="14" rx="14" ry="6" fill="white"/>
-  <path d="M10 14 L10 24 C10 27.3 16.3 30 24 30 C31.7 30 38 27.3 38 24 L38 14" fill="none" stroke="white" stroke-width="2"/>
-  <path d="M10 24 L10 34 C10 37.3 16.3 40 24 40 C31.7 40 38 37.3 38 34 L38 24" fill="none" stroke="white" stroke-width="2"/>
-  <ellipse cx="24" cy="24" rx="14" ry="6" fill="none" stroke="white" stroke-width="2"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
+  <ellipse cx="24" cy="14" rx="14" ry="6" fill="currentColor"/>
+  <path d="M10 14 L10 24 C10 27.3 16.3 30 24 30 C31.7 30 38 27.3 38 24 L38 14" fill="none" stroke="currentColor" stroke-width="2"/>
+  <path d="M10 24 L10 34 C10 37.3 16.3 40 24 40 C31.7 40 38 37.3 38 34 L38 24" fill="none" stroke="currentColor" stroke-width="2"/>
+  <ellipse cx="24" cy="24" rx="14" ry="6" fill="none" stroke="currentColor" stroke-width="2"/>
 </svg>

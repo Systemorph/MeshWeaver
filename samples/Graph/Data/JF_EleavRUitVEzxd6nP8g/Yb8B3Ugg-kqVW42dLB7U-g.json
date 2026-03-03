@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/Yb8B3Ugg-kqVW42dLB7U-g",
+  "path": "JF_EleavRUitVEzxd6nP8g/Yb8B3Ugg-kqVW42dLB7U-g",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:56:02.089265+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "Yb8B3Ugg-kqVW42dLB7U-g",
+    "role": "user",
+    "text": "Go with option 3",
+    "timestamp": "2026-03-02T14:56:02.088878Z",
+    "type": "ExecutedInput"
+  }
+}

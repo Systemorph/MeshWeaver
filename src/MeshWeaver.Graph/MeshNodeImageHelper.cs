@@ -12,4 +12,7 @@ public static class MeshNodeImageHelper
             return null;
         return icon.Contains('/') || icon.StartsWith("data:") ? icon : null;
     }
+
+    public static bool IsMonochromeIcon(string? url)
+        => !string.IsNullOrEmpty(url) && url.Contains("/NodeTypeIcons/");
 }

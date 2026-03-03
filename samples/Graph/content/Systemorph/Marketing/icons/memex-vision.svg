@@ -1,44 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="memex-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0ea5e9"/>
-      <stop offset="100%" stop-color="#0369a1"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#memex-grad)"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
   <!-- Central claim node -->
-  <circle cx="24" cy="24" r="6" fill="white" stroke="white" stroke-width="1"/>
+  <circle cx="24" cy="24" r="6" fill="currentColor" stroke="currentColor" stroke-width="1"/>
   <!-- Surrounding nodes - 6 data types -->
   <!-- Top: Photo/Image -->
-  <circle cx="24" cy="8" r="4" fill="none" stroke="white" stroke-width="1.5"/>
-  <rect x="22" y="6" width="4" height="3" fill="white" rx="0.5"/>
+  <circle cx="24" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <rect x="22" y="6" width="4" height="3" fill="currentColor" rx="0.5"/>
   <!-- Top-right: PDF -->
-  <circle cx="38" cy="14" r="4" fill="none" stroke="white" stroke-width="1.5"/>
-  <rect x="36" y="12" width="4" height="5" fill="white" rx="0.5"/>
+  <circle cx="38" cy="14" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <rect x="36" y="12" width="4" height="5" fill="currentColor" rx="0.5"/>
   <!-- Bottom-right: Excel -->
-  <circle cx="38" cy="34" r="4" fill="none" stroke="white" stroke-width="1.5"/>
-  <rect x="36" y="32" width="4" height="4" fill="none" stroke="white" stroke-width="1"/>
-  <line x1="38" y1="32" x2="38" y2="36" stroke="white" stroke-width="0.5"/>
-  <line x1="36" y1="34" x2="40" y2="34" stroke="white" stroke-width="0.5"/>
+  <circle cx="38" cy="34" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <rect x="36" y="32" width="4" height="4" fill="none" stroke="currentColor" stroke-width="1"/>
+  <line x1="38" y1="32" x2="38" y2="36" stroke="currentColor" stroke-width="0.5"/>
+  <line x1="36" y1="34" x2="40" y2="34" stroke="currentColor" stroke-width="0.5"/>
   <!-- Bottom: Email -->
-  <circle cx="24" cy="40" r="4" fill="none" stroke="white" stroke-width="1.5"/>
-  <rect x="21.5" y="38.5" width="5" height="3" fill="none" stroke="white" stroke-width="1"/>
-  <polyline points="21.5,38.5 24,40.5 26.5,38.5" fill="none" stroke="white" stroke-width="0.8"/>
+  <circle cx="24" cy="40" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <rect x="21.5" y="38.5" width="5" height="3" fill="none" stroke="currentColor" stroke-width="1"/>
+  <polyline points="21.5,38.5 24,40.5 26.5,38.5" fill="none" stroke="currentColor" stroke-width="0.8"/>
   <!-- Bottom-left: Database -->
-  <circle cx="10" cy="34" r="4" fill="none" stroke="white" stroke-width="1.5"/>
-  <ellipse cx="10" cy="32.5" rx="2.5" ry="1" fill="none" stroke="white" stroke-width="1"/>
-  <path d="M7.5,32.5 v3 a2.5,1 0 0,0 5,0 v-3" fill="none" stroke="white" stroke-width="1"/>
+  <circle cx="10" cy="34" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <ellipse cx="10" cy="32.5" rx="2.5" ry="1" fill="none" stroke="currentColor" stroke-width="1"/>
+  <path d="M7.5,32.5 v3 a2.5,1 0 0,0 5,0 v-3" fill="none" stroke="currentColor" stroke-width="1"/>
   <!-- Top-left: Comment/Chat -->
-  <circle cx="10" cy="14" r="4" fill="none" stroke="white" stroke-width="1.5"/>
-  <rect x="8" y="12" width="4" height="3" rx="1" fill="white"/>
-  <circle cx="9" cy="13.5" r="0.4" fill="#0369a1"/>
-  <circle cx="10.5" cy="13.5" r="0.4" fill="#0369a1"/>
-  <circle cx="12" cy="13.5" r="0.4" fill="#0369a1"/>
+  <circle cx="10" cy="14" r="4" fill="none" stroke="currentColor" stroke-width="1.5"/>
+  <rect x="8" y="12" width="4" height="3" rx="1" fill="currentColor"/>
+  <circle cx="9" cy="13.5" r="0.4" fill="var(--accent-fill-rest, #0078d4)"/>
+  <circle cx="10.5" cy="13.5" r="0.4" fill="var(--accent-fill-rest, #0078d4)"/>
+  <circle cx="12" cy="13.5" r="0.4" fill="var(--accent-fill-rest, #0078d4)"/>
   <!-- Connecting lines -->
-  <line x1="24" y1="18" x2="24" y2="12" stroke="white" stroke-width="1" stroke-dasharray="1,1"/>
-  <line x1="29" y1="20" x2="34" y2="16" stroke="white" stroke-width="1" stroke-dasharray="1,1"/>
-  <line x1="29" y1="28" x2="34" y2="32" stroke="white" stroke-width="1" stroke-dasharray="1,1"/>
-  <line x1="24" y1="30" x2="24" y2="36" stroke="white" stroke-width="1" stroke-dasharray="1,1"/>
-  <line x1="19" y1="28" x2="14" y2="32" stroke="white" stroke-width="1" stroke-dasharray="1,1"/>
-  <line x1="19" y1="20" x2="14" y2="16" stroke="white" stroke-width="1" stroke-dasharray="1,1"/>
+  <line x1="24" y1="18" x2="24" y2="12" stroke="currentColor" stroke-width="1" stroke-dasharray="1,1"/>
+  <line x1="29" y1="20" x2="34" y2="16" stroke="currentColor" stroke-width="1" stroke-dasharray="1,1"/>
+  <line x1="29" y1="28" x2="34" y2="32" stroke="currentColor" stroke-width="1" stroke-dasharray="1,1"/>
+  <line x1="24" y1="30" x2="24" y2="36" stroke="currentColor" stroke-width="1" stroke-dasharray="1,1"/>
+  <line x1="19" y1="28" x2="14" y2="32" stroke="currentColor" stroke-width="1" stroke-dasharray="1,1"/>
+  <line x1="19" y1="20" x2="14" y2="16" stroke="currentColor" stroke-width="1" stroke-dasharray="1,1"/>
 </svg>

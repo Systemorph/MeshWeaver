@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="history-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#64748b"/>
-      <stop offset="100%" stop-color="#475569"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#history-grad)"/>
-  <circle cx="24" cy="24" r="14" fill="none" stroke="white" stroke-width="3"/>
-  <path d="M24 14 L24 24 L32 28" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/>
-  <path d="M10 24 L6 20 M10 24 L6 28" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
+  <circle cx="24" cy="24" r="14" fill="none" stroke="currentColor" stroke-width="3"/>
+  <path d="M24 14 L24 24 L32 28" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M10 24 L6 20 M10 24 L6 28" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
 </svg>

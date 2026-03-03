@@ -2,7 +2,7 @@
 NodeType: "Doc/Article"
 Title: "Specifying Software"
 Abstract: "Writing specification is still quite complex, and good tooling is difficult to find. In many cases, mockups are created but without any real functionality. We believe that specification must be written iteratively and as closely as possible to the implementation."
-Icon: "Video"
+Icon: "/static/DocContent/Architecture/SpecifyingSoftware/icon.svg"
 Published: "2025-01-03"
 VideoUrl: "https://www.youtube.com/embed/CtpgzjClS5c?si=jqOftd0uSGqbjFvS"
 VideoDuration: "00:12:16"

@@ -2,7 +2,7 @@
 Name: JSON Serialization
 Category: Documentation
 Description: How MeshWeaver handles polymorphic JSON serialization with per-hub type registries
-Icon: code
+Icon: "/static/DocContent/Architecture/Serialization/icon.svg"
 ---
 
 MeshWeaver uses **per-hub JsonSerializerOptions** to handle polymorphic JSON serialization. Each MessageHub has its own type registry, enabling type-safe serialization and deserialization across the persistence layer.

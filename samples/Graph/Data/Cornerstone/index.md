@@ -3,7 +3,7 @@ NodeType: Organization
 Name: Cornerstone
 Category: Insurance
 Description: Reinsurance pricing demo showcasing property risk management, geographic visualization, and Excel data import
-Icon: /static/storage/content/Cornerstone/icon.svg
+Icon: /static/storage/content/Cornerstone/logo.svg
 ---
 
 Welcome to Cornerstone, a reinsurance pricing demo showcasing MeshWeaver's capabilities for managing complex insurance data. Explore property risk pricings, geographic visualizations, and document-based workflows for corporate insurance clients.

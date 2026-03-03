@@ -2,7 +2,7 @@
 Name: Actor Model Architecture
 Category: Architecture
 Description: Understanding single-threaded message processing and avoiding deadlocks with AwaitResponse vs callbacks
-Icon: Lock
+Icon: "/static/DocContent/Architecture/ActorModel/icon.svg"
 ---
 
 MeshWeaver's MessageHub architecture follows the **Actor Model** pattern, where each hub processes messages single-threaded through a queue. This design provides important benefits but also requires understanding potential deadlock scenarios.

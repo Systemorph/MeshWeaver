@@ -2,7 +2,7 @@
 NodeType: "Doc/Article"
 Title: "MCP Authentication"
 Abstract: "How to generate API tokens and configure MCP clients like Claude Code to securely access the MeshWeaver MCP endpoint with bearer token authentication."
-Icon: "Key"
+Icon: "/static/DocContent/AI/McpAuthentication/icon.svg"
 Published: "2025-06-15"
 Thumbnail: "images/agenticai.svg"
 Authors:

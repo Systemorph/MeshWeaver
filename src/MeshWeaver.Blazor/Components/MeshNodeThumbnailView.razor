@@ -5,7 +5,14 @@
     <div class="mesh-node-thumbnail-content">
         @if (!string.IsNullOrEmpty(ImageUrl))
         {
-            <img src="@ImageUrl" alt="@Title" class="mesh-node-thumbnail-image" />
+            @if (MeshNodeImageHelper.IsMonochromeIcon(ImageUrl))
+            {
+                <div class="mesh-node-thumbnail-image theme-icon" style="mask-image: url('@ImageUrl'); -webkit-mask-image: url('@ImageUrl');" />
+            }
+            else
+            {
+                <img src="@ImageUrl" alt="@Title" class="mesh-node-thumbnail-image" />
+            }
         }
         else
         {
@@ -47,12 +54,6 @@
         border-radius: 8px;
         object-fit: cover;
         flex-shrink: 0;
-    }
-
-    @@media (prefers-color-scheme: dark) {
-        .mesh-node-thumbnail-image {
-            filter: invert(1);
-        }
     }
 
     .mesh-node-thumbnail-placeholder {

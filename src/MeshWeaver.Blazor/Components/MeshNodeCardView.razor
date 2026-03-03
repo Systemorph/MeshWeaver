@@ -43,7 +43,14 @@ else
                 <div class="mesh-node-card-content">
                     @if (!string.IsNullOrEmpty(ImageUrl))
                     {
-                        <img src="@ImageUrl" alt="@Title" class="@(ImageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "mesh-node-card-icon" : "mesh-node-card-image")" />
+                        @if (MeshNodeImageHelper.IsMonochromeIcon(ImageUrl))
+                        {
+                            <div class="mesh-node-card-icon theme-icon" style="mask-image: url('@ImageUrl'); -webkit-mask-image: url('@ImageUrl');" />
+                        }
+                        else
+                        {
+                            <img src="@ImageUrl" alt="@Title" class="@(ImageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "mesh-node-card-icon" : "mesh-node-card-image")" />
+                        }
                     }
                     else
                     {

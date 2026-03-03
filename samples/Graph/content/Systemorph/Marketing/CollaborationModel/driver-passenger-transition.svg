@@ -1,59 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320">
   <style>
-    .bg { fill: #f7fafc; }
-    .title { fill: #2d3748; }
-    .road { fill: url(#roadGrad); }
-    .road-line { stroke: #edf2f7; }
-    .car-body { fill: url(#carGrad); }
-    .window-blue { fill: #bee3f8; }
-    .window-green { fill: #c6f6d5; }
-    .wheel-outer { fill: #1a202c; }
-    .wheel-inner { fill: #718096; }
-    .steering { stroke: #2d3748; fill: none; }
-    .sys-head { fill: #9f7aea; }
-    .sys-label { fill: #805ad5; }
-    .client-head { fill: #48bb78; }
-    .client-label { fill: #2f855a; }
-    .arrow { fill: url(#arrowGrad); }
-    .arrow-text { fill: #2f855a; }
-    .phase1-title { fill: #5a67d8; }
-    .phase2-title { fill: #38a169; }
-    .phase-text { fill: #718096; }
-    .legend-text { fill: #4a5568; }
-
-    [data-theme="dark"] .bg { fill: #1a202c; }
-    [data-theme="dark"] .title { fill: #e2e8f0; }
-    [data-theme="dark"] .road-line { stroke: #4a5568; }
-    [data-theme="dark"] .window-blue { fill: #4299e1; fill-opacity: 0.6; }
-    [data-theme="dark"] .window-green { fill: #10b981; fill-opacity: 0.5; }
-    [data-theme="dark"] .wheel-outer { fill: #0d1117; }
-    [data-theme="dark"] .wheel-inner { fill: #4a5568; }
-    [data-theme="dark"] .steering { stroke: #e2e8f0; }
-    [data-theme="dark"] .sys-head { fill: #a78bfa; }
-    [data-theme="dark"] .sys-label { fill: #c4b5fd; }
-    [data-theme="dark"] .client-head { fill: #34d399; }
-    [data-theme="dark"] .client-label { fill: #6ee7b7; }
-    [data-theme="dark"] .arrow-text { fill: #6ee7b7; }
-    [data-theme="dark"] .phase1-title { fill: #a78bfa; }
-    [data-theme="dark"] .phase2-title { fill: #34d399; }
-    [data-theme="dark"] .phase-text { fill: #a0aec0; }
-    [data-theme="dark"] .legend-text { fill: #cbd5e0; }
+    .bg { fill: var(--neutral-layer-1, #f7fafc); }
+    .title { fill: currentColor; }
+    .road { fill: var(--neutral-fill-strong, #2d3748); }
+    .road-line { stroke: var(--neutral-stroke-rest, #edf2f7); }
+    .car-body { fill: var(--accent-fill-rest, #5a67d8); }
+    .window-blue { fill: var(--accent-fill-rest, #bee3f8); opacity: 0.5; }
+    .window-green { fill: var(--success-fill-rest, #c6f6d5); opacity: 0.5; }
+    .wheel-outer { fill: var(--neutral-foreground-rest, #1a202c); }
+    .wheel-inner { fill: var(--neutral-foreground-hint, #718096); }
+    .steering { stroke: currentColor; fill: none; }
+    .sys-head { fill: var(--info-fill-rest, #9f7aea); }
+    .sys-label { fill: var(--info-fill-rest, #805ad5); }
+    .client-head { fill: var(--success-fill-rest, #48bb78); }
+    .client-label { fill: var(--success-fill-rest, #2f855a); }
+    .arrow { fill: var(--success-fill-rest, #48bb78); }
+    .arrow-text { fill: var(--success-fill-rest, #2f855a); }
+    .phase1-title { fill: var(--accent-fill-rest, #5a67d8); }
+    .phase2-title { fill: var(--success-fill-rest, #38a169); }
+    .phase-text { fill: var(--neutral-foreground-hint, #718096); }
+    .legend-text { fill: var(--neutral-foreground-rest, #4a5568); }
   </style>
-
-  <defs>
-    <linearGradient id="roadGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#4a5568"/>
-      <stop offset="100%" style="stop-color:#2d3748"/>
-    </linearGradient>
-    <linearGradient id="carGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" style="stop-color:#667eea"/>
-      <stop offset="100%" style="stop-color:#5a67d8"/>
-    </linearGradient>
-    <linearGradient id="arrowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" style="stop-color:#48bb78"/>
-      <stop offset="100%" style="stop-color:#38a169"/>
-    </linearGradient>
-  </defs>
 
   <!-- Background -->
   <rect class="bg" width="800" height="320"/>

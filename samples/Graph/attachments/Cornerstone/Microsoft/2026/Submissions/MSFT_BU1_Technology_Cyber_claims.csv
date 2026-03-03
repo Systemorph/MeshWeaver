@@ -1,0 +1,9 @@
+Claim ID,Risk ID,Insured,Claimant,Policy No.,Line of Business,Date of Loss,Date Reported,Cause of Loss,Location,Currency,Paid Loss,Paid Expense,Case Reserve,Incurred Total,Status
+CLM-2025-0041,MSFT-DC-PROP-2025004,Microsoft Corporation,N/A,ZIG-334521,Data Center,2025-10-03,2025-10-04,Cooling system failure — server damage,"Quincy, WA, US",USD,"2,350,000","185,000","1,200,000","3,735,000",Open
+CLM-2025-0042,MSFT-CYBER-2025011,Microsoft Corporation,Various — class action,ZIG-887234,Cyber,2025-10-15,2025-10-18,Data breach — customer PII exposure,"Redmond, WA, US",USD,"5,400,000","1,250,000","12,000,000","18,650,000",Open
+CLM-2025-0043,MSFT-PROP-2025002,Microsoft Corporation,N/A,ZIG-441298,Property,2025-11-02,2025-11-03,Storm damage — roof & facade,"Dublin, Ireland",USD,"890,000","67,000","350,000","1,307,000",Open
+CLM-2025-0044,MSFT-DC-PROP-2025006,Microsoft Corporation,N/A,ZIG-552176,Data Center,2025-11-20,2025-11-21,Electrical fire — UPS room,"Boydton, VA, US",USD,"1,750,000","142,000","2,800,000","4,692,000",Open
+CLM-2025-0045,MSFT-BI-2025013,Microsoft Corporation,N/A,ZIG-663891,Business Interruption,2025-10-03,2025-10-10,BI consequential to CLM-2025-0041,"Quincy, WA, US",USD,"4,200,000","95,000","3,500,000","7,795,000",Open
+CLM-2025-0046,MSFT-PROP-2025008,Microsoft Corporation,N/A,ZIG-774512,Property,2025-12-01,2025-12-02,Water damage — burst pipe,"Amsterdam, NL",USD,"320,000","28,000",0,"348,000",Closed
+CLM-2025-0047,MSFT-CYBER-2025012,Microsoft Corporation,RegulatorFine Co.,ZIG-887234,Cyber,2025-11-01,2025-11-15,Regulatory fine — GDPR non-compliance,"London, UK",USD,"3,200,000","480,000",0,"3,680,000",Closed
+CLM-2025-0048,MSFT-DC-PROP-2025015,Microsoft Corporation,N/A,ZIG-885443,Data Center,2025-12-10,2025-12-11,Generator malfunction during outage,"Chicago, IL, US",USD,0,"15,000","950,000","965,000",Open

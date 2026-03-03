@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/gTs0FLX5zkeevN1XHGdPCA",
+  "path": "JF_EleavRUitVEzxd6nP8g/gTs0FLX5zkeevN1XHGdPCA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:26:18.454794+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "gTs0FLX5zkeevN1XHGdPCA",
+    "role": "user",
+    "text": "Show me the Microsoft 2026 pricing",
+    "timestamp": "2026-03-02T14:26:18.454119Z",
+    "type": "ExecutedInput"
+  }
+}

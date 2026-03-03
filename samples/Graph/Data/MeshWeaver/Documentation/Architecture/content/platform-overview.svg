@@ -1,134 +1,142 @@
 <svg width="100%" height="500" viewBox="0 0 900 500" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .po-bg { fill: var(--neutral-layer-1, #fafafa); }
+    .po-title { fill: var(--accent-fill-rest, #1a237e); }
+    .po-hub { fill: var(--accent-fill-rest, #1a237e); }
+    .po-ai { fill: var(--warning-fill-rest, #e65100); }
+    .po-ui { fill: var(--info-fill-rest, #6a1b9a); }
+    .po-data { fill: var(--success-fill-rest, #2e7d32); }
+    .po-sources { fill: var(--neutral-fill-rest, #607d8b); }
+    .po-white { fill: currentColor; }
+    .po-white-text { fill: currentColor; }
+    .po-white-sub { fill: currentColor; opacity: 0.9; }
+    .po-muted { fill: var(--neutral-foreground-hint, #666); }
+
+    .po-ai-stroke { stroke: var(--warning-fill-rest, #ff6f00); }
+    .po-ai-label { fill: var(--warning-fill-rest, #e65100); }
+    .po-ui-stroke { stroke: var(--info-fill-rest, #9c27b0); }
+    .po-ui-label { fill: var(--info-fill-rest, #6a1b9a); }
+    .po-data-stroke { stroke: var(--success-fill-rest, #4caf50); }
+    .po-data-label { fill: var(--success-fill-rest, #2e7d32); }
+    .po-sources-stroke { stroke: var(--neutral-fill-rest, #607d8b); }
+    .po-sources-label { fill: var(--neutral-foreground-rest, #455a64); }
+
+    .po-legend-line { stroke: currentColor; }
+  </style>
   <defs>
-    <linearGradient id="hubGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3f51b5"/>
-      <stop offset="100%" stop-color="#1a237e"/>
-    </linearGradient>
-    <linearGradient id="aiGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ff6f00"/>
-      <stop offset="100%" stop-color="#e65100"/>
-    </linearGradient>
-    <linearGradient id="uiGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#9c27b0"/>
-      <stop offset="100%" stop-color="#6a1b9a"/>
-    </linearGradient>
-    <linearGradient id="dataGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4caf50"/>
-      <stop offset="100%" stop-color="#2e7d32"/>
-    </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
       <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.2"/>
     </filter>
   </defs>
 
   <!-- Background -->
-  <rect width="900" height="500" fill="#fafafa"/>
+  <rect class="po-bg" width="900" height="500"/>
 
   <!-- Title -->
-  <text x="450" y="35" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#1a237e">MeshWeaver Platform Architecture</text>
+  <text class="po-title" x="450" y="35" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold">MeshWeaver Platform Architecture</text>
 
   <!-- Central MessageHub -->
   <g filter="url(#shadow)">
-    <rect x="350" y="180" width="200" height="140" rx="12" fill="url(#hubGradient)"/>
-    <text x="450" y="215" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="white">MessageHub</text>
-    <text x="450" y="240" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="rgba(255,255,255,0.9)">Route Messages</text>
-    <text x="450" y="258" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="rgba(255,255,255,0.9)">Handle Data &amp; Layouts</text>
-    <text x="450" y="276" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="rgba(255,255,255,0.9)">Execute Workflows</text>
-    <text x="450" y="294" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="rgba(255,255,255,0.9)">Operate Agents</text>
+    <rect x="350" y="180" width="200" height="140" rx="12" class="po-hub"/>
+    <text x="450" y="215" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" font-weight="bold" class="po-white-text">MessageHub</text>
+    <text x="450" y="240" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" class="po-white-sub">Route Messages</text>
+    <text x="450" y="258" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" class="po-white-sub">Handle Data &amp; Layouts</text>
+    <text x="450" y="276" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" class="po-white-sub">Execute Workflows</text>
+    <text x="450" y="294" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" class="po-white-sub">Operate Agents</text>
   </g>
 
   <!-- AI Agent Box (Top Left) -->
   <g filter="url(#shadow)">
-    <rect x="60" y="80" width="180" height="120" rx="10" fill="url(#aiGradient)"/>
-    <text x="150" y="110" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">AI Agents</text>
-    <text x="150" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Planner • Researcher</text>
-    <text x="150" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Executor • Custom</text>
+    <rect x="60" y="80" width="180" height="120" rx="10" class="po-ai"/>
+    <text x="150" y="110" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" class="po-white-text">AI Agents</text>
+    <text x="150" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Planner &bull; Researcher</text>
+    <text x="150" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Executor &bull; Custom</text>
     <!-- Robot icon -->
-    <rect x="125" y="165" width="50" height="25" rx="4" fill="white" opacity="0.3"/>
-    <circle cx="140" cy="177" r="4" fill="white"/>
-    <circle cx="160" cy="177" r="4" fill="white"/>
+    <rect x="125" y="165" width="50" height="25" rx="4" class="po-white" opacity="0.3"/>
+    <circle cx="140" cy="177" r="4" class="po-white"/>
+    <circle cx="160" cy="177" r="4" class="po-white"/>
   </g>
 
   <!-- UI/Portal Box (Top Right) -->
   <g filter="url(#shadow)">
-    <rect x="660" y="80" width="180" height="120" rx="10" fill="url(#uiGradient)"/>
-    <text x="750" y="110" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">Portal &amp; UI</text>
-    <text x="750" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Navigate • Stream</text>
-    <text x="750" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Controls • Two-Way Binding</text>
+    <rect x="660" y="80" width="180" height="120" rx="10" class="po-ui"/>
+    <text x="750" y="110" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" class="po-white-text">Portal &amp; UI</text>
+    <text x="750" y="135" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Navigate &bull; Stream</text>
+    <text x="750" y="152" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Controls &bull; Two-Way Binding</text>
     <!-- Screen icon -->
-    <rect x="720" y="160" width="60" height="35" rx="3" fill="white" opacity="0.3"/>
-    <rect x="725" y="165" width="50" height="22" rx="2" fill="white" opacity="0.5"/>
+    <rect x="720" y="160" width="60" height="35" rx="3" class="po-white" opacity="0.3"/>
+    <rect x="725" y="165" width="50" height="22" rx="2" class="po-white" opacity="0.5"/>
   </g>
 
   <!-- Mesh Graph Box (Bottom Left) -->
   <g filter="url(#shadow)">
-    <rect x="60" y="300" width="180" height="120" rx="10" fill="url(#dataGradient)"/>
-    <text x="150" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">Mesh Graph</text>
-    <text x="150" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Namespaces • Types</text>
-    <text x="150" y="372" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Versioning • Hierarchy</text>
+    <rect x="60" y="300" width="180" height="120" rx="10" class="po-data"/>
+    <text x="150" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" class="po-white-text">Mesh Graph</text>
+    <text x="150" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Namespaces &bull; Types</text>
+    <text x="150" y="372" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Versioning &bull; Hierarchy</text>
     <!-- Tree icon -->
-    <circle cx="150" cy="395" r="8" fill="white" opacity="0.5"/>
-    <circle cx="130" cy="410" r="6" fill="white" opacity="0.4"/>
-    <circle cx="170" cy="410" r="6" fill="white" opacity="0.4"/>
-    <line x1="150" y1="395" x2="130" y2="410" stroke="white" stroke-width="2" opacity="0.5"/>
-    <line x1="150" y1="395" x2="170" y2="410" stroke="white" stroke-width="2" opacity="0.5"/>
+    <circle cx="150" cy="395" r="8" class="po-white" opacity="0.5"/>
+    <circle cx="130" cy="410" r="6" class="po-white" opacity="0.4"/>
+    <circle cx="170" cy="410" r="6" class="po-white" opacity="0.4"/>
+    <line x1="150" y1="395" x2="130" y2="410" stroke="currentColor" stroke-width="2" opacity="0.5"/>
+    <line x1="150" y1="395" x2="170" y2="410" stroke="currentColor" stroke-width="2" opacity="0.5"/>
   </g>
 
   <!-- Data Sources Box (Bottom Right) -->
   <g filter="url(#shadow)">
-    <rect x="660" y="300" width="180" height="120" rx="10" fill="#607d8b"/>
-    <text x="750" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white">Data Sources</text>
-    <text x="750" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Snowflake • Databricks</text>
-    <text x="750" y="372" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">SQL Server • Cosmos DB</text>
-    <text x="750" y="389" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="rgba(255,255,255,0.9)">Blob Storage</text>
+    <rect x="660" y="300" width="180" height="120" rx="10" class="po-sources"/>
+    <text x="750" y="330" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" class="po-white-text">Data Sources</text>
+    <text x="750" y="355" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Snowflake &bull; Databricks</text>
+    <text x="750" y="372" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">SQL Server &bull; Cosmos DB</text>
+    <text x="750" y="389" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" class="po-white-sub">Blob Storage</text>
     <!-- Database icon -->
-    <ellipse cx="750" cy="405" rx="20" ry="8" fill="white" opacity="0.3"/>
-    <rect x="730" y="405" width="40" height="10" fill="white" opacity="0.3"/>
+    <ellipse cx="750" cy="405" rx="20" ry="8" class="po-white" opacity="0.3"/>
+    <rect x="730" y="405" width="40" height="10" class="po-white" opacity="0.3"/>
   </g>
 
   <!-- Connecting arrows -->
   <!-- AI to Hub -->
-  <path d="M240 140 Q295 140 295 200 Q295 250 350 250" fill="none" stroke="#ff6f00" stroke-width="3" marker-end="url(#arrowOrange)"/>
-  <text x="270" y="175" font-family="Arial, sans-serif" font-size="9" fill="#e65100">MeshPlugin</text>
+  <path d="M240 140 Q295 140 295 200 Q295 250 350 250" fill="none" class="po-ai-stroke" stroke-width="3" marker-end="url(#arrowOrange)"/>
+  <text x="270" y="175" font-family="Arial, sans-serif" font-size="9" class="po-ai-label">MeshPlugin</text>
 
   <!-- Hub to UI -->
-  <path d="M550 250 Q605 250 605 200 Q605 140 660 140" fill="none" stroke="#9c27b0" stroke-width="3" marker-end="url(#arrowPurple)"/>
-  <text x="580" y="175" font-family="Arial, sans-serif" font-size="9" fill="#6a1b9a">JSON/Patch</text>
+  <path d="M550 250 Q605 250 605 200 Q605 140 660 140" fill="none" class="po-ui-stroke" stroke-width="3" marker-end="url(#arrowPurple)"/>
+  <text x="580" y="175" font-family="Arial, sans-serif" font-size="9" class="po-ui-label">JSON/Patch</text>
 
   <!-- UI to Hub (return) -->
-  <path d="M660 170 Q620 170 620 220 Q620 280 550 280" fill="none" stroke="#9c27b0" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrowPurple)"/>
-  <text x="595" y="235" font-family="Arial, sans-serif" font-size="9" fill="#6a1b9a">Events</text>
+  <path d="M660 170 Q620 170 620 220 Q620 280 550 280" fill="none" class="po-ui-stroke" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#arrowPurple)"/>
+  <text x="595" y="235" font-family="Arial, sans-serif" font-size="9" class="po-ui-label">Events</text>
 
   <!-- Mesh to Hub -->
-  <path d="M240 360 Q295 360 295 300 Q295 270 350 270" fill="none" stroke="#4caf50" stroke-width="3" marker-end="url(#arrowGreen)"/>
-  <text x="260" y="310" font-family="Arial, sans-serif" font-size="9" fill="#2e7d32">Nodes</text>
+  <path d="M240 360 Q295 360 295 300 Q295 270 350 270" fill="none" class="po-data-stroke" stroke-width="3" marker-end="url(#arrowGreen)"/>
+  <text x="260" y="310" font-family="Arial, sans-serif" font-size="9" class="po-data-label">Nodes</text>
 
   <!-- Hub to Data -->
-  <path d="M550 270 Q605 270 605 320 Q605 360 660 360" fill="none" stroke="#607d8b" stroke-width="3" marker-end="url(#arrowGray)"/>
-  <text x="575" y="310" font-family="Arial, sans-serif" font-size="9" fill="#455a64">Queries</text>
+  <path d="M550 270 Q605 270 605 320 Q605 360 660 360" fill="none" class="po-sources-stroke" stroke-width="3" marker-end="url(#arrowGray)"/>
+  <text x="575" y="310" font-family="Arial, sans-serif" font-size="9" class="po-sources-label">Queries</text>
 
   <!-- Arrow markers -->
   <defs>
     <marker id="arrowOrange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#ff6f00"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="var(--warning-fill-rest, #ff6f00)"/>
     </marker>
     <marker id="arrowPurple" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#9c27b0"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="var(--info-fill-rest, #9c27b0)"/>
     </marker>
     <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#4caf50"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="var(--success-fill-rest, #4caf50)"/>
     </marker>
     <marker id="arrowGray" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-      <path d="M0,0 L0,6 L9,3 z" fill="#607d8b"/>
+      <path d="M0,0 L0,6 L9,3 z" fill="var(--neutral-fill-rest, #607d8b)"/>
     </marker>
   </defs>
 
   <!-- Legend -->
   <g transform="translate(320, 450)">
-    <text x="130" y="0" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#666">Message Flow</text>
-    <line x1="0" y1="20" x2="40" y2="20" stroke="#333" stroke-width="2"/>
-    <text x="50" y="24" font-family="Arial, sans-serif" font-size="10" fill="#666">Request</text>
-    <line x1="120" y1="20" x2="160" y2="20" stroke="#333" stroke-width="2" stroke-dasharray="5,3"/>
-    <text x="170" y="24" font-family="Arial, sans-serif" font-size="10" fill="#666">Response/Event</text>
+    <text x="130" y="0" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" class="po-muted">Message Flow</text>
+    <line x1="0" y1="20" x2="40" y2="20" class="po-legend-line" stroke-width="2"/>
+    <text x="50" y="24" font-family="Arial, sans-serif" font-size="10" class="po-muted">Request</text>
+    <line x1="120" y1="20" x2="160" y2="20" class="po-legend-line" stroke-width="2" stroke-dasharray="5,3"/>
+    <text x="170" y="24" font-family="Arial, sans-serif" font-size="10" class="po-muted">Response/Event</text>
   </g>
 </svg>

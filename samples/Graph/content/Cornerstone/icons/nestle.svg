@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
   <style>
-    .bg { fill: #f5f5f5; }
-    .nf { fill: #616161; }
+    .bg { fill: var(--neutral-layer-1, #fafafa); }
+    .nf { fill: currentColor; }
   </style>
   <rect class="bg" width="24" height="24" rx="4"/>
   <!-- Nest outer arc -->

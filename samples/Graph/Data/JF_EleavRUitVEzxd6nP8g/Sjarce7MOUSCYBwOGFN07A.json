@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/Sjarce7MOUSCYBwOGFN07A",
+  "path": "JF_EleavRUitVEzxd6nP8g/Sjarce7MOUSCYBwOGFN07A",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:41:15.607831+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "Sjarce7MOUSCYBwOGFN07A",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I\u0027ve opened the Microsoft 2026 pricing node. What would you like me to do there?",
+    "timestamp": "2026-03-02T14:41:15.607412Z",
+    "type": "AgentResponse"
+  }
+}

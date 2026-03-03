@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <style>
-    .bg { fill: #f5f5f5; }
-    .fg { fill: #616161; }
-    .detail { fill: #e0e0e0; }
-    .dk { fill: #424242; }
+    .bg { fill: var(--neutral-layer-1, #fafafa); }
+    .fg { fill: currentColor; }
+    .detail { fill: currentColor; opacity: 0.3; }
+    .dk { fill: currentColor; opacity: 0.9; }
   </style>
   <rect class="bg" width="24" height="24" rx="4"/>
   <!-- Truck cabin -->

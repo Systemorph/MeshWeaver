@@ -2,7 +2,7 @@
 NodeType: "Doc/Article"
 Title: "What is a Data Mesh"
 Abstract: "In this article, we explain the basic concepts of a data mesh. We show that not just data should be shared but entire layout areas. In an age of hyper-personalization, we believe that reporting should be personalized for each receiving party."
-Icon: "Video"
+Icon: "/static/DocContent/DataMesh/WhatIsADataMesh/icon.svg"
 Published: "2024-12-20"
 VideoUrl: "https://www.youtube.com/embed/a7sARIKDpXg?si=j-WE7F7qr-mVTq8z"
 VideoDuration: "00:12:47"

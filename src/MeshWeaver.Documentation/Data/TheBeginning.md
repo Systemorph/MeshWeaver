@@ -2,7 +2,7 @@
 NodeType: "Doc/Article"
 Title: "Mesh Bros: The Beginning"
 Abstract: "In their inaugural video, Roland and Stefan, the Mesh Bros, discuss their journey from early retirement and corporate innovation to launching their new channel. They delve into their experiences at Swiss Re, the challenges of data management, and the transformative potential of AI and decentralization in reinsurance pricing. Join them as they explore the future of data management and share their expertise through insightful discussions and live programming sessions."
-Icon: "Video"
+Icon: "/static/DocContent/TheBeginning/icon.svg"
 Published: "2024-12-10"
 VideoUrl: "https://www.youtube.com/embed/5uqzI9wZ9t0?si=698vQr7Wr5wGkYWU"
 VideoDuration: "00:28:52"

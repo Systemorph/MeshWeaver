@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <g transform="translate(32, 32) scale(1.4)">
+    <!-- Compass rose pointing north -->
+    <!-- North point (emphasized) -->
+    <polygon points="0,-20 -6,-4 0,-8 6,-4" fill="#0655bf"/>
+    <!-- South point -->
+    <polygon points="0,20 -6,4 0,8 6,4" fill="#0655bf"/>
+    <!-- East point -->
+    <polygon points="20,0 4,-6 8,0 4,6" fill="#0655bf"/>
+    <!-- West point -->
+    <polygon points="-20,0 -4,-6 -8,0 -4,6" fill="#0655bf"/>
+    <!-- Inner diamond accent -->
+    <polygon points="0,-8 6,0 0,8 -6,0" fill="none" stroke="#0655bf" stroke-width="2.5"/>
+  </g>
+</svg>

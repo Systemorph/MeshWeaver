@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Cornerstone / keystone shape with 3D depth -->
+  <g transform="translate(32, 32) scale(2)">
+    <!-- Main keystone face -->
+    <polygon points="-10,-14 10,-14 14,14 -14,14" fill="#757575"/>
+    <!-- Light bevel (top) -->
+    <polygon points="-10,-14 10,-14 8,-12 -8,-12" fill="#a0a0a0"/>
+    <!-- Light bevel (left) -->
+    <polygon points="-10,-14 -8,-12 -12,12 -14,14" fill="#8a8a8a"/>
+    <!-- Dark bevel (right) -->
+    <polygon points="10,-14 14,14 12,12 8,-12" fill="#5a5a5a"/>
+    <!-- Center cross mark -->
+    <line x1="-5" y1="0" x2="5" y2="0" stroke="#a0a0a0" stroke-width="1.5"/>
+    <line x1="0" y1="-5" x2="0" y2="5" stroke="#a0a0a0" stroke-width="1.5"/>
+  </g>
+</svg>

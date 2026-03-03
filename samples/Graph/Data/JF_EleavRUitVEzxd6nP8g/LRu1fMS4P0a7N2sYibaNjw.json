@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/LRu1fMS4P0a7N2sYibaNjw",
+  "path": "JF_EleavRUitVEzxd6nP8g/LRu1fMS4P0a7N2sYibaNjw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:51:32.755813+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "LRu1fMS4P0a7N2sYibaNjw",
+    "role": "user",
+    "text": "What property risks are in the Microsoft pricing?",
+    "timestamp": "2026-03-02T14:51:32.755068Z",
+    "type": "ExecutedInput"
+  }
+}

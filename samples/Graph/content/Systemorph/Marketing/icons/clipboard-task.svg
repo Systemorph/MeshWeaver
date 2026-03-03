@@ -1,14 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="clipboard-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#10b981"/>
-      <stop offset="100%" stop-color="#059669"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#clipboard-grad)"/>
-  <rect x="12" y="10" width="24" height="32" rx="2" fill="white"/>
-  <rect x="18" y="6" width="12" height="6" rx="1" fill="white" stroke="#10b981" stroke-width="1"/>
-  <path d="M17 22 L21 26 L31 16" stroke="#10b981" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-  <line x1="16" y1="32" x2="32" y2="32" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
-  <line x1="16" y1="36" x2="26" y2="36" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
+  <rect x="12" y="10" width="24" height="32" rx="2" fill="currentColor"/>
+  <rect x="18" y="6" width="12" height="6" rx="1" fill="currentColor" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="1"/>
+  <path d="M17 22 L21 26 L31 16" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="16" y1="32" x2="32" y2="32" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="2" stroke-linecap="round"/>
+  <line x1="16" y1="36" x2="26" y2="36" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="2" stroke-linecap="round"/>
 </svg>

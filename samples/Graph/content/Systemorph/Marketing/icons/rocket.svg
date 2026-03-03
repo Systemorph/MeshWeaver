@@ -1,14 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="rocket-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ef4444"/>
-      <stop offset="100%" stop-color="#dc2626"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#rocket-grad)"/>
-  <path d="M24 8 C24 8 34 18 34 28 C34 32 30 36 24 36 C18 36 14 32 14 28 C14 18 24 8 24 8 Z" fill="white"/>
-  <circle cx="24" cy="24" r="4" fill="#ef4444"/>
-  <path d="M14 30 L8 38 L16 34 Z" fill="white"/>
-  <path d="M34 30 L40 38 L32 34 Z" fill="white"/>
-  <path d="M20 36 L20 42 L24 40 L28 42 L28 36" fill="white"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
+  <path d="M24 8 C24 8 34 18 34 28 C34 32 30 36 24 36 C18 36 14 32 14 28 C14 18 24 8 24 8 Z" fill="currentColor"/>
+  <circle cx="24" cy="24" r="4" fill="var(--accent-fill-rest, #0078d4)"/>
+  <path d="M14 30 L8 38 L16 34 Z" fill="currentColor"/>
+  <path d="M34 30 L40 38 L32 34 Z" fill="currentColor"/>
+  <path d="M20 36 L20 42 L24 40 L28 42 L28 36" fill="currentColor"/>
 </svg>

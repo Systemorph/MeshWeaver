@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
   <style>
-    .bg { fill: #fdf6f6; }
-    .nf { fill: #616161; }
-    .af { fill: #d13438; }
-    .sf { fill: #ffffff; }
+    .bg { fill: var(--neutral-layer-1, #fafafa); }
+    .nf { fill: currentColor; }
+    .af { fill: var(--accent-fill-rest, #d13438); }
+    .sf { fill: var(--neutral-layer-1, white); }
   </style>
   <!-- Background -->
   <rect class="bg" width="140" height="79" rx="8"/>

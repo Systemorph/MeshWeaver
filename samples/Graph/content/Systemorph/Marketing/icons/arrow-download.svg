@@ -1,12 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="download-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#06b6d4"/>
-      <stop offset="100%" stop-color="#0891b2"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#download-grad)"/>
-  <path d="M24 10 L24 30" stroke="white" stroke-width="3" stroke-linecap="round"/>
-  <path d="M16 24 L24 32 L32 24" stroke="white" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12 36 L36 36" stroke="white" stroke-width="3" stroke-linecap="round"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
+  <path d="M24 10 L24 30" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  <path d="M16 24 L24 32 L32 24" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 36 L36 36" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
 </svg>

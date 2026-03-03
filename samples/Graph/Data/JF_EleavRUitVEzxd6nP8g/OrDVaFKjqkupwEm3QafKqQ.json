@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/OrDVaFKjqkupwEm3QafKqQ",
+  "path": "JF_EleavRUitVEzxd6nP8g/OrDVaFKjqkupwEm3QafKqQ",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:26:42.835983+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "OrDVaFKjqkupwEm3QafKqQ",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "Here\u0027s Microsoft Corporation in Cornerstone. What would you like to do next?",
+    "timestamp": "2026-03-02T14:26:42.830976Z",
+    "type": "AgentResponse"
+  }
+}

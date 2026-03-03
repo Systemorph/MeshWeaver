@@ -4,6 +4,7 @@
   "path": "Admin",
   "name": "Platform",
   "nodeType": "Platform",
+  "icon": "/static/NodeTypeIcons/settings.svg",
   "lastModified": "2026-03-02T20:28:57.9341111+00:00",
   "state": "Active",
   "content": {

@@ -1,0 +1,6 @@
+<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <rect width="48" height="48" rx="8" fill="var(--accent-fill-rest, #0078d4)"/>
+  <path d="M14 24l6-12h3l-6 12 6 12h-3l-6-12z" fill="currentColor"/>
+  <path d="M34 24l-6-12h-3l6 12-6 12h3l6-12z" fill="currentColor"/>
+  <rect x="21" y="10" width="3" height="28" rx="1" fill="currentColor" transform="rotate(15 22.5 24)"/>
+</svg>

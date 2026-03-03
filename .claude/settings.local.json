@@ -98,7 +98,16 @@
       "Bash(git blame:*)",
       "WebFetch(domain:fluent2.microsoft.design)",
       "Bash(sips:*)",
-      "Bash(bc:*)"
+      "Bash(bc:*)",
+      "Bash(do if grep -q \"var\\(--\" \"$f\")",
+      "Bash(then echo \"$f\")",
+      "Bash(fi)",
+      "Bash(do if ! grep -q \"currentColor\" \"$f\")",
+      "Bash(! grep -q \"var\\(--\" \"$f\")",
+      "Bash(then basename \"$f\")",
+      "Bash(git -C \"/Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver\" log --oneline --all -20 -- \"src/MeshWeaver.Documentation/Content/Architecture/UserInterface/data-compression.svg\" \"samples/Graph/Data/MeshWeaver/Documentation/Architecture/UserInterface/content/data-compression.svg\")",
+      "Bash(md5:*)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver diff origin/documentation HEAD -- src/MeshWeaver.Blazor/ src/MeshWeaver.Blazor.Portal/ src/MeshWeaver.Graph/ src/MeshWeaver.Documentation/ --stat)"
     ],
     "deny": []
   },

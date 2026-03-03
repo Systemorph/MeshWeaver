@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" fill="none">
   <style>
-    .diagram-bg { fill: #fafafa; }
-    .conn-line { fill: #d1d1d1; }
-    .center-node { fill: #0f6cbd; }
-    .center-text { fill: #ffffff; }
-    .area-node { fill: #0f6cbd; }
-    .area-text { fill: #ffffff; }
-    .content-node { fill: #d13438; }
-    .content-text { fill: #ffffff; }
-    .data-node { fill: #5c2d91; }
-    .data-text { fill: #ffffff; }
-    .title-text { fill: #242424; }
+    .diagram-bg { fill: var(--neutral-layer-1, #fafafa); }
+    .conn-line { fill: var(--neutral-stroke-rest, #d1d1d1); }
+    .center-node { fill: var(--accent-fill-rest, #0f6cbd); }
+    .center-text { fill: var(--neutral-foreground-on-accent, #ffffff); }
+    .area-node { fill: var(--accent-fill-rest, #0f6cbd); }
+    .area-text { fill: var(--neutral-foreground-on-accent, #ffffff); }
+    .content-node { fill: var(--error-fill-rest, #d13438); }
+    .content-text { fill: var(--neutral-foreground-on-accent, #ffffff); }
+    .data-node { fill: var(--info-fill-rest, #5c2d91); }
+    .data-text { fill: var(--neutral-foreground-on-accent, #ffffff); }
+    .title-text { fill: currentColor; }
   </style>
 
   <!-- Background -->

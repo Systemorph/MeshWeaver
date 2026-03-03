@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/jhNRlo7W_0uFHdjEk6Cd_w",
+  "path": "JF_EleavRUitVEzxd6nP8g/jhNRlo7W_0uFHdjEk6Cd_w",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:50:09.708236+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "jhNRlo7W_0uFHdjEk6Cd_w",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I opened the Microsoft 2026 pricing node in Cornerstone and am waiting for your instruction. Would you like me to show its details, list files/attachments, or take another action?",
+    "timestamp": "2026-03-02T14:50:09.707657Z",
+    "type": "AgentResponse"
+  }
+}

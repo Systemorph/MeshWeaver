@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g/7kyXVY3cS0e4fbU7RdtppA",
+  "path": "JF_EleavRUitVEzxd6nP8g/7kyXVY3cS0e4fbU7RdtppA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-02T14:09:08.978948+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "7kyXVY3cS0e4fbU7RdtppA",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "You\u0027re talking to Navigator \u2014 the mesh navigation agent. I can explore the mesh, display visual nodes/layout areas, and delegate tasks to specialized agents. What would you like me to do?",
+    "timestamp": "2026-03-02T14:09:08.977818Z",
+    "type": "AgentResponse"
+  }
+}

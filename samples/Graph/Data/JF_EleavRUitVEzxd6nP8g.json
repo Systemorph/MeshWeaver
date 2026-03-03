@@ -1,0 +1,16 @@
+{
+  "$type": "MeshNode",
+  "id": "JF_EleavRUitVEzxd6nP8g",
+  "path": "JF_EleavRUitVEzxd6nP8g",
+  "name": "Hello, who am I talking to?",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-03-02T14:56:42.761617+00:00",
+  "version": 5,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "",
+    "primaryNodePath": ""
+  }
+}

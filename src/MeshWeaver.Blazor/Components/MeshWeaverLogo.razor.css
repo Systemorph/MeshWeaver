@@ -1,12 +1,12 @@
-﻿
+﻿:host(:focus) {
+    outline: none !important;
+    box-shadow: none !important;
+}
+
 .meshweaver-logo .primary-color {
-    fill: #0655bf; 
+    fill: #0655bf;
 }
 
 .meshweaver-logo .secondary-color {
     fill: #f26363;
-}
-:host(:focus) {
-    outline: none !important;
-    box-shadow: none !important;
 }

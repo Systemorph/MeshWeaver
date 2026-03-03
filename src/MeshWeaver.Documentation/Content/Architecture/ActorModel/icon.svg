@@ -1,0 +1,7 @@
+<svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+  <rect width="48" height="48" rx="8" fill="var(--accent-fill-rest, #0078d4)"/>
+  <rect x="14" y="22" width="20" height="18" rx="3" fill="currentColor"/>
+  <path d="M18 22v-4a6 6 0 0 1 12 0v4" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="24" cy="31" r="3" fill="var(--accent-fill-rest, #0078d4)"/>
+  <rect x="23" y="33" width="2" height="4" rx="1" fill="var(--accent-fill-rest, #0078d4)"/>
+</svg>

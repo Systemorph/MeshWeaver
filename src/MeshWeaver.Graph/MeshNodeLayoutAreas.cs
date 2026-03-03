@@ -757,9 +757,13 @@ public static class MeshNodeLayoutAreas
         var iconUrl = !string.IsNullOrEmpty(imageUrl) ? imageUrl : "/static/NodeTypeIcons/document.svg";
         var name = node.Name ?? node.Id;
 
+        var iconHtml = MeshNodeImageHelper.IsMonochromeIcon(iconUrl)
+            ? $@"<div class=""theme-icon"" style=""width: 24px; height: 24px; flex-shrink: 0; mask-image: url('{iconUrl}'); -webkit-mask-image: url('{iconUrl}');""></div>"
+            : $@"<img src=""{iconUrl}"" alt="""" style=""width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;"" />";
+
         return Controls.Html($@"
             <div style=""display: flex; align-items: center; gap: 8px;"">
-                <img src=""{iconUrl}"" alt="""" style=""width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;"" />
+                {iconHtml}
                 <span>{name}</span>
             </div>");
     }

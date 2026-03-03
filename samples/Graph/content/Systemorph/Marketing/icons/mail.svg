@@ -1,11 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
-  <defs>
-    <linearGradient id="mail-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#3b82f6"/>
-      <stop offset="100%" stop-color="#2563eb"/>
-    </linearGradient>
-  </defs>
-  <rect width="48" height="48" rx="8" fill="url(#mail-grad)"/>
-  <rect x="8" y="14" width="32" height="22" rx="2" fill="white"/>
-  <path d="M8 16 L24 28 L40 16" stroke="#3b82f6" stroke-width="2" fill="none"/>
+  <rect width="48" height="48" rx="8" fill="var(--neutral-layer-1, #fafafa)"/>
+  <rect x="8" y="14" width="32" height="22" rx="2" fill="currentColor"/>
+  <path d="M8 16 L24 28 L40 16" stroke="var(--accent-fill-rest, #0078d4)" stroke-width="2" fill="none"/>
 </svg>

@@ -1,9 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
   <style>
-    .bg { fill: #ebf3fc; }
-    .nf { fill: #0f6cbd; }
-    .accent { fill: #0e4775; }
-    .wh { fill: #ffffff; }
+    .bg { fill: var(--accent-fill-rest, #0f6cbd); opacity: 0.15; }
+    .nf { fill: var(--accent-fill-rest, #0f6cbd); }
+    .accent { fill: var(--accent-fill-strong, #0e4775); }
+    .wh { fill: var(--neutral-layer-1, #ffffff); }
   </style>
   <rect class="bg" width="24" height="24" rx="4"/>
   <!-- Document border (outer) -->
