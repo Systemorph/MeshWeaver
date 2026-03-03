@@ -13,11 +13,17 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Registers the "Activity" area on User nodes for the personal dashboard start page.
-/// Layout: Activity Feed (main) + sidebar (Recently Viewed, Notifications, Pending Actions) + Chat pinned to bottom.
+/// Layout: Tabbed content (Feed, Notifications, Actions) + sidebar (Recently Viewed, Chat).
+/// Height constrained to viewport with individual areas scrollable.
 /// </summary>
 public static class UserActivityLayoutAreas
 {
     public const string ActivityArea = "Activity";
+
+    private static readonly HashSet<string> SystemNodeTypes =
+    [
+        "AccessAssignment", "NodeType", "User", "Role", "Group", "PartitionAccessPolicy"
+    ];
 
     /// <summary>
     /// Adds the Activity view to the User node's layout.
@@ -27,7 +33,7 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Renders the user's personal dashboard: welcome header,
-    /// 2-column layout (Activity Feed + sidebar), and chat pinned to bottom.
+    /// tabbed main content (Feed, Notifications, Actions) + sidebar (Recently Viewed, Chat).
     /// </summary>
     public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
     {
@@ -37,69 +43,80 @@ public static class UserActivityLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
-            // Outer container: flex column filling available height
+            var userName = accessService?.Context?.Name ?? "User";
+
+            // Outer container: flex column filling viewport minus portal header
             var dashboard = Controls.Stack
                 .WithWidth("100%")
-                .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0;");
+                .WithStyle("display: flex; flex-direction: column; height: calc(100vh - 64px); min-height: 0; gap: 12px; padding: 16px;");
 
-            // Scrollable content area
-            var contentArea = Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("flex: 1; overflow-y: auto; min-height: 0;")
-                .WithVerticalGap(16);
+            // Welcome header (compact, no scroll)
+            dashboard = dashboard.WithView(Controls.H2($"Welcome back, {userName}"));
 
-            // Welcome header
-            var userName = accessService?.Context?.Name ?? "User";
-            contentArea = contentArea.WithView(Controls.H2($"Welcome back, {userName}"));
+            // 2-column responsive grid: tabs (9 cols) + sidebar (3 cols)
+            var grid = Controls.LayoutGrid.WithStyle("width: 100%; flex: 1; min-height: 0;");
 
-            // 2-column responsive grid: feed (8 cols) + sidebar (4 cols)
-            var grid = Controls.LayoutGrid.WithStyle("width: 100%;");
+            // LEFT COLUMN: Tabbed content
+            var tabs = Controls.Tabs
+                .WithSkin(skin => skin
+                    .WithActiveTabId("1")
+                    .WithHeight("100%"))
+                .WithView(
+                    await BuildActivityFeed(host, userId),
+                    s => s.WithLabel("Feed"))
+                .WithView(
+                    BuildNotifications(nodePath, userId),
+                    s => s.WithLabel("Notifications"))
+                .WithView(
+                    BuildPendingActions(userId),
+                    s => s.WithLabel("Actions"));
 
-            // Activity Feed (main area)
-            grid = grid.WithView(
-                await BuildActivityFeed(host, userId),
-                skin => skin.WithXs(12).WithSm(8)
-            );
+            grid = grid.WithView(tabs, skin => skin.WithXs(12).WithSm(9));
 
-            // Sidebar: Recently Viewed + Notifications + Pending Actions
-            var sidebar = Controls.Stack.WithVerticalGap(16);
+            // RIGHT COLUMN: Recently Viewed + Chat
+            var sidebar = Controls.Stack
+                .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 16px;");
+
             sidebar = sidebar.WithView(await BuildRecentActivity(host, userId));
-            sidebar = sidebar.WithView(BuildNotifications(nodePath, userId));
-            sidebar = sidebar.WithView(BuildPendingActions(userId));
+            sidebar = sidebar.WithView(BuildChatSection(host, nodePath));
 
-            grid = grid.WithView(sidebar, skin => skin.WithXs(12).WithSm(4));
-            contentArea = contentArea.WithView(grid);
+            grid = grid.WithView(sidebar, skin => skin.WithXs(12).WithSm(3));
 
-            // Chat pinned to bottom of scroll area
-            contentArea = contentArea.WithView(
-                Controls.Stack
-                    .WithWidth("100%")
-                    .WithStyle("position: sticky; bottom: 0; background: var(--neutral-layer-1); border-top: 1px solid var(--neutral-stroke-divider-rest); padding-top: 8px; z-index: 1;")
-                    .WithView(BuildChatEntry(host, nodePath))
-            );
-
-            dashboard = dashboard.WithView(contentArea);
+            dashboard = dashboard.WithView(grid);
 
             return (UiControl?)dashboard;
         });
     }
 
-    private static UiControl BuildChatEntry(LayoutAreaHost host, string nodePath)
+    /// <summary>
+    /// Chat section in the sidebar — narrower than the previous full-width sticky footer.
+    /// </summary>
+    private static UiControl BuildChatSection(LayoutAreaHost host, string nodePath)
     {
+        var section = Controls.Stack
+            .WithStyle("flex-shrink: 0; max-height: 40%; border-top: 1px solid var(--neutral-stroke-divider-rest); padding-top: 8px;");
+
+        section = section.WithView(Controls.PaneHeader("Chat"));
+
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
             .WithInitialContextDisplayName("Home")
             .WithHideEmptyState();
 
-        return Controls.Stack.WithWidth("100%").WithView(chatControl);
+        section = section.WithView(chatControl);
+        return section;
     }
 
     /// <summary>
-    /// Builds the system-wide activity feed combining UserActivityRecords and ActivityLogs.
+    /// Builds the unified activity feed combining UserActivityRecords and ActivityLogs.
+    /// Modern card styling with hover effects.
     /// </summary>
     private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host, string userId)
     {
-        var section = Controls.Stack.WithVerticalGap(8);
+        var section = Controls.Stack
+            .WithVerticalGap(8)
+            .WithStyle("overflow-y: auto; padding: 4px;");
+
         section = section.WithView(Controls.PaneHeader("Activity Feed"));
 
         var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
@@ -138,13 +155,22 @@ public static class UserActivityLayoutAreas
             };
 
             feedItems.Add((log.Start,
-                $"<div style=\"display: flex; gap: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--neutral-stroke-divider-rest); background: var(--neutral-layer-2);\">" +
-                $"<div style=\"flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: {statusColor}; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px;\">&#9998;</div>" +
+                $"<div style=\"display: flex; gap: 12px; padding: 12px 16px; border-radius: 8px; " +
+                $"border: 1px solid var(--neutral-stroke-divider-rest); background: var(--neutral-layer-2); " +
+                $"transition: box-shadow 0.15s ease, border-color 0.15s ease;\" " +
+                $"onmouseenter=\"this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'; this.style.borderColor='var(--accent-stroke-control-rest)'\" " +
+                $"onmouseleave=\"this.style.boxShadow='none'; this.style.borderColor='var(--neutral-stroke-divider-rest)'\">" +
+                $"<div style=\"flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: {statusColor}; " +
+                $"display: flex; align-items: center; justify-content: center; color: white; font-size: 15px;\">&#9998;</div>" +
                 $"<div style=\"flex: 1; min-width: 0;\">" +
-                $"<div style=\"font-weight: 500;\">{EscapeHtml(userName)} <span style=\"font-weight: 400; color: var(--neutral-foreground-hint);\">edited</span> <a href=\"/{EscapeHtml(hubPath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest);\">{EscapeHtml(hubName)}</a></div>" +
-                $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">{EscapeHtml(changeCount)}</div>" +
-                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{timeAgo}</div>" +
-                "</div></div>"));
+                $"<div style=\"font-weight: 600; font-size: 0.9rem; line-height: 1.4;\">{EscapeHtml(userName)} " +
+                $"<span style=\"font-weight: 400; color: var(--neutral-foreground-hint);\">edited</span> " +
+                $"<a href=\"/{EscapeHtml(hubPath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest); font-weight: 500;\">{EscapeHtml(hubName)}</a></div>" +
+                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-top: 4px; display: flex; align-items: center; gap: 8px;\">" +
+                $"<span>{EscapeHtml(changeCount)}</span>" +
+                $"<span style=\"opacity: 0.4;\">&#183;</span>" +
+                $"<span>{timeAgo}</span>" +
+                $"</div></div></div>"));
         }
 
         // Add recent user activity (personal views) — show top 10
@@ -156,23 +182,28 @@ public static class UserActivityLayoutAreas
                 : "";
 
             feedItems.Add((activity.LastAccessedAt.UtcDateTime,
-                $"<div style=\"display: flex; gap: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid var(--neutral-stroke-divider-rest);\">" +
-                $"<div style=\"flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--neutral-layer-3); display: flex; align-items: center; justify-content: center; color: var(--neutral-foreground-hint); font-size: 14px;\">&#128065;</div>" +
+                $"<div style=\"display: flex; gap: 12px; padding: 12px 16px; border-radius: 8px; " +
+                $"border: 1px solid var(--neutral-stroke-divider-rest); " +
+                $"transition: box-shadow 0.15s ease, border-color 0.15s ease;\" " +
+                $"onmouseenter=\"this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'; this.style.borderColor='var(--accent-stroke-control-rest)'\" " +
+                $"onmouseleave=\"this.style.boxShadow='none'; this.style.borderColor='var(--neutral-stroke-divider-rest)'\">" +
+                $"<div style=\"flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: var(--neutral-layer-3); " +
+                $"display: flex; align-items: center; justify-content: center; color: var(--neutral-foreground-hint); font-size: 15px;\">&#128065;</div>" +
                 $"<div style=\"flex: 1; min-width: 0;\">" +
-                $"<div>{nodeTypeBadge}You viewed <a href=\"/{EscapeHtml(activity.NodePath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest);\">{EscapeHtml(activity.NodeName ?? activity.NodePath)}</a></div>" +
+                $"<div style=\"font-size: 0.9rem; line-height: 1.4;\">{nodeTypeBadge}You viewed " +
+                $"<a href=\"/{EscapeHtml(activity.NodePath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest); font-weight: 500;\">" +
+                $"{EscapeHtml(activity.NodeName ?? activity.NodePath)}</a></div>" +
                 $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{timeAgo}</div>" +
-                "</div></div>"));
+                $"</div></div>"));
         }
 
         if (feedItems.Count == 0)
         {
             section = section.WithView(Controls.Html(
-                "<div style=\"padding: 24px; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 8px;\">" +
-                "<div style=\"font-weight: 500; margin-bottom: 8px;\">Your activity feed is empty</div>" +
-                "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">Start exploring — your recent views and edits will appear here.</div>" +
+                "<div style=\"padding: 32px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 8px;\">" +
+                "<div style=\"font-weight: 600; margin-bottom: 4px;\">No activity yet</div>" +
+                "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Start exploring content \u2014 your views and edits will appear here.</div>" +
                 "</div>"));
-
-            section = section.WithView(await BuildSuggestedContent(host));
             return section;
         }
 
@@ -187,33 +218,34 @@ public static class UserActivityLayoutAreas
         return section;
     }
 
+    /// <summary>
+    /// Builds the "Recently Viewed" sidebar section. Shows up to 5 items,
+    /// filling remaining slots from top-level Doc namespace nodes when fewer than 5 real activities exist.
+    /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        var section = Controls.Stack;
+        const int maxItems = 5;
+
+        var section = Controls.Stack
+            .WithStyle("flex: 1; overflow-y: auto; min-height: 0;");
 
         section = section.WithView(Controls.PaneHeader("Recently Viewed"));
 
         var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
-        if (activityStore == null || string.IsNullOrEmpty(userId))
+        var recentActivities = new List<UserActivityRecord>();
+
+        if (activityStore != null && !string.IsNullOrEmpty(userId))
         {
-            section = section.WithView(BuildQuickLinks(host));
-            return section;
+            var activities = await activityStore.GetActivitiesAsync(userId);
+            recentActivities = activities
+                .OrderByDescending(a => a.LastAccessedAt)
+                .Take(maxItems)
+                .ToList();
         }
 
-        var activities = await activityStore.GetActivitiesAsync(userId);
-        var recent = activities
-            .OrderByDescending(a => a.LastAccessedAt)
-            .Take(5)
-            .ToList();
-
-        if (recent.Count == 0)
-        {
-            section = section.WithView(BuildQuickLinks(host));
-            return section;
-        }
-
+        // Render actual activity items
         var list = Controls.Stack.WithVerticalGap(4);
-        foreach (var activity in recent)
+        foreach (var activity in recentActivities)
         {
             var nodeTypeBadge = !string.IsNullOrEmpty(activity.NodeType)
                 ? $"<span style=\"font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; background: var(--neutral-layer-3); color: var(--neutral-foreground-hint);\">{EscapeHtml(activity.NodeType)}</span>"
@@ -222,11 +254,63 @@ public static class UserActivityLayoutAreas
             var timeAgo = GetRelativeTime(activity.LastAccessedAt);
 
             list = list.WithView(Controls.Html(
-                $"<div style=\"display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px;\">" +
+                $"<div style=\"display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; " +
+                $"transition: background 0.1s ease;\" " +
+                $"onmouseenter=\"this.style.background='var(--neutral-layer-3)'\" " +
+                $"onmouseleave=\"this.style.background='transparent'\">" +
                 $"{nodeTypeBadge}" +
-                $"<a href=\"/{EscapeHtml(activity.NodePath)}\" style=\"flex: 1; text-decoration: none; color: var(--neutral-foreground-rest);\">{EscapeHtml(activity.NodeName ?? activity.NodePath)}</a>" +
-                $"<span style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint);\">{timeAgo}</span>" +
+                $"<a href=\"/{EscapeHtml(activity.NodePath)}\" style=\"flex: 1; text-decoration: none; color: var(--neutral-foreground-rest); font-size: 0.85rem;\">{EscapeHtml(activity.NodeName ?? activity.NodePath)}</a>" +
+                $"<span style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint);\">{timeAgo}</span>" +
                 "</div>"));
+        }
+
+        // Fill remaining slots from Doc namespace top-level items
+        var remaining = maxItems - recentActivities.Count;
+        if (remaining > 0)
+        {
+            var recentPaths = new HashSet<string>(recentActivities.Select(a => a.NodePath));
+            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+
+            if (meshCatalog != null)
+            {
+                var fillerNodes = new List<MeshNode>();
+                await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
+                {
+                    if (node.NodeType != null && SystemNodeTypes.Contains(node.NodeType))
+                        continue;
+
+                    if (node.Path != null && recentPaths.Contains(node.Path))
+                        continue;
+
+                    fillerNodes.Add(node);
+                    if (fillerNodes.Count >= remaining)
+                        break;
+                }
+
+                if (fillerNodes.Count > 0 && recentActivities.Count > 0)
+                {
+                    list = list.WithView(Controls.Html(
+                        "<div style=\"border-top: 1px solid var(--neutral-stroke-divider-rest); margin: 4px 0;\"></div>"));
+                    list = list.WithView(Controls.Html(
+                        "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 2px 8px;\">Suggested</div>"));
+                }
+
+                foreach (var node in fillerNodes)
+                {
+                    var nodeTypeBadge = !string.IsNullOrEmpty(node.NodeType)
+                        ? $"<span style=\"font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; background: var(--neutral-layer-3); color: var(--neutral-foreground-hint);\">{EscapeHtml(node.NodeType)}</span>"
+                        : "";
+
+                    list = list.WithView(Controls.Html(
+                        $"<div style=\"display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; " +
+                        $"transition: background 0.1s ease;\" " +
+                        $"onmouseenter=\"this.style.background='var(--neutral-layer-3)'\" " +
+                        $"onmouseleave=\"this.style.background='transparent'\">" +
+                        $"{nodeTypeBadge}" +
+                        $"<a href=\"/{EscapeHtml(node.Path ?? "")}\" style=\"flex: 1; text-decoration: none; color: var(--neutral-foreground-rest); font-size: 0.85rem;\">{EscapeHtml(node.Name ?? node.Id ?? "")}</a>" +
+                        "</div>"));
+                }
+            }
         }
 
         section = section.WithView(list);
@@ -235,11 +319,12 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildNotifications(string nodePath, string userId)
     {
-        var section = Controls.Stack;
+        var section = Controls.Stack
+            .WithVerticalGap(8)
+            .WithStyle("overflow-y: auto; padding: 4px;");
 
         section = section.WithView(Controls.PaneHeader("Notifications"));
 
-        // Use MeshSearchControl to query notification nodes under this user
         var searchControl = Controls.MeshSearch
             .WithHiddenQuery($"path:User/{userId} nodeType:{NotificationNodeType.NodeType} scope:descendants")
             .WithShowSearchBox(false)
@@ -247,7 +332,8 @@ public static class UserActivityLayoutAreas
             .WithSortBy("CreatedAt", ascending: false)
             .WithReactiveMode(true)
             .WithCollapsibleSections(false)
-            .WithSectionCounts(false);
+            .WithSectionCounts(false)
+            .WithMaxColumns(2);
 
         section = section.WithView(searchControl);
         return section;
@@ -255,11 +341,12 @@ public static class UserActivityLayoutAreas
 
     private static UiControl BuildPendingActions(string userId)
     {
-        var section = Controls.Stack;
+        var section = Controls.Stack
+            .WithVerticalGap(8)
+            .WithStyle("overflow-y: auto; padding: 4px;");
 
         section = section.WithView(Controls.PaneHeader("Pending Actions"));
 
-        // Query approval nodes where this user is the approver
         var searchControl = Controls.MeshSearch
             .WithHiddenQuery($"nodeType:{ApprovalNodeType.NodeType}")
             .WithShowSearchBox(false)
@@ -267,74 +354,8 @@ public static class UserActivityLayoutAreas
             .WithSortBy("CreatedAt", ascending: false)
             .WithReactiveMode(true)
             .WithCollapsibleSections(false)
-            .WithSectionCounts(false);
-
-        section = section.WithView(searchControl);
-        return section;
-    }
-
-    /// <summary>
-    /// Builds a "Discover Content" section showing doc sections for new users.
-    /// Only shows direct children (sections) — not all nested pages.
-    /// </summary>
-    private static async Task<UiControl> BuildSuggestedContent(LayoutAreaHost host)
-    {
-        var section = Controls.Stack.WithVerticalGap(8);
-        section = section.WithView(Controls.PaneHeader("Discover"));
-
-        var searchControl = Controls.MeshSearch
-            .WithPlaceholder("Search for content to explore...")
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithMaxColumns(2)
-            .WithItemLimit(6)
-            .WithShowEmptyMessage(false)
-            .WithShowLoadingIndicator(false);
-
-        // Try to find documentation namespace and show its direct sections
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog != null)
-        {
-            var rootNodes = new List<MeshNode>();
-            await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
-                rootNodes.Add(node);
-
-            var docNode = rootNodes.FirstOrDefault(n =>
-                n.Category?.Contains("Documentation", StringComparison.OrdinalIgnoreCase) == true
-                || n.Name?.Contains("Documentation", StringComparison.OrdinalIgnoreCase) == true);
-
-            if (docNode != null)
-            {
-                // scope:children — only direct sections, not every nested page
-                searchControl = searchControl
-                    .WithHiddenQuery($"path:{docNode.Path} scope:children")
-                    .WithShowSearchBox(true);
-            }
-        }
-
-        section = section.WithView(searchControl);
-        return section;
-    }
-
-    /// <summary>
-    /// Builds quick links to root-level content as a replacement for empty "Recently Viewed".
-    /// Excludes system node types (AccessAssignment, NodeType, etc.).
-    /// </summary>
-    private static UiControl BuildQuickLinks(LayoutAreaHost host)
-    {
-        var section = Controls.Stack.WithVerticalGap(4);
-        section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;\">Suggested pages:</div>"));
-
-        var searchControl = Controls.MeshSearch
-            .WithHiddenQuery("-nodeType:(AccessAssignment OR NodeType OR User OR Role OR Group) scope:children")
-            .WithShowSearchBox(false)
-            .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithItemLimit(5)
-            .WithMaxColumns(1)
-            .WithShowEmptyMessage(false)
-            .WithShowLoadingIndicator(false)
-            .WithCollapsibleSections(false)
-            .WithSectionCounts(false);
+            .WithSectionCounts(false)
+            .WithMaxColumns(2);
 
         section = section.WithView(searchControl);
         return section;

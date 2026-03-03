@@ -464,7 +464,11 @@ public static class MeshExtensions
                 HubConfiguration = existingNode.HubConfiguration
             };
 
-            // 5. Return success response
+            // 5. Persist the validated node
+            var persistence = hub.ServiceProvider.GetRequiredService<IPersistenceService>();
+            await persistence.SaveNodeAsync(nodeToSave, ct);
+
+            // 6. Return success response
             hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
 
             logger.LogInformation("Node updated successfully at {Path} by {UpdatedBy}",

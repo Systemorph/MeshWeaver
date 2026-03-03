@@ -15,14 +15,13 @@ namespace MeshWeaver.AI;
 /// Plugin providing mesh operations for AI agents.
 /// Supports @ prefix shorthand (e.g., @graph/org1 -> graph/org1).
 /// Supports Unified Path prefixes (e.g., @path/schema:, @path/model:).
+/// All operations go through Hub messaging to enforce security via validators.
 /// </summary>
 public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
-    private readonly IPersistenceService? persistence = hub.ServiceProvider.GetService<IPersistenceService>();
     private readonly IMeshQuery? meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
     private readonly IMeshCatalog? meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-    private readonly IEnumerable<IStaticNodeProvider> staticNodeProviders = hub.ServiceProvider.GetServices<IStaticNodeProvider>();
 
     /// <summary>
     /// Resolves @ prefix to full path. Example: @graph/org1 -> graph/org1
@@ -39,9 +38,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to data (e.g., @graph/org1, @NodeType/*, @ACME/schema:, @ACME/model:)")] string path)
     {
         logger.LogInformation("Get called with path={Path}", path);
-
-        if (persistence == null)
-            return "Persistence service not available.";
 
         var resolvedPath = ResolvePath(path);
 
@@ -74,9 +70,12 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             if (unifiedResult != null)
                 return unifiedResult;
 
-            // Get single node by path (persistence first, then static providers)
-            var meshNode = await persistence.GetNodeAsync(resolvedPath);
-            meshNode ??= FindStaticNode(resolvedPath);
+            // Get single node via MeshCatalog (enforces security via ValidateReadAsync)
+            if (meshCatalog == null)
+                return "Mesh catalog service not available.";
+
+            var address = new Address(resolvedPath);
+            var meshNode = await meshCatalog.GetNodeAsync(address);
             if (meshNode == null)
                 return $"Not found: {resolvedPath}";
 
@@ -154,9 +153,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     {
         logger.LogInformation("Update called");
 
-        if (persistence == null)
-            return "Persistence service not available.";
-
         try
         {
             var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(nodes, hub.JsonSerializerOptions);
@@ -166,8 +162,19 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             var results = new List<string>();
             foreach (var node in nodeList)
             {
-                var saved = await persistence.SaveNodeAsync(node);
-                results.Add($"Updated: {saved.Path}");
+                var tcs = new TaskCompletionSource<UpdateNodeResponse>();
+                var delivery = hub.Post(
+                    new UpdateNodeRequest(node),
+                    o => o.WithTarget(hub.Address));
+                hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
+                {
+                    tcs.TrySetResult(response.Message);
+                    return response;
+                });
+                var updateResponse = await tcs.Task;
+                if (!updateResponse.Success)
+                    throw new InvalidOperationException(updateResponse.Error ?? "Update failed");
+                results.Add($"Updated: {updateResponse.Node!.Path}");
             }
 
             return string.Join("\n", results);
@@ -189,9 +196,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     {
         logger.LogInformation("Delete called");
 
-        if (meshCatalog == null)
-            return "Mesh catalog service not available.";
-
         try
         {
             var pathList = JsonSerializer.Deserialize<List<string>>(paths, hub.JsonSerializerOptions);
@@ -202,7 +206,18 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                await meshCatalog.DeleteNodeAsync(resolvedPath);
+                var tcs = new TaskCompletionSource<DeleteNodeResponse>();
+                var delivery = hub.Post(
+                    new DeleteNodeRequest(resolvedPath),
+                    o => o.WithTarget(hub.Address));
+                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                {
+                    tcs.TrySetResult(response.Message);
+                    return response;
+                });
+                var deleteResponse = await tcs.Task;
+                if (!deleteResponse.Success)
+                    throw new InvalidOperationException(deleteResponse.Error ?? "Delete failed");
                 results.Add($"Deleted: {resolvedPath}");
             }
 
@@ -274,17 +289,6 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             logger.LogWarning(ex, "Error searching with query {Query}", query);
             return $"Error: {ex.Message}";
         }
-    }
-
-    /// <summary>
-    /// Finds a node by path in static node providers (e.g., BuiltInAgentProvider, DocumentationNodeProvider).
-    /// Falls back to this when file system persistence doesn't find the node.
-    /// </summary>
-    private MeshNode? FindStaticNode(string path)
-    {
-        return staticNodeProviders
-            .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
