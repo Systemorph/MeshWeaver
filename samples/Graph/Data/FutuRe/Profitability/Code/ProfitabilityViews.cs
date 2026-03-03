@@ -20,6 +20,8 @@ public static class ProfitabilityViews
 {
     public static LayoutDefinition AddProfitabilityViews(this LayoutDefinition layout) =>
         layout
+            .WithView(nameof(KeyMetrics), KeyMetrics)
+            .WithView(nameof(ProfitabilityTable), ProfitabilityTable)
             .WithView(nameof(ProfitabilityOverview), ProfitabilityOverview)
             .WithView(nameof(EstimateVsActual), EstimateVsActual)
             .WithView(nameof(ProfitByLoB), ProfitByLoB)
@@ -31,6 +33,90 @@ public static class ProfitabilityViews
     /// </summary>
     private static IObservable<IEnumerable<FutuReDataCube>> GetDataCube(LayoutAreaHost host)
         => host.Workspace.GetStream<FutuReDataCube>()!;
+
+    /// <summary>
+    /// Key performance indicators: total premium, claims, combined ratio, net profit.
+    /// </summary>
+    [Display(GroupName = "Profitability", Order = 10)]
+    public static IObservable<UiControl> KeyMetrics(this LayoutAreaHost host, RenderingContext _)
+        => GetDataCube(host).Select(data =>
+        {
+            var allData = data.ToList();
+            var totalPremium = allData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
+            var totalClaims = allData.Where(d => d.AmountType == "Claims").Sum(d => d.Estimate);
+            var totalInternal = allData.Where(d => d.AmountType == "InternalCost").Sum(d => d.Estimate);
+            var totalExternal = allData.Where(d => d.AmountType == "ExternalCost").Sum(d => d.Estimate);
+            var totalCapital = allData.Where(d => d.AmountType == "CapitalCost").Sum(d => d.Estimate);
+            var totalCosts = totalClaims + totalInternal + totalExternal + totalCapital;
+            var netProfit = totalPremium - totalCosts;
+            var lossRatio = totalPremium > 0 ? totalClaims / totalPremium * 100 : 0;
+            var combinedRatio = totalPremium > 0 ? totalCosts / totalPremium * 100 : 0;
+            var profitMargin = totalPremium > 0 ? netProfit / totalPremium * 100 : 0;
+            var lobCount = allData.Select(d => d.LineOfBusinessName).Distinct().Count();
+            var monthCount = allData.Select(d => d.Month).Distinct().Count();
+
+            var md = $@"### Revenue & Profitability
+
+- **Total Premium**: {totalPremium:N0}
+- **Total Claims**: {totalClaims:N0}
+- **Net Profit**: {netProfit:N0}
+
+### Ratios
+
+- **Loss Ratio**: {lossRatio:F1}%
+- **Combined Ratio**: {combinedRatio:F1}%
+- **Profit Margin**: {profitMargin:F1}%
+
+### Scope
+
+- **Lines of Business**: {lobCount}
+- **Months**: {monthCount}
+- **Business Units**: 2 (EuropeRe, AmericasIns)";
+
+            return (UiControl)Controls.Markdown(md);
+        });
+
+    /// <summary>
+    /// Line of business breakdown table showing premium, claims, costs, profit,
+    /// and loss ratio for each group LoB.
+    /// </summary>
+    [Display(GroupName = "Profitability", Order = 11)]
+    public static IObservable<UiControl> ProfitabilityTable(this LayoutAreaHost host, RenderingContext _)
+        => GetDataCube(host).Select(data =>
+        {
+            var allData = data.ToList();
+            var lobNames = allData.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
+
+            var sb = new StringBuilder();
+            sb.AppendLine("| Line of Business | Premium | Claims | Other Costs | Profit | Loss Ratio |");
+            sb.AppendLine("|------------------|--------:|-------:|------------:|-------:|-----------:|");
+
+            double grandPremium = 0, grandClaims = 0, grandOther = 0, grandProfit = 0;
+
+            foreach (var lob in lobNames)
+            {
+                var lobData = allData.Where(d => d.LineOfBusinessName == lob).ToList();
+                var premium = lobData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
+                var claims = lobData.Where(d => d.AmountType == "Claims").Sum(d => d.Estimate);
+                var otherCosts = lobData
+                    .Where(d => d.AmountType is "InternalCost" or "ExternalCost" or "CapitalCost")
+                    .Sum(d => d.Estimate);
+                var profit = premium - claims - otherCosts;
+                var lr = premium > 0 ? claims / premium * 100 : 0;
+
+                grandPremium += premium;
+                grandClaims += claims;
+                grandOther += otherCosts;
+                grandProfit += profit;
+
+                sb.AppendLine($"| {lob} | {premium:N0} | {claims:N0} | {otherCosts:N0} | {profit:N0} | {lr:F1}% |");
+            }
+
+            var grandLr = grandPremium > 0 ? grandClaims / grandPremium * 100 : 0;
+            sb.AppendLine($"| **Total** | **{grandPremium:N0}** | **{grandClaims:N0}** | **{grandOther:N0}** | **{grandProfit:N0}** | **{grandLr:F1}%** |");
+
+            return (UiControl)Controls.Markdown(sb.ToString());
+        });
 
     /// <summary>
     /// Monthly profitability overview: stacked column chart showing Premium (positive)

@@ -164,6 +164,62 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
+    /// Verifies that the KeyMetrics layout area renders KPI summary.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task KeyMetrics_ShouldRender()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Profitability");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("KeyMetrics");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for KeyMetrics area...");
+        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+
+        Output.WriteLine($"Received value: {value.Value.ValueKind}");
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            "KeyMetrics area should render KPI summary");
+    }
+
+    /// <summary>
+    /// Verifies that the ProfitabilityTable layout area renders LoB breakdown.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ProfitabilityTable_ShouldRender()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Profitability");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("ProfitabilityTable");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for ProfitabilityTable area...");
+        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+
+        Output.WriteLine($"Received value: {value.Value.ValueKind}");
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            "ProfitabilityTable area should render LoB breakdown table");
+    }
+
+    /// <summary>
     /// Verifies that TransactionMapping MeshNodes are loaded via IMeshQuery
     /// from both business unit namespaces.
     /// </summary>
