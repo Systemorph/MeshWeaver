@@ -54,6 +54,9 @@ public class NavigationService : INavigationService
     public NavigationContext? Context => _context;
 
     /// <inheritdoc />
+    public bool IsResolving { get; private set; } = true;
+
+    /// <inheritdoc />
     public event Action<NavigationContext?>? OnNavigationContextChanged;
 
     /// <inheritdoc />
@@ -134,8 +137,13 @@ public class NavigationService : INavigationService
 
     private async Task ProcessLocationChangeAsync(string path)
     {
+        IsResolving = true;
+        OnNavigationContextChanged?.Invoke(_context);
+
         // Resolve the path using pattern matching
         var resolution = await _meshCatalog.ResolvePathAsync(path);
+
+        IsResolving = false;
 
         if (resolution is null)
         {

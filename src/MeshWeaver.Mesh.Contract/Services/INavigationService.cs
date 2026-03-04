@@ -43,6 +43,12 @@ public interface INavigationService : IDisposable
     NavigationContext? Context { get; }
 
     /// <summary>
+    /// True while the service is resolving the current path.
+    /// When true, <see cref="Context"/> being null means "still loading", not "not found".
+    /// </summary>
+    bool IsResolving { get; }
+
+    /// <summary>
     /// Event raised when the navigation context changes due to location change.
     /// </summary>
     event Action<NavigationContext?>? OnNavigationContextChanged;

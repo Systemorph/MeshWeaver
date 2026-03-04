@@ -7,7 +7,15 @@
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
-    @if (NavigationService.Context is null)
+    @if (NavigationService.Context is null && NavigationService.IsResolving)
+    {
+        @* Address resolution in progress - show loading spinner *@
+        <div class="resolving-container">
+            <div class="spinner"></div>
+            <p>Looking up <strong>@Path</strong>...</p>
+        </div>
+    }
+    else if (NavigationService.Context is null)
     {
         <div class="error-container">
             <h2>Page Not Found</h2>

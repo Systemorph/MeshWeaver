@@ -73,7 +73,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
         if (context is null)
         {
-            PageTitle = "Page Not Found";
+            PageTitle = NavigationService.IsResolving ? "Loading..." : "Page Not Found";
             PreRenderedHtml = null;
             return;
         }
