@@ -48,6 +48,72 @@
     background: var(--accent-fill-hover, #106ebe);
 }
 
+.mesh-search-options-button {
+    background: transparent;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    padding: 0 8px;
+    height: 38px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    color: var(--neutral-foreground-rest);
+    opacity: 0.6;
+}
+
+.mesh-search-options-button:hover {
+    opacity: 1;
+    background: var(--neutral-fill-hover, #f0f0f0);
+}
+
+.mesh-search-options-panel {
+    margin-bottom: 12px;
+    padding: 10px 14px;
+    background: var(--neutral-layer-2);
+    border-radius: 6px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+}
+
+.mesh-search-options-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--neutral-foreground-hint, #666);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.mesh-search-options-close {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--neutral-foreground-hint, #666);
+    padding: 0 4px;
+}
+
+.mesh-search-options-query {
+    width: 100%;
+    font-family: monospace;
+    font-size: 13px;
+    padding: 6px 8px;
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    background: var(--neutral-layer-1);
+    color: var(--neutral-foreground-rest);
+    resize: vertical;
+    box-sizing: border-box;
+}
+
+.mesh-search-options-actions {
+    margin-top: 6px;
+    display: flex;
+    justify-content: flex-end;
+}
+
 .mesh-search-results {
     width: 100%;
 }

@@ -29,6 +29,9 @@ public partial class MeshSearchView : IDisposable
     private IDisposable? _reactiveSubscription;
     private HashSet<string> _collapsedGroups = new();
     private string _lastBoundVisibleQuery = "";
+    private bool _showSearchOptions;
+    private string _editableHiddenQuery = "";
+    private string? _overriddenHiddenQuery;
 
     [Inject]
     private IMeshQuery MeshQuery { get; set; } = default!;
@@ -59,7 +62,7 @@ public partial class MeshSearchView : IDisposable
     public string? SelectedPath { get; set; }
 
     // Basic properties
-    private string BoundHiddenQuery => ViewModel?.HiddenQuery?.ToString() ?? "";
+    private string BoundHiddenQuery => _overriddenHiddenQuery ?? ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
     private string BoundNamespace => ViewModel?.Namespace?.ToString() ?? "";
@@ -637,6 +640,22 @@ public partial class MeshSearchView : IDisposable
 
     private MeshNodeCardControl GetCardControl(MeshNode node) =>
         MeshNodeCardControl.FromNode(node, node.Path, BoundItemArea, BoundDisableNavigation);
+
+    private void ToggleSearchOptions()
+    {
+        _showSearchOptions = !_showSearchOptions;
+        if (_showSearchOptions)
+        {
+            _editableHiddenQuery = BoundHiddenQuery;
+        }
+    }
+
+    private async Task ApplySearchOptions()
+    {
+        _overriddenHiddenQuery = _editableHiddenQuery;
+        _showSearchOptions = false;
+        await LoadResultsAsync();
+    }
 
     public void Dispose()
     {

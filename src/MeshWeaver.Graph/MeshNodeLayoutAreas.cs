@@ -454,14 +454,14 @@ public static class MeshNodeLayoutAreas
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
-            // For NodeType mode, query by the node's full path as the nodeType filter
+            // For NodeType mode, query instances under this NodeType's namespace.
+            // Uses the node's own path as namespace to correctly scope to local instances.
+            // E.g., FutuRe/EuropeRe/LineOfBusiness → finds children under that namespace,
+            // regardless of whether they reference the local or parent nodeType path.
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var nodeTypeNamespace = node.Namespace ?? "";
-                var hiddenQuery = string.IsNullOrEmpty(nodeTypeNamespace)
-                    ? $"path: nodeType:{nodeTypePath} scope:children"
-                    : $"namespace:{nodeTypeNamespace} nodeType:{nodeTypePath} scope:subtree";
+                var hiddenQuery = $"namespace:{nodeTypePath} scope:children";
 
                 // Build create href with type restriction and optional namespace restrictions
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;

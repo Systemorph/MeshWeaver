@@ -381,21 +381,19 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that the LineOfBusiness Search area renders a MeshSearchControl
+    /// Verifies that the group-level LineOfBusiness Search area renders a MeshSearchControl
     /// and that executing its query returns the expected LoB instances.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task LineOfBusiness_Search_ShouldReturnLoBs()
+    public async Task LineOfBusiness_Search_ShouldReturnGroupLoBs()
     {
         var client = GetClient();
         var address = new Address("FutuRe/LineOfBusiness");
 
-        Output.WriteLine("Initializing hub for FutuRe/LineOfBusiness...");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(address),
             TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("Search");
@@ -403,26 +401,243 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        Output.WriteLine("Waiting for Search control...");
         var control = await stream
             .GetControlStream(reference.Area!)
             .Timeout(TimeSpan.FromSeconds(15))
             .FirstAsync(x => x is not null);
 
-        Output.WriteLine($"Received control: {control?.GetType().Name}");
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
         searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
 
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
-        Output.WriteLine($"Hidden query: {hiddenQuery}");
-        hiddenQuery.Should().Contain("nodeType:FutuRe/LineOfBusiness",
-            "Search query should filter by LineOfBusiness node type");
+        Output.WriteLine($"Group-level hidden query: {hiddenQuery}");
+        hiddenQuery.Should().Contain("namespace:FutuRe/LineOfBusiness",
+            "Search query should scope to group LineOfBusiness namespace");
 
-        // Execute the same query via IMeshQuery to verify result count
+        // Execute the query and verify we get the 10 group-level LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
-        Output.WriteLine($"Query returned {results.Count} results");
-        results.Count.Should().BeGreaterThanOrEqualTo(10,
-            "Should find LineOfBusiness instances from both EuropeRe and AmericasIns");
+        Output.WriteLine($"Group query returned {results.Count} results");
+        results.Count.Should().Be(10, "Should find all 10 group lines of business");
+    }
+
+    /// <summary>
+    /// Verifies that the EuropeRe LineOfBusiness Search area renders correctly
+    /// and returns the 8 EuropeRe-specific LoB instances.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/LineOfBusiness");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Search");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
+        searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
+
+        var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
+        Output.WriteLine($"EuropeRe hidden query: {hiddenQuery}");
+        hiddenQuery.Should().Contain("namespace:FutuRe/EuropeRe/LineOfBusiness",
+            "Search query should scope to EuropeRe LineOfBusiness namespace");
+
+        // Execute the query and verify we get the 8 EuropeRe LoBs
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
+        var names = results.Cast<MeshNode>().Select(n => n.Name).ToList();
+        Output.WriteLine($"EuropeRe query returned {results.Count} results: {string.Join(", ", names)}");
+        results.Count.Should().Be(8, "Should find all 8 EuropeRe lines of business");
+    }
+
+    // ── Analysis Hub Layout Areas (Group Level) ──
+
+    /// <summary>
+    /// Verifies that the ProfitabilityOverview chart area renders.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ProfitabilityOverview_ShouldRender()
+        => await AssertLayoutAreaRenders("FutuRe/Profitability", "ProfitabilityOverview");
+
+    /// <summary>
+    /// Verifies that the EstimateVsActual area renders.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task EstimateVsActual_ShouldRender()
+        => await AssertLayoutAreaRenders("FutuRe/Profitability", "EstimateVsActual");
+
+    /// <summary>
+    /// Verifies that the ProfitByLoB chart area renders.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ProfitByLoB_ShouldRender()
+        => await AssertLayoutAreaRenders("FutuRe/Profitability", "ProfitByLoB");
+
+    /// <summary>
+    /// Verifies that the LossRatio chart area renders.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task LossRatio_ShouldRender()
+        => await AssertLayoutAreaRenders("FutuRe/Profitability", "LossRatio");
+
+    /// <summary>
+    /// Verifies that the QuarterlyTrend chart area renders.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task QuarterlyTrend_ShouldRender()
+        => await AssertLayoutAreaRenders("FutuRe/Profitability", "QuarterlyTrend");
+
+    // ── Business Unit Layout Areas ──
+
+    /// <summary>
+    /// Verifies that the EuropeRe Search area renders with child nodes.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_Search_ShouldRenderWithChildren()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Search");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
+        var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
+        Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
+
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
+        Output.WriteLine($"EuropeRe Search returned {results.Count} results");
+        results.Count.Should().BeGreaterThanOrEqualTo(2,
+            "EuropeRe should have at least LineOfBusiness and TransactionMapping child nodes");
+    }
+
+    // ── Node Existence Verification ──
+
+    /// <summary>
+    /// Verifies that all FutuRe NodeType definitions exist.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AllNodeTypes_ShouldExist()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        var query = "namespace:FutuRe nodeType:NodeType scope:children state:Active";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+
+        Output.WriteLine($"Found {results.Count} NodeTypes: {string.Join(", ", ids)}");
+
+        ids.Should().Contain("Analysis");
+        ids.Should().Contain("BusinessUnit");
+        ids.Should().Contain("LineOfBusiness");
+        ids.Should().Contain("TransactionMapping");
+        ids.Should().Contain("AmountType");
+        ids.Should().Contain("Currency");
+        ids.Should().Contain("Country");
+        ids.Should().Contain("Report");
+    }
+
+    /// <summary>
+    /// Verifies that both BusinessUnit instances exist with correct properties.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task BusinessUnits_ShouldExistWithProperties()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        var query = "nodeType:FutuRe/BusinessUnit namespace:FutuRe scope:children state:Active";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        Output.WriteLine($"Found {results.Count} BusinessUnits");
+        results.Count.Should().Be(2, "Should have EuropeRe and AmericasIns");
+
+        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        ids.Should().Contain("EuropeRe");
+        ids.Should().Contain("AmericasIns");
+    }
+
+    // ── Report ──
+
+    /// <summary>
+    /// Verifies that the AnnualReport node exists and its Overview area renders.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnnualReport_Overview_ShouldRender()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Profitability/AnnualReport");
+
+        Output.WriteLine("Initializing hub for FutuRe/Profitability/AnnualReport...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for Overview area...");
+        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+
+        Output.WriteLine($"Received value: {value.Value.ValueKind}");
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            "AnnualReport Overview should render the report content");
+    }
+
+    // ── Helper ──
+
+    private async Task AssertLayoutAreaRenders(string addressPath, string areaName)
+    {
+        var client = GetClient();
+        var address = new Address(addressPath);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(areaName);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine($"Waiting for {areaName} area at {addressPath}...");
+        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+
+        Output.WriteLine($"Received {areaName}: {value.Value.ValueKind}");
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            $"{areaName} area should render at {addressPath}");
     }
 }

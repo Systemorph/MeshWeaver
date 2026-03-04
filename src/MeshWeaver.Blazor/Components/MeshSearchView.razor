@@ -24,6 +24,10 @@
                 <button type="button" class="mesh-search-button" @onclick="HandleSearch">
                     Search
                 </button>
+                <button type="button" class="mesh-search-options-button" @onclick="ToggleSearchOptions"
+                        title="Search options">
+                    <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
+                </button>
                 @if (ShowCreateButton)
                 {
                     <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
@@ -42,6 +46,21 @@
                         title="Create new">
                     +
                 </button>
+            </div>
+        </div>
+    }
+
+    @if (_showSearchOptions)
+    {
+        <div class="mesh-search-options-panel">
+            <div class="mesh-search-options-header">
+                <span>Query</span>
+                <button type="button" class="mesh-search-options-close" @onclick="ToggleSearchOptions">&times;</button>
+            </div>
+            <textarea class="mesh-search-options-query" rows="2"
+                      @bind="_editableHiddenQuery" @bind:event="oninput" />
+            <div class="mesh-search-options-actions">
+                <button type="button" class="mesh-search-button" @onclick="ApplySearchOptions">Apply</button>
             </div>
         </div>
     }
