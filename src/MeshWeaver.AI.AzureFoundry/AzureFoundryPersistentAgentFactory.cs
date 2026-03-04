@@ -112,40 +112,72 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
     {
         var tools = new List<ToolDefinition>();
 
-        // Create standard chat tools
-        var chatLogger = hub.ServiceProvider.GetService<ILogger<ChatPlugin>>();
-        var chatPlugin = new ChatPlugin(chat, chatLogger);
-        foreach (var tool in chatPlugin.CreateTools())
+        // Resolve tools from agent config plugins (same pattern as ChatClientAgentFactory)
+        if (agentConfig.Plugins is { Count: > 0 })
         {
-            if (tool is AIFunction aiFunc)
-                tools.Add(aiFunc.ToToolDefinition());
+            foreach (var pluginRef in agentConfig.Plugins)
+            {
+                var pluginTools = ResolvePluginTools(pluginRef, chat);
+                if (pluginTools != null)
+                {
+                    foreach (var tool in pluginTools)
+                    {
+                        if (tool is AIFunction aiFunc)
+                            tools.Add(aiFunc.ToToolDefinition());
+                    }
+                }
+                else
+                {
+                    logger.LogWarning("Plugin '{PluginName}' not found for agent {AgentName}",
+                        pluginRef.Name, agentConfig.Id);
+                }
+            }
         }
-
-        // Create mesh tools
-        var meshPlugin = new MeshPlugin(hub, chat);
-        foreach (var tool in meshPlugin.CreateTools())
+        else
         {
-            if (tool is AIFunction aiFunc)
-                tools.Add(aiFunc.ToToolDefinition());
-        }
-
-        // Create layout area tools
-        var layoutAreaPlugin = new LayoutAreaPlugin(hub, chat);
-        foreach (var tool in layoutAreaPlugin.CreateTools())
-        {
-            if (tool is AIFunction aiFunc)
-                tools.Add(aiFunc.ToToolDefinition());
-        }
-
-        // Create data tools
-        var dataPlugin = new DataPlugin(hub, chat);
-        foreach (var tool in dataPlugin.CreateTools())
-        {
-            if (tool is AIFunction aiFunc)
-                tools.Add(aiFunc.ToToolDefinition());
+            // Legacy mode: Mesh tools (backward compatibility)
+            var meshPlugin = new MeshPlugin(hub, chat);
+            var description = agentConfig.Description ?? "";
+            var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
+                || description.Contains("update", StringComparison.OrdinalIgnoreCase)
+                || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
+            foreach (var tool in needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools())
+            {
+                if (tool is AIFunction aiFunc)
+                    tools.Add(aiFunc.ToToolDefinition());
+            }
         }
 
         return tools;
+    }
+
+    /// <summary>
+    /// Resolves a plugin reference to AITool instances.
+    /// Built-in plugin "Mesh" is resolved directly; custom plugins are resolved from DI.
+    /// </summary>
+    private IEnumerable<AITool>? ResolvePluginTools(
+        AgentPluginReference pluginRef,
+        IAgentChat chat)
+    {
+        var allTools = pluginRef.Name switch
+        {
+            "Mesh" => (IEnumerable<AITool>)new MeshPlugin(hub, chat).CreateAllTools(),
+            _ => hub.ServiceProvider.GetServices<IAgentPlugin>()
+                    .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
+                    ?.CreateTools()
+        };
+
+        if (allTools == null)
+            return null;
+
+        // Filter to specific methods if specified
+        if (pluginRef.Methods is { Count: > 0 })
+        {
+            var methodSet = new HashSet<string>(pluginRef.Methods, StringComparer.OrdinalIgnoreCase);
+            allTools = allTools.Where(t => t is AIFunction f && methodSet.Contains(f.Name));
+        }
+
+        return allTools;
     }
 
     private static string GetAgentInstructions(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents)

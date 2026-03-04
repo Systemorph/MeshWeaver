@@ -82,6 +82,10 @@ public static class SampleDataExtensions
     public static TBuilder AddUserActivity<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("_useractivity");
 
+    /// <summary>Includes the activity logs partition (system-wide edit/approval logs).</summary>
+    public static TBuilder AddActivityLogs<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+        => builder.IncludePartition("_activitylogs");
+
     // === Convenience bundles ===
 
     /// <summary>
@@ -106,5 +110,6 @@ public static class SampleDataExtensions
             .AddVUser()
             .AddKernelData()
             .AddActivity()
-            .AddUserActivity();
+            .AddUserActivity()
+            .AddActivityLogs();
 }

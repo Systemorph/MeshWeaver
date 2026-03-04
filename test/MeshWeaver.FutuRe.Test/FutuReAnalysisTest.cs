@@ -10,6 +10,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -56,6 +57,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddFutuRe()
+            .AddActivityLogs()
+            .AddActivityTracking()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -97,9 +100,9 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task Profitability_Overview_ShouldRender()
     {
         var client = GetClient();
-        var address = new Address("FutuRe/Profitability");
+        var address = new Address("FutuRe/Analysis");
 
-        Output.WriteLine("Initializing hub for FutuRe/Profitability...");
+        Output.WriteLine("Initializing hub for FutuRe/Analysis...");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(address),
@@ -201,7 +204,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task KeyMetrics_ShouldRender()
     {
         var client = GetClient();
-        var address = new Address("FutuRe/Profitability");
+        var address = new Address("FutuRe/Analysis");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -229,7 +232,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task ProfitabilityTable_ShouldRender()
     {
         var client = GetClient();
-        var address = new Address("FutuRe/Profitability");
+        var address = new Address("FutuRe/Analysis");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -521,7 +524,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task ProfitabilityOverview_ShouldRender()
     {
         var client = GetClient();
-        var address = new Address("FutuRe/Profitability");
+        var address = new Address("FutuRe/Analysis");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -551,28 +554,28 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task EstimateVsActual_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Profitability", "EstimateVsActual");
+        => await AssertLayoutAreaRenders("FutuRe/Analysis", "EstimateVsActual");
 
     /// <summary>
     /// Verifies that the ProfitByLoB chart area renders.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task ProfitByLoB_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Profitability", "ProfitByLoB");
+        => await AssertLayoutAreaRenders("FutuRe/Analysis", "ProfitByLoB");
 
     /// <summary>
     /// Verifies that the LossRatio chart area renders.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task LossRatio_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Profitability", "LossRatio");
+        => await AssertLayoutAreaRenders("FutuRe/Analysis", "LossRatio");
 
     /// <summary>
     /// Verifies that the QuarterlyTrend chart area renders.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task QuarterlyTrend_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Profitability", "QuarterlyTrend");
+        => await AssertLayoutAreaRenders("FutuRe/Analysis", "QuarterlyTrend");
 
     // ── Business Unit Layout Areas ──
 
@@ -628,7 +631,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         Output.WriteLine($"Found {results.Count} NodeTypes: {string.Join(", ", ids)}");
 
-        ids.Should().Contain("Analysis");
+        ids.Should().Contain("GroupAnalysis");
         ids.Should().Contain("LocalAnalysis");
         ids.Should().Contain("BusinessUnit");
         ids.Should().Contain("LineOfBusiness");
@@ -668,9 +671,9 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task AnnualReport_Overview_ShouldRender()
     {
         var client = GetClient();
-        var address = new Address("FutuRe/Profitability/AnnualReport");
+        var address = new Address("FutuRe/Analysis/AnnualReport");
 
-        Output.WriteLine("Initializing hub for FutuRe/Profitability/AnnualReport...");
+        Output.WriteLine("Initializing hub for FutuRe/Analysis/AnnualReport...");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(address),
@@ -689,6 +692,64 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
             "AnnualReport Overview should render the report content");
+    }
+
+    // ── Activity Logs ──
+
+    /// <summary>
+    /// Verifies that activity logs from the _activitylogs filesystem partition
+    /// are loaded and returned by GetRecentActivityLogsAsync.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ActivityLogs_ShouldLoadFromFileSystem()
+    {
+        var storageAdapter = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
+
+        Output.WriteLine($"StorageAdapter type: {storageAdapter.GetType().Name}");
+        Output.WriteLine($"Persistence type: {persistence.GetType().Name}");
+        Output.WriteLine($"Data directory: {TestPaths.SamplesGraphData}");
+
+        // Diagnose: check if ListPartitionSubPathsAsync works for _activitylogs
+        var subPaths = await storageAdapter.ListPartitionSubPathsAsync("_activitylogs");
+        Output.WriteLine($"ListPartitionSubPathsAsync('_activitylogs'): [{string.Join(", ", subPaths)}]");
+
+        foreach (var sub in subPaths)
+        {
+            var nextLevel = await storageAdapter.ListPartitionSubPathsAsync($"_activitylogs/{sub}");
+            Output.WriteLine($"  _activitylogs/{sub} subPaths: [{string.Join(", ", nextLevel)}]");
+        }
+
+        // Diagnose: try reading partition objects directly
+        var directObjects = new List<object>();
+        await foreach (var obj in persistence.GetPartitionObjectsAsync("_activitylogs", null, new JsonSerializerOptions()))
+            directObjects.Add(obj);
+        Output.WriteLine($"GetPartitionObjectsAsync('_activitylogs', null): {directObjects.Count} objects");
+
+        // Create PersistenceActivityLogStore directly to bypass DI ordering
+        var activityLogStore = new PersistenceActivityLogStore(persistence, adapter: storageAdapter);
+
+        Output.WriteLine("Fetching recent activity logs...");
+        var logs = await activityLogStore.GetRecentActivityLogsAsync(limit: 30);
+
+        Output.WriteLine($"Found {logs.Count} activity logs");
+        foreach (var log in logs)
+            Output.WriteLine($"  [{log.Category}] {log.User?.DisplayName} - {log.HubPath} ({log.Status})");
+
+        logs.Count.Should().BeGreaterThanOrEqualTo(4,
+            "Should find at least 4 activity logs (2 EuropeRe + 2 AmericasIns from _activitylogs/)");
+
+        // Verify we have logs from both entities
+        var hubPaths = logs.Select(l => l.HubPath).ToList();
+        hubPaths.Should().Contain(p => p != null && p.Contains("EuropeRe"),
+            "Should have activity logs from EuropeRe");
+        hubPaths.Should().Contain(p => p != null && p.Contains("AmericasIns"),
+            "Should have activity logs from AmericasIns");
+
+        // Verify both categories are present
+        var categories = logs.Select(l => l.Category).Distinct().ToList();
+        categories.Should().Contain("Approval");
+        categories.Should().Contain("DataUpdate");
     }
 
     // ── Helper ──

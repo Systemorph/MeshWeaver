@@ -29,6 +29,7 @@ These prefixes have special meaning and map to specific layout areas:
 | `schema:` | Access the ContentType schema |
 | `model:` | Access the data model |
 | `area:` | Access a specific layout area |
+| `layoutAreas:` | List available layout areas (reports, views, charts) |
 
 ## Content Collection Prefixes
 

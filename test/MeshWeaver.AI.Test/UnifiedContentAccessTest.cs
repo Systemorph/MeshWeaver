@@ -403,6 +403,31 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
                 .WithView("TestArea", TestAreaView));
     }
 
+    [Fact]
+    public async Task GetDataRequest_UnifiedReference_LayoutAreas_ReturnsAreaDefinitions()
+    {
+        // arrange
+        GetHost();
+        var client = GetClient();
+        var path = "layoutAreas:";
+
+        // act
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new UnifiedReference(path)),
+            o => o.WithTarget(CreateHostAddress()),
+            TestContext.Current.CancellationToken);
+
+        // assert
+        var dataResponse = response.Message;
+        dataResponse.Error.Should().BeNull();
+        dataResponse.Data.Should().NotBeNull();
+
+        // Should contain list of LayoutAreaDefinition with "TestArea"
+        var areas = dataResponse.Data as IList<LayoutAreaDefinition>;
+        areas.Should().NotBeNull();
+        areas.Should().Contain(a => a.Area == "TestArea");
+    }
+
     #endregion
 
     #region Test Configuration

@@ -45,43 +45,41 @@ public class MeshOperations
 
         try
         {
+            if (meshQuery == null)
+                return "Query service not available.";
+
             // Handle children query (path/*)
             if (resolvedPath.EndsWith("/*"))
             {
                 var parentPath = resolvedPath[..^2];
                 var result = new List<object>();
-                if (meshQuery != null)
+                var query = $"path:{parentPath} scope:children";
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
                 {
-                    var query = $"path:{parentPath} scope:children";
-                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
+                    result.Add(new
                     {
-                        result.Add(new
-                        {
-                            node.Path,
-                            node.Name,
-                            node.NodeType,
-                            node.Icon
-                        });
-                    }
+                        node.Path,
+                        node.Name,
+                        node.NodeType,
+                        node.Icon
+                    });
                 }
                 return JsonSerializer.Serialize(result, hub.JsonSerializerOptions);
             }
 
-            // Check for Unified Path prefix (e.g., "ACME/schema:", "ACME/schema:TypeName", "ACME/model:")
+            // Check for Unified Path prefix (e.g., "ACME/schema:", "ACME/data:Collection/id")
             var unifiedResult = await TryResolveUnifiedPathAsync(resolvedPath);
             if (unifiedResult != null)
                 return unifiedResult;
 
-            // Get single node via MeshCatalog (enforces security via ValidateReadAsync)
-            if (meshCatalog == null)
-                return "Mesh catalog service not available.";
+            // Get single node via query (reads from persistence, not cached)
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>(
+                MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
+            {
+                return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
+            }
 
-            var address = new Address(resolvedPath);
-            var meshNode = await meshCatalog.GetNodeAsync(address);
-            if (meshNode == null)
-                return $"Not found: {resolvedPath}";
-
-            return JsonSerializer.Serialize(meshNode, hub.JsonSerializerOptions);
+            return $"Not found: {resolvedPath}";
         }
         catch (Exception ex)
         {
@@ -92,23 +90,28 @@ public class MeshOperations
 
     /// <summary>
     /// Tries to resolve a path as a Unified Path with prefix (schema:, model:, data:).
-    /// Uses meshCatalog.ResolvePathAsync to split into address and remainder,
+    /// Parses the path to find the colon separator, splits into address and remainder,
     /// then routes data request to the resolved address.
     /// Returns null if the path is not a Unified Path.
     /// </summary>
     private async Task<string?> TryResolveUnifiedPathAsync(string resolvedPath)
     {
-        if (meshCatalog == null || !resolvedPath.Contains(':'))
+        var colonIndex = resolvedPath.IndexOf(':');
+        if (colonIndex < 0)
             return null;
 
-        var resolution = await meshCatalog.ResolvePathAsync(resolvedPath);
-        if (resolution?.Remainder == null || !resolution.Remainder.Contains(':'))
-            return null;
+        // Find the last '/' before the colon — separates address from prefix:path
+        var slashBeforeColon = resolvedPath.LastIndexOf('/', colonIndex);
+        if (slashBeforeColon < 0)
+            return null; // No address part
 
-        var reference = new UnifiedReference(resolution.Remainder);
-        var address = new Address(resolution.Prefix);
+        var addressPart = resolvedPath[..slashBeforeColon];
+        var remainder = resolvedPath[(slashBeforeColon + 1)..];
+
+        var reference = new UnifiedReference(remainder);
+        var address = new Address(addressPart);
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
-            resolution.Prefix, resolution.Remainder);
+            addressPart, remainder);
 
         var response = await hub.AwaitResponse(
             new GetDataRequest(reference),

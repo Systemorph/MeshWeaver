@@ -815,7 +815,9 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             "type" => (new NodeTypeReference(), null),
             "schema" => (new SchemaReference(remainingPath), null),
             "model" => (new DataModelReference(), null),
-            _ => (null, new GetDataResponse(null, 0) { Error = $"Unknown prefix: {prefix}" })
+            // Unknown prefix — return as UnifiedReference so workspace-level resolvers
+            // (registered via WithUnifiedReference) can handle it through GetDataFromWorkspaceAsync
+            _ => (new UnifiedReference($"{prefix}:{remainingPath ?? ""}"), null)
         };
     }
 

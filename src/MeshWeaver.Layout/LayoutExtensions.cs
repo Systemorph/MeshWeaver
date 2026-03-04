@@ -6,6 +6,7 @@ using Json.Patch;
 using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Completion;
 using MeshWeaver.Layout.Composition;
@@ -73,6 +74,13 @@ public static class LayoutExtensions
                     {
                         data = data.WithUnifiedReference("area", CreateAreaPathStream);
                     }
+                    // Register the layoutAreas: prefix resolver for UnifiedReference
+                    if (!data.UnifiedReferenceResolvers.ContainsKey("layoutAreas"))
+                    {
+                        data = data.WithUnifiedReference("layoutAreas", (workspace, _) =>
+                            CreateLayoutAreasStream(workspace));
+                    }
+
                     return data.Configure(reduction => reduction
                         .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
                             reference is not LayoutAreaReference layoutArea
@@ -85,6 +93,10 @@ public static class LayoutExtensions
                                         configuration!)
                                     .GetStream()
                         )
+                        .AddWorkspaceReferenceStream<object>((workspace, reference, _) =>
+                            reference is not LayoutAreasReference
+                                ? null
+                                : CreateLayoutAreasStream(workspace))
                     );
                 }).AddLayoutTypes()
                 .WithSerialization(serialization => serialization.WithOptions(options =>
@@ -150,6 +162,7 @@ public static class LayoutExtensions
                 typeof(Option), // this is not a control
                 typeof(Option<>), // this is not a control
                 typeof(ContextProperty), // this is not a control
+                typeof(LayoutAreasReference),
                 typeof(GetLayoutAreasRequest),
                 typeof(LayoutAreasResponse),
                 typeof(DataGridCellClick)
@@ -522,5 +535,49 @@ public static class LayoutExtensions
         var layoutAreaRef = new LayoutAreaReference(areaName) { Id = areaId };
         // LayoutAreaReference returns ISynchronizationStream<EntityStore>, cast to object
         return (ISynchronizationStream<object>?)workspace.GetStream(layoutAreaRef, null);
+    }
+
+    /// <summary>
+    /// Creates a stream that returns the list of available layout areas.
+    /// Used by the layoutAreas: unified reference prefix.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateLayoutAreasStream(IWorkspace workspace)
+    {
+        var uiControlService = workspace.Hub.ServiceProvider.GetService<IUiControlService>();
+        if (uiControlService == null)
+            return null;
+
+        var reference = new LayoutAreasReference();
+        var streamIdentity = new StreamIdentity(workspace.Hub.Address, "layoutAreas");
+        var stream = new SynchronizationStream<object>(
+            streamIdentity,
+            workspace.Hub,
+            reference,
+            workspace.ReduceManager.ReduceTo<object>(),
+            c => c
+        );
+
+        // Use FromAsync to allow the hub's message processing to handle the value
+        // before the observable sequence completes
+        var observable = Observable.FromAsync(_ =>
+        {
+            var areas = uiControlService.LayoutDefinition
+                .AreaDefinitions
+                .Values
+                .Where(l => l.IsVisible())
+                .ToList();
+            return Task.FromResult((object)areas);
+        });
+
+        stream.RegisterForDisposal(
+            observable
+                .Select(value => new ChangeItem<object>(value, stream.StreamId, workspace.Hub.Version))
+                .Where(x => x.Value != null)
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(stream)
+        );
+
+        return stream;
     }
 }

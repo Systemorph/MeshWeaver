@@ -24,9 +24,14 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 
 | Syntax | Returns |
 |--------|---------|
+| `Get('@path/data:')` | Node's Content data as JSON |
+| `Get('@path/data:Collection')` | All entities in a data collection |
+| `Get('@path/data:Collection/id')` | A specific entity by ID |
 | `Get('@path/schema:')` | JSON Schema for the node's content type |
 | `Get('@path/schema:TypeName')` | JSON Schema for a specific named type |
 | `Get('@path/model:')` | Full data model with all registered types |
+| `Get('@path/layoutAreas:')` | List of available layout areas (reports, charts) |
+| `Get('@path/area:AreaName')` | Download a layout area's data for analysis |
 
 #### Unified Path Reference
 
@@ -51,6 +56,7 @@ Unified Path allows you to **reference** and **embed** content from anywhere in 
 | `schema:` | Access the ContentType schema |
 | `model:` | Access the data model |
 | `area:` | Access a specific layout area |
+| `layoutAreas:` | List available layout areas (reports, views, charts) |
 
 **Content Collection Prefixes:**
 
@@ -73,8 +79,13 @@ With any other prefix, it accesses files from a content collection.
 
 - `Get('@graph/org1')` — Get a specific organization node
 - `Get('@NodeType/*')` — List all available node types
+- `Get('@ACME/ProductLaunch/data:')` — Get the node's content data as JSON
+- `Get('@ACME/ProductLaunch/data:Pricing')` — Get all Pricing entities
+- `Get('@ACME/ProductLaunch/data:Pricing/item-1')` — Get a specific Pricing entity
 - `Get('@ACME/ProductLaunch/schema:')` — Get content type schema for ProductLaunch
 - `Get('@ACME/ProductLaunch/model:')` — Get the full data model
+- `Get('@Northwind/Analytics/layoutAreas:')` — List available reports and charts
+- `Get('@Northwind/Analytics/area:SalesByCategory')` — Download area data for analysis
 
 ## Search
 
@@ -273,6 +284,53 @@ Deletes one or more nodes by their paths.
 ```
 Delete('["ACME/OldProject", "ACME/ArchivedTask"]')
 ```
+
+## Layout Areas (Reports, Views, Charts, Dashboards)
+
+When the user asks about **reports**, **views**, **charts**, **analysis**, **dashboards**, or **visualizations**, use layout areas.
+
+### Discovering Available Layout Areas
+
+Use the `layoutAreas:` prefix to list all available layout areas for a node:
+
+```
+Get('@Northwind/Analytics/layoutAreas:')
+```
+
+This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `Description`, `Group`, and `Order` fields.
+
+### Downloading Area Data for Analysis
+
+Use the `area:` prefix to download a layout area's data for analysis:
+
+```
+Get('@Northwind/Analytics/area:SalesByCategory')
+```
+
+This returns the area's data as an EntityStore, which you can analyze and summarize.
+
+### Navigating to a Visual Display
+
+Use `NavigateTo` to display a layout area visually in the chat UI:
+
+```
+NavigateTo('@Northwind/Analytics/SalesByCategory')
+```
+
+### Inline Embedding
+
+Use `@@` syntax to embed a layout area inline in markdown responses:
+
+```
+@@Northwind/Analytics/SalesByCategory
+```
+
+### Workflow
+
+1. **Discover**: `Get('@path/layoutAreas:')` — list available areas
+2. **Analyze**: `Get('@path/area:AreaName')` — download area data
+3. **Display**: `NavigateTo('@path/AreaName')` — show visual chart/report
+4. **Embed**: `@@path/AreaName` — inline in markdown
 
 ## Reading Documentation
 

@@ -81,17 +81,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
         else
         {
-            // Legacy mode: standard tools + all built-in plugins (backward compatibility)
-            tools = tools.Concat(GetStandardTools(chat));
-
+            // Legacy mode: Mesh tools (backward compatibility)
             var meshPlugin = new MeshPlugin(Hub, chat);
             var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
                 || description.Contains("update", StringComparison.OrdinalIgnoreCase)
                 || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
             tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
-
-            tools = tools.Concat(new LayoutAreaPlugin(Hub, chat).CreateTools());
-            tools = tools.Concat(new DataPlugin(Hub, chat).CreateTools());
         }
 
         // Create ChatClientAgent with all parameters
@@ -139,8 +134,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
     protected virtual IEnumerable<AITool> GetStandardTools(IAgentChat chat)
     {
-        var logger = Hub.ServiceProvider.GetService<ILogger<ChatPlugin>>();
-        return new ChatPlugin(chat, logger).CreateTools();
+        return [];
     }
 
     /// <summary>
@@ -236,10 +230,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
     /// <summary>
     /// Resolves a plugin reference to AITool instances.
-    /// Built-in plugins (Mesh, Data, LayoutArea, Chat) are resolved by name.
-    /// Custom plugins are resolved from DI-registered IAgentPlugin services.
+    /// Built-in plugin "Mesh" is resolved directly; custom plugins are resolved from DI.
     /// Method filtering is applied when the plugin reference specifies methods.
-    /// Override to add custom plugin resolution in derived factories.
     /// </summary>
     protected virtual IEnumerable<AITool>? ResolvePluginTools(
         AgentPluginReference pluginRef,
@@ -249,9 +241,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var allTools = pluginRef.Name switch
         {
             "Mesh" => (IEnumerable<AITool>)new MeshPlugin(Hub, chat).CreateAllTools(),
-            "Data" => new DataPlugin(Hub, chat).CreateTools(),
-            "LayoutArea" => new LayoutAreaPlugin(Hub, chat).CreateTools(),
-            "Chat" => new ChatPlugin(chat, Hub.ServiceProvider.GetService<ILogger<ChatPlugin>>()).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
                     .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
                     ?.CreateTools()

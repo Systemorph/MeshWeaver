@@ -102,7 +102,18 @@ public class MeshPluginTest : MonolithMeshTestBase
         var mockChat = new MockAgentChat();
         var plugin = new MeshPlugin(Mesh, mockChat);
 
-        var result = await plugin.Get("@Agent/Navigator");
+        // Create a node first, then get it (static agent nodes are not queryable via meshQuery)
+        var uniqueId = $"GetTest_{Guid.NewGuid():N}";
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = uniqueId,
+            @namespace = "ACME",
+            name = "Get Test Node",
+            nodeType = "Organization"
+        });
+        await plugin.Create(createJson);
+
+        var result = await plugin.Get($"@ACME/{uniqueId}");
 
         result.Should().NotBeNullOrEmpty();
         result.Should().NotStartWith("Not found");
@@ -154,10 +165,21 @@ public class MeshPluginTest : MonolithMeshTestBase
         var mockChat = new MockAgentChat();
         var plugin = new MeshPlugin(Mesh, mockChat);
 
+        // Create a node first
+        var uniqueId = $"AtTest_{Guid.NewGuid():N}";
+        var createJson = JsonSerializer.Serialize(new
+        {
+            id = uniqueId,
+            @namespace = "ACME",
+            name = "At Prefix Test",
+            nodeType = "Organization"
+        });
+        await plugin.Create(createJson);
+
         // With @ prefix
-        var result1 = await plugin.Get("@Agent/Navigator");
+        var result1 = await plugin.Get($"@ACME/{uniqueId}");
         // Without @ prefix (should also work)
-        var result2 = await plugin.Get("Agent/Navigator");
+        var result2 = await plugin.Get($"ACME/{uniqueId}");
 
         result1.Should().Be(result2, "@ prefix should be stripped and both should return the same result");
     }
