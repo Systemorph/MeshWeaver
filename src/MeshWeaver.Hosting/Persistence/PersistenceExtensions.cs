@@ -241,6 +241,9 @@ public static class PersistenceExtensions
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
+        // Register IStorageAdapter for cross-partition scanning (e.g. activity log feed)
+        services.TryAddSingleton<IStorageAdapter>(new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier));
+
         services.AddSingleton<IPartitionedStoreFactory>(sp =>
         {
             // Collect all partition inclusions registered via IncludePartition()
