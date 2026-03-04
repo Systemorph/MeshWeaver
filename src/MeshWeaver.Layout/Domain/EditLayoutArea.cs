@@ -207,14 +207,14 @@ public static class EditLayoutArea
             .Where(p => !IsTitleProperty(p.Name))
             .ToList();
 
-        // Separate properties into regular vs markdown (SeparateEditView) vs collection (MeshNodeCollectionAttribute)
+        // Separate properties into regular vs markdown vs collection
         var regularProps = properties
-            .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView != true
+            .Where(p => !EditorExtensions.IsMarkdownProperty(p)
                         && p.GetCustomAttribute<MeshNodeCollectionAttribute>() == null)
             .ToList();
 
         var markdownProps = properties
-            .Where(p => p.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView == true)
+            .Where(p => EditorExtensions.IsMarkdownProperty(p))
             .ToList();
 
         var collectionProps = properties

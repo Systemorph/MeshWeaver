@@ -175,7 +175,7 @@ public static class ProfitabilityLayoutAreas
             sb.AppendLine("| Month | Type | Estimate | Actual | Variance |");
             sb.AppendLine("|-------|------|----------|--------|----------|");
 
-            foreach (var month in months.TakeLast(6))
+            foreach (var month in Enumerable.TakeLast(months, 6))
             {
                 foreach (var at in amountTypes)
                 {

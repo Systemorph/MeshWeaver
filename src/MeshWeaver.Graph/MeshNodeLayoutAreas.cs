@@ -172,10 +172,9 @@ public static class MeshNodeLayoutAreas
     internal static string GetContainerStyle(LayoutAreaHost host, NodeTypeDefinition? typeDef = null)
     {
         var pageMaxWidth = typeDef?.PageMaxWidth
-            ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth;
-        return string.IsNullOrEmpty(pageMaxWidth)
-            ? "position: relative; padding: 0 24px;"
-            : $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
+            ?? host.Hub.Configuration.Get<PageLayoutOptions>()?.MaxWidth
+            ?? "1200px";
+        return $"position: relative; max-width: {pageMaxWidth}; margin: 0 auto; padding: 0 24px;";
     }
 
     internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef, bool canEdit = true)
@@ -194,13 +193,19 @@ public static class MeshNodeLayoutAreas
         // Children
         if (typeDef?.ShowChildrenInDetails ?? true)
         {
-            stack = stack.WithView(LayoutAreaControl.Children(host.Hub));
+            stack = stack.WithView(
+                Controls.Stack
+                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                    .WithView(LayoutAreaControl.Children(host.Hub)));
         }
 
         // Comments
         if (host.Hub.Configuration.HasComments())
         {
-            stack = stack.WithView(CommentsView.BuildInlineCommentsSection(host));
+            stack = stack.WithView(
+                Controls.Stack
+                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                    .WithView(CommentsView.BuildInlineCommentsSection(host)));
         }
 
         return stack;

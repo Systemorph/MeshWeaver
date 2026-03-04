@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -81,6 +82,56 @@ internal class MeshNodeCompilationService(
         return references;
     }
 
+    /// <summary>
+    /// Regex matching @@path references in code files, consistent with InlineReferenceResolver in MeshWeaver.AI.
+    /// </summary>
+    private static readonly Regex CodeIncludePattern = new(@"@@([^\s#\]]+)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
+    /// For example, @@FutuRe/LineOfBusiness/Code/LineOfBusiness resolves to that node's code content.
+    /// </summary>
+    internal async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshQuery meshQuery, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
+            return code;
+
+        var matches = CodeIncludePattern.Matches(code);
+        if (matches.Count == 0)
+            return code;
+
+        var result = code;
+        foreach (Match match in matches)
+        {
+            var path = match.Groups[1].Value;
+            string? resolvedCode = null;
+
+            await foreach (var referencedNode in meshQuery
+                               .QueryAsync<MeshNode>($"path:{path}", ct: ct)
+                               .WithCancellation(ct))
+            {
+                if (referencedNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+                {
+                    resolvedCode = cf.Code;
+                }
+                break;
+            }
+
+            if (resolvedCode != null)
+            {
+                logger.LogDebug("Resolved code include @@{Path}", path);
+                result = result.Replace(match.Value, resolvedCode);
+            }
+            else
+            {
+                logger.LogWarning("Could not resolve code include @@{Path}", path);
+            }
+        }
+
+        return result;
+    }
+
     /// <inheritdoc />
     public async Task<string?> GetAssemblyLocationAsync(MeshNode node, CancellationToken ct = default)
     {
@@ -118,6 +169,17 @@ internal class MeshNodeCompilationService(
                 {
                     codeFiles.Add(cf);
                 }
+            }
+        }
+
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Code/LineOfBusiness)
+        if (meshQuery != null)
+        {
+            for (int i = 0; i < codeFiles.Count; i++)
+            {
+                var resolved = await ResolveCodeIncludesAsync(codeFiles[i].Code!, meshQuery, ct);
+                if (resolved != codeFiles[i].Code)
+                    codeFiles[i] = codeFiles[i] with { Code = resolved };
             }
         }
 

@@ -62,7 +62,7 @@ public static class OverviewLayoutArea
         {
             container = container.WithView(
                 new MarkdownControl("") { Html = node.PreRenderedHtml }
-                    .WithStyle("max-width: 1280px; margin: 0 auto; padding: 0 24px 48px 24px;"));
+                    .WithStyle("padding: 0 0 48px 0;"));
         }
 
         return container;

@@ -559,6 +559,16 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 codeFiles.Add(codeConfig.Code);
             }
         }
+
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Code/LineOfBusiness)
+        if (compilationService != null)
+        {
+            for (int i = 0; i < codeFiles.Count; i++)
+            {
+                codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshQuery, ct);
+            }
+        }
+
         var code = codeFiles.Count > 0 ? string.Join("\n\n", codeFiles) : null;
 
         var frameworkVersion = typeof(NodeTypeService).Assembly.GetName().Version?.ToString() ?? "unknown";
