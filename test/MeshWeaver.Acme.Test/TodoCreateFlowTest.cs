@@ -8,10 +8,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Acme.Test.TestHelpers;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting.Monolith.Test.TestHelpers;
+using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
@@ -22,7 +24,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Acme.Test;
 
 /// <summary>
 /// Tests for the Todo Create flow that verify actual UI behavior.
@@ -30,7 +32,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// 1. CreateChild (on parent node): Shows Name/Description form, creates transient node, redirects
 /// 2. Create (on transient node): Shows ContentType editor with all fields
 /// </summary>
-[Collection("SamplesGraphData")]
 public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private static readonly string SharedCacheDirectory = Path.Combine(
@@ -54,7 +55,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -195,7 +197,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Create the transient node via catalog
-            await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await catalog.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
             Output.WriteLine("Transient node created.");
 
             // Initialize the node's hub
@@ -278,7 +280,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         try
         {
-            await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await catalog.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
             Output.WriteLine("Transient node created successfully");
 
             var nodeAddress = new Address(nodePath);
@@ -363,7 +365,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node (simulates BuildCreateChildForm)
-            var createdNode = await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            var createdNode = await catalog.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
             createdNode.Should().NotBeNull("Transient node should be created");
             createdNode.State.Should().Be(MeshNodeState.Transient);
             Output.WriteLine($"Transient node created: {createdNode.Path}");
@@ -448,7 +450,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node
-            var createdNode = await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            var createdNode = await catalog.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
             createdNode.Should().NotBeNull("Transient node should be created");
             createdNode.State.Should().Be(MeshNodeState.Transient, "Node should be in Transient state");
             createdNode.Name.Should().Be("E2E Test Task");
@@ -554,7 +556,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         try
         {
-            await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await catalog.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
             Output.WriteLine("Transient node created (without content).");
 
             // Step 2: Initialize the node's hub (this triggers MeshDataSource initialization)
@@ -688,7 +690,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             // Step 1: Create transient node
-            await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, ct: TestContext.Current.CancellationToken);
+            await catalog.CreateTransientAsync(transientNode, ct: TestContext.Current.CancellationToken);
             Output.WriteLine("Transient node created.");
 
             // Step 2: Initialize the node's hub
