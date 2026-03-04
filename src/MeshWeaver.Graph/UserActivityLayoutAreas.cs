@@ -13,12 +13,13 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Registers the "Activity" area on User nodes for the personal dashboard start page.
-/// Layout: Vertical stack — top panel (grid: Activities + Recently Viewed, scrollable),
-/// bottom panel (Chat, full width, glued to bottom).
+/// Modern social-media-inspired layout with activity timeline, quick-access cards, and chat.
 /// </summary>
 public static class UserActivityLayoutAreas
 {
     public const string ActivityArea = "Activity";
+
+    private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
 
     private static readonly HashSet<string> SystemNodeTypes =
     [
@@ -32,9 +33,7 @@ public static class UserActivityLayoutAreas
         => configuration.AddLayout(layout => layout.WithView(ActivityArea, Activity));
 
     /// <summary>
-    /// Renders the user's personal dashboard.
-    /// Top: grid with Activities (bigger) + Recently Viewed (smaller), scrollable.
-    /// Bottom: Chat (full width, glued to bottom).
+    /// Renders the user's personal dashboard with a modern social-media look.
     /// </summary>
     public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
     {
@@ -46,17 +45,22 @@ public static class UserActivityLayoutAreas
         {
             var userName = accessService?.Context?.Name ?? "User";
 
-            // Outer container: flex column filling viewport minus portal header
+            // Outer shell: flex column, full viewport height minus portal header
             var dashboard = Controls.Stack
                 .WithWidth("100%")
-                .WithStyle("display: flex; flex-direction: column; height: calc(100vh - 64px); min-height: 0; padding: 16px; gap: 0;");
+                .WithStyle("display: flex; flex-direction: column; height: calc(100vh - 64px); min-height: 0; overflow: hidden;");
 
-            // Welcome header (compact, no scroll)
-            dashboard = dashboard.WithView(Controls.H2($"Welcome back, {userName}"));
+            // Welcome banner
+            dashboard = dashboard.WithView(Controls.Html(
+                $"<div style=\"flex-shrink: 0; padding: 20px 24px 12px 24px;\">" +
+                $"<div style=\"font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em;\">" +
+                $"Welcome back, {EscapeHtml(userName)}</div>" +
+                $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
+                "</div>"));
 
-            // TOP PANEL: Grid with Activities + Recently Viewed (scrollable, takes remaining space)
+            // Content area: two-column grid, each column scrolls independently
             var topPanel = Controls.LayoutGrid
-                .WithStyle("width: 100%; flex: 1; min-height: 0; overflow-y: auto; gap: 16px;");
+                .WithStyle("flex: 1; min-height: 0; padding: 0 24px; gap: 24px; align-items: stretch;");
 
             topPanel = topPanel.WithView(
                 await BuildActivityFeed(host),
@@ -68,7 +72,7 @@ public static class UserActivityLayoutAreas
 
             dashboard = dashboard.WithView(topPanel);
 
-            // BOTTOM PANEL: Chat (full width, glued to bottom)
+            // Chat — full width, pinned to bottom, no title
             dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
 
             return (UiControl?)dashboard;
@@ -76,14 +80,12 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Chat section — full width, glued to bottom of the page.
+    /// Chat input pinned to the very bottom — no header, full width, aligned with content above.
     /// </summary>
     private static UiControl BuildChatSection(LayoutAreaHost host, string nodePath)
     {
         var section = Controls.Stack
-            .WithStyle("flex-shrink: 0; height: 280px; border-top: 1px solid var(--neutral-stroke-divider-rest); padding-top: 8px;");
-
-        section = section.WithView(Controls.PaneHeader("Chat"));
+            .WithStyle("flex-shrink: 0; width: 100%; padding: 8px 24px 12px 24px;");
 
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
@@ -95,65 +97,42 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Builds the activity feed from ActivityLog entries only (system-wide edits/approvals).
-    /// Personal views are shown separately in Recently Viewed.
+    /// Activity timeline — social-media style feed with rich cards.
     /// </summary>
     private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host)
     {
         var section = Controls.Stack
-            .WithVerticalGap(8)
-            .WithStyle("overflow-y: auto; padding: 4px;");
+            .WithStyle($"display: flex; flex-direction: column; min-height: 0; height: 100%; {ThinScrollbar}");
 
-        section = section.WithView(Controls.PaneHeader("Activity Feed"));
+        // Section header
+        section = section.WithView(Controls.Html(
+            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px; flex-shrink: 0;\">Activity Feed</div>"));
 
         var activityLogStore = host.Hub.ServiceProvider.GetService<IActivityLogStore>();
-
         var activityLogs = activityLogStore != null
             ? await activityLogStore.GetRecentActivityLogsAsync(limit: 30)
             : [];
 
+        // Scrollable feed container
+        var feed = Controls.Stack
+            .WithVerticalGap(12)
+            .WithStyle($"flex: 1; overflow-y: auto; min-height: 0; padding-right: 4px; {ThinScrollbar}");
+
         if (activityLogs.Count == 0)
         {
-            section = section.WithView(Controls.Html(
-                "<div style=\"padding: 32px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 8px;\">" +
+            feed = feed.WithView(Controls.Html(
+                "<div style=\"padding: 48px 24px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 12px; margin-top: 8px;\">" +
+                "<div style=\"font-size: 2rem; margin-bottom: 8px;\">&#128240;</div>" +
                 "<div style=\"font-weight: 600; margin-bottom: 4px;\">No activity yet</div>" +
                 "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Edits, approvals and other events will appear here.</div>" +
                 "</div>"));
+            section = section.WithView(feed);
             return section;
         }
 
-        var feed = Controls.Stack.WithVerticalGap(8);
         foreach (var log in activityLogs)
         {
-            var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
-            var hubPath = log.HubPath ?? "unknown";
-            var hubName = hubPath.Contains('/') ? hubPath.Substring(hubPath.LastIndexOf('/') + 1) : hubPath;
-            var changeCount = log.Messages.Count > 0 ? log.Messages[0].Message : "data changes";
-            var timeAgo = GetRelativeTime(new DateTimeOffset(log.Start, TimeSpan.Zero));
-            var statusColor = log.Status switch
-            {
-                ActivityStatus.Failed => "var(--error)",
-                ActivityStatus.Warning => "var(--warning)",
-                _ => "var(--accent-fill-rest)"
-            };
-
-            feed = feed.WithView(Controls.Html(
-                $"<div style=\"display: flex; gap: 12px; padding: 12px 16px; border-radius: 8px; " +
-                $"border: 1px solid var(--neutral-stroke-divider-rest); background: var(--neutral-layer-2); " +
-                $"transition: box-shadow 0.15s ease, border-color 0.15s ease;\" " +
-                $"onmouseenter=\"this.style.boxShadow='0 2px 8px rgba(0,0,0,0.08)'; this.style.borderColor='var(--accent-stroke-control-rest)'\" " +
-                $"onmouseleave=\"this.style.boxShadow='none'; this.style.borderColor='var(--neutral-stroke-divider-rest)'\">" +
-                $"<div style=\"flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; background: {statusColor}; " +
-                $"display: flex; align-items: center; justify-content: center; color: white; font-size: 15px;\">&#9998;</div>" +
-                $"<div style=\"flex: 1; min-width: 0;\">" +
-                $"<div style=\"font-weight: 600; font-size: 0.9rem; line-height: 1.4;\">{EscapeHtml(userName)} " +
-                $"<span style=\"font-weight: 400; color: var(--neutral-foreground-hint);\">{EscapeHtml(log.Category)}</span> " +
-                $"<a href=\"/{EscapeHtml(hubPath)}\" style=\"text-decoration: none; color: var(--accent-foreground-rest); font-weight: 500;\">{EscapeHtml(hubName)}</a></div>" +
-                $"<div style=\"font-size: 0.8rem; color: var(--neutral-foreground-hint); margin-top: 4px; display: flex; align-items: center; gap: 8px;\">" +
-                $"<span>{EscapeHtml(changeCount)}</span>" +
-                $"<span style=\"opacity: 0.4;\">&#183;</span>" +
-                $"<span>{timeAgo}</span>" +
-                $"</div></div></div>"));
+            feed = feed.WithView(BuildActivityCard(log));
         }
 
         section = section.WithView(feed);
@@ -161,19 +140,91 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Builds the "Recently Viewed" panel. Takes 50 most recently visited,
-    /// then orders by view count (AccessCount) descending.
-    /// Fills remaining slots from catalog when fewer than 10 real activities.
+    /// Single activity card — social-media post style with avatar, action, link, and timestamp.
+    /// </summary>
+    private static UiControl BuildActivityCard(ActivityLog log)
+    {
+        var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
+        var initials = GetInitials(userName);
+        var hubPath = log.HubPath ?? "unknown";
+        var hubName = hubPath.Contains('/') ? hubPath.Substring(hubPath.LastIndexOf('/') + 1) : hubPath;
+        var message = log.Messages.Count > 0 ? log.Messages[0].Message : "data changes";
+        var timeAgo = GetRelativeTime(new DateTimeOffset(log.Start, TimeSpan.Zero));
+
+        // Category styling
+        var (categoryIcon, categoryColor, categoryBg) = log.Category switch
+        {
+            "Approval" => ("&#10003;", "#2e7d32", "rgba(46,125,50,0.12)"),
+            "DataUpdate" => ("&#9998;", "#1565c0", "rgba(21,101,192,0.12)"),
+            _ => ("&#9679;", "var(--accent-fill-rest)", "rgba(100,100,100,0.12)")
+        };
+
+        var statusBorderLeft = log.Status switch
+        {
+            ActivityStatus.Failed => "border-left: 3px solid var(--error);",
+            ActivityStatus.Warning => "border-left: 3px solid var(--warning);",
+            _ => $"border-left: 3px solid {categoryColor};"
+        };
+
+        // Avatar color based on user name hash
+        var avatarHue = Math.Abs(userName.GetHashCode()) % 360;
+
+        return Controls.Html(
+            $"<div style=\"display: flex; gap: 14px; padding: 14px 16px; border-radius: 12px; " +
+            $"background: var(--neutral-layer-2); {statusBorderLeft} " +
+            $"transition: transform 0.15s ease, box-shadow 0.15s ease;\" " +
+            $"onmouseenter=\"this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 16px rgba(0,0,0,0.12)'\" " +
+            $"onmouseleave=\"this.style.transform='none'; this.style.boxShadow='none'\">" +
+
+            // User avatar
+            $"<div style=\"flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; " +
+            $"background: hsl({avatarHue}, 55%, 55%); " +
+            $"display: flex; align-items: center; justify-content: center; " +
+            $"color: white; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.5px;\">{EscapeHtml(initials)}</div>" +
+
+            // Content
+            $"<div style=\"flex: 1; min-width: 0;\">" +
+
+            // Top row: user + category badge + time
+            $"<div style=\"display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\">" +
+            $"<span style=\"font-weight: 600; font-size: 0.9rem;\">{EscapeHtml(userName)}</span>" +
+            $"<span style=\"font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; " +
+            $"background: {categoryBg}; color: {categoryColor}; font-weight: 500;\">" +
+            $"{categoryIcon} {EscapeHtml(log.Category)}</span>" +
+            $"<span style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-left: auto;\">{timeAgo}</span>" +
+            $"</div>" +
+
+            // Action description
+            $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-rest); margin-top: 6px; line-height: 1.5;\">" +
+            $"{EscapeHtml(message)}</div>" +
+
+            // Target link
+            $"<a href=\"/{EscapeHtml(hubPath)}\" style=\"display: inline-flex; align-items: center; gap: 4px; " +
+            $"margin-top: 8px; padding: 4px 12px; border-radius: 6px; " +
+            $"background: var(--neutral-layer-3); text-decoration: none; " +
+            $"color: var(--accent-foreground-rest); font-size: 0.8rem; font-weight: 500; " +
+            $"transition: background 0.1s ease;\" " +
+            $"onmouseenter=\"this.style.background='var(--accent-fill-rest)'; this.style.color='white'\" " +
+            $"onmouseleave=\"this.style.background='var(--neutral-layer-3)'; this.style.color='var(--accent-foreground-rest)'\">" +
+            $"&#8594; {EscapeHtml(hubName)}</a>" +
+
+            "</div></div>");
+    }
+
+    /// <summary>
+    /// Recently Viewed panel — compact card grid, max 10 items.
     /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
         const int fetchLimit = 50;
-        const int displayLimit = 20;
+        const int displayLimit = 10;
 
         var section = Controls.Stack
-            .WithStyle("overflow-y: auto; padding: 4px;");
+            .WithStyle($"display: flex; flex-direction: column; min-height: 0; height: 100%; {ThinScrollbar}");
 
-        section = section.WithView(Controls.PaneHeader("Recently Viewed"));
+        // Section header
+        section = section.WithView(Controls.Html(
+            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px; flex-shrink: 0;\">Recently Viewed</div>"));
 
         var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
         var recentActivities = new List<UserActivityRecord>();
@@ -181,7 +232,6 @@ public static class UserActivityLayoutAreas
         if (activityStore != null && !string.IsNullOrEmpty(userId))
         {
             var activities = await activityStore.GetActivitiesAsync(userId);
-            // Take 50 most recent, then sort by view count descending
             recentActivities = activities
                 .OrderByDescending(a => a.LastAccessedAt)
                 .Take(fetchLimit)
@@ -191,81 +241,65 @@ public static class UserActivityLayoutAreas
                 .ToList();
         }
 
-        // Render activity items with view count
-        var list = Controls.Stack.WithVerticalGap(4);
+        // Scrollable card container
+        var grid = Controls.LayoutGrid
+            .WithStyle($"flex: 1; overflow-y: auto; min-height: 0; gap: 8px; padding-right: 4px; {ThinScrollbar}");
+
+        // Resolve full nodes from catalog for proper thumbnails
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        var nodeCache = new Dictionary<string, MeshNode>();
+        if (meshCatalog != null)
+        {
+            await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 100))
+            {
+                if (node.Path != null)
+                    nodeCache[node.Path] = node;
+            }
+        }
+
         foreach (var activity in recentActivities)
         {
-            var nodeTypeBadge = !string.IsNullOrEmpty(activity.NodeType)
-                ? $"<span style=\"font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; background: var(--neutral-layer-3); color: var(--neutral-foreground-hint);\">{EscapeHtml(activity.NodeType)}</span>"
-                : "";
-
-            var timeAgo = GetRelativeTime(activity.LastAccessedAt);
-            var viewCount = activity.AccessCount > 1
-                ? $"<span style=\"font-size: 0.7rem; color: var(--neutral-foreground-hint); white-space: nowrap;\">{activity.AccessCount}x</span>"
-                : "";
-
-            list = list.WithView(Controls.Html(
-                $"<div style=\"display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; " +
-                $"transition: background 0.1s ease;\" " +
-                $"onmouseenter=\"this.style.background='var(--neutral-layer-3)'\" " +
-                $"onmouseleave=\"this.style.background='transparent'\">" +
-                $"{nodeTypeBadge}" +
-                $"<a href=\"/{EscapeHtml(activity.NodePath)}\" style=\"flex: 1; text-decoration: none; color: var(--neutral-foreground-rest); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;\">{EscapeHtml(activity.NodeName ?? activity.NodePath)}</a>" +
-                $"{viewCount}" +
-                $"<span style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); white-space: nowrap;\">{timeAgo}</span>" +
-                "</div>"));
+            if (nodeCache.TryGetValue(activity.NodePath, out var node))
+                grid = grid.WithView(
+                    MeshNodeCardControl.FromNode(node, activity.NodePath),
+                    skin => skin.WithXs(12));
+            else
+                grid = grid.WithView(
+                    new MeshNodeCardControl(
+                        NodePath: activity.NodePath,
+                        Title: activity.NodeName ?? activity.NodePath,
+                        Description: activity.NodeType),
+                    skin => skin.WithXs(12));
         }
 
         // Fill remaining slots from catalog
         var remaining = displayLimit - recentActivities.Count;
-        if (remaining > 0)
+        if (remaining > 0 && meshCatalog != null)
         {
             var recentPaths = new HashSet<string>(recentActivities.Select(a => a.NodePath));
-            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+            var fillerNodes = nodeCache.Values
+                .Where(n => n.NodeType == null || !SystemNodeTypes.Contains(n.NodeType))
+                .Where(n => n.Path == null || !recentPaths.Contains(n.Path))
+                .Take(remaining)
+                .ToList();
 
-            if (meshCatalog != null)
+            if (fillerNodes.Count > 0 && recentActivities.Count > 0)
             {
-                var fillerNodes = new List<MeshNode>();
-                await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
-                {
-                    if (node.NodeType != null && SystemNodeTypes.Contains(node.NodeType))
-                        continue;
+                grid = grid.WithView(Controls.Html(
+                    "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 4px 8px; " +
+                    "border-top: 1px solid var(--neutral-stroke-divider-rest); margin-top: 4px; padding-top: 8px;\">Suggested</div>"),
+                    skin => skin.WithXs(12));
+            }
 
-                    if (node.Path != null && recentPaths.Contains(node.Path))
-                        continue;
-
-                    fillerNodes.Add(node);
-                    if (fillerNodes.Count >= remaining)
-                        break;
-                }
-
-                if (fillerNodes.Count > 0 && recentActivities.Count > 0)
-                {
-                    list = list.WithView(Controls.Html(
-                        "<div style=\"border-top: 1px solid var(--neutral-stroke-divider-rest); margin: 4px 0;\"></div>"));
-                    list = list.WithView(Controls.Html(
-                        "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 2px 8px;\">Suggested</div>"));
-                }
-
-                foreach (var node in fillerNodes)
-                {
-                    var nodeTypeBadge = !string.IsNullOrEmpty(node.NodeType)
-                        ? $"<span style=\"font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; background: var(--neutral-layer-3); color: var(--neutral-foreground-hint);\">{EscapeHtml(node.NodeType)}</span>"
-                        : "";
-
-                    list = list.WithView(Controls.Html(
-                        $"<div style=\"display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; " +
-                        $"transition: background 0.1s ease;\" " +
-                        $"onmouseenter=\"this.style.background='var(--neutral-layer-3)'\" " +
-                        $"onmouseleave=\"this.style.background='transparent'\">" +
-                        $"{nodeTypeBadge}" +
-                        $"<a href=\"/{EscapeHtml(node.Path ?? "")}\" style=\"flex: 1; text-decoration: none; color: var(--neutral-foreground-rest); font-size: 0.85rem;\">{EscapeHtml(node.Name ?? node.Id ?? "")}</a>" +
-                        "</div>"));
-                }
+            foreach (var node in fillerNodes)
+            {
+                grid = grid.WithView(
+                    MeshNodeCardControl.FromNode(node, node.Path ?? ""),
+                    skin => skin.WithXs(12));
             }
         }
 
-        section = section.WithView(list);
+        section = section.WithView(grid);
         return section;
     }
 
@@ -311,6 +345,14 @@ public static class UserActivityLayoutAreas
 
         section = section.WithView(searchControl);
         return section;
+    }
+
+    private static string GetInitials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2)
+            return $"{parts[0][0]}{parts[parts.Length - 1][0]}".ToUpperInvariant();
+        return parts.Length > 0 ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant() : "?";
     }
 
     private static string GetRelativeTime(DateTimeOffset time)
