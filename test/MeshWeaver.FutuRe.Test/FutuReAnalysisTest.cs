@@ -106,7 +106,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that the EuropeRe business unit renders its Overview area.
+    /// Verifies that the EuropeRe business unit renders its Overview area
+    /// with actual content (not just an error control).
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task EuropeRe_Overview_ShouldRender()
@@ -127,16 +128,23 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        Output.WriteLine("Waiting for EuropeRe Overview...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        Output.WriteLine("Waiting for EuropeRe Overview control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
 
-        Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            "Overview area should render for EuropeRe business unit");
+        Output.WriteLine($"Received control: {control?.GetType().Name}");
+        control.Should().NotBeNull("Overview area should render for EuropeRe business unit");
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
+            "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
 
     /// <summary>
-    /// Verifies that the AmericasIns business unit renders its Overview area.
+    /// Verifies that the AmericasIns business unit renders its Overview area
+    /// with actual content (not just an error control).
     /// </summary>
     [Fact(Timeout = 30000)]
     public async Task AmericasIns_Overview_ShouldRender()
@@ -157,12 +165,18 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        Output.WriteLine("Waiting for AmericasIns Overview...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
+        Output.WriteLine("Waiting for AmericasIns Overview control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
 
-        Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            "Overview area should render for AmericasIns business unit");
+        Output.WriteLine($"Received control: {control?.GetType().Name}");
+        control.Should().NotBeNull("Overview area should render for AmericasIns business unit");
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
+            "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
 
     /// <summary>

@@ -4,7 +4,8 @@
 // </meshweaver>
 
 using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Mesh.Contract;
+using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 
 /// <summary>
 /// Content type for FutuRe analysis hub instances.
