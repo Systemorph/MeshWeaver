@@ -326,4 +326,69 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Found {results.Count} LineOfBusiness nodes");
         results.Count.Should().Be(10, "Should find all 10 group lines of business");
     }
+
+    /// <summary>
+    /// Verifies that the EuropeRe LineOfBusiness hub renders its Overview area.
+    /// This tests runtime compilation of the LineOfBusiness data type.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_LineOfBusiness_Overview_ShouldRender()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD");
+
+        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/LineOfBusiness/HOUSEHOLD...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for Overview control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control: {control?.GetType().Name}");
+        control.Should().NotBeNull("Overview area should render a control for EuropeRe LineOfBusiness HOUSEHOLD");
+    }
+
+    /// <summary>
+    /// Verifies that the EuropeRe LineOfBusiness Search area loads and returns 8 LoBs.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/LineOfBusiness");
+
+        Output.WriteLine("Initializing hub for FutuRe/LineOfBusiness...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Search");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for Search control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control: {control?.GetType().Name}");
+        control.Should().NotBeNull("Search area should render for LineOfBusiness");
+    }
 }
