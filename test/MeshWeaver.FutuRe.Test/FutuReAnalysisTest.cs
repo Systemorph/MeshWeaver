@@ -18,6 +18,7 @@ using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,7 +67,20 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 return services;
             })
             .AddGraph()
-            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+            .ConfigureHub(hub => hub.AddContentCollection(_ => new ContentCollectionConfig
+            {
+                SourceType = "FileSystem",
+                Name = "storage",
+                BasePath = graphPath,
+                IsEditable = false
+            }))
+            .ConfigureDefaultNodeHub(config =>
+            {
+                var nodePath = config.Address.ToString();
+                return config
+                    .MapContentCollection("attachments", "storage", $"attachments/{nodePath}")
+                    .AddDefaultLayoutAreas();
+            });
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -79,7 +93,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the Profitability Analysis hub renders its Overview area.
     /// This is the group-level view showing profitability charts.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task Profitability_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -99,7 +113,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -110,7 +124,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the EuropeRe business unit renders its Overview area
     /// with actual content (not just an error control).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task EuropeRe_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -132,7 +146,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for EuropeRe Overview control...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -147,7 +161,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the AmericasIns business unit renders its Overview area
     /// with actual content (not just an error control).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task AmericasIns_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -169,7 +183,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for AmericasIns Overview control...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -183,7 +197,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that the KeyMetrics layout area renders KPI summary.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task KeyMetrics_ShouldRender()
     {
         var client = GetClient();
@@ -201,7 +215,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for KeyMetrics area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -211,7 +225,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that the ProfitabilityTable layout area renders LoB breakdown.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task ProfitabilityTable_ShouldRender()
     {
         var client = GetClient();
@@ -229,7 +243,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for ProfitabilityTable area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -240,7 +254,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that TransactionMapping MeshNodes are loaded via IMeshQuery
     /// from both business unit namespaces.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task TransactionMappings_ShouldLoadFromBothBusinessUnits()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -264,7 +278,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that AmountType MeshNodes are loaded via IMeshQuery.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task AmountTypes_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -286,7 +300,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that Currency MeshNodes are loaded via IMeshQuery.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task Currencies_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -308,7 +322,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that Country MeshNodes are loaded via IMeshQuery.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task Countries_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -330,7 +344,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that LineOfBusiness MeshNodes are loaded via IMeshQuery.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task LinesOfBusiness_ShouldLoadFromMeshNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -348,7 +362,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the EuropeRe LineOfBusiness hub renders its Overview area.
     /// This tests runtime compilation of the LineOfBusiness data type.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task EuropeRe_LineOfBusiness_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -370,7 +384,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for Overview control...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
@@ -385,7 +399,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the group-level LineOfBusiness Search area renders a MeshSearchControl
     /// and that executing its query returns the expected LoB instances.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task LineOfBusiness_Search_ShouldReturnGroupLoBs()
     {
         var client = GetClient();
@@ -404,7 +418,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
@@ -426,7 +440,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Verifies that the EuropeRe LineOfBusiness Search area renders correctly
     /// and returns the 8 EuropeRe-specific LoB instances.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
     {
         var client = GetClient();
@@ -445,7 +459,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
@@ -464,6 +478,38 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         results.Count.Should().Be(8, "Should find all 8 EuropeRe lines of business");
     }
 
+    // ── Local Analysis Hub ──
+
+    /// <summary>
+    /// Verifies that the EuropeRe local analysis hub renders its Overview area.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task EuropeRe_Analysis_Overview_ShouldRender()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/Analysis");
+
+        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for Overview area...");
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+
+        Output.WriteLine($"Received value: {value.Value.ValueKind}");
+        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
+            "Overview area should return a response for EuropeRe local Analysis");
+    }
+
     // ── Analysis Hub Layout Areas (Group Level) ──
 
     /// <summary>
@@ -471,7 +517,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// If Roslyn compilation of ProfitabilityLayoutAreas.cs fails, this area
     /// will be null (never registered) — the test must detect that.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task ProfitabilityOverview_ShouldRender()
     {
         var client = GetClient();
@@ -491,7 +537,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Waiting for ProfitabilityOverview control...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         Output.WriteLine($"Received control type: {control?.GetType().Name}");
@@ -503,28 +549,28 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that the EstimateVsActual area renders.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task EstimateVsActual_ShouldRender()
         => await AssertLayoutAreaRenders("FutuRe/Profitability", "EstimateVsActual");
 
     /// <summary>
     /// Verifies that the ProfitByLoB chart area renders.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task ProfitByLoB_ShouldRender()
         => await AssertLayoutAreaRenders("FutuRe/Profitability", "ProfitByLoB");
 
     /// <summary>
     /// Verifies that the LossRatio chart area renders.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task LossRatio_ShouldRender()
         => await AssertLayoutAreaRenders("FutuRe/Profitability", "LossRatio");
 
     /// <summary>
     /// Verifies that the QuarterlyTrend chart area renders.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task QuarterlyTrend_ShouldRender()
         => await AssertLayoutAreaRenders("FutuRe/Profitability", "QuarterlyTrend");
 
@@ -533,7 +579,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that the EuropeRe Search area renders with child nodes.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task EuropeRe_Search_ShouldRenderWithChildren()
     {
         var client = GetClient();
@@ -552,7 +598,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync(x => x is not null);
 
         var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
@@ -571,7 +617,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that all FutuRe NodeType definitions exist.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task AllNodeTypes_ShouldExist()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -583,6 +629,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Found {results.Count} NodeTypes: {string.Join(", ", ids)}");
 
         ids.Should().Contain("Analysis");
+        ids.Should().Contain("LocalAnalysis");
         ids.Should().Contain("BusinessUnit");
         ids.Should().Contain("LineOfBusiness");
         ids.Should().Contain("TransactionMapping");
@@ -595,7 +642,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that both BusinessUnit instances exist with correct properties.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task BusinessUnits_ShouldExistWithProperties()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -604,11 +651,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         Output.WriteLine($"Found {results.Count} BusinessUnits");
-        results.Count.Should().Be(2, "Should have EuropeRe and AmericasIns");
+        results.Count.Should().Be(3, "Should have EuropeRe, AmericasIns, and AsiaRe");
 
         var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
         ids.Should().Contain("EuropeRe");
         ids.Should().Contain("AmericasIns");
+        ids.Should().Contain("AsiaRe");
     }
 
     // ── Report ──
@@ -616,7 +664,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// <summary>
     /// Verifies that the AnnualReport node exists and its Overview area renders.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 20000)]
     public async Task AnnualReport_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -636,7 +684,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine("Waiting for Overview area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
 
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
@@ -662,7 +710,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine($"Waiting for {areaName} area at {addressPath}...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
 
         Output.WriteLine($"Received {areaName}: {value.Value.ValueKind}");
         value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
