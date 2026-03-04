@@ -17,10 +17,31 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
     private readonly ConcurrentDictionary<string, IPersistenceServiceCore> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
+    private volatile bool _initialized;
 
     public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory)
     {
         _factory = factory;
+    }
+
+    /// <summary>
+    /// Ensures partitions have been discovered at least once.
+    /// Uses double-checked locking for thread safety.
+    /// </summary>
+    private async Task EnsureInitializedAsync(CancellationToken ct = default)
+    {
+        if (_initialized) return;
+        await _provisionLock.WaitAsync(ct);
+        try
+        {
+            if (_initialized) return;
+            await InitializeAsync(ct);
+            _initialized = true;
+        }
+        finally
+        {
+            _provisionLock.Release();
+        }
     }
 
     /// <summary>
@@ -103,8 +124,9 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
         var segment = PathPartition.GetFirstSegment(path);
         if (segment == null) return null;
 
+        await EnsureInitializedAsync(ct);
         var store = TryGetStore(path);
-        if (store == null) return null; // Partition not provisioned yet — node doesn't exist
+        if (store == null) return null;
 
         return await store.GetNodeAsync(path, options, ct);
     }
@@ -246,6 +268,7 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
 
     public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
     {
+        await EnsureInitializedAsync(ct);
         var store = TryGetStore(path);
         if (store == null) return false;
         return await store.ExistsAsync(path, ct);
