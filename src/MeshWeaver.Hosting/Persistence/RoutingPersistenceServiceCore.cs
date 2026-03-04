@@ -326,11 +326,13 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
 
     #region Partition Storage
 
-    public IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
+    public async IAsyncEnumerable<object> GetPartitionObjectsAsync(string nodePath, string? subPath, JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var store = TryGetStore(nodePath);
-        if (store == null) return AsyncEnumerable.Empty<object>();
-        return store.GetPartitionObjectsAsync(nodePath, subPath, options);
+        if (store == null) yield break;
+        await foreach (var obj in store.GetPartitionObjectsAsync(nodePath, subPath, options))
+            yield return obj;
     }
 
     public async Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
