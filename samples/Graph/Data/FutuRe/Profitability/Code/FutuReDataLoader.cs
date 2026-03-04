@@ -6,8 +6,8 @@
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Mesh.Contract.Services;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>

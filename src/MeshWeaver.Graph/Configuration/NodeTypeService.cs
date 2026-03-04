@@ -307,10 +307,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 ?? GetCachedHubConfiguration(nodeType)
                 ?? builtInNode?.HubConfiguration;
 
-            // If compilation failed, wrap configuration to show the error
-            if (hubConfigDynamic == null && _compilationErrors.TryGetValue(nodeType, out var errorMessage))
+            // If compilation failed, add error view on top of the default configuration
+            if (_compilationErrors.TryGetValue(nodeType, out var errorMessage))
             {
-                hubConfigDynamic = CreateCompilationErrorConfiguration(errorMessage);
+                var baseConfig = hubConfigDynamic;
+                var errorOverlay = CreateCompilationErrorConfiguration(errorMessage);
+                hubConfigDynamic = baseConfig != null
+                    ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config => errorOverlay(baseConfig(config)))
+                    : errorOverlay;
             }
 
             return CopyIconFromNodeType(node with
