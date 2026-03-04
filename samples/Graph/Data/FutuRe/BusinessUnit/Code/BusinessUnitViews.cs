@@ -5,6 +5,7 @@
 
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
@@ -13,6 +14,8 @@ using MeshWeaver.Layout.Composition;
 /// </summary>
 public static class BusinessUnitViews
 {
+    private const string BuDataId = "businessUnit";
+
     public static LayoutDefinition AddBusinessUnitViews(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(Overview), Overview);
@@ -23,7 +26,9 @@ public static class BusinessUnitViews
     [Display(GroupName = "Overview", Order = 1)]
     public static IObservable<UiControl?> Overview(this LayoutAreaHost host, RenderingContext _)
     {
-        return host.GetDataStream<BusinessUnit>()
+        host.SubscribeToDataStream(BuDataId, host.Workspace.GetNodeContent<BusinessUnit>().Where(x => x != null));
+
+        return host.GetDataStream<BusinessUnit>(BuDataId)
             .Select(bu =>
             {
                 if (bu == null)

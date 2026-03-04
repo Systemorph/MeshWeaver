@@ -28,11 +28,11 @@ graph TD
 
     click EUR "FutuRe/EuropeRe"
     click AME "FutuRe/AmericasIns"
-    click EUR_LOB "FutuRe/EuropeRe/LineOfBusiness"
-    click EUR_MAP "FutuRe/EuropeRe/TransactionMapping"
-    click AME_LOB "FutuRe/AmericasIns/LineOfBusiness"
-    click AME_MAP "FutuRe/AmericasIns/TransactionMapping"
-    click G_LOB "FutuRe/LineOfBusiness"
+    click EUR_LOB "FutuRe/EuropeRe/LineOfBusiness/Search"
+    click EUR_MAP "FutuRe/EuropeRe/TransactionMapping/Search"
+    click AME_LOB "FutuRe/AmericasIns/LineOfBusiness/Search"
+    click AME_MAP "FutuRe/AmericasIns/TransactionMapping/Search"
+    click G_LOB "FutuRe/LineOfBusiness/Search"
     click G_ANALYSIS "FutuRe/Profitability"
 ```
 
