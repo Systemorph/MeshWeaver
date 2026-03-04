@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "iOK6O-0zq0yzO7LUr2a_oA",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping/MappingRules",
+  "path": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA",
+  "name": "Is there any data associated with the FutuRe use c...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-03-04T13:22:55.400616+00:00",
+  "version": 3,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "FutuRe/AmericasIns/TransactionMapping/MappingRules",
+    "primaryNodePath": "FutuRe/AmericasIns/TransactionMapping/MappingRules"
+  }
+}

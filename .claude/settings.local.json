@@ -107,7 +107,13 @@
       "Bash(then basename \"$f\")",
       "Bash(git -C \"/Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver\" log --oneline --all -20 -- \"src/MeshWeaver.Documentation/Content/Architecture/UserInterface/data-compression.svg\" \"samples/Graph/Data/MeshWeaver/Documentation/Architecture/UserInterface/content/data-compression.svg\")",
       "Bash(md5:*)",
-      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver diff origin/documentation HEAD -- src/MeshWeaver.Blazor/ src/MeshWeaver.Blazor.Portal/ src/MeshWeaver.Graph/ src/MeshWeaver.Documentation/ --stat)"
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver diff origin/documentation HEAD -- src/MeshWeaver.Blazor/ src/MeshWeaver.Blazor.Portal/ src/MeshWeaver.Graph/ src/MeshWeaver.Documentation/ --stat)",
+      "WebFetch(domain:blazor.radzen.com)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver ls-files:*)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver status --short samples/Graph/attachments/FutuRe/)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver status --short samples/Graph/Data/FutuRe/AmericasIns/TransactionMapping/)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver status --short samples/Graph/Data/FutuRe/)",
+      "Bash(git -C /Users/samuelglauser/Documents/work/2026_Systemorph/projekte/MeshWeaver status --short)"
     ],
     "deny": []
   },

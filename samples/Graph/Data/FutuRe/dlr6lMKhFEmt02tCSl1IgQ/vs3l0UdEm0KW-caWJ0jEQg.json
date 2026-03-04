@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/dlr6lMKhFEmt02tCSl1IgQ/vs3l0UdEm0KW-caWJ0jEQg",
+  "path": "FutuRe/dlr6lMKhFEmt02tCSl1IgQ/vs3l0UdEm0KW-caWJ0jEQg",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-04T13:32:22.760805+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "vs3l0UdEm0KW-caWJ0jEQg",
+    "role": "user",
+    "text": "What can you tell me about the profitability datacube?",
+    "timestamp": "2026-03-04T13:32:22.756151Z",
+    "type": "ExecutedInput"
+  }
+}

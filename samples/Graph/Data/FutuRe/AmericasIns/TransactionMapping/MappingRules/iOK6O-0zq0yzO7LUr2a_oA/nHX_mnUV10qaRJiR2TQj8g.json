@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA/nHX_mnUV10qaRJiR2TQj8g",
+  "path": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA/nHX_mnUV10qaRJiR2TQj8g",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-04T13:16:54.335433+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "nHX_mnUV10qaRJiR2TQj8g",
+    "role": "user",
+    "text": "Where is the split from local BU to group BU determined?",
+    "timestamp": "2026-03-04T13:16:54.333868Z",
+    "type": "ExecutedInput"
+  }
+}

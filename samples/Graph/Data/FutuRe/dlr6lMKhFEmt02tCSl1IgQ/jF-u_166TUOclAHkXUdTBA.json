@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/dlr6lMKhFEmt02tCSl1IgQ/jF-u_166TUOclAHkXUdTBA",
+  "path": "FutuRe/dlr6lMKhFEmt02tCSl1IgQ/jF-u_166TUOclAHkXUdTBA",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-04T13:32:40.709989+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "jF-u_166TUOclAHkXUdTBA",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I\u0027ve opened the Profitability Analysis view for FutuRe.",
+    "timestamp": "2026-03-04T13:32:40.709767Z",
+    "type": "AgentResponse"
+  }
+}

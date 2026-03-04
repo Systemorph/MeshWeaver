@@ -3,17 +3,18 @@
 // DisplayName: FutuRe Data Loader
 // </meshweaver>
 
+using System.Collections.Concurrent;
+using System.Globalization;
+using System.IO;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
-using MeshWeaver.Mesh.Contract;
-using MeshWeaver.Mesh.Contract.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Loads profitability data for the FutuRe sample.
 /// Generates a rolling 18-month window of monthly estimates and actuals
-/// from hard-coded base amounts keyed by local (business unit) lines of business.
+/// from CSV-based base amounts keyed by local (business unit) lines of business.
 /// Applies TransactionMapping percentage splits to produce group LoB rows.
 /// </summary>
 public static class FutuReDataLoader
@@ -42,77 +43,93 @@ public static class FutuReDataLoader
         $"Q{(date.Month - 1) / 3 + 1}-{date.Year}";
 
     // ---------------------------------------------------------------
-    // Base monthly amounts per LOCAL LoB (in thousands)
-    // Format: [Premium, Claims, InternalCost, ExternalCost, CapitalCost, ExpectedProfit]
+    // CSV-based data loading
     // ---------------------------------------------------------------
-    // EuropeRe local lines of business
-    // ---------------------------------------------------------------
-    private static readonly Dictionary<string, double[]> EuropeReBaseAmounts = new()
-    {
-        ["HOUSEHOLD"]      = [13000, 7800, 1040, 1300, 910, 1950],
-        ["MOTOR"]          = [8500,  5100, 680,  850,  595, 1275],
-        ["COMM_FIRE"]      = [6500,  3900, 520,  650,  455, 975],
-        ["LIABILITY"]      = [7200,  4320, 576,  720,  504, 1080],
-        ["TRANSPORT"]      = [4200,  2520, 336,  420,  294, 630],
-        ["TECH_RISK"]      = [5000,  3000, 400,  500,  350, 750],
-        ["LIFE_HEALTH_EU"] = [8200,  4920, 656,  820,  574, 1230],
-        ["SPECIALTY_AVTN"] = [4800,  2880, 384,  480,  336, 720],
-    };
+    private static string _basePath = "";
+    private static string BasePath => _basePath;
 
-    // ---------------------------------------------------------------
-    // AmericasIns local lines of business
-    // ---------------------------------------------------------------
-    private static readonly Dictionary<string, double[]> AmericasInsBaseAmounts = new()
-    {
-        ["HOMEOWNERS"]       = [16000, 9600, 1280, 1600, 1120, 2400],
-        ["WORKERS_COMP"]     = [9000,  5400, 720,  900,  630,  1350],
-        ["COMMERCIAL"]       = [10000, 6000, 800,  1000, 700,  1500],
-        ["ENERGY_MINING"]    = [7500,  4500, 600,  750,  525,  1125],
-        ["LIFE_ANN"]         = [9800,  5880, 784,  980,  686,  1470],
-        ["CYBER_TECH"]       = [6000,  3600, 480,  600,  420,  900],
-        ["SPECIALTY_AVTN_US"]= [5200,  3120, 416,  520,  364,  780],
-        ["AGRICULTURE"]      = [3800,  2280, 304,  380,  266,  570],
-    };
+    private static readonly ConcurrentDictionary<string, Dictionary<string, double[]>> BaseAmountsCache = new();
+    private static readonly ConcurrentDictionary<string, Dictionary<string, double[]>> SeasonalCache = new();
 
-    // ---------------------------------------------------------------
-    // Seasonal multipliers by month (1=Jan..12=Dec)
-    // Keyed by local LoB + amount type for lines with distinct patterns.
-    // Lines without a specific key use the default factor of 1.0.
-    // ---------------------------------------------------------------
-    private static readonly Dictionary<string, double[]> SeasonalFactors = new()
-    {
-        // Month:                           Jan   Feb   Mar   Apr   May   Jun   Jul   Aug   Sep   Oct   Nov   Dec
-        // Property-like lines
-        ["HOUSEHOLD_Premium"]             = [0.95, 0.92, 1.00, 1.02, 1.05, 1.08, 1.10, 1.08, 1.05, 1.00, 0.95, 0.90],
-        ["HOUSEHOLD_Claims"]              = [1.15, 1.10, 0.95, 0.90, 0.85, 0.90, 1.05, 1.20, 1.35, 1.25, 1.10, 1.15],
-        ["HOMEOWNERS_Premium"]            = [0.93, 0.90, 0.98, 1.00, 1.04, 1.08, 1.12, 1.10, 1.06, 1.02, 0.95, 0.88],
-        ["HOMEOWNERS_Claims"]             = [1.10, 1.05, 0.90, 0.85, 0.88, 0.95, 1.10, 1.30, 1.40, 1.30, 1.10, 1.08],
-        // Casualty-like lines
-        ["MOTOR_Claims"]                  = [0.90, 0.85, 0.95, 1.00, 1.05, 1.10, 1.15, 1.10, 1.05, 1.00, 0.95, 0.90],
-        ["WORKERS_COMP_Claims"]           = [0.95, 0.90, 1.00, 1.05, 1.08, 1.10, 1.12, 1.10, 1.05, 1.00, 0.92, 0.88],
-        // Marine/transport
-        ["TRANSPORT_Claims"]              = [1.10, 1.05, 0.95, 0.90, 0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20],
-        ["COMMERCIAL_Claims"]             = [1.05, 1.00, 0.95, 0.90, 0.92, 1.00, 1.05, 1.08, 1.10, 1.05, 1.00, 0.98],
-        // Energy
-        ["COMM_FIRE_Claims"]              = [1.05, 1.00, 0.90, 0.85, 0.90, 1.10, 1.15, 1.20, 1.15, 1.00, 0.95, 1.05],
-        ["ENERGY_MINING_Claims"]          = [1.08, 1.02, 0.92, 0.88, 0.90, 1.08, 1.12, 1.18, 1.12, 1.02, 0.98, 1.05],
-        // Agriculture
-        ["AGRICULTURE_Claims"]            = [0.70, 0.75, 0.85, 0.95, 1.10, 1.20, 1.30, 1.25, 1.15, 1.00, 0.85, 0.70],
-        // Cyber/tech
-        ["TECH_RISK_Claims"]              = [1.20, 1.10, 1.00, 0.90, 0.95, 1.00, 1.05, 0.95, 1.00, 1.10, 1.15, 1.30],
-        ["CYBER_TECH_Claims"]             = [1.18, 1.08, 0.98, 0.92, 0.95, 1.02, 1.08, 0.98, 1.02, 1.12, 1.18, 1.28],
-    };
+    private static Dictionary<string, double[]> GetBaseAmounts(string businessUnit)
+        => BaseAmountsCache.GetOrAdd(businessUnit, LoadBaseAmounts);
 
-    /// <summary>
-    /// Hard-coded actual variance factors by month offset (0 = start month).
-    /// Represents realistic deviations from estimates.
-    /// Actuals only exist for past months (before current month).
-    /// </summary>
-    private static readonly double[] ActualVarianceFactors =
-    [
-        1.02, 0.97, 1.05, 0.98, 1.01, 0.96, 1.03, 0.99, 1.04, 0.95,
-        1.06, 0.98, 1.01, 0.97, 1.03, 1.00, 0.96, 1.02
-    ];
+    private static Dictionary<string, double[]> GetSeasonalFactors(string businessUnit)
+        => SeasonalCache.GetOrAdd(businessUnit, bu =>
+        {
+            var path = Path.Combine(BasePath, bu, "Profitability", "SeasonalFactors.csv");
+            return File.Exists(path) ? LoadSeasonalFactors(bu) : new Dictionary<string, double[]>();
+        });
+
+    private static readonly Lazy<double[]> VarianceFactors =
+        new(LoadActualVarianceFactors);
+
+    private static Dictionary<string, double[]> LoadBaseAmounts(string businessUnit)
+    {
+        var path = Path.Combine(BasePath, businessUnit, "Profitability", "BaseAmounts.csv");
+        var lines = File.ReadAllLines(path);
+        var result = new Dictionary<string, double[]>();
+        foreach (var line in lines.Skip(1))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var parts = SplitCsvLine(line);
+            var lob = parts[0];
+            var amounts = new double[parts.Length - 1];
+            for (int i = 1; i < parts.Length; i++)
+                amounts[i - 1] = double.Parse(parts[i], CultureInfo.InvariantCulture);
+            result[lob] = amounts;
+        }
+        return result;
+    }
+
+    private static Dictionary<string, double[]> LoadSeasonalFactors(string businessUnit)
+    {
+        var path = Path.Combine(BasePath, businessUnit, "Profitability", "SeasonalFactors.csv");
+        var lines = File.ReadAllLines(path);
+        var result = new Dictionary<string, double[]>();
+        foreach (var line in lines.Skip(1))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            var parts = SplitCsvLine(line);
+            var key = parts[0];
+            var factors = new double[12];
+            for (int i = 0; i < 12; i++)
+                factors[i] = double.Parse(parts[i + 1], CultureInfo.InvariantCulture);
+            result[key] = factors;
+        }
+        return result;
+    }
+
+    private static double[] LoadActualVarianceFactors()
+    {
+        var path = Path.Combine(BasePath, "Profitability", "ActualVarianceFactors.csv");
+        var lines = File.ReadAllLines(path);
+        return lines.Skip(1)
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Select(l => double.Parse(l.Trim(), CultureInfo.InvariantCulture))
+            .ToArray();
+    }
+
+    private static string[] SplitCsvLine(string line)
+    {
+        var parts = new List<string>();
+        var current = new System.Text.StringBuilder();
+        bool inQuotes = false;
+        foreach (char c in line)
+        {
+            if (c == '"')
+                inQuotes = !inQuotes;
+            else if (c == ',' && !inQuotes)
+            {
+                parts.Add(current.ToString());
+                current.Clear();
+            }
+            else
+                current.Append(c);
+        }
+        parts.Add(current.ToString());
+        return parts.ToArray();
+    }
 
     private static readonly string[] AmountTypeNames =
         ["Premium", "Claims", "InternalCost", "ExternalCost", "CapitalCost", "ExpectedProfit"];
@@ -178,7 +195,7 @@ public static class FutuReDataLoader
 
         return meshQuery
             .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping state:Active"))
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToTransactionMapping)
                 .Where(m => m != null)
@@ -191,12 +208,24 @@ public static class FutuReDataLoader
     /// </summary>
     public static IObservable<IEnumerable<FutuReDataCube>> LoadDataCube(IWorkspace workspace)
     {
+        // Resolve attachment base path from storage configuration
+        if (string.IsNullOrEmpty(_basePath))
+        {
+            var config = workspace.Hub.ServiceProvider.GetService<IConfiguration>();
+            var graphRoot = config?["Storage:BasePath"] ?? config?["Graph:Storage:BasePath"] ?? "";
+            var combined = Path.Combine(graphRoot, "attachments", "FutuRe");
+            // Resolve to absolute path for consistent file access
+            _basePath = Path.IsPathRooted(combined)
+                ? combined
+                : Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), combined));
+        }
+
         return LoadTransactionMappingsFromNodes(workspace)
             .Select(mappings => GenerateDataCube(mappings.ToArray()));
     }
 
     /// <summary>
-    /// Generates the full data cube from static arrays with dynamic date computation.
+    /// Generates the full data cube from CSV-loaded data with dynamic date computation.
     /// Base amounts are keyed by local (business unit) LoB codes.
     /// TransactionMapping is applied to split each local LoB row into one or more
     /// group LoB rows with percentage-weighted amounts.
@@ -211,12 +240,12 @@ public static class FutuReDataLoader
         TransactionMapping[] GetMappings(string bu, string localLoB) =>
             allMappings.Where(m => m.BusinessUnit == bu && m.LocalLineOfBusiness == localLoB).ToArray();
 
-        foreach (var (buName, baseAmounts) in new[]
+        var businessUnits = allMappings.Select(m => m.BusinessUnit).Distinct();
+
+        foreach (var buName in businessUnits)
         {
-            ("EuropeRe", EuropeReBaseAmounts),
-            ("AmericasIns", AmericasInsBaseAmounts)
-        })
-        {
+            var baseAmounts = GetBaseAmounts(buName);
+            var seasonalFactors = GetSeasonalFactors(buName);
             int monthOffset = 0;
             var current = new DateTime(start.Year, start.Month, 1);
 
@@ -245,7 +274,7 @@ public static class FutuReDataLoader
                         // Apply seasonal factor if available
                         var seasonKey = $"{localLobId}_{amountType}";
                         var seasonalFactor = 1.0;
-                        if (SeasonalFactors.TryGetValue(seasonKey, out var factors))
+                        if (seasonalFactors.TryGetValue(seasonKey, out var factors))
                             seasonalFactor = factors[monthIndex - 1];
 
                         var localEstimate = baseAmount * seasonalFactor;
@@ -254,8 +283,8 @@ public static class FutuReDataLoader
                         double? localActual = null;
                         if (isPastMonth && AmountTypeHasActuals[i])
                         {
-                            var varianceIdx = monthOffset % ActualVarianceFactors.Length;
-                            localActual = localEstimate * ActualVarianceFactors[varianceIdx];
+                            var varianceIdx = monthOffset % VarianceFactors.Value.Length;
+                            localActual = localEstimate * VarianceFactors.Value[varianceIdx];
                         }
 
                         // Split across group LoBs via TransactionMapping

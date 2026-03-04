@@ -1,0 +1,18 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA/LH2A6-iR3kSowXP2O-24yw",
+  "path": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA/LH2A6-iR3kSowXP2O-24yw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-04T13:17:08.808268+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "LH2A6-iR3kSowXP2O-24yw",
+    "role": "Navigator",
+    "authorName": "Navigator",
+    "text": "I\u2019ve opened the AmericasIns Mapping Rules for you.\n\nWhere the split is determined\n- Each split is defined explicitly in the TransactionMapping nodes under each business unit (e.g., FutuRe/AmericasIns/TransactionMapping contains nodes like AME-HOMEOWNERS-PROP 85% and AME-HOMEOWNERS-CAS 15%).\n- The Mapping Rules Markdown document summarises those mappings (and is what I displayed).\n- At query time the Profitability hub applies these TransactionMapping entries virtually to transform local BU amounts into group LoBs \u2014 so the split values are stored in the TransactionMapping nodes (and summarised in MappingRules), not computed dynamically elsewhere.\n\nNext actions\n- I can list the individual TransactionMapping nodes for AmericasIns so you can inspect each mapping record.\n- Or show the EuropeRe mappings as well.\nWhich would you like?",
+    "timestamp": "2026-03-04T13:17:08.807713Z",
+    "type": "AgentResponse"
+  }
+}

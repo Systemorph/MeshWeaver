@@ -64,6 +64,11 @@ public record ChartControl()
     public object? CategoryAxisLabelAngle { get; init; }
 
     /// <summary>
+    /// Gets or initializes the format string for value axis labels (e.g. "{0:N0}" for thousands separators).
+    /// </summary>
+    public object? ValueAxisFormatString { get; init; }
+
+    /// <summary>
     /// Adds a series to the chart.
     /// </summary>
     public ChartControl WithSeries(ChartSeries series)
@@ -165,4 +170,9 @@ public record ChartControl()
     /// Sets the angle for category axis labels (in degrees). Use negative values for counter-clockwise rotation.
     /// </summary>
     public ChartControl WithCategoryAxisLabelAngle(int angle) => this with { CategoryAxisLabelAngle = angle };
+
+    /// <summary>
+    /// Sets the format string for value axis labels (e.g. "{0:N0}" for thousands separators).
+    /// </summary>
+    public ChartControl WithValueAxisFormatString(string formatString) => this with { ValueAxisFormatString = formatString };
 }

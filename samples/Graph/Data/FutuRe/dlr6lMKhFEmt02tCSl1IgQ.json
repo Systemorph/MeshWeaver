@@ -1,0 +1,15 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/dlr6lMKhFEmt02tCSl1IgQ",
+  "path": "FutuRe/dlr6lMKhFEmt02tCSl1IgQ",
+  "name": "What can you tell me about the profitability datac...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-03-04T13:32:22.721453+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "FutuRe",
+    "primaryNodePath": "FutuRe"
+  }
+}

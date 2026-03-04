@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA/_Y1zEHZgT02Sj60Fe_nyRw",
+  "path": "FutuRe/AmericasIns/TransactionMapping/MappingRules/iOK6O-0zq0yzO7LUr2a_oA/_Y1zEHZgT02Sj60Fe_nyRw",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-04T12:46:48.018134+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "_Y1zEHZgT02Sj60Fe_nyRw",
+    "role": "user",
+    "text": "Is there any data associated with the FutuRe use case?  Perhaps in the form of csv files?",
+    "timestamp": "2026-03-04T12:46:48.013697Z",
+    "type": "ExecutedInput"
+  }
+}

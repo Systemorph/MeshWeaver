@@ -7,6 +7,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 
 /// <summary>
 /// Views for displaying line of business details.
@@ -23,26 +24,31 @@ public static class LineOfBusinessViews
     [Display(GroupName = "Overview", Order = 1)]
     public static IObservable<UiControl?> Overview(this LayoutAreaHost host, RenderingContext _)
     {
-        return host.GetDataStream<LineOfBusiness>()
-            .Select(lob =>
+        var hubPath = host.Hub.Address.ToString();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+
+        return nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var lob = node?.Content as LineOfBusiness;
+            if (lob == null)
+                return null;
+
+            var stack = Controls.Stack
+                .WithView(Controls.H2(lob.DisplayName))
+                .WithView(Controls.Markdown(lob.Description ?? ""));
+
+            if (!string.IsNullOrEmpty(lob.ProductExamples))
             {
-                if (lob == null)
-                    return null;
+                stack = stack
+                    .WithView(Controls.H3("Insurance Products"))
+                    .WithView(Controls.Markdown(string.Join("\n",
+                        lob.ProductExamples.Split(',', StringSplitOptions.TrimEntries)
+                            .Select(p => $"- {p}"))));
+            }
 
-                var stack = Controls.Stack
-                    .WithView(Controls.H2(lob.DisplayName))
-                    .WithView(Controls.Markdown(lob.Description ?? ""));
-
-                if (!string.IsNullOrEmpty(lob.ProductExamples))
-                {
-                    stack = stack
-                        .WithView(Controls.H3("Insurance Products"))
-                        .WithView(Controls.Markdown(string.Join("\n",
-                            lob.ProductExamples.Split(',', StringSplitOptions.TrimEntries)
-                                .Select(p => $"- {p}"))));
-                }
-
-                return (UiControl?)stack;
-            });
+            return (UiControl?)stack;
+        });
     }
 }

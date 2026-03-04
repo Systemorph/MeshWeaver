@@ -18,6 +18,7 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
     private object? Width { get; set; }
     private object? Height { get; set; }
     private object? CategoryAxisLabelAngle { get; set; }
+    private object? ValueAxisFormatString { get; set; }
 
     protected override void BindData()
     {
@@ -71,5 +72,6 @@ public partial class RadzenChartView : RadzenViewBase<ChartControl, RadzenChartV
         DataBind(ViewModel.Width, x => x.Width, defaultValue: "100%");
         DataBind(ViewModel.Height, x => x.Height, defaultValue: "400px");
         DataBind(ViewModel.CategoryAxisLabelAngle, x => x.CategoryAxisLabelAngle, defaultValue: -45);
+        DataBind(ViewModel.ValueAxisFormatString, x => x.ValueAxisFormatString);
     }
 }

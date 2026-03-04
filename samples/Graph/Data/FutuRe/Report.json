@@ -13,6 +13,6 @@
     "displayName": "Report",
     "iconName": "DocumentText",
     "description": "Report document embedding profitability views",
-    "configuration": "config => config.AddDefaultLayoutAreas()"
+    "configuration": "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddReportViews())"
   }
 }
