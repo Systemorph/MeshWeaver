@@ -39,27 +39,19 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     // Local copy of test data - each test instance gets its own copy
     private string? _localTestDataPath;
 
-    private static string GetSamplesGraphPath()
-    {
-        var currentDir = Directory.GetCurrentDirectory();
-        var solutionRoot = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
-        return Path.Combine(solutionRoot, "samples", "Graph");
-    }
-
     /// <summary>
     /// Gets or creates a local copy of the sample data for this test instance.
+    /// Uses the pre-deployed SamplesGraph directory from the build output.
     /// </summary>
     private string GetLocalTestDataPath()
     {
         if (_localTestDataPath != null)
             return _localTestDataPath;
 
-        var currentDir = Directory.GetCurrentDirectory();
-        _localTestDataPath = Path.Combine(currentDir, "testdata", $"TodoWorkflowTests_{Guid.NewGuid():N}");
+        _localTestDataPath = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", $"TodoWorkflowTests_{Guid.NewGuid():N}");
 
-        // Copy samples/Graph to local test directory
-        var sourcePath = GetSamplesGraphPath();
-        CopyDirectory(sourcePath, _localTestDataPath);
+        // Copy pre-deployed SamplesGraph to local test directory for mutation isolation
+        CopyDirectory(TestPaths.SamplesGraph, _localTestDataPath);
 
         return _localTestDataPath;
     }
@@ -83,8 +75,9 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        var graphPath = GetLocalTestDataPath();
-        var dataDirectory = TestPaths.SamplesGraphData;
+        var localCopy = GetLocalTestDataPath();
+        var graphPath = localCopy;
+        var dataDirectory = Path.Combine(localCopy, "Data");
         Directory.CreateDirectory(SharedCacheDirectory);
 
         var configuration = new ConfigurationBuilder()

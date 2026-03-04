@@ -534,6 +534,19 @@ public class InMemoryMeshQuery(
             }
         }
 
+        // Supplement re-query results with entities from notifications
+        // that haven't appeared in the file-system listing yet (write lag).
+        foreach (var (path, change) in changesByPath)
+        {
+            if (change.Entity is T directMatch && _evaluator.Matches(directMatch, parsedQuery))
+            {
+                if (change.Kind == DataChangeKind.Deleted)
+                    newItems.Remove(path);
+                else
+                    newItems[path] = directMatch;
+            }
+        }
+
         // Detect added and updated items
         foreach (var (path, item) in newItems)
         {

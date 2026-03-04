@@ -120,15 +120,26 @@ public class FileSystemPersistenceService : IPersistenceServiceCore, IDisposable
             LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
         };
 
-        await _storageAdapter.WriteAsync(savedNode, options, ct);
-
-        // Update cache
+        // Update cache and notify BEFORE disk write so observers see the change immediately.
+        // The re-query triggered by the notification will hit the warm cache.
         _cache.Set(key, savedNode, _cacheOptions);
 
-        // Notify change
         _changeNotifier?.NotifyChange(isNew
             ? DataChangeNotification.Created(key, savedNode)
             : DataChangeNotification.Updated(key, savedNode));
+
+        try
+        {
+            await _storageAdapter.WriteAsync(savedNode, options, ct);
+        }
+        catch
+        {
+            // Rollback cache on write failure
+            _cache.Remove(key);
+            if (isNew)
+                _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(key, savedNode));
+            throw;
+        }
 
         return savedNode;
     }
