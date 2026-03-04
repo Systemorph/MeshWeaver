@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -40,7 +41,7 @@ public static class WorkspaceNodeExtensions
     public static IObservable<T?> GetNodeContent<T>(this IWorkspace workspace) where T : class
     {
         return workspace.GetNodeStream()
-            .Select(node => node?.Content as T);
+            .Select(node => DeserializeContent<T>(node, workspace.Hub.JsonSerializerOptions));
     }
 
     /// <summary>
@@ -69,7 +70,19 @@ public static class WorkspaceNodeExtensions
     public static IObservable<T?> GetNodeContent<T>(this IWorkspace workspace, string path) where T : class
     {
         return workspace.GetNodeStream(path)
-            .Select(node => node?.Content as T);
+            .Select(node => DeserializeContent<T>(node, workspace.Hub.JsonSerializerOptions));
+    }
+
+    private static T? DeserializeContent<T>(MeshNode? node, JsonSerializerOptions? options) where T : class
+    {
+        if (node?.Content == null) return null;
+        if (node.Content is T typed) return typed;
+        if (node.Content is JsonElement json)
+        {
+            try { return JsonSerializer.Deserialize<T>(json, options); }
+            catch { return null; }
+        }
+        return null;
     }
 
     /// <summary>

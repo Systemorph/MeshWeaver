@@ -242,12 +242,37 @@ public static class PersistenceExtensions
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
         services.AddSingleton<IPartitionedStoreFactory>(sp =>
-            new FileSystemPartitionedStoreFactory(
+        {
+            // Collect all partition inclusions registered via IncludePartition()
+            var inclusions = sp.GetServices<PartitionInclusion>().ToList();
+            var filter = inclusions.Count > 0
+                ? new PartitionFilter(inclusions.Select(i => i.Name))
+                : null;
+
+            return new FileSystemPartitionedStoreFactory(
                 baseDirectory,
                 writeOptionsModifier,
-                sp.GetService<IDataChangeNotifier>()));
+                sp.GetService<IDataChangeNotifier>(),
+                filter);
+        });
 
         return services.AddPartitionedCoreAndWrapperServices();
+    }
+
+    /// <summary>
+    /// Includes a specific partition by name in selective partitioned persistence.
+    /// When at least one IncludePartition call is made, only explicitly included partitions are loaded.
+    /// If no IncludePartition calls are made, all partitions are loaded (backward compatibility).
+    /// </summary>
+    public static TBuilder IncludePartition<TBuilder>(this TBuilder builder, string partitionName)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(new PartitionInclusion(partitionName));
+            return services;
+        });
+        return builder;
     }
 
     /// <summary>

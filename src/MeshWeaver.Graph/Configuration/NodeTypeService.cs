@@ -1,6 +1,9 @@
 ﻿using System.Collections.Concurrent;
+using System.Net;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -41,6 +44,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
     // Cached NotCreatable markers (types that cannot be created via UI)
     private readonly ConcurrentDictionary<string, bool> _notCreatableTypes = new();
+
+    // Compilation errors by nodeTypePath - tracks last compilation failure for error reporting
+    private readonly ConcurrentDictionary<string, string> _compilationErrors = new();
 
     public NodeTypeService(
         IMessageHub meshHub,
@@ -125,6 +131,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         return _notCreatableTypes.GetValueOrDefault(nodeTypePath);
     }
 
+    /// <summary>
+    /// Gets the last compilation error for a node type, if any.
+    /// </summary>
+    public string? GetCompilationError(string nodeTypePath)
+    {
+        return _compilationErrors.GetValueOrDefault(nodeTypePath);
+    }
+
     private Task<string?> GetAssemblyPathAsync(string nodeTypePath, CancellationToken ct = default)
     {
         // Use ConcurrentDictionary.GetOrAdd with a Task to ensure only one compilation runs per key.
@@ -139,8 +153,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 _compilationTasks.TryRemove(nodeTypePath, out _);
                 _releaseKeys.TryRemove(nodeTypePath, out _);
+                // Track the compilation error for error reporting in UI
+                if (t.Exception?.InnerException is CompilationException compEx)
+                    _compilationErrors[nodeTypePath] = compEx.Message;
+                else if (t.Exception?.InnerException != null)
+                    _compilationErrors[nodeTypePath] = t.Exception.InnerException.Message;
                 return null;
             }
+            _compilationErrors.TryRemove(nodeTypePath, out _);
             return t.Result?.AssemblyPath;
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
@@ -286,6 +306,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             var hubConfigDynamic = node.HubConfiguration
                 ?? GetCachedHubConfiguration(nodeType)
                 ?? builtInNode?.HubConfiguration;
+
+            // If compilation failed, wrap configuration to show the error
+            if (hubConfigDynamic == null && _compilationErrors.TryGetValue(nodeType, out var errorMessage))
+            {
+                hubConfigDynamic = CreateCompilationErrorConfiguration(errorMessage);
+            }
 
             return CopyIconFromNodeType(node with
             {
@@ -649,6 +675,19 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     {
         logger.LogInformation("NodeType {NodeTypePath} updated, invalidating cache", nodeTypePath);
         InvalidateCache(nodeTypePath);
+    }
+
+    /// <summary>
+    /// Creates a hub configuration that shows a compilation error in the Overview area.
+    /// </summary>
+    private static Func<MessageHubConfiguration, MessageHubConfiguration> CreateCompilationErrorConfiguration(string errorMessage)
+    {
+        return config => config.AddLayout(layout =>
+            layout.WithView(MeshNodeLayoutAreas.OverviewArea, (host, ctx) =>
+                Observable.Return<UiControl?>(
+                    Controls.Stack
+                        .WithView(Controls.Html(
+                            $"<div style=\"color:#d32f2f;background:#fce4ec;padding:16px;border:1px solid #d32f2f;border-radius:4px;font-family:monospace;white-space:pre-wrap\">{WebUtility.HtmlEncode(errorMessage)}</div>")))));
     }
 
     #region Creatable Types
