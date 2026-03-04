@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Specialty & Aviation",
     "groupLineOfBusiness": "AVTN",
     "groupLineOfBusinessName": "Aviation",
-    "percentage": 0.30
-  }
+    "percentage": 0.3
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

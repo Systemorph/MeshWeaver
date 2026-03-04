@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Life & Health",
     "groupLineOfBusiness": "LH",
     "groupLineOfBusinessName": "Life & Health",
-    "percentage": 1.00
-  }
+    "percentage": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

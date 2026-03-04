@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Motor",
     "groupLineOfBusiness": "CAS",
     "groupLineOfBusinessName": "Casualty",
-    "percentage": 1.00
-  }
+    "percentage": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

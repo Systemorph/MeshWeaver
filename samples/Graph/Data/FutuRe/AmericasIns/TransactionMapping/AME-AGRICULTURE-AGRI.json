@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Agriculture",
     "groupLineOfBusiness": "AGRI",
     "groupLineOfBusinessName": "Agriculture",
-    "percentage": 1.00
-  }
+    "percentage": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

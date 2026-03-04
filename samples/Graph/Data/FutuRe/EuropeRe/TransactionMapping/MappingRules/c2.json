@@ -15,5 +15,6 @@
     "text": "The virtual approach means group queries fan out to the EuropeRe data source. For 8 local LoBs × 6 amount types × 18 months that's about 860 rows, split through 13 mapping rules into roughly 2,500 group-level rows — all computed in-memory. Performance is well within acceptable limits.",
     "createdAt": "2026-01-17T11:00:00+00:00",
     "status": "Active"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

@@ -14,5 +14,6 @@
     "iconName": "Money",
     "description": "Amount type dimension for profitability analysis",
     "configuration": "config => config.WithContentType<AmountType>()"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

@@ -1,0 +1,19 @@
+{
+  "id": "GroupAnalysis",
+  "namespace": "FutuRe",
+  "name": "Group Analysis",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Group-level profitability analysis hub aggregating data from local business unit hubs",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "GroupAnalysis",
+    "namespace": "FutuRe",
+    "displayName": "Group Analysis",
+    "iconName": "DataTrending",
+    "description": "Group profitability analysis hub loading data from local BU hubs via PartitionedHubDataSource and applying transaction mapping rules",
+    "configuration": "config => config\n    .WithContentType<AnalysisContent>()\n    .AddData(data => data\n        .AddPartitionedHubSource<Address>(\n            c => c.WithType<FutuReDataCube>(\n                    cube => (Address)(\"FutuRe/\" + cube.BusinessUnit + \"/Analysis\"))\n                .InitializingPartitions(\n                    (Address)\"FutuRe/EuropeRe/Analysis\",\n                    (Address)\"FutuRe/AmericasIns/Analysis\"))\n        .WithVirtualDataSource(\"ReferenceData\", vs => vs\n            .WithVirtualType<AmountType>(\n                workspace => FutuReDataLoader.LoadAmountTypes(workspace))\n            .WithVirtualType<Currency>(\n                workspace => FutuReDataLoader.LoadCurrencies(workspace))\n            .WithVirtualType<Country>(\n                workspace => FutuReDataLoader.LoadCountries(workspace)))\n        .WithVirtualDataSource(\"TransactionMapping\", vs => vs\n            .WithVirtualType<TransactionMapping>(\n                workspace => FutuReDataLoader.LoadTransactionMappingsFromNodes(workspace)))\n        .WithVirtualDataSource(\"LineOfBusiness\", vs => vs\n            .WithVirtualType<LineOfBusiness>(\n                workspace => FutuReDataLoader.LoadLinesOfBusinessFromNodes(workspace))))\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout.AddProfitabilityLayoutAreas())"
+  }
+}

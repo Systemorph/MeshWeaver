@@ -14,5 +14,6 @@
     "iconName": "Globe",
     "description": "Country dimension for geographic classification in profitability reporting",
     "configuration": "config => config.WithContentType<Country>()"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

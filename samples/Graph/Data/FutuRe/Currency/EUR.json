@@ -8,8 +8,9 @@
     "$type": "Currency",
     "id": "EUR",
     "name": "Euro",
-    "symbol": "\u20ac",
+    "symbol": "€",
     "decimalPlaces": 2,
     "order": 1
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

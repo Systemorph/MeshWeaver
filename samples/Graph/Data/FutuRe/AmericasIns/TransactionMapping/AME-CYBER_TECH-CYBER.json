@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Cyber & Technology",
     "groupLineOfBusiness": "CYBER",
     "groupLineOfBusinessName": "Cyber",
-    "percentage": 0.70
-  }
+    "percentage": 0.7
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

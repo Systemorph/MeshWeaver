@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Household",
     "groupLineOfBusiness": "PROP",
     "groupLineOfBusinessName": "Property",
-    "percentage": 0.90
-  }
+    "percentage": 0.9
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

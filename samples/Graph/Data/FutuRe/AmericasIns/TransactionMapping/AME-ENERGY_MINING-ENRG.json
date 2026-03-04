@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Energy & Mining",
     "groupLineOfBusiness": "ENRG",
     "groupLineOfBusinessName": "Energy",
-    "percentage": 0.80
-  }
+    "percentage": 0.8
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }
