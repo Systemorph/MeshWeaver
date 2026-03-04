@@ -14,6 +14,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -466,11 +467,38 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // ── Analysis Hub Layout Areas (Group Level) ──
 
     /// <summary>
-    /// Verifies that the ProfitabilityOverview chart area renders.
+    /// Verifies that the ProfitabilityOverview chart area renders a ChartControl.
+    /// If Roslyn compilation of ProfitabilityLayoutAreas.cs fails, this area
+    /// will be null (never registered) — the test must detect that.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task ProfitabilityOverview_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Profitability", "ProfitabilityOverview");
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Profitability");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("ProfitabilityOverview");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for ProfitabilityOverview control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("ProfitabilityOverview should render a control (null means compilation failed)");
+        control.Should().BeOfType<ChartControl>(
+            "ProfitabilityOverview should render a ChartControl, not an error");
+    }
 
     /// <summary>
     /// Verifies that the EstimateVsActual area renders.

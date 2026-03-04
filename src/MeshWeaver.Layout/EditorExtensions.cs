@@ -579,9 +579,9 @@ public static class EditorExtensions
             return BuildCollectionSection(host, property, dataId, isEditable);
         }
 
-        // Handle SeparateEditView (Markdown) differently - full width with Done button
+        // Handle markdown properties - full width with Done button
         var uiControlAttr = property.GetCustomAttribute<UiControlAttribute>();
-        if (uiControlAttr?.SeparateEditView == true)
+        if (IsMarkdownProperty(property))
         {
             return BuildMarkdownToggle(host, property, dataId, editStateId, editStateStream, isEditable, isToggleable);
         }
@@ -605,6 +605,17 @@ public static class EditorExtensions
                     ? BuildEditControl(h, property, dataId, editStateId, isToggleable)
                     : BuildReadonlyControl(h, property, dataId, editStateId, isEditable)));
     }
+
+    /// <summary>
+    /// Returns true if the property should render as markdown.
+    /// This includes properties with [Markdown] attribute (SeparateEditView)
+    /// and string properties named "Description" (by convention).
+    /// </summary>
+    internal static bool IsMarkdownProperty(PropertyInfo property)
+        => property.GetCustomAttribute<UiControlAttribute>()?.SeparateEditView == true
+           || (property.PropertyType == typeof(string)
+               && property.Name.Equals("Description", StringComparison.OrdinalIgnoreCase)
+               && property.GetCustomAttribute<UiControlAttribute>() == null);
 
     private static string GetToggleableDisplayName(PropertyInfo property)
     {
