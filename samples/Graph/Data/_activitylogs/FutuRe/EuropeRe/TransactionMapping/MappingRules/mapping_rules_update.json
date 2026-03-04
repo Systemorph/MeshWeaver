@@ -1,0 +1,20 @@
+{
+  "Category": "DataUpdate",
+  "Start": "2026-03-04T09:15:00Z",
+  "End": "2026-03-04T09:15:00Z",
+  "Id": "mapping_rules_update",
+  "Status": "Succeeded",
+  "User": {
+    "Email": "alice.chen@example.com",
+    "DisplayName": "Alice Chen"
+  },
+  "HubPath": "FutuRe/EuropeRe/TransactionMapping/MappingRules",
+  "Messages": [
+    {
+      "Message": "Bundled 3 data change(s)",
+      "LogLevel": "Information",
+      "Timestamp": "2026-03-04T09:15:00Z"
+    }
+  ],
+  "SubActivities": []
+}

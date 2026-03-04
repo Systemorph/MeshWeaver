@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -6,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -132,6 +135,10 @@ public static class ApprovalLayoutAreas
         if (persistence == null || node.Content is not Approval approval)
             return;
 
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.ObjectId ?? "System";
+        var currentUserName = accessService?.Context?.Name ?? currentUser;
+
         var updated = node with
         {
             Content = approval with
@@ -142,6 +149,24 @@ public static class ApprovalLayoutAreas
         };
         await persistence.SaveNodeAsync(updated);
 
+        // Record approval activity in ActivityLogStore
+        var activityLogStore = host.Hub.ServiceProvider.GetService<IActivityLogStore>();
+        if (activityLogStore != null && !string.IsNullOrEmpty(approval.PrimaryNodePath))
+        {
+            var verb = newStatus == ApprovalStatus.Approved ? "Approved" : "Rejected";
+            var log = new ActivityLog("Approval")
+            {
+                Start = DateTime.UtcNow,
+                End = DateTime.UtcNow,
+                Status = ActivityStatus.Succeeded,
+                User = new UserInfo(currentUser, currentUserName),
+                HubPath = approval.PrimaryNodePath,
+                Messages = ImmutableList.Create(
+                    new LogMessage($"{verb}: {approval.Purpose}", LogLevel.Information))
+            };
+            await activityLogStore.SaveActivityLogAsync(approval.PrimaryNodePath, log);
+        }
+
         // Create notification for the requester
         var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
         if (meshCatalog != null)
@@ -149,9 +174,6 @@ public static class ApprovalLayoutAreas
             var notificationType = newStatus == ApprovalStatus.Approved
                 ? NotificationType.ApprovalGiven
                 : NotificationType.ApprovalRejected;
-
-            var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-            var currentUser = accessService?.Context?.ObjectId ?? "System";
 
             await NotificationService.CreateNotificationAsync(
                 meshCatalog,
