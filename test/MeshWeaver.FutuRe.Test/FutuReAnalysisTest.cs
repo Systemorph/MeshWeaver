@@ -374,13 +374,18 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
         control.Should().NotBeNull("Overview area should render a control for EuropeRe LineOfBusiness HOUSEHOLD");
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
+            "LineOfBusiness Overview should have H2 title + description (not just an error control)");
     }
 
     /// <summary>
-    /// Verifies that the EuropeRe LineOfBusiness Search area loads and returns 8 LoBs.
+    /// Verifies that the LineOfBusiness Search area renders a MeshSearchControl
+    /// and that executing its query returns the expected LoB instances.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
+    public async Task LineOfBusiness_Search_ShouldReturnLoBs()
     {
         var client = GetClient();
         var address = new Address("FutuRe/LineOfBusiness");
@@ -405,6 +410,19 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .FirstAsync(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Search area should render for LineOfBusiness");
+        var searchControl = control.Should().BeOfType<MeshSearchControl>().Subject;
+        searchControl.HiddenQuery.Should().NotBeNull("Search should have a hidden query");
+
+        var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
+        Output.WriteLine($"Hidden query: {hiddenQuery}");
+        hiddenQuery.Should().Contain("nodeType:FutuRe/LineOfBusiness",
+            "Search query should filter by LineOfBusiness node type");
+
+        // Execute the same query via IMeshQuery to verify result count
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
+        Output.WriteLine($"Query returned {results.Count} results");
+        results.Count.Should().BeGreaterThanOrEqualTo(10,
+            "Should find LineOfBusiness instances from both EuropeRe and AmericasIns");
     }
 }

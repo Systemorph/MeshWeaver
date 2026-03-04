@@ -7,9 +7,9 @@
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
-    @if (NavigationService.Context is null && NavigationService.IsResolving)
+    @if (NavigationService.Context is null && (IsLoading || !IsInteractive))
     {
-        @* Address resolution in progress - show loading spinner *@
+        @* Address resolution in progress or prerender phase - show loading spinner *@
         <div class="resolving-container">
             <div class="spinner"></div>
             <p>Looking up <strong>@Path</strong>...</p>

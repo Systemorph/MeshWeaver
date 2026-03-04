@@ -1,0 +1,19 @@
+{
+  "id": "LineOfBusiness",
+  "namespace": "FutuRe/AmericasIns",
+  "name": "Line of Business",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Lines of business for AmericasIns",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "LineOfBusiness",
+    "namespace": "FutuRe/AmericasIns",
+    "displayName": "Line of Business",
+    "iconName": "Grid",
+    "description": "AmericasIns lines of business",
+    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessLayoutAreas())"
+  }
+}

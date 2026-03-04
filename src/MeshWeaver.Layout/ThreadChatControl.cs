@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace MeshWeaver.Layout;
 
 /// <summary>
@@ -28,8 +30,16 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     /// </summary>
     public bool HideEmptyState { get; init; }
 
+    /// <summary>
+    /// Data-bound list of message cells. Each cell is a LayoutAreaControl
+    /// pointing to the message node's OverviewArea. Populated server-side
+    /// by the thread's layout function.
+    /// </summary>
+    public ImmutableList<LayoutAreaControl> Cells { get; init; } = ImmutableList<LayoutAreaControl>.Empty;
+
     public ThreadChatControl WithThreadPath(string threadPath) => this with { ThreadPath = threadPath };
     public ThreadChatControl WithInitialContext(string context) => this with { InitialContext = context };
     public ThreadChatControl WithInitialContextDisplayName(string displayName) => this with { InitialContextDisplayName = displayName };
     public ThreadChatControl WithHideEmptyState(bool hide = true) => this with { HideEmptyState = hide };
+    public ThreadChatControl WithCells(ImmutableList<LayoutAreaControl> cells) => this with { Cells = cells };
 }

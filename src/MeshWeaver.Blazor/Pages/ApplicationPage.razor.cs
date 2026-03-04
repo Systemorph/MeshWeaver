@@ -46,6 +46,12 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     /// </summary>
     private bool IsInteractive { get; set; }
 
+    /// <summary>
+    /// True while the component is still waiting for address resolution.
+    /// Starts true and becomes false only after InitializeAsync completes in the interactive phase.
+    /// </summary>
+    private bool IsLoading { get; set; } = true;
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -54,7 +60,9 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     protected override async Task OnParametersSetAsync()
     {
+        IsLoading = true;
         await NavigationService.InitializeAsync();
+        IsLoading = NavigationService.IsResolving;
         UpdateFromContext();
     }
 
@@ -62,6 +70,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     {
         InvokeAsync(() =>
         {
+            IsLoading = NavigationService.IsResolving;
             UpdateFromContext();
             StateHasChanged();
         });
@@ -73,7 +82,7 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
         if (context is null)
         {
-            PageTitle = NavigationService.IsResolving ? "Loading..." : "Page Not Found";
+            PageTitle = IsLoading ? "Loading..." : "Page Not Found";
             PreRenderedHtml = null;
             return;
         }
