@@ -4,7 +4,7 @@
   "name": "Analysis",
   "nodeType": "NodeType",
   "category": "Types",
-  "description": "FutuRe profitability analysis hub with data cube, reference data, and charting views",
+  "description": "Group-level profitability analysis hub aggregating data from local business unit hubs",
   "icon": "/static/storage/content/FutuRe/icon.svg",
   "isPersistent": true,
   "content": {
@@ -13,7 +13,7 @@
     "namespace": "FutuRe",
     "displayName": "Analysis",
     "iconName": "DataTrending",
-    "description": "Profitability analysis hub sourcing line of business data via IMeshQuery and loading estimates/actuals from static data arrays",
-    "configuration": "config => config\n    .WithContentType<AnalysisContent>()\n    .AddData(data => data\n        .WithVirtualDataSource(\"ReferenceData\", vs => vs\n            .WithVirtualType<AmountType>(\n                workspace => FutuReDataLoader.LoadAmountTypes(workspace))\n            .WithVirtualType<Currency>(\n                workspace => FutuReDataLoader.LoadCurrencies(workspace))\n            .WithVirtualType<Country>(\n                workspace => FutuReDataLoader.LoadCountries(workspace)))\n        .WithVirtualDataSource(\"TransactionMapping\", vs => vs\n            .WithVirtualType<TransactionMapping>(\n                workspace => FutuReDataLoader.LoadTransactionMappingsFromNodes(workspace)))\n        .WithVirtualDataSource(\"LineOfBusiness\", vs => vs\n            .WithVirtualType<LineOfBusiness>(\n                workspace => FutuReDataLoader.LoadLinesOfBusinessFromNodes(workspace)))\n        .WithVirtualDataSource(\"FutuReDataCube\", vs => vs\n            .WithVirtualType<FutuReDataCube>(\n                workspace => FutuReDataLoader.LoadDataCube(workspace))))\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout.AddProfitabilityLayoutAreas())"
+    "description": "Group profitability analysis hub loading data from local BU hubs via PartitionedHubDataSource and applying transaction mapping rules",
+    "configuration": "config => config\n    .WithContentType<AnalysisContent>()\n    .AddData(data => data\n        .AddPartitionedHubSource<Address>(\n            c => c.WithType<FutuReDataCube>(\n                    cube => (Address)(\"FutuRe/\" + cube.BusinessUnit + \"/Analysis\"))\n                .InitializingPartitions(\n                    (Address)\"FutuRe/EuropeRe/Analysis\",\n                    (Address)\"FutuRe/AmericasIns/Analysis\"))\n        .WithVirtualDataSource(\"ReferenceData\", vs => vs\n            .WithVirtualType<AmountType>(\n                workspace => FutuReDataLoader.LoadAmountTypes(workspace))\n            .WithVirtualType<Currency>(\n                workspace => FutuReDataLoader.LoadCurrencies(workspace))\n            .WithVirtualType<Country>(\n                workspace => FutuReDataLoader.LoadCountries(workspace)))\n        .WithVirtualDataSource(\"TransactionMapping\", vs => vs\n            .WithVirtualType<TransactionMapping>(\n                workspace => FutuReDataLoader.LoadTransactionMappingsFromNodes(workspace)))\n        .WithVirtualDataSource(\"LineOfBusiness\", vs => vs\n            .WithVirtualType<LineOfBusiness>(\n                workspace => FutuReDataLoader.LoadLinesOfBusinessFromNodes(workspace))))\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout.AddProfitabilityLayoutAreas())"
   }
 }

@@ -1,0 +1,19 @@
+{
+  "id": "LocalAnalysis",
+  "namespace": "FutuRe",
+  "name": "Local Analysis",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Per-business-unit profitability analysis hub loading local data from CSV",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "LocalAnalysis",
+    "namespace": "FutuRe",
+    "displayName": "Local Analysis",
+    "iconName": "DataTrending",
+    "description": "Local profitability analysis hub loading estimates/actuals from CSV with local line of business enrichment",
+    "configuration": "config => config\n    .WithContentType<AnalysisContent>()\n    .AddData(data => data\n        .WithVirtualDataSource(\"ReferenceData\", vs => vs\n            .WithVirtualType<AmountType>(\n                workspace => FutuReDataLoader.LoadAmountTypes(workspace)))\n        .WithVirtualDataSource(\"LocalData\", vs => vs\n            .WithVirtualType<FutuReDataCube>(\n                workspace => FutuReDataLoader.LoadLocalDataCube(workspace))))\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout.AddProfitabilityLayoutAreas())"
+  }
+}

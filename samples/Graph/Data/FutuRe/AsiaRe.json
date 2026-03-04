@@ -1,0 +1,18 @@
+{
+  "id": "AsiaRe",
+  "namespace": "FutuRe",
+  "name": "FutuRe Asia Reinsurance",
+  "nodeType": "FutuRe/BusinessUnit",
+  "category": "Business Units",
+  "description": "Asian reinsurance operations across APAC markets",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "BusinessUnit",
+    "id": "AsiaRe",
+    "name": "FutuRe Asia Reinsurance",
+    "description": "Asian reinsurance operations covering treaty and facultative business across Asia-Pacific markets. Specializes in natural catastrophe (earthquake, typhoon), agricultural, and construction reinsurance. Headquartered in Tokyo with underwriting offices in Singapore, Hong Kong, and Sydney.",
+    "currency": "JPY",
+    "region": "APAC"
+  }
+}
