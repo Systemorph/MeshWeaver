@@ -82,7 +82,9 @@ public class PersistenceActivityLogStore : IActivityLogStore
     }
 
     /// <summary>
-    /// Enumerates all hub paths under the activity logs partition and aggregates results.
+    /// Recursively enumerates all hub paths under the activity logs partition
+    /// and aggregates results. Hub paths can be nested (e.g., FutuRe/EuropeRe/...),
+    /// so we scan recursively through subdirectories.
     /// Requires IStorageAdapter for partition enumeration.
     /// </summary>
     public async Task<IReadOnlyList<ActivityLog>> GetRecentActivityLogsAsync(
@@ -95,19 +97,58 @@ public class PersistenceActivityLogStore : IActivityLogStore
         if (_storageAdapter == null)
             return [];
 
-        // Enumerate all hub paths stored under _activitylogs
-        var hubPaths = await _storageAdapter.ListPartitionSubPathsAsync(ActivityLogPartition, ct);
-
         var allLogs = new List<ActivityLog>();
-        foreach (var hubPath in hubPaths)
-        {
-            var logs = await GetActivityLogsAsync(hubPath, user, from, to, limit, ct);
-            allLogs.AddRange(logs);
-        }
+        await ScanPartitionRecursiveAsync(ActivityLogPartition, null, allLogs, user, from, to, ct);
 
         return allLogs
             .OrderByDescending(l => l.Start)
             .Take(limit)
             .ToList();
+    }
+
+    /// <summary>
+    /// Recursively scans partition directories. At each level:
+    /// 1. Try to read ActivityLog objects (json files at this level)
+    /// 2. Enumerate subdirectories and recurse into them
+    /// </summary>
+    private async Task ScanPartitionRecursiveAsync(
+        string basePath,
+        string? relativePath,
+        List<ActivityLog> results,
+        string? user,
+        DateTime? from,
+        DateTime? to,
+        CancellationToken ct)
+    {
+        // Try reading objects at this level
+        await foreach (var obj in _persistence.GetPartitionObjectsAsync(
+            basePath, relativePath, _jsonOptions))
+        {
+            var log = TryConvertToLog(obj);
+            if (log == null) continue;
+
+            // Set HubPath from the relative path if not already set
+            if (log.HubPath == null && relativePath != null)
+                log = log with { HubPath = relativePath };
+
+            if (user != null && log.User?.Email != user && log.User?.DisplayName != user)
+                continue;
+            if (from.HasValue && log.Start < from.Value)
+                continue;
+            if (to.HasValue && log.End > to.Value)
+                continue;
+
+            results.Add(log);
+        }
+
+        // Enumerate subdirectories and recurse
+        if (_storageAdapter == null) return;
+        var fullPath = string.IsNullOrEmpty(relativePath) ? basePath : $"{basePath}/{relativePath}";
+        var subPaths = await _storageAdapter.ListPartitionSubPathsAsync(fullPath, ct);
+        foreach (var sub in subPaths)
+        {
+            var newRelative = string.IsNullOrEmpty(relativePath) ? sub : $"{relativePath}/{sub}";
+            await ScanPartitionRecursiveAsync(basePath, newRelative, results, user, from, to, ct);
+        }
     }
 }
