@@ -18,18 +18,9 @@ This report provides a consolidated view of the FutuRe Group profitability acros
 
 ## Key Performance Indicators
 
-<div style="display: flex; gap: 20px; margin: 20px 0;">
-  <div style="flex: 1;">
+@@("FutuRe/Analysis/KeyMetrics")
 
-@@("FutuRe/Profitability/KeyMetrics")
-
-  </div>
-  <div style="flex: 1;">
-
-@@("FutuRe/Profitability/ProfitByLoB")
-
-  </div>
-</div>
+@@("FutuRe/Analysis/ProfitByLoB")
 
 ---
 
@@ -37,7 +28,7 @@ This report provides a consolidated view of the FutuRe Group profitability acros
 
 The chart below shows the monthly P&L waterfall — premium income (positive) stacked against claims and cost components (negative), with a net profit line overlay.
 
-@@("FutuRe/Profitability/ProfitabilityOverview")
+@@("FutuRe/Analysis/ProfitabilityOverview")
 
 ---
 
@@ -45,7 +36,7 @@ The chart below shows the monthly P&L waterfall — premium income (positive) st
 
 The table summarises estimated premium, claims, operating costs, net profit, and loss ratio for each group line of business across the full 18-month window.
 
-@@("FutuRe/Profitability/ProfitabilityTable")
+@@("FutuRe/Analysis/ProfitabilityTable")
 
 ---
 
@@ -53,7 +44,7 @@ The table summarises estimated premium, claims, operating costs, net profit, and
 
 Loss ratio (Claims / Premium) is the primary underwriting performance metric. A ratio above 100 % indicates an underwriting loss on that line. The chart below compares loss ratios across all group lines of business.
 
-@@("FutuRe/Profitability/LossRatio")
+@@("FutuRe/Analysis/LossRatio")
 
 ---
 
@@ -61,7 +52,7 @@ Loss ratio (Claims / Premium) is the primary underwriting performance metric. A 
 
 Quarterly aggregation smooths monthly volatility and reveals seasonal patterns. The chart compares actual computed profit against expected profit budgets.
 
-@@("FutuRe/Profitability/QuarterlyTrend")
+@@("FutuRe/Analysis/QuarterlyTrend")
 
 ---
 
@@ -69,7 +60,7 @@ Quarterly aggregation smooths monthly volatility and reveals seasonal patterns. 
 
 For amount types that track actuals (Premium, Claims, External Cost), the section below shows a month-by-month comparison table and a Premium estimate-vs-actual chart.
 
-@@("FutuRe/Profitability/EstimateVsActual")
+@@("FutuRe/Analysis/EstimateVsActual")
 
 ---
 

@@ -15,5 +15,6 @@
     "text": "The Commercial Lines 3-way split (60% Property, 25% Casualty, 15% Marine) is the most complex mapping we have. Worth monitoring during reconciliation — small rounding differences across three splits can accumulate over 18 months of data. Should we round to the nearest dollar or keep full precision?",
     "createdAt": "2026-01-18T08:30:00+00:00",
     "status": "Active"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

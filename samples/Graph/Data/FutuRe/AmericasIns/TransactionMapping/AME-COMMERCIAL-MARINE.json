@@ -13,5 +13,6 @@
     "groupLineOfBusiness": "MARINE",
     "groupLineOfBusinessName": "Marine",
     "percentage": 0.15
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

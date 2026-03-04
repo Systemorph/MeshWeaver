@@ -11,5 +11,6 @@
     "symbol": "CHF",
     "decimalPlaces": 2,
     "order": 2
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Specialty & Aviation",
     "groupLineOfBusiness": "SPEC",
     "groupLineOfBusinessName": "Specialty",
-    "percentage": 0.50
-  }
+    "percentage": 0.5
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

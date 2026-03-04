@@ -13,5 +13,6 @@
     "groupLineOfBusiness": "CAS",
     "groupLineOfBusinessName": "Casualty",
     "percentage": 0.25
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

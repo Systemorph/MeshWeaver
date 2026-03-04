@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Services;
 
@@ -22,8 +23,15 @@ public class PersistenceActivityLogStore : IActivityLogStore
         IStorageAdapter? adapter = null)
     {
         _persistence = persistence;
-        _jsonOptions = jsonOptions ?? new JsonSerializerOptions();
+        _jsonOptions = jsonOptions ?? CreateDefaultOptions();
         _storageAdapter = adapter;
+    }
+
+    private static JsonSerializerOptions CreateDefaultOptions()
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new JsonStringEnumConverter());
+        return options;
     }
 
     /// <summary>

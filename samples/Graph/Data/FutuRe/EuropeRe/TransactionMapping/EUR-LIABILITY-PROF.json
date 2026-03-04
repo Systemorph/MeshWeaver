@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Liability",
     "groupLineOfBusiness": "PROF",
     "groupLineOfBusinessName": "Professional Liability",
-    "percentage": 0.30
-  }
+    "percentage": 0.3
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

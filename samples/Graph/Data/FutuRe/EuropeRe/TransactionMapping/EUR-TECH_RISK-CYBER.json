@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Technology Risk",
     "groupLineOfBusiness": "CYBER",
     "groupLineOfBusinessName": "Cyber",
-    "percentage": 0.60
-  }
+    "percentage": 0.6
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

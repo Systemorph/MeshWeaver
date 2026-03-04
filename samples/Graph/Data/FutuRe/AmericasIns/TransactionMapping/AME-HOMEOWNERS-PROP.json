@@ -13,5 +13,6 @@
     "groupLineOfBusiness": "PROP",
     "groupLineOfBusinessName": "Property",
     "percentage": 0.85
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

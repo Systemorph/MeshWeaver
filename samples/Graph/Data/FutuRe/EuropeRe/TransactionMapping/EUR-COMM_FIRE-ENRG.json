@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Commercial Fire",
     "groupLineOfBusiness": "ENRG",
     "groupLineOfBusinessName": "Energy",
-    "percentage": 0.20
-  }
+    "percentage": 0.2
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

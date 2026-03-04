@@ -14,5 +14,6 @@
     "iconName": "DocumentText",
     "description": "Report document embedding profitability views",
     "configuration": "config => config.AddDefaultLayoutAreas()"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

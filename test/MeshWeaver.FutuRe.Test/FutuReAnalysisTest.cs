@@ -706,30 +706,10 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var storageAdapter = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
 
-        Output.WriteLine($"StorageAdapter type: {storageAdapter.GetType().Name}");
-        Output.WriteLine($"Persistence type: {persistence.GetType().Name}");
-        Output.WriteLine($"Data directory: {TestPaths.SamplesGraphData}");
-
-        // Diagnose: check if ListPartitionSubPathsAsync works for _activitylogs
-        var subPaths = await storageAdapter.ListPartitionSubPathsAsync("_activitylogs");
-        Output.WriteLine($"ListPartitionSubPathsAsync('_activitylogs'): [{string.Join(", ", subPaths)}]");
-
-        foreach (var sub in subPaths)
-        {
-            var nextLevel = await storageAdapter.ListPartitionSubPathsAsync($"_activitylogs/{sub}");
-            Output.WriteLine($"  _activitylogs/{sub} subPaths: [{string.Join(", ", nextLevel)}]");
-        }
-
-        // Diagnose: try reading partition objects directly
-        var directObjects = new List<object>();
-        await foreach (var obj in persistence.GetPartitionObjectsAsync("_activitylogs", null, new JsonSerializerOptions()))
-            directObjects.Add(obj);
-        Output.WriteLine($"GetPartitionObjectsAsync('_activitylogs', null): {directObjects.Count} objects");
-
         // Create PersistenceActivityLogStore directly to bypass DI ordering
+        // (InMemoryActivityLogStore is registered first via TryAddSingleton in DataExtensions)
         var activityLogStore = new PersistenceActivityLogStore(persistence, adapter: storageAdapter);
 
-        Output.WriteLine("Fetching recent activity logs...");
         var logs = await activityLogStore.GetRecentActivityLogsAsync(limit: 30);
 
         Output.WriteLine($"Found {logs.Count} activity logs");

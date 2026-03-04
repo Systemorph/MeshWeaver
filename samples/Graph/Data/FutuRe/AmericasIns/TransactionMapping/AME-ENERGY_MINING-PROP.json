@@ -12,6 +12,7 @@
     "localLineOfBusinessName": "Energy & Mining",
     "groupLineOfBusiness": "PROP",
     "groupLineOfBusinessName": "Property",
-    "percentage": 0.20
-  }
+    "percentage": 0.2
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

@@ -7,7 +7,7 @@ Description: EuropeRe local-to-group LoB mapping rules with governance discussio
 
 This document defines how [EuropeRe](@FutuRe/EuropeRe)'s local Lines of Business are allocated to the [group standard classification](@FutuRe/LineOfBusiness). Each mapping specifies a <!--comment:c1-->percentage split<!--/comment:c1-->, enabling one local LoB to contribute to multiple group LoBs.
 
-The mappings are applied virtually at query time by the [Profitability Analysis](@FutuRe/Profitability) hub — <!--comment:c2-->local data is never physically copied to the group level<!--/comment:c2-->.
+The mappings are applied virtually at query time by the [Profitability Analysis](@FutuRe/Analysis) hub — <!--comment:c2-->local data is never physically copied to the group level<!--/comment:c2-->.
 
 ---
 

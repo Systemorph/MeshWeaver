@@ -3,8 +3,8 @@
 // DisplayName: External Dependencies
 // </meshweaver>
 
-@@FutuRe/Analysis/Code/FutuReDataCube
-@@FutuRe/Analysis/Code/AnalysisContent
-@@FutuRe/Analysis/Code/ProfitabilityLayoutAreas
-@@FutuRe/Analysis/Code/FutuReDataLoader
-@@FutuRe/Analysis/Code/ExternalDependencies
+@@FutuRe/GroupAnalysis/Code/FutuReDataCube
+@@FutuRe/GroupAnalysis/Code/AnalysisContent
+@@FutuRe/GroupAnalysis/Code/ProfitabilityLayoutAreas
+@@FutuRe/GroupAnalysis/Code/FutuReDataLoader
+@@FutuRe/GroupAnalysis/Code/ExternalDependencies

@@ -15,5 +15,6 @@
     "text": "How do we validate that splits sum to exactly 100% for each local LoB? The AmericasIns team has 8 local lines with 14 mapping rules — a missing 1% could silently distort group profitability figures. Should we add a runtime check in the data loader?",
     "createdAt": "2026-01-15T09:30:00+00:00",
     "status": "Active"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }

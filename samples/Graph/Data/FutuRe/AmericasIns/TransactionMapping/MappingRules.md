@@ -7,7 +7,7 @@ Description: AmericasIns local-to-group LoB mapping rules with governance discus
 
 This document defines how [AmericasIns](@FutuRe/AmericasIns)'s local Lines of Business are allocated to the [group standard classification](@FutuRe/LineOfBusiness). Each mapping specifies a <!--comment:c1-->percentage split<!--/comment:c1-->, enabling one local LoB to contribute to multiple group LoBs.
 
-The mappings are applied virtually at query time by the [Profitability Analysis](@FutuRe/Profitability) hub — local data is never physically copied to the group level.
+The mappings are applied virtually at query time by the [Profitability Analysis](@FutuRe/Analysis) hub — local data is never physically copied to the group level.
 
 ---
 

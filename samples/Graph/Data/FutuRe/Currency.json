@@ -14,5 +14,6 @@
     "iconName": "CurrencyDollarEuro",
     "description": "Currency dimension for monetary values in profitability reporting",
     "configuration": "config => config.WithContentType<Currency>()"
-  }
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
 }
