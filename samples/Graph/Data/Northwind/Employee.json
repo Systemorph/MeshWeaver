@@ -14,6 +14,6 @@
     "displayName": "Employee",
     "iconName": "User",
     "description": "Employee master data with job title and location",
-    "configuration": "config => config.WithContentType<EmployeeContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddEmployeeNodeViews())"
+    "configuration": "config => config.WithContentType<EmployeeContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddEmployeeNodeLayoutAreas())"
   }
 }

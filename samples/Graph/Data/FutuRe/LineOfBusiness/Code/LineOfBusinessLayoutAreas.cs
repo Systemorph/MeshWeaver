@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: LineOfBusinessViews
+// Id: LineOfBusinessLayoutAreas
 // DisplayName: Line of Business Views
 // </meshweaver>
 
@@ -12,11 +12,11 @@ using MeshWeaver.Layout.Composition;
 /// <summary>
 /// Views for displaying line of business details.
 /// </summary>
-public static class LineOfBusinessViews
+public static class LineOfBusinessLayoutAreas
 {
     private const string LobDataId = "lineOfBusiness";
 
-    public static LayoutDefinition AddLineOfBusinessViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddLineOfBusinessLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(Overview), Overview);
 

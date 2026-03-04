@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: InventoryViews
+// Id: InventoryLayoutAreas
 // DisplayName: Inventory Views
 // </meshweaver>
 
@@ -14,9 +14,9 @@ using MeshWeaver.Layout.Composition;
 /// Inventory and time series analysis views.
 /// </summary>
 [Display(GroupName = "Inventory", Order = 800)]
-public static class InventoryViews
+public static class InventoryLayoutAreas
 {
-    public static LayoutDefinition AddInventoryViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddInventoryLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(StockLevelsAnalysis), StockLevelsAnalysis)
             .WithView(nameof(MonthlySalesTrend), MonthlySalesTrend)

@@ -14,6 +14,6 @@
     "displayName": "Customer",
     "iconName": "Users",
     "description": "Customer master data with contact information and location",
-    "configuration": "config => config.WithContentType<CustomerContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddCustomerNodeViews())"
+    "configuration": "config => config.WithContentType<CustomerContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddCustomerNodeLayoutAreas())"
   }
 }

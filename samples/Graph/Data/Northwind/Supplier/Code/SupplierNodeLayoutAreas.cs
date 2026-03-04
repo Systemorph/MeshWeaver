@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: SupplierNodeViews
+// Id: SupplierNodeLayoutAreas
 // DisplayName: Supplier Node Views
 // </meshweaver>
 
@@ -12,9 +12,9 @@ using MeshWeaver.Layout;
 /// Instance-level views for individual Supplier MeshNodes.
 /// Displays supplier company information and contact details.
 /// </summary>
-public static class SupplierNodeViews
+public static class SupplierNodeLayoutAreas
 {
-    public static LayoutDefinition AddSupplierNodeViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddSupplierNodeLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithDefaultArea("SupplierOverview")
             .WithView("SupplierOverview", SupplierOverview)

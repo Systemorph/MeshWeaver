@@ -14,6 +14,6 @@
     "displayName": "Insured",
     "iconName": "Building",
     "description": "An insurance client with pricings",
-    "configuration": "config => config.WithContentType<Insured>().AddData(data => data.AddSource(source => source.WithType<PricingStatus>(t => t.WithInitialData(PricingStatus.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"PricingCatalog\").AddInsuranceViews())"
+    "configuration": "config => config.WithContentType<Insured>().AddData(data => data.AddSource(source => source.WithType<PricingStatus>(t => t.WithInitialData(PricingStatus.All)))).AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"PricingCatalog\").AddInsuranceLayoutAreas())"
   }
 }

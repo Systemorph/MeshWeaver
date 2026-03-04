@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: ProductViews
+// Id: ProductLayoutAreas
 // DisplayName: Product Views
 // </meshweaver>
 
@@ -14,9 +14,9 @@ using MeshWeaver.Layout.DataGrid;
 /// Product analysis views.
 /// </summary>
 [Display(GroupName = "Products", Order = 400)]
-public static class ProductViews
+public static class ProductLayoutAreas
 {
-    public static LayoutDefinition AddProductViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddProductLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(ProductOverview), ProductOverview)
             .WithView(nameof(TopProducts), TopProducts)

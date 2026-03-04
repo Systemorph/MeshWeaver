@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: TodoViews
+// Id: TodoLayoutAreas
 // DisplayName: Todo Views
 // </meshweaver>
 
@@ -9,7 +9,7 @@ using MeshWeaver.Domain;
 /// <summary>
 /// Custom views for Todo items.
 /// </summary>
-public static class TodoViews
+public static class TodoLayoutAreas
 {
     /// <summary>
     /// Extracts Todo from MeshNode content, handling various serialization formats
@@ -95,9 +95,9 @@ public static class TodoViews
                 .Select(nodes => nodes?.FirstOrDefault())
                 .Select(node =>
                 {
-                    System.Console.WriteLine($"[TodoViews.Details] MeshNode stream: {node?.Path}, Content type: {node?.Content?.GetType().Name ?? "null"}");
+                    System.Console.WriteLine($"[TodoLayoutAreas.Details] MeshNode stream: {node?.Path}, Content type: {node?.Content?.GetType().Name ?? "null"}");
                     var todo = ExtractTodo(node);
-                    System.Console.WriteLine($"[TodoViews.Details] Extracted Todo: {todo?.Title ?? "null"}");
+                    System.Console.WriteLine($"[TodoLayoutAreas.Details] Extracted Todo: {todo?.Title ?? "null"}");
                     return BuildTodoDetails(host, todo);
                 });
         }
@@ -110,13 +110,13 @@ public static class TodoViews
                 .Select(todos => todos?.FirstOrDefault())
                 .Select(todo =>
                 {
-                    System.Console.WriteLine($"[TodoViews.Details] Todo stream: {todo?.Title ?? "null"}");
+                    System.Console.WriteLine($"[TodoLayoutAreas.Details] Todo stream: {todo?.Title ?? "null"}");
                     return BuildTodoDetails(host, todo);
                 });
         }
 
         // Last resort: load directly from IMeshCatalog
-        System.Console.WriteLine($"[TodoViews.Details] No stream available, loading from IMeshCatalog: {todoPath}");
+        System.Console.WriteLine($"[TodoLayoutAreas.Details] No stream available, loading from IMeshCatalog: {todoPath}");
         return Observable.FromAsync(async () =>
         {
             var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();

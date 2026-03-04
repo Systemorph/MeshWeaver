@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: ProductNodeViews
+// Id: ProductNodeLayoutAreas
 // DisplayName: Product Node Views
 // </meshweaver>
 
@@ -12,9 +12,9 @@ using MeshWeaver.Layout;
 /// Instance-level views for individual Product MeshNodes.
 /// Displays product information, pricing, and inventory status.
 /// </summary>
-public static class ProductNodeViews
+public static class ProductNodeLayoutAreas
 {
-    public static LayoutDefinition AddProductNodeViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddProductNodeLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithDefaultArea("ProductOverview")
             .WithView("ProductOverview", ProductOverview)

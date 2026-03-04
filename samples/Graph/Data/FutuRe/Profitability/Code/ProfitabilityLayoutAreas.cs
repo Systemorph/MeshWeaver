@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: ProfitabilityViews
+// Id: ProfitabilityLayoutAreas
 // DisplayName: Profitability Views
 // </meshweaver>
 
@@ -16,9 +16,9 @@ using MeshWeaver.Layout.Composition;
 /// loss ratios, and quarterly trends.
 /// </summary>
 [Display(GroupName = "Profitability", Order = 100)]
-public static class ProfitabilityViews
+public static class ProfitabilityLayoutAreas
 {
-    public static LayoutDefinition AddProfitabilityViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddProfitabilityLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(KeyMetrics), KeyMetrics)
             .WithView(nameof(ProfitabilityTable), ProfitabilityTable)

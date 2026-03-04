@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: InsuranceViews
+// Id: InsuranceLayoutAreas
 // DisplayName: Insurance Views
 // </meshweaver>
 
@@ -16,12 +16,12 @@ using MeshWeaver.Mesh.Services;
 /// <summary>
 /// Catalog views for ACME Insurance portfolio using CatalogControl with LayoutAreaControl thumbnails.
 /// </summary>
-public static class InsuranceViews
+public static class InsuranceLayoutAreas
 {
     /// <summary>
     /// Registers all ACME Insurance views with the layout definition.
     /// </summary>
-    public static LayoutDefinition AddInsuranceViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddInsuranceLayoutAreas(this LayoutDefinition layout) =>
         layout.WithView("PricingCatalog", PricingCatalog);
 
     private static Dictionary<string, MeshNode> ApplyChanges(

@@ -14,6 +14,6 @@
     "displayName": "Reports Catalog",
     "iconName": "Document",
     "description": "A catalog that renders child reports with their frontmatter metadata",
-    "configuration": "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddReportsCatalogViews())"
+    "configuration": "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddReportsCatalogLayoutAreas())"
   }
 }

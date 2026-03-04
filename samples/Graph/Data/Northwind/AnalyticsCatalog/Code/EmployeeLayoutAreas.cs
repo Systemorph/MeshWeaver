@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: EmployeeViews
+// Id: EmployeeLayoutAreas
 // DisplayName: Employee Views
 // </meshweaver>
 
@@ -14,9 +14,9 @@ using MeshWeaver.Layout.Composition;
 /// Employee performance views.
 /// </summary>
 [Display(GroupName = "Employees", Order = 300)]
-public static class EmployeeViews
+public static class EmployeeLayoutAreas
 {
-    public static LayoutDefinition AddEmployeeViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddEmployeeLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(EmployeeMetrics), EmployeeMetrics)
             .WithView(nameof(TopEmployees), TopEmployees)

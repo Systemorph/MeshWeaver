@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: OrganizationViews
+// Id: OrganizationLayoutAreas
 // DisplayName: Organization Views
 // </meshweaver>
 
@@ -9,7 +9,7 @@ using MeshWeaver.Mesh;
 /// <summary>
 /// Custom views for Organization nodes.
 /// </summary>
-public static class OrganizationViews
+public static class OrganizationLayoutAreas
 {
     /// <summary>
     /// GitHub-style organization header view with standard children section.

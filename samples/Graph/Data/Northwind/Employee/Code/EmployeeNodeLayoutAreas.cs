@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: EmployeeNodeViews
+// Id: EmployeeNodeLayoutAreas
 // DisplayName: Employee Node Views
 // </meshweaver>
 
@@ -12,9 +12,9 @@ using MeshWeaver.Layout;
 /// Instance-level views for individual Employee MeshNodes.
 /// Displays employee information and contact details.
 /// </summary>
-public static class EmployeeNodeViews
+public static class EmployeeNodeLayoutAreas
 {
-    public static LayoutDefinition AddEmployeeNodeViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddEmployeeNodeLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithDefaultArea("EmployeeOverview")
             .WithView("EmployeeOverview", EmployeeOverview)
