@@ -388,6 +388,21 @@ public sealed class MeshCatalog(
                 logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", testPath);
                 return (node, depth);
             }
+
+            // Check if this path is a virtual namespace (has children but no explicit node).
+            // This handles directories like FutuRe/EuropeRe/LineOfBusiness which contain
+            // instance nodes but have no node file themselves.
+            await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
+            if (await enumerator.MoveNextAsync())
+            {
+                logger.LogDebug("FindBestPersistenceMatchAsync: found virtual namespace at path={Path}", testPath);
+                var ns = depth > 1 ? string.Join("/", segments.Take(depth - 1)) : null;
+                var virtualNode = new MeshNode(segments[depth - 1], ns)
+                {
+                    Name = segments[depth - 1]
+                };
+                return (virtualNode, depth);
+            }
         }
 
         // Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)

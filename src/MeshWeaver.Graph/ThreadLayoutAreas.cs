@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -149,15 +150,19 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Renders the Thread area — the default view for threads.
     /// Shows the thread title (observable, bound to meshNode.Name) and a
-    /// ThreadChatControl that handles both message display and chat input.
+    /// ThreadChatControl with data-bound message cells.
     /// </summary>
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Node stream — drives the observable title and chat control context
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+
+        // Message cells stream — reactively tracks child ThreadMessage nodes
+        var cellsStream = BuildCellsStream(meshQuery, hubPath);
 
         // Static container — emits once, not rebuilt on every node update
         var container = Controls.Stack
@@ -174,8 +179,8 @@ public static class ThreadLayoutAreas
                 $"<h2 style=\"margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>");
         }));
 
-        // 2. ThreadChatControl — observable for context resolution, handles messages + input
-        container = container.WithView(nodeStream.Select(nodes =>
+        // 2. ThreadChatControl — combines node context with reactive message cells
+        container = container.WithView(nodeStream.CombineLatest(cellsStream, (nodes, cells) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
@@ -189,12 +194,48 @@ public static class ThreadLayoutAreas
 
             return (UiControl?)new ThreadChatControl()
                 .WithThreadPath(hubPath)
+                .WithCells(cells)
                 .WithInitialContext(contextPath)
                 .WithInitialContextDisplayName(contextDisplayName)
                 .WithStyle("flex: 1; overflow: hidden;");
         }));
 
         return Observable.Return<UiControl?>(container);
+    }
+
+    /// <summary>
+    /// Builds a reactive stream of message cells by observing child ThreadMessage nodes.
+    /// Uses Scan to accumulate changes into a running list, then maps to LayoutAreaControls.
+    /// </summary>
+    private static IObservable<ImmutableList<LayoutAreaControl>> BuildCellsStream(IMeshQuery? meshQuery, string threadPath)
+    {
+        if (meshQuery == null)
+            return Observable.Return(ImmutableList<LayoutAreaControl>.Empty);
+
+        var request = MeshQueryRequest.FromQuery(
+            $"namespace:{threadPath} nodeType:ThreadMessage sort:Order-asc");
+
+        return meshQuery.ObserveQuery<MeshNode>(request)
+            .Scan(ImmutableList<MeshNode>.Empty, (list, change) => change.ChangeType switch
+            {
+                QueryChangeType.Initial or QueryChangeType.Reset =>
+                    change.Items.ToImmutableList(),
+                QueryChangeType.Added =>
+                    list.AddRange(change.Items),
+                QueryChangeType.Removed =>
+                    list.RemoveAll(n => change.Items.Any(r => r.Path == n.Path)),
+                QueryChangeType.Updated =>
+                    list.Select(n => change.Items.FirstOrDefault(u => u.Path == n.Path) ?? n)
+                        .ToImmutableList(),
+                _ => list
+            })
+            .Select(nodes => nodes
+                .OrderBy(n => n.Order)
+                .Select(n => new LayoutAreaControl(
+                    n.Path!,
+                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
+                    .WithShowProgress(false))
+                .ToImmutableList());
     }
 
     /// <summary>
