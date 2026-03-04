@@ -1,6 +1,6 @@
 // <meshweaver>
-// Id: ArticleViews
-// DisplayName: Northwind Article Views
+// Id: ArticleLayoutAreas
+// DisplayName: ACME Insurance Article Views
 // </meshweaver>
 
 using System.Reactive.Linq;
@@ -11,14 +11,14 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 
 /// <summary>
-/// Views for Northwind Article nodes.
+/// Views for ACME Insurance Article nodes.
 /// </summary>
-public static class ArticleViews
+public static class ArticleLayoutAreas
 {
     /// <summary>
     /// Registers article views with the layout definition.
     /// </summary>
-    public static LayoutDefinition AddArticleViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddArticleLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView("Overview", Overview)
             .WithView("Thumbnail", Thumbnail);

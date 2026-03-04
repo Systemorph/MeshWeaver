@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: SalesViews
+// Id: SalesLayoutAreas
 // DisplayName: Sales Views
 // </meshweaver>
 
@@ -13,9 +13,9 @@ using MeshWeaver.Layout.Composition;
 /// Sales analysis views.
 /// </summary>
 [Display(GroupName = "Sales", Order = 200)]
-public static class SalesViews
+public static class SalesLayoutAreas
 {
-    public static LayoutDefinition AddSalesViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddSalesLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(SalesByCategory), SalesByCategory)
             .WithView(nameof(SalesGrowthSummary), SalesGrowthSummary)

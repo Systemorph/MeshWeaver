@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: BusinessUnitViews
+// Id: BusinessUnitLayoutAreas
 // DisplayName: Business Unit Views
 // </meshweaver>
 
@@ -12,11 +12,11 @@ using MeshWeaver.Layout.Composition;
 /// <summary>
 /// Views for displaying business unit details.
 /// </summary>
-public static class BusinessUnitViews
+public static class BusinessUnitLayoutAreas
 {
     private const string BuDataId = "businessUnit";
 
-    public static LayoutDefinition AddBusinessUnitViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddBusinessUnitLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(Overview), Overview);
 

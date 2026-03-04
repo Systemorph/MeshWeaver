@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: DashboardViews
+// Id: DashboardLayoutAreas
 // DisplayName: Dashboard Views
 // </meshweaver>
 
@@ -14,9 +14,9 @@ using Microsoft.Extensions.DependencyInjection;
 /// <summary>
 /// Main dashboard for Northwind analytics.
 /// </summary>
-public static class DashboardViews
+public static class DashboardLayoutAreas
 {
-    public static LayoutDefinition AddDashboardViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddDashboardLayoutAreas(this LayoutDefinition layout) =>
         layout
             .AddLayoutAreaCatalog()
             .WithView(nameof(Dashboard), Dashboard, area => area.WithGroup("Dashboards"))

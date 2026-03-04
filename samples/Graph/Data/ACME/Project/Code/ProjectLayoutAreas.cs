@@ -1,5 +1,5 @@
 ﻿// <meshweaver>
-// Id: ProjectViews
+// Id: ProjectLayoutAreas
 // DisplayName: Project Views
 // </meshweaver>
 
@@ -11,12 +11,12 @@ using MeshWeaver.Mesh.Services;
 /// <summary>
 /// Catalog views for Project nodes using CatalogControl with LayoutAreaControl thumbnails.
 /// </summary>
-public static class ProjectViews
+public static class ProjectLayoutAreas
 {
     /// <summary>
     /// Registers all Project views with the layout definition.
     /// </summary>
-    public static LayoutDefinition AddProjectViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddProjectLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView("AllTasks", AllTasks)
             .WithView("TodosByCategory", TodosByCategory)

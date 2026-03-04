@@ -14,6 +14,6 @@
     "displayName": "Product",
     "iconName": "ShoppingBag",
     "description": "Product master data with inventory and pricing information",
-    "configuration": "config => config.WithContentType<ProductContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddProductNodeViews())"
+    "configuration": "config => config.WithContentType<ProductContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddProductNodeLayoutAreas())"
   }
 }

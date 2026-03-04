@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: CustomerViews
+// Id: CustomerLayoutAreas
 // DisplayName: Customer Views
 // </meshweaver>
 
@@ -15,9 +15,9 @@ using MeshWeaver.Layout.DataGrid;
 /// Customer analysis views.
 /// </summary>
 [Display(GroupName = "Customers", Order = 120)]
-public static class CustomerViews
+public static class CustomerLayoutAreas
 {
-    public static LayoutDefinition AddCustomerViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddCustomerLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(CustomerSummary), CustomerSummary)
             .WithView(nameof(TopClients), TopClients)

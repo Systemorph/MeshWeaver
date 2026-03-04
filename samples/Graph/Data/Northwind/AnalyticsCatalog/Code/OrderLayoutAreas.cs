@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: OrderViews
+// Id: OrderLayoutAreas
 // DisplayName: Order Views
 // </meshweaver>
 
@@ -15,9 +15,9 @@ using MeshWeaver.Layout.DataGrid;
 /// Order analysis views.
 /// </summary>
 [Display(GroupName = "Orders", Order = 600)]
-public static class OrderViews
+public static class OrderLayoutAreas
 {
-    public static LayoutDefinition AddOrderViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddOrderLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(OrderSummary), OrderSummary)
             .WithView(nameof(OrdersCount), OrdersCount)

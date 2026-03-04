@@ -14,6 +14,6 @@
     "displayName": "Line of Business",
     "iconName": "Grid",
     "description": "Insurance line of business dimension with risk category descriptions and product mappings",
-    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessViews())"
+    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessLayoutAreas())"
   }
 }

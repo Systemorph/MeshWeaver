@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: ReportsCatalogViews
+// Id: ReportsCatalogLayoutAreas
 // DisplayName: Reports Catalog Views
 // </meshweaver>
 
@@ -14,12 +14,12 @@ using Microsoft.Extensions.DependencyInjection;
 /// <summary>
 /// Views for ReportsCatalog nodes — rich overview with report cards.
 /// </summary>
-public static class ReportsCatalogViews
+public static class ReportsCatalogLayoutAreas
 {
     /// <summary>
     /// Registers reports catalog views with the layout definition.
     /// </summary>
-    public static LayoutDefinition AddReportsCatalogViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddReportsCatalogLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView("Overview", Overview)
             .WithView("Thumbnail", Thumbnail);

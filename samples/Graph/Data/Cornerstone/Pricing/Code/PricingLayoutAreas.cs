@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: PricingViews
+// Id: PricingLayoutAreas
 // DisplayName: ACME Insurance Pricing Views
 // </meshweaver>
 
@@ -22,12 +22,12 @@ using static MeshWeaver.ContentCollections.ContentCollectionsExtensions;
 /// <summary>
 /// Views for ACME Insurance Pricing nodes.
 /// </summary>
-public static class PricingViews
+public static class PricingLayoutAreas
 {
     /// <summary>
     /// Registers all pricing views with the layout definition.
     /// </summary>
-    public static LayoutDefinition AddPricingViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddPricingLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView("Overview", Overview)
             .WithView("PropertyRisks", PropertyRisks)

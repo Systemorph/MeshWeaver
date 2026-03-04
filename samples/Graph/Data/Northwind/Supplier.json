@@ -14,6 +14,6 @@
     "displayName": "Supplier",
     "iconName": "Truck",
     "description": "Supplier master data with contact information and location",
-    "configuration": "config => config.WithContentType<SupplierContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddSupplierNodeViews())"
+    "configuration": "config => config.WithContentType<SupplierContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddSupplierNodeLayoutAreas())"
   }
 }

@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: CustomerNodeViews
+// Id: CustomerNodeLayoutAreas
 // DisplayName: Customer Node Views
 // </meshweaver>
 
@@ -12,9 +12,9 @@ using MeshWeaver.Layout;
 /// Instance-level views for individual Customer MeshNodes.
 /// Displays customer contact information and details.
 /// </summary>
-public static class CustomerNodeViews
+public static class CustomerNodeLayoutAreas
 {
-    public static LayoutDefinition AddCustomerNodeViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddCustomerNodeLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithDefaultArea("CustomerOverview")
             .WithView("CustomerOverview", CustomerOverview)

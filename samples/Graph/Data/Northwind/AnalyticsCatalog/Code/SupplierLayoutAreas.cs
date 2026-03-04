@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: SupplierViews
+// Id: SupplierLayoutAreas
 // DisplayName: Supplier Views
 // </meshweaver>
 
@@ -14,9 +14,9 @@ using MeshWeaver.Layout.DataGrid;
 /// Supplier analysis views.
 /// </summary>
 [Display(GroupName = "Suppliers", Order = 420)]
-public static class SupplierViews
+public static class SupplierLayoutAreas
 {
-    public static LayoutDefinition AddSupplierViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddSupplierLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(SupplierSummary), SupplierSummary)
             .WithView(nameof(SupplierAnalysis), SupplierAnalysis);

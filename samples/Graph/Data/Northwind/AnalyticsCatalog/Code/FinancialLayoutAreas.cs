@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: FinancialViews
+// Id: FinancialLayoutAreas
 // DisplayName: Financial Views
 // </meshweaver>
 
@@ -14,9 +14,9 @@ using MeshWeaver.Layout.Composition;
 /// Financial and discount analysis views.
 /// </summary>
 [Display(GroupName = "Financial", Order = 700)]
-public static class FinancialViews
+public static class FinancialLayoutAreas
 {
-    public static LayoutDefinition AddFinancialViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddFinancialLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView(nameof(FinancialSummary), FinancialSummary)
             .WithView(nameof(RevenueSummary), RevenueSummary)

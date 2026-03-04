@@ -1,5 +1,5 @@
 // <meshweaver>
-// Id: ArticleViews
+// Id: ArticleLayoutAreas
 // DisplayName: MeshWeaver Documentation Article Views
 // </meshweaver>
 
@@ -13,12 +13,12 @@ using MeshWeaver.Mesh;
 /// <summary>
 /// Views for MeshWeaver Documentation Article nodes.
 /// </summary>
-public static class ArticleViews
+public static class ArticleLayoutAreas
 {
     /// <summary>
     /// Registers article views with the layout definition.
     /// </summary>
-    public static LayoutDefinition AddArticleViews(this LayoutDefinition layout) =>
+    public static LayoutDefinition AddArticleLayoutAreas(this LayoutDefinition layout) =>
         layout
             .WithView("Overview", Overview)
             .WithView("Thumbnail", Thumbnail);
