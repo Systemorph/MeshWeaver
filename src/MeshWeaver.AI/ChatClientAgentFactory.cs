@@ -62,24 +62,37 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // Create a chat client for this agent using the derived class implementation
         var chatClient = CreateChatClient(config);
 
-        // Get tools for this agent, passing the chat instance so plugins can access context
-        var tools = GetToolsForAgent(config, chat, existingAgents, hierarchyAgents).ToArray();
+        // Get delegation/handoff tools
+        var agentTools = GetAgentTools(config, chat, existingAgents, hierarchyAgents);
+        IEnumerable<AITool> tools = agentTools;
 
-        // Add MeshPlugin tools for agents that need mesh operations
-        // Agents whose description mentions create/update/delete get write tools
-        var meshPlugin = new MeshPlugin(Hub, chat);
-        var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
-            || description.Contains("update", StringComparison.OrdinalIgnoreCase)
-            || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
-        tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools()).ToArray();
+        if (config.Plugins is { Count: > 0 })
+        {
+            // Explicit plugin mode: only declared plugins are loaded
+            foreach (var pluginRef in config.Plugins)
+            {
+                var pluginTools = ResolvePluginTools(pluginRef, chat);
+                if (pluginTools != null)
+                    tools = tools.Concat(pluginTools);
+                else
+                    Logger.LogWarning("Plugin '{PluginName}' not found for agent {AgentName}",
+                        pluginRef.Name, config.Id);
+            }
+        }
+        else
+        {
+            // Legacy mode: standard tools + all built-in plugins (backward compatibility)
+            tools = tools.Concat(GetStandardTools(chat));
 
-        // Add LayoutAreaPlugin tools for displaying views/charts in chat
-        var layoutAreaPlugin = new LayoutAreaPlugin(Hub, chat);
-        tools = tools.Concat(layoutAreaPlugin.CreateTools()).ToArray();
+            var meshPlugin = new MeshPlugin(Hub, chat);
+            var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
+                || description.Contains("update", StringComparison.OrdinalIgnoreCase)
+                || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
+            tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
 
-        // Add DataPlugin tools for data access
-        var dataPlugin = new DataPlugin(Hub, chat);
-        tools = tools.Concat(dataPlugin.CreateTools()).ToArray();
+            tools = tools.Concat(new LayoutAreaPlugin(Hub, chat).CreateTools());
+            tools = tools.Concat(new DataPlugin(Hub, chat).CreateTools());
+        }
 
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
@@ -87,7 +100,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             instructions: instructions,
             name: name,
             description: description,
-            tools: tools,
+            tools: tools.ToList(),
             loggerFactory: null,
             services: null
         );
@@ -219,6 +232,42 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
             yield return handoffTool;
         }
+    }
+
+    /// <summary>
+    /// Resolves a plugin reference to AITool instances.
+    /// Built-in plugins (Mesh, Data, LayoutArea, Chat) are resolved by name.
+    /// Custom plugins are resolved from DI-registered IAgentPlugin services.
+    /// Method filtering is applied when the plugin reference specifies methods.
+    /// Override to add custom plugin resolution in derived factories.
+    /// </summary>
+    protected virtual IEnumerable<AITool>? ResolvePluginTools(
+        AgentPluginReference pluginRef,
+        IAgentChat chat)
+    {
+        // Resolve all tools for the plugin
+        var allTools = pluginRef.Name switch
+        {
+            "Mesh" => (IEnumerable<AITool>)new MeshPlugin(Hub, chat).CreateAllTools(),
+            "Data" => new DataPlugin(Hub, chat).CreateTools(),
+            "LayoutArea" => new LayoutAreaPlugin(Hub, chat).CreateTools(),
+            "Chat" => new ChatPlugin(chat, Hub.ServiceProvider.GetService<ILogger<ChatPlugin>>()).CreateTools(),
+            _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
+                    .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
+                    ?.CreateTools()
+        };
+
+        if (allTools == null)
+            return null;
+
+        // Apply method filtering if specified
+        if (pluginRef.Methods is { Count: > 0 })
+        {
+            var methodSet = new HashSet<string>(pluginRef.Methods, StringComparer.OrdinalIgnoreCase);
+            return allTools.Where(t => methodSet.Contains(t.Name));
+        }
+
+        return allTools;
     }
 
     protected async Task<string> GetAgentInstructionsAsync(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)

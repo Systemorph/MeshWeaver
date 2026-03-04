@@ -23,6 +23,8 @@ handoffs:
     instructions: Complex multi-step tasks requiring analysis and planning
   - agentPath: Agent/Executor
     instructions: "Direct actions: create, update, delete nodes"
+plugins:
+  - Mesh:Get,Search,NavigateTo
 ---
 
 You are **Navigator**, the primary agent for understanding user intent and navigating the mesh.

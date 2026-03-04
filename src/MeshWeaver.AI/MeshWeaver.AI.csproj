@@ -9,6 +9,8 @@
     <ItemGroup>
         <PackageReference Include="Azure.AI.OpenAI" />
         <PackageReference Include="Azure.Core" />
+        <PackageReference Include="HtmlAgilityPack" />
+        <PackageReference Include="Microsoft.Extensions.Http" />
         <PackageReference Include="ClosedXML" />
         <PackageReference Include="DocumentFormat.OpenXml" />
         <PackageReference Include="Microsoft.Extensions.AI" />

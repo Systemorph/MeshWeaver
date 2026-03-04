@@ -167,6 +167,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                 AgentPath = h.AgentPath ?? "",
                 Instructions = h.Instructions
             }).ToList(),
+            Plugins = frontMatter.Plugins?.Select(ParsePluginReference).ToList(),
             PreferredModel = frontMatter.PreferredModel,
             ContextMatchPattern = frontMatter.ContextMatchPattern,
             Order = frontMatter.Order
@@ -230,6 +231,22 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         return (id, ns);
     }
 
+    /// <summary>
+    /// Parses "PluginName" or "PluginName:Method1,Method2" into AgentPluginReference.
+    /// </summary>
+    private static AgentPluginReference ParsePluginReference(string s)
+    {
+        var colonIndex = s.IndexOf(':');
+        if (colonIndex < 0)
+            return new AgentPluginReference { Name = s.Trim() };
+
+        return new AgentPluginReference
+        {
+            Name = s[..colonIndex].Trim(),
+            Methods = s[(colonIndex + 1)..].Split(',').Select(m => m.Trim()).ToList()
+        };
+    }
+
     // Peek class to check nodeType without full deserialization
     private class NodeTypePeek
     {
@@ -253,6 +270,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         public string? CustomIconSvg { get; set; }
         public List<DelegationEntry>? Delegations { get; set; }
         public List<HandoffEntry>? Handoffs { get; set; }
+        public List<string>? Plugins { get; set; }
     }
 
     private class DelegationEntry

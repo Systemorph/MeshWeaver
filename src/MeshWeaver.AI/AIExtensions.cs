@@ -1,4 +1,5 @@
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.AI.Plugins;
 using MeshWeaver.AI.Threading;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -50,5 +51,21 @@ public static class AIExtensions
     public static IServiceCollection AddAgentChatFactoryProvider(this IServiceCollection services)
     {
         return services.AddAgentChatServices();
+    }
+
+    /// <summary>
+    /// Registers the WebSearch plugin, making SearchWeb and FetchWebPage tools
+    /// available to agents that declare "WebSearch" in their plugins frontmatter.
+    /// </summary>
+    public static IServiceCollection AddWebSearchPlugin(this IServiceCollection services, Action<WebSearchConfiguration>? configure = null)
+    {
+        if (configure != null)
+            services.Configure(configure);
+        else
+            services.AddOptions<WebSearchConfiguration>();
+
+        services.AddHttpClient<WebSearchPlugin>();
+        services.AddSingleton<IAgentPlugin, WebSearchPlugin>();
+        return services;
     }
 }

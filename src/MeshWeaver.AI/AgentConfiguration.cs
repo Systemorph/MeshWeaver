@@ -89,6 +89,13 @@ public record AgentConfiguration
     /// Lower values appear first.
     /// </summary>
     public int Order { get; init; }
+
+    /// <summary>
+    /// Optional list of additional plugins this agent should load.
+    /// Standard plugins (Chat, Mesh, LayoutArea, Data) are always loaded.
+    /// Additional plugins are resolved by name from DI-registered IAgentPlugin services.
+    /// </summary>
+    public List<AgentPluginReference>? Plugins { get; init; }
 }
 
 /// <summary>
@@ -107,6 +114,25 @@ public record AgentDelegation
     /// Used by the LLM to decide when to call this delegation.
     /// </summary>
     public string? Instructions { get; init; }
+}
+
+/// <summary>
+/// References an optional plugin by name, with optional method filtering.
+/// Used in agent frontmatter to declare which additional plugins an agent needs.
+/// </summary>
+public record AgentPluginReference
+{
+    /// <summary>
+    /// Plugin name (e.g., "WebSearch").
+    /// Must match a registered IAgentPlugin.Name.
+    /// </summary>
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Optional list of method names to expose.
+    /// If null or empty, all plugin methods are included.
+    /// </summary>
+    public List<string>? Methods { get; init; }
 }
 
 /// <summary>
