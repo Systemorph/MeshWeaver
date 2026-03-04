@@ -143,15 +143,20 @@ public class NavigationService : INavigationService
         // Resolve the path using pattern matching
         var resolution = await _meshCatalog.ResolvePathAsync(path);
 
-        IsResolving = false;
-
         if (resolution is null)
         {
-            _context = null;
-            CurrentNamespace = null;
-            OnNavigationContextChanged?.Invoke(null);
+            // Catalog may still be initializing — retry in background with backoff.
+            // IsResolving stays true so the UI shows a spinner instead of "Page Not Found".
+            _ = RetryResolutionAsync(path);
             return;
         }
+
+        await ProcessResolvedPathAsync(path, resolution);
+    }
+
+    private async Task ProcessResolvedPathAsync(string path, AddressResolution resolution)
+    {
+        IsResolving = false;
 
         // Parse remainder into area and id
         var (area, id) = ParseRemainder(resolution.Remainder);
@@ -184,6 +189,38 @@ public class NavigationService : INavigationService
         {
             _ = LoadCreatableTypesAsync(currentNodePath);
         }
+    }
+
+    /// <summary>
+    /// Retries path resolution with backoff when the initial attempt returns null.
+    /// This handles the case where the mesh catalog is still initializing at startup.
+    /// Runs in the background so the UI can show a spinner while waiting.
+    /// </summary>
+    private async Task RetryResolutionAsync(string path)
+    {
+        var delays = new[] { 500, 1000, 2000, 3000, 5000 };
+        foreach (var delay in delays)
+        {
+            await Task.Delay(delay);
+
+            // Check if a new navigation happened while we were waiting
+            if (CurrentPath != path)
+                return;
+
+            var resolution = await _meshCatalog.ResolvePathAsync(path);
+            if (resolution is not null)
+            {
+                // Success — process the result
+                await ProcessResolvedPathAsync(path, resolution);
+                return;
+            }
+        }
+
+        // All retries exhausted — show "Page Not Found"
+        IsResolving = false;
+        _context = null;
+        CurrentNamespace = null;
+        OnNavigationContextChanged?.Invoke(null);
     }
 
     /// <summary>

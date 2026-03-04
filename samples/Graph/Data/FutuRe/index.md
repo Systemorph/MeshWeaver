@@ -43,44 +43,18 @@ Local transactions stay in their business unit databases. The group view is **vi
 ```mermaid
 graph TB
     subgraph BU1["EuropeRe — Physical Storage"]
-        direction LR
-        E1[("Household")]
-        E2[("Motor")]
-        E3[("Comm. Fire")]
-        E4[("Liability")]
-        E5[("Transport")]
-        E6[("Tech Risk")]
-        E7[("Life & Health")]
-        E8[("Specialty")]
+        E1[("Household")] ~~~ E2[("Motor")] ~~~ E3[("...")]
     end
 
     subgraph BU2["AmericasIns — Physical Storage"]
-        direction LR
-        A1[("Homeowners")]
-        A2[("Workers Comp")]
-        A3[("Commercial")]
-        A4[("Energy")]
-        A5[("Life & Ann.")]
-        A6[("Cyber")]
-        A7[("Specialty")]
-        A8[("Agriculture")]
+        A1[("Homeowners")] ~~~ A2[("Commercial")] ~~~ A3[("...")]
     end
 
     BU1 -->|"TransactionMapping · virtual % splits"| VL
     BU2 -->|"TransactionMapping · virtual % splits"| VL
 
     subgraph VL["Group View — Virtual · No Physical Storage"]
-        direction LR
-        V1["Property"]
-        V2["Casualty"]
-        V3["Marine"]
-        V4["Energy"]
-        V5["Life & Health"]
-        V6["Cyber"]
-        V7["Prof. Liability"]
-        V8["Specialty"]
-        V9["Aviation"]
-        V10["Agriculture"]
+        V1["Property"] ~~~ V2["Casualty"] ~~~ V3["..."]
     end
 
     style BU1 fill:#1a3a5c,stroke:#3b82f6,color:#fff

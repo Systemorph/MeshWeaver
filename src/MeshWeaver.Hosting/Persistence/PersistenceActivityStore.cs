@@ -21,15 +21,33 @@ public class PersistenceActivityStore : IActivityStore
         _jsonOptions = jsonOptions ?? new JsonSerializerOptions();
     }
 
+    /// <summary>
+    /// Converts a deserialized object to UserActivityRecord.
+    /// Handles the case where JsonSerializer.Deserialize&lt;object&gt; returns JsonElement
+    /// (when using default JsonSerializerOptions without polymorphic type info).
+    /// </summary>
+    private UserActivityRecord? TryConvertToRecord(object obj)
+    {
+        if (obj is UserActivityRecord rec) return rec;
+        if (obj is JsonElement element)
+        {
+            try { return element.Deserialize<UserActivityRecord>(_jsonOptions); }
+            catch { return null; }
+        }
+        return null;
+    }
+
     public async Task<IReadOnlyList<UserActivityRecord>> GetActivitiesAsync(string userId, CancellationToken ct = default)
     {
-        var objects = new List<object>();
+        var records = new List<UserActivityRecord>();
         await foreach (var obj in _persistence.GetPartitionObjectsAsync(Partition, userId, _jsonOptions))
         {
-            objects.Add(obj);
+            var rec = TryConvertToRecord(obj);
+            if (rec != null)
+                records.Add(rec);
         }
 
-        return objects.OfType<UserActivityRecord>()
+        return records
             .OrderByDescending(r => r.LastAccessedAt)
             .ToList();
     }
@@ -40,7 +58,8 @@ public class PersistenceActivityStore : IActivityStore
         var existing = new Dictionary<string, UserActivityRecord>(StringComparer.OrdinalIgnoreCase);
         await foreach (var obj in _persistence.GetPartitionObjectsAsync(Partition, userId, _jsonOptions))
         {
-            if (obj is UserActivityRecord rec)
+            var rec = TryConvertToRecord(obj);
+            if (rec != null)
                 existing[rec.NodePath] = rec;
         }
 
