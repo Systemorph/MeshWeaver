@@ -1,0 +1,17 @@
+{
+  "id": "AME-WORKERS_COMP-CAS",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Workers Compensation → Casualty (100%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-WORKERS_COMP-CAS",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "WORKERS_COMP",
+    "localLineOfBusinessName": "Workers Compensation",
+    "groupLineOfBusiness": "CAS",
+    "groupLineOfBusinessName": "Casualty",
+    "percentage": 1.00
+  }
+}

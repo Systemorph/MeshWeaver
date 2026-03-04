@@ -121,12 +121,78 @@ public static class FutuReDataLoader
         [true, true, false, true, false, false];
 
     /// <summary>
+    /// Loads AmountType reference data from MeshNodes via IMeshQuery.
+    /// </summary>
+    public static IObservable<IEnumerable<AmountType>> LoadAmountTypes(IWorkspace workspace)
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToAmountType)
+                .Where(a => a != null)
+                .Cast<AmountType>()
+                .OrderBy(a => a.Order));
+    }
+
+    /// <summary>
+    /// Loads Currency reference data from MeshNodes via IMeshQuery.
+    /// </summary>
+    public static IObservable<IEnumerable<Currency>> LoadCurrencies(IWorkspace workspace)
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToCurrency)
+                .Where(c => c != null)
+                .Cast<Currency>()
+                .OrderBy(c => c.Order));
+    }
+
+    /// <summary>
+    /// Loads Country reference data from MeshNodes via IMeshQuery.
+    /// </summary>
+    public static IObservable<IEnumerable<Country>> LoadCountries(IWorkspace workspace)
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToCountry)
+                .Where(c => c != null)
+                .Cast<Country>()
+                .OrderBy(c => c.Order));
+    }
+
+    /// <summary>
+    /// Loads TransactionMapping instances from MeshNode graph via IMeshQuery.
+    /// Queries nodes with nodeType:FutuRe/TransactionMapping.
+    /// </summary>
+    public static IObservable<IEnumerable<TransactionMapping>> LoadTransactionMappingsFromNodes(IWorkspace workspace)
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToTransactionMapping)
+                .Where(m => m != null)
+                .Cast<TransactionMapping>());
+    }
+
+    /// <summary>
     /// Loads the full data cube as an observable stream.
-    /// Used by the Analysis hub's virtual data source configuration.
+    /// Combines TransactionMapping from MeshNodes with static base amounts.
     /// </summary>
     public static IObservable<IEnumerable<FutuReDataCube>> LoadDataCube(IWorkspace workspace)
     {
-        return Observable.Return(GenerateDataCube());
+        return LoadTransactionMappingsFromNodes(workspace)
+            .Select(mappings => GenerateDataCube(mappings.ToArray()));
     }
 
     /// <summary>
@@ -135,12 +201,15 @@ public static class FutuReDataLoader
     /// TransactionMapping is applied to split each local LoB row into one or more
     /// group LoB rows with percentage-weighted amounts.
     /// </summary>
-    public static IEnumerable<FutuReDataCube> GenerateDataCube()
+    public static IEnumerable<FutuReDataCube> GenerateDataCube(TransactionMapping[] allMappings)
     {
         var start = StartDate;
         var end = EndDate;
         var now = DateTime.UtcNow;
         var results = new List<FutuReDataCube>();
+
+        TransactionMapping[] GetMappings(string bu, string localLoB) =>
+            allMappings.Where(m => m.BusinessUnit == bu && m.LocalLineOfBusiness == localLoB).ToArray();
 
         foreach (var (buName, baseAmounts) in new[]
         {
@@ -162,7 +231,7 @@ public static class FutuReDataLoader
                 foreach (var (localLobId, amounts) in baseAmounts)
                 {
                     // Get the TransactionMapping entries for this BU + local LoB
-                    var mappings = TransactionMapping.GetMappings(buName, localLobId);
+                    var mappings = GetMappings(buName, localLobId);
                     if (mappings.Length == 0)
                         continue;
 
@@ -242,6 +311,23 @@ public static class FutuReDataLoader
                 .OrderBy(lob => lob.Order));
     }
 
+    private static TransactionMapping? ConvertToTransactionMapping(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new TransactionMapping
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            BusinessUnit = GetString(json, "businessUnit") ?? string.Empty,
+            LocalLineOfBusiness = GetString(json, "localLineOfBusiness") ?? string.Empty,
+            LocalLineOfBusinessName = GetString(json, "localLineOfBusinessName") ?? string.Empty,
+            GroupLineOfBusiness = GetString(json, "groupLineOfBusiness") ?? string.Empty,
+            GroupLineOfBusinessName = GetString(json, "groupLineOfBusinessName") ?? string.Empty,
+            Percentage = GetDouble(json, "percentage")
+        };
+    }
+
     private static LineOfBusiness? ConvertToLineOfBusiness(MeshNode node)
     {
         if (node.Content is not JsonElement json)
@@ -266,4 +352,59 @@ public static class FutuReDataLoader
         json.TryGetProperty(property, out var val) && val.ValueKind == JsonValueKind.Number
             ? val.GetInt32()
             : 0;
+
+    private static double GetDouble(JsonElement json, string property) =>
+        json.TryGetProperty(property, out var val) && val.ValueKind == JsonValueKind.Number
+            ? val.GetDouble()
+            : 0.0;
+
+    private static bool GetBool(JsonElement json, string property) =>
+        json.TryGetProperty(property, out var val) &&
+        (val.ValueKind == JsonValueKind.True || val.ValueKind == JsonValueKind.False)
+            && val.GetBoolean();
+
+    private static AmountType? ConvertToAmountType(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new AmountType
+        {
+            SystemName = GetString(json, "systemName") ?? node.Id,
+            DisplayName = GetString(json, "displayName") ?? node.Name ?? node.Id,
+            Order = GetInt(json, "order"),
+            Sign = GetInt(json, "sign"),
+            HasActuals = GetBool(json, "hasActuals")
+        };
+    }
+
+    private static Currency? ConvertToCurrency(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new Currency
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            Name = GetString(json, "name") ?? node.Name ?? node.Id,
+            Symbol = GetString(json, "symbol"),
+            DecimalPlaces = GetInt(json, "decimalPlaces"),
+            Order = GetInt(json, "order")
+        };
+    }
+
+    private static Country? ConvertToCountry(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new Country
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            Name = GetString(json, "name") ?? node.Name ?? node.Id,
+            Alpha3Code = GetString(json, "alpha3Code"),
+            Region = GetString(json, "region"),
+            Order = GetInt(json, "order")
+        };
+    }
 }

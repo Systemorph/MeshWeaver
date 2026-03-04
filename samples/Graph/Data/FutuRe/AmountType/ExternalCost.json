@@ -1,0 +1,15 @@
+{
+  "id": "ExternalCost",
+  "namespace": "FutuRe/AmountType",
+  "name": "External Cost",
+  "nodeType": "FutuRe/AmountType",
+  "isPersistent": true,
+  "content": {
+    "$type": "AmountType",
+    "systemName": "ExternalCost",
+    "displayName": "External Cost",
+    "order": 3,
+    "sign": -1,
+    "hasActuals": true
+  }
+}

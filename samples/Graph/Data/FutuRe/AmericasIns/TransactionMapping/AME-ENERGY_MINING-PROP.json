@@ -1,0 +1,17 @@
+{
+  "id": "AME-ENERGY_MINING-PROP",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Energy & Mining → Property (20%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-ENERGY_MINING-PROP",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "ENERGY_MINING",
+    "localLineOfBusinessName": "Energy & Mining",
+    "groupLineOfBusiness": "PROP",
+    "groupLineOfBusinessName": "Property",
+    "percentage": 0.20
+  }
+}

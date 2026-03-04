@@ -1,0 +1,18 @@
+{
+  "id": "Report",
+  "namespace": "FutuRe",
+  "name": "Report",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "FutuRe report document with embedded layout area views",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Report",
+    "namespace": "FutuRe",
+    "displayName": "Report",
+    "iconName": "DocumentText",
+    "description": "Report document embedding profitability views",
+    "configuration": "config => config.AddDefaultLayoutAreas()"
+  }
+}

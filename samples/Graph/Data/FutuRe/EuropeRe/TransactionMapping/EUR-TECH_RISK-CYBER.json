@@ -1,0 +1,17 @@
+{
+  "id": "EUR-TECH_RISK-CYBER",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Technology Risk → Cyber (60%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-TECH_RISK-CYBER",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "TECH_RISK",
+    "localLineOfBusinessName": "Technology Risk",
+    "groupLineOfBusiness": "CYBER",
+    "groupLineOfBusinessName": "Cyber",
+    "percentage": 0.60
+  }
+}

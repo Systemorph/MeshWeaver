@@ -11,47 +11,33 @@ using MeshWeaver.Domain;
 /// </summary>
 public record Currency : INamed
 {
+    /// <summary>
+    /// ISO 4217 currency code (e.g. USD, EUR).
+    /// </summary>
     [Key]
     public string Id { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Full currency name (e.g. US Dollar).
+    /// </summary>
     [Required]
     public string Name { get; init; } = string.Empty;
 
+    /// <summary>
+    /// Currency symbol for display (e.g. $, &euro;).
+    /// </summary>
     public string? Symbol { get; init; }
 
+    /// <summary>
+    /// Number of decimal places for formatting amounts.
+    /// </summary>
     public int DecimalPlaces { get; init; } = 2;
 
+    /// <summary>
+    /// Sort order for display.
+    /// </summary>
     public int Order { get; init; }
 
+    /// <inheritdoc />
     string INamed.DisplayName => Name;
-
-    public static readonly Currency USD = new()
-    {
-        Id = "USD", Name = "US Dollar", Symbol = "$", DecimalPlaces = 2, Order = 0
-    };
-
-    public static readonly Currency EUR = new()
-    {
-        Id = "EUR", Name = "Euro", Symbol = "\u20ac", DecimalPlaces = 2, Order = 1
-    };
-
-    public static readonly Currency GBP = new()
-    {
-        Id = "GBP", Name = "British Pound", Symbol = "\u00a3", DecimalPlaces = 2, Order = 2
-    };
-
-    public static readonly Currency CHF = new()
-    {
-        Id = "CHF", Name = "Swiss Franc", Symbol = "CHF", DecimalPlaces = 2, Order = 3
-    };
-
-    public static readonly Currency JPY = new()
-    {
-        Id = "JPY", Name = "Japanese Yen", Symbol = "\u00a5", DecimalPlaces = 0, Order = 4
-    };
-
-    public static readonly Currency[] All = [USD, EUR, GBP, CHF, JPY];
-
-    public static Currency GetById(string? id) =>
-        All.FirstOrDefault(c => c.Id == id) ?? USD;
 }

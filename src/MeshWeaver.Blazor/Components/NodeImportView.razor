@@ -5,16 +5,16 @@
 @inject NavigationManager NavigationManager
 @inherits BlazorView<NodeImportControl, NodeImportView>
 
-<div class="node-import-view" style="padding: 24px; max-width: 800px;">
-    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
-        <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Lightweight" OnClick="@GoBack"
-                      IconStart="@(new Icons.Regular.Size16.ArrowLeft())">
-        </FluentButton>
-        <h2 style="margin: 0;">Import Nodes</h2>
-    </div>
-
+<div class="node-import-view" style="max-width: 800px;">
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
-        Upload a ZIP file containing MeshNodes and their partition data to import into the mesh.
+        @if (IsFileMode)
+        {
+            <text>Upload a file to import into the mesh.</text>
+        }
+        else
+        {
+            <text>Upload a ZIP file containing MeshNodes and their partition data to import into the mesh.</text>
+        }
     </p>
 
     @if (!IsImporting && ImportResult == null)
@@ -26,7 +26,7 @@
         <div style="margin-bottom: 16px;">
             <FluentButton Id="node-import-upload" Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
                           IconStart="@(new Icons.Regular.Size16.ArrowUpload())">
-                Select ZIP File
+                @(IsFileMode ? "Select File" : "Select ZIP File")
             </FluentButton>
         </div>
 
@@ -34,8 +34,8 @@
                          AnchorId="node-import-upload"
                          DragDropZoneVisible="false"
                          Mode="InputFileMode.Stream"
-                         Multiple="false"
-                         Accept=".zip"
+                         Multiple="@IsFileMode"
+                         Accept="@AcceptFilter"
                          MaximumFileSize="@(500 * 1024 * 1024)"
                          OnFileUploaded="@OnFileUploadedAsync"
                          OnCompleted="@OnUploadCompletedAsync" />
@@ -84,6 +84,7 @@
 {
     private FluentInputFile inputFile = default!;
     private string? TargetPath;
+    private string? ImportMode;
     private bool ForceReimport;
     private bool IsImporting;
     private int ProgressPercent;
@@ -91,10 +92,14 @@
     private ImportNodesResponse? ImportResult;
     private string? ErrorMessage;
 
+    private bool IsFileMode => ImportMode == "file";
+    private string AcceptFilter => IsFileMode ? ".md,.json,.yaml,.yml,.txt,.csv,.xml,.html" : ".zip";
+
     protected override void BindData()
     {
         base.BindData();
         TargetPath = ViewModel?.TargetPath;
+        ImportMode = ViewModel?.Mode;
         ForceReimport = ViewModel?.Force ?? false;
     }
 
@@ -107,38 +112,55 @@
         ErrorMessage = null;
         ImportResult = null;
         ProgressPercent = 10;
-        ProgressMessage = "Uploading ZIP file...";
+        ProgressMessage = IsFileMode ? "Uploading file..." : "Uploading ZIP file...";
         StateHasChanged();
 
         string? tempDir = null;
         try
         {
-            // Save uploaded stream to temp file
-            var tempZip = Path.GetTempFileName();
-            try
+            tempDir = Path.Combine(Path.GetTempPath(), "meshweaver-import-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(tempDir);
+
+            if (IsFileMode)
             {
-                await using (var fs = File.Create(tempZip))
+                // File mode: save the uploaded file directly to the temp directory
+                var fileName = file.Name ?? "imported-file";
+                var destPath = Path.Combine(tempDir, fileName);
+                await using (var fs = File.Create(destPath))
                 {
                     await file.Stream.CopyToAsync(fs);
                 }
 
-                ProgressPercent = 40;
-                ProgressMessage = "Extracting ZIP file...";
+                ProgressPercent = 60;
+                ProgressMessage = "Importing file...";
                 StateHasChanged();
-
-                // Extract to temp directory
-                tempDir = Path.Combine(Path.GetTempPath(), "meshweaver-import-" + Guid.NewGuid().ToString("N")[..8]);
-                ZipFile.ExtractToDirectory(tempZip, tempDir);
             }
-            finally
+            else
             {
-                // Clean up temp zip file
-                try { File.Delete(tempZip); } catch { }
-            }
+                // Folder/ZIP mode: save as temp zip, extract
+                var tempZip = Path.GetTempFileName();
+                try
+                {
+                    await using (var fs = File.Create(tempZip))
+                    {
+                        await file.Stream.CopyToAsync(fs);
+                    }
 
-            ProgressPercent = 60;
-            ProgressMessage = "Importing nodes...";
-            StateHasChanged();
+                    ProgressPercent = 40;
+                    ProgressMessage = "Extracting ZIP file...";
+                    StateHasChanged();
+
+                    ZipFile.ExtractToDirectory(tempZip, tempDir);
+                }
+                finally
+                {
+                    try { File.Delete(tempZip); } catch { }
+                }
+
+                ProgressPercent = 60;
+                ProgressMessage = "Importing nodes...";
+                StateHasChanged();
+            }
 
             // Call import service
             var importService = Hub.ServiceProvider.GetService<IMeshImportService>();

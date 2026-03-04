@@ -16,5 +16,10 @@ namespace MeshWeaver.Layout
         /// Whether to force re-import (overwrite existing data).
         /// </summary>
         public bool Force { get; init; }
+
+        /// <summary>
+        /// Import mode: "file" for single-file upload, "folder" (or null) for ZIP archive upload.
+        /// </summary>
+        public string? Mode { get; init; }
     }
 }
