@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Messaging;
+using System.Reactive.Linq;
+using MeshWeaver.Data.Serialization;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data.Persistence
 {
@@ -26,15 +28,79 @@ namespace MeshWeaver.Data.Persistence
 
         protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
         {
-            if (identity.Partition is not Address partition)
-                throw new NotSupportedException($"Partition {identity.Partition} must be of type Address");
-            var reference = GetReference();
-            var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
-                partition,
-                reference
+            if (identity.Partition is Address partition)
+            {
+                var reference = GetReference();
+                var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
+                    partition,
+                    reference
+                );
+                return Workspace.GetRemoteStream(partition, partitionedReference);
+            }
+
+            // Null partition: combine all initialized partition streams into one.
+            // This is called when views request GetStream<T>() without specifying a partition.
+            var partitionStreams = InitializePartitions
+                .Select(p => GetStreamForPartition(p))
+                .ToArray();
+
+            var combinedRef = new CombinedStreamReference(
+                partitionStreams.Select(s => s.StreamIdentity).ToArray());
+
+            var ret = new SynchronizationStream<EntityStore>(
+                identity,
+                Hub,
+                combinedRef,
+                Workspace.ReduceManager.ReduceTo<EntityStore>(),
+                c => c
             );
-            var stream = Workspace.GetRemoteStream(partition, partitionedReference);
-            return stream;
+
+            var processedChangeItems = new HashSet<object>();
+            var isInitialized = false;
+
+            var combinedStream = partitionStreams
+                .Cast<IObservable<ChangeItem<EntityStore>>>()
+                .CombineLatest();
+
+            ret.RegisterForDisposal(combinedStream
+                .Synchronize()
+                .Subscribe(changes =>
+                {
+                    if (!isInitialized)
+                    {
+                        var initialStore = changes
+                            .Where(c => c.Value != null)
+                            .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
+
+                        ret.OnNext(new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version));
+
+                        foreach (var change in changes)
+                            processedChangeItems.Add(change);
+
+                        isInitialized = true;
+                    }
+                    else
+                    {
+                        var newChanges = changes.Where(c => !processedChangeItems.Contains(c)).ToArray();
+                        if (newChanges.Any())
+                        {
+                            var updatedStore = newChanges
+                                .Where(c => c.Value != null)
+                                .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
+
+                            ret.OnNext(new ChangeItem<EntityStore>(updatedStore, ret.StreamId, ret.Hub.Version)
+                            {
+                                ChangedBy = string.Join(", ", newChanges.Select(c => c.ChangedBy).Where(cb => !string.IsNullOrEmpty(cb))),
+                                Updates = newChanges.SelectMany(c => c.Updates).ToArray(),
+                            });
+
+                            foreach (var change in newChanges)
+                                processedChangeItems.Add(change);
+                        }
+                    }
+                }));
+
+            return ret;
         }
 
 
