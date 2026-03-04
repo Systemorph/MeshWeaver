@@ -170,6 +170,9 @@ public static class ApprovalLayoutAreas
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var currentUser = accessService?.Context?.ObjectId ?? "";
+
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
@@ -183,10 +186,33 @@ public static class ApprovalLayoutAreas
                     $"<div style=\"display: flex; align-items: center; gap: 8px;\">" +
                     $"<span style=\"{GetStatusStyle(approval.Status)}; font-size: 0.8rem; padding: 2px 8px; border-radius: 4px;\">{approval.Status}</span>" +
                     $"<span style=\"font-weight: 600;\">{EscapeHtml(approval.Purpose)}</span></div>"));
-                card = card.WithView(Controls.Html(
-                    $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">From: {EscapeHtml(approval.Requester)}" +
-                    (approval.DueDate.HasValue ? $" · Due: {approval.DueDate.Value:yyyy-MM-dd}" : "") +
-                    "</div>"));
+
+                if (approval.Status == ApprovalStatus.Approved || approval.Status == ApprovalStatus.Rejected)
+                {
+                    var verb = approval.Status == ApprovalStatus.Approved ? "Approved" : "Rejected";
+                    card = card.WithView(Controls.Html(
+                        $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{verb} by: {EscapeHtml(approval.Approver)}" +
+                        (approval.ApprovalDate.HasValue ? $" on {approval.ApprovalDate.Value:yyyy-MM-dd}" : "") +
+                        "</div>"));
+                }
+                else
+                {
+                    card = card.WithView(Controls.Html(
+                        $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">From: {EscapeHtml(approval.Requester)}" +
+                        (approval.DueDate.HasValue ? $" · Due: {approval.DueDate.Value:yyyy-MM-dd}" : "") +
+                        "</div>"));
+
+                    if (string.Equals(approval.Approver, currentUser, StringComparison.OrdinalIgnoreCase))
+                    {
+                        card = card.WithView(Controls.Button("Approve")
+                            .WithAppearance(Appearance.Accent)
+                            .WithClickAction(async ctx =>
+                            {
+                                await UpdateApprovalStatusAsync(ctx.Host, node!, ApprovalStatus.Approved);
+                            }));
+                    }
+                }
+
                 return (UiControl)card;
             }
             return MeshNodeThumbnailControl.FromNode(node, hubPath);
