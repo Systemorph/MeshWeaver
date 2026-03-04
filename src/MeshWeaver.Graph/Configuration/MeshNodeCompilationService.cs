@@ -90,9 +90,17 @@ internal class MeshNodeCompilationService(
     /// <summary>
     /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
     /// For example, @@FutuRe/LineOfBusiness/Code/LineOfBusiness resolves to that node's code content.
+    /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
         string code, IMeshQuery meshQuery, CancellationToken ct)
+    {
+        var resolved = new HashSet<string>();
+        return await ResolveCodeIncludesAsync(code, meshQuery, resolved, ct);
+    }
+
+    private async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshQuery meshQuery, HashSet<string> resolved, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return code;
@@ -105,6 +113,13 @@ internal class MeshNodeCompilationService(
         foreach (Match match in matches)
         {
             var path = match.Groups[1].Value;
+            if (!resolved.Add(path))
+            {
+                // Already resolved this path — remove the duplicate reference
+                result = result.Replace(match.Value, string.Empty);
+                continue;
+            }
+
             string? resolvedCode = null;
 
             await foreach (var referencedNode in meshQuery
@@ -121,6 +136,8 @@ internal class MeshNodeCompilationService(
             if (resolvedCode != null)
             {
                 logger.LogDebug("Resolved code include @@{Path}", path);
+                // Transitively resolve nested includes
+                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshQuery, resolved, ct);
                 result = result.Replace(match.Value, resolvedCode);
             }
             else
