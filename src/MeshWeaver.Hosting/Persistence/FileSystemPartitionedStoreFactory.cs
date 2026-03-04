@@ -15,16 +15,19 @@ public class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly IStorageAdapter _sharedAdapter;
+    private readonly PartitionFilter? _filter;
 
     public FileSystemPartitionedStoreFactory(
         string baseDirectory,
         Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier,
-        IDataChangeNotifier? changeNotifier)
+        IDataChangeNotifier? changeNotifier,
+        PartitionFilter? filter = null)
     {
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
         _changeNotifier = changeNotifier;
         _sharedAdapter = new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier);
+        _filter = filter;
     }
 
     public Task<PartitionedStore> CreateStoreAsync(string firstSegment, CancellationToken ct = default)
@@ -68,6 +71,10 @@ public class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
                 partitions.Add(name);
             }
         }
+
+        // Apply partition filter if configured
+        if (_filter != null)
+            partitions = partitions.Where(p => _filter.ShouldInclude(p)).ToList();
 
         return Task.FromResult<IReadOnlyList<string>>(partitions);
     }
