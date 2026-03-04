@@ -1,3 +1,4 @@
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -16,8 +17,8 @@ public static class ActivityTrackingExtensions
     /// Adds user activity tracking.
     /// Activity is tracked at the navigation level (ApplicationPage) via NavigationService,
     /// not at the persistence layer, to avoid noisy internal data fetches.
-    /// Uses PersistenceActivityStore when IPersistenceServiceCore is available,
-    /// falls back to InMemoryActivityStore otherwise.
+    /// Uses PersistenceActivityStore/PersistenceActivityLogStore when IPersistenceServiceCore is available,
+    /// falls back to InMemory stores otherwise.
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
@@ -29,6 +30,16 @@ public static class ActivityTrackingExtensions
                 if (persistence != null)
                     return new PersistenceActivityStore(persistence);
                 return new InMemoryActivityStore();
+            });
+            services.TryAddSingleton<IActivityLogStore>(sp =>
+            {
+                var persistence = sp.GetService<IPersistenceServiceCore>();
+                if (persistence != null)
+                {
+                    var adapter = sp.GetService<IStorageAdapter>();
+                    return new PersistenceActivityLogStore(persistence, adapter: adapter);
+                }
+                return new InMemoryActivityLogStore();
             });
             return services;
         });
