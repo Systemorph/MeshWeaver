@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -20,6 +21,7 @@ public static class UserActivityLayoutAreas
     public const string ActivityArea = "Activity";
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
+    private const string ColumnHeight = "calc(100vh - 280px)";
 
     private static readonly HashSet<string> SystemNodeTypes =
     [
@@ -58,9 +60,9 @@ public static class UserActivityLayoutAreas
                 $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
                 "</div>"));
 
-            // Content area: two-column grid, each column scrolls independently
+            // Content area: two-column grid
             var topPanel = Controls.LayoutGrid
-                .WithStyle("flex: 1; min-height: 0; padding: 0 24px; gap: 24px; align-items: stretch;");
+                .WithStyle("padding: 0 24px; gap: 24px;");
 
             topPanel = topPanel.WithView(
                 await BuildActivityFeed(host),
@@ -97,39 +99,36 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Activity timeline — social-media style feed with rich cards.
+    /// Activity timeline — social-media style feed with rich cards, fixed height with scroll.
     /// </summary>
     private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host)
     {
+        // Fixed-height scrollable section
         var section = Controls.Stack
-            .WithStyle($"display: flex; flex-direction: column; min-height: 0; height: 100%; {ThinScrollbar}");
+            .WithHeight(ColumnHeight)
+            .WithStyle($"overflow-y: auto; {ThinScrollbar}");
 
         // Section header
         section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px; flex-shrink: 0;\">Activity Feed</div>"));
+            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Activity Feed</div>"));
 
         var activityLogStore = host.Hub.ServiceProvider.GetService<IActivityLogStore>();
         var activityLogs = activityLogStore != null
             ? await activityLogStore.GetRecentActivityLogsAsync(limit: 30)
             : [];
 
-        // Scrollable feed container
-        var feed = Controls.Stack
-            .WithVerticalGap(12)
-            .WithStyle($"flex: 1; overflow-y: auto; min-height: 0; padding-right: 4px; {ThinScrollbar}");
-
         if (activityLogs.Count == 0)
         {
-            feed = feed.WithView(Controls.Html(
+            section = section.WithView(Controls.Html(
                 "<div style=\"padding: 48px 24px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 12px; margin-top: 8px;\">" +
                 "<div style=\"font-size: 2rem; margin-bottom: 8px;\">&#128240;</div>" +
                 "<div style=\"font-weight: 600; margin-bottom: 4px;\">No activity yet</div>" +
                 "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Edits, approvals and other events will appear here.</div>" +
                 "</div>"));
-            section = section.WithView(feed);
             return section;
         }
 
+        var feed = Controls.Stack.WithVerticalGap(12);
         foreach (var log in activityLogs)
         {
             feed = feed.WithView(BuildActivityCard(log));
@@ -212,19 +211,22 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Recently Viewed panel — compact card grid, max 10 items.
+    /// Recently Viewed panel — compact card grid, max 10 items, fixed height with scroll.
+    /// Resolves full MeshNode for each item to get proper icon/thumbnail.
     /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
         const int fetchLimit = 50;
         const int displayLimit = 10;
 
+        // Fixed-height scrollable section
         var section = Controls.Stack
-            .WithStyle($"display: flex; flex-direction: column; min-height: 0; height: 100%; {ThinScrollbar}");
+            .WithHeight(ColumnHeight)
+            .WithStyle($"overflow-y: auto; {ThinScrollbar}");
 
         // Section header
         section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px; flex-shrink: 0;\">Recently Viewed</div>"));
+            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recently Viewed</div>"));
 
         var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
         var recentActivities = new List<UserActivityRecord>();
@@ -241,25 +243,22 @@ public static class UserActivityLayoutAreas
                 .ToList();
         }
 
-        // Scrollable card container
-        var grid = Controls.LayoutGrid
-            .WithStyle($"flex: 1; overflow-y: auto; min-height: 0; gap: 8px; padding-right: 4px; {ThinScrollbar}");
+        // Resolve full nodes from persistence for proper icons
+        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceServiceCore>();
+        var jsonOptions = new JsonSerializerOptions();
 
-        // Resolve full nodes from catalog for proper thumbnails
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        var nodeCache = new Dictionary<string, MeshNode>();
-        if (meshCatalog != null)
-        {
-            await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 100))
-            {
-                if (node.Path != null)
-                    nodeCache[node.Path] = node;
-            }
-        }
+        var grid = Controls.LayoutGrid.WithStyle("gap: 8px;");
 
         foreach (var activity in recentActivities)
         {
-            if (nodeCache.TryGetValue(activity.NodePath, out var node))
+            MeshNode? node = null;
+            if (persistence != null)
+            {
+                try { node = await persistence.GetNodeAsync(activity.NodePath, jsonOptions); }
+                catch { /* ignore lookup failures */ }
+            }
+
+            if (node != null)
                 grid = grid.WithView(
                     MeshNodeCardControl.FromNode(node, activity.NodePath),
                     skin => skin.WithXs(12));
@@ -274,28 +273,41 @@ public static class UserActivityLayoutAreas
 
         // Fill remaining slots from catalog
         var remaining = displayLimit - recentActivities.Count;
-        if (remaining > 0 && meshCatalog != null)
+        if (remaining > 0)
         {
             var recentPaths = new HashSet<string>(recentActivities.Select(a => a.NodePath));
-            var fillerNodes = nodeCache.Values
-                .Where(n => n.NodeType == null || !SystemNodeTypes.Contains(n.NodeType))
-                .Where(n => n.Path == null || !recentPaths.Contains(n.Path))
-                .Take(remaining)
-                .ToList();
+            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
 
-            if (fillerNodes.Count > 0 && recentActivities.Count > 0)
+            if (meshCatalog != null)
             {
-                grid = grid.WithView(Controls.Html(
-                    "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 4px 8px; " +
-                    "border-top: 1px solid var(--neutral-stroke-divider-rest); margin-top: 4px; padding-top: 8px;\">Suggested</div>"),
-                    skin => skin.WithXs(12));
-            }
+                var fillerNodes = new List<MeshNode>();
+                await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
+                {
+                    if (node.NodeType != null && SystemNodeTypes.Contains(node.NodeType))
+                        continue;
 
-            foreach (var node in fillerNodes)
-            {
-                grid = grid.WithView(
-                    MeshNodeCardControl.FromNode(node, node.Path ?? ""),
-                    skin => skin.WithXs(12));
+                    if (node.Path != null && recentPaths.Contains(node.Path))
+                        continue;
+
+                    fillerNodes.Add(node);
+                    if (fillerNodes.Count >= remaining)
+                        break;
+                }
+
+                if (fillerNodes.Count > 0 && recentActivities.Count > 0)
+                {
+                    grid = grid.WithView(Controls.Html(
+                        "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 4px 8px; " +
+                        "border-top: 1px solid var(--neutral-stroke-divider-rest); margin-top: 4px; padding-top: 8px;\">Suggested</div>"),
+                        skin => skin.WithXs(12));
+                }
+
+                foreach (var node in fillerNodes)
+                {
+                    grid = grid.WithView(
+                        MeshNodeCardControl.FromNode(node, node.Path ?? ""),
+                        skin => skin.WithXs(12));
+                }
             }
         }
 

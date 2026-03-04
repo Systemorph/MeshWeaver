@@ -1,14 +1,12 @@
+﻿using System.ComponentModel;
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Layout.Domain;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
-using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
@@ -21,6 +19,12 @@ namespace MeshWeaver.Graph;
 [Browsable(false)]
 public static class ImportLayoutArea
 {
+    /// <summary>
+    /// Layout area for importing mesh nodes.
+    /// Shows a form with destination namespace picker, source type selector
+    /// (Mesh Node / File / Folder), and the appropriate source input.
+    /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> ImportMeshNodes(LayoutAreaHost host, RenderingContext _)
     {
         var currentPath = host.Hub.Address.ToString();
