@@ -9,6 +9,7 @@ using System.Text;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Chart;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Views;
 
 /// <summary>
 /// Profitability analysis views for FutuRe insurance data.
@@ -20,6 +21,8 @@ public static class ProfitabilityLayoutAreas
 {
     public static LayoutDefinition AddProfitabilityLayoutAreas(this LayoutDefinition layout) =>
         layout
+            .AddLayoutAreaCatalog()
+            .WithDefaultArea(LayoutAreaCatalogArea.LayoutAreas)
             .WithView(nameof(KeyMetrics), KeyMetrics)
             .WithView(nameof(ProfitabilityTable), ProfitabilityTable)
             .WithView(nameof(ProfitabilityOverview), ProfitabilityOverview)
@@ -29,10 +32,27 @@ public static class ProfitabilityLayoutAreas
             .WithView(nameof(QuarterlyTrend), QuarterlyTrend);
 
     /// <summary>
-    /// Gets the full FutuRe data cube stream.
+    /// Gets the data cube stream. On local hubs returns raw local data;
+    /// on the group hub applies transaction mapping rules to aggregate
+    /// local rows into group lines of business.
     /// </summary>
     private static IObservable<IEnumerable<FutuReDataCube>> GetDataCube(LayoutAreaHost host)
-        => host.Workspace.GetStream<FutuReDataCube>()!;
+    {
+        var rawStream = host.Workspace.GetStream<FutuReDataCube>()!
+            .Select(data => data?.AsEnumerable() ?? Enumerable.Empty<FutuReDataCube>());
+
+        var mappingStream = host.Workspace.GetStream<TransactionMapping>();
+        if (mappingStream == null)
+            return rawStream;
+
+        var lobStream = host.Workspace.GetStream<LineOfBusiness>()!
+            .Select(data => data?.AsEnumerable() ?? Enumerable.Empty<LineOfBusiness>());
+
+        return rawStream.CombineLatest(
+            mappingStream.Select(m => m?.AsEnumerable() ?? Enumerable.Empty<TransactionMapping>()),
+            lobStream,
+            FutuReDataLoader.AggregateToGroupLevel);
+    }
 
     /// <summary>
     /// Key performance indicators: total premium, claims, combined ratio, net profit.
@@ -71,7 +91,7 @@ public static class ProfitabilityLayoutAreas
 
 - **Lines of Business**: {lobCount}
 - **Months**: {monthCount}
-- **Business Units**: 2 (EuropeRe, AmericasIns)";
+- **Business Units**: {allData.Select(d => d.BusinessUnit).Distinct().Count()}";
 
             return (UiControl)Controls.Markdown(md);
         });

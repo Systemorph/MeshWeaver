@@ -1,0 +1,17 @@
+{
+  "id": "Analysis",
+  "namespace": "FutuRe/AsiaRe",
+  "name": "AsiaRe Profitability Analysis",
+  "nodeType": "FutuRe/LocalAnalysis",
+  "category": "Analytics",
+  "description": "Monthly profitability analysis for AsiaRe local lines of business",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "order": 1,
+  "isPersistent": true,
+  "content": {
+    "$type": "AnalysisContent",
+    "id": "Analysis",
+    "name": "AsiaRe Profitability Analysis",
+    "description": "Interactive profitability analysis for AsiaRe with local lines of business, estimates vs actuals, and quarterly trends."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "LineOfBusiness",
+  "namespace": "FutuRe/AsiaRe",
+  "name": "Line of Business",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Lines of business for AsiaRe",
+  "icon": "/static/storage/content/FutuRe/AsiaRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "LineOfBusiness",
+    "namespace": "FutuRe/AsiaRe",
+    "displayName": "Line of Business",
+    "iconName": "Grid",
+    "description": "AsiaRe lines of business",
+    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessLayoutAreas())"
+  }
+}
