@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using System.ComponentModel;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
@@ -17,6 +18,7 @@ namespace MeshWeaver.Graph;
 /// Shows a form with destination namespace picker, source type selector
 /// (Mesh Node / File / Folder), and the appropriate source input.
 /// </summary>
+[Browsable(false)]
 public static class ImportLayoutArea
 {
     public static IObservable<UiControl?> ImportMeshNodes(LayoutAreaHost host, RenderingContext _)
