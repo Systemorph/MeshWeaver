@@ -10,6 +10,7 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -22,13 +23,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Acme.Test;
 
 /// <summary>
 /// Tests for Project-level aggregate views (Summary, AllTasks, TodosByCategory, Planning, MyTasks, Backlog, TodaysFocus).
 /// These views aggregate data from child Todo items in the ProductLaunch project.
 /// </summary>
-[Collection("SamplesGraphData")]
 public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache - tests run sequentially in this collection
@@ -36,13 +36,6 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
         Path.GetTempPath(),
         "MeshWeaverProjectViewTests",
         ".mesh-cache");
-
-    private static string GetSamplesGraphPath()
-    {
-        var currentDir = Directory.GetCurrentDirectory();
-        var solutionRoot = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
-        return Path.Combine(solutionRoot, "samples", "Graph");
-    }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -60,7 +53,8 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

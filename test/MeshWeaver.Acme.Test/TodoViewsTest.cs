@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -9,6 +10,8 @@ using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
@@ -19,13 +22,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Acme.Test;
 
 /// <summary>
 /// Tests for Todo-level views (Details, Thumbnail).
 /// These views display individual Todo items with their metadata and action buttons.
 /// </summary>
-[Collection("SamplesGraphData")]
 public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache - tests run sequentially in this collection
@@ -50,7 +52,8 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -217,7 +220,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var testConfig = new MessageHubConfiguration(Mesh.ServiceProvider, new Address("test"));
         var configuredConfig = meshConfig.DefaultNodeHubConfiguration!(testConfig);
 
-        var lambdas = configuredConfig.Get<System.Collections.Immutable.ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>();
+        var lambdas = configuredConfig.Get<ImmutableList<Func<LayoutDefinition, LayoutDefinition>>>();
         Output.WriteLine($"Lambdas count: {lambdas?.Count ?? 0}");
         lambdas.Should().NotBeNull("Config should have layout lambdas");
         lambdas!.Count.Should().BeGreaterThan(1, "Should have more than just the default AddStandardViews lambda");

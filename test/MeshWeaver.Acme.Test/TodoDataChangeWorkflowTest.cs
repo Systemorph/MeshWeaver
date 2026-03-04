@@ -9,6 +9,7 @@ using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -20,14 +21,13 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Acme.Test;
 
 /// <summary>
 /// Tests for DataChangeRequest workflows in the Graph-based Todo application.
 /// Verifies that status changes, assignments, and other mutations work correctly
 /// through the DataChangeRequest mechanism.
 /// </summary>
-[Collection("SamplesGraphData")]
 public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache - tests run sequentially in this collection
@@ -97,7 +97,8 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

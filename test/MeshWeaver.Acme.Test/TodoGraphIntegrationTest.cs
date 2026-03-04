@@ -8,6 +8,7 @@ using FluentAssertions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
@@ -18,7 +19,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Acme.Test;
 
 /// <summary>
 /// Integration tests for the ProductLaunch project under ACME organization.
@@ -26,7 +27,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// and that task instances can be loaded and accessed.
 /// Theme: MeshFlow B2B SaaS product launch campaign.
 /// </summary>
-[Collection("SamplesGraphData")]
 public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     // Shared cache directory for all tests - compiled assemblies are reused
@@ -34,13 +34,6 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
         Path.GetTempPath(),
         "MeshWeaverTodoGraphTests",
         ".mesh-cache");
-
-    private static string GetSamplesGraphPath()
-    {
-        var currentDir = Directory.GetCurrentDirectory();
-        var solutionRoot = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
-        return Path.Combine(solutionRoot, "samples", "Graph");
-    }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -62,7 +55,8 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 // Use shared disk cache - first test compiles, subsequent tests reuse
