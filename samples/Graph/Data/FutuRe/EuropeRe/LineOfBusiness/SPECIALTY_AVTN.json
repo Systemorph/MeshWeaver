@@ -12,7 +12,7 @@
     "systemName": "SPECIALTY_AVTN",
     "displayName": "Specialty & Aviation",
     "description": "Combined specialty and aviation insurance covering niche risks including political violence, trade credit, surety bonds, and aviation hull and liability. This local line consolidates low-frequency, high-severity exposures that require specialist underwriting expertise. Aviation covers European airlines, airport operators, and space launch programs. Specialty encompasses political risk for cross-border trade, EU export credit guarantees, and contingency coverages for major European events.",
-    "order": 7,
+    "order": 8,
     "productExamples": "Aviation hull & liability, Political risk, Trade credit, Surety bonds, Space launch, Contingency, Kidnap & ransom"
   }
 }

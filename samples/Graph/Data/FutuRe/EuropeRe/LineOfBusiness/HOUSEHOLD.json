@@ -12,7 +12,7 @@
     "systemName": "HOUSEHOLD",
     "displayName": "Household",
     "description": "Bundled residential insurance combining dwelling coverage, personal property protection, and homeowner liability. This European-market product covers fire, water damage, storm, theft, and glass breakage for private residences. Personal liability covers third-party bodily injury and property damage arising from daily activities. Household policies in continental Europe typically follow an all-risks or named-perils format with regional variations for natural hazard exposure.",
-    "order": 0,
+    "order": 1,
     "productExamples": "Dwelling fire, Home contents, Personal liability, Glass breakage, Natural hazards, Tenant liability"
   }
 }
