@@ -5,7 +5,7 @@
   "nodeType": "FutuRe/BusinessUnit",
   "category": "Business Units",
   "description": "European reinsurance operations headquartered in Zurich",
-  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "BusinessUnit",

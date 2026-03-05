@@ -249,7 +249,7 @@ public static class FutuReDataLoader
 
         return meshQuery
             .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping state:Active"))
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants"))
             .Select(change => change.Items
                 .Select(ConvertToTransactionMapping)
                 .Where(m => m != null)

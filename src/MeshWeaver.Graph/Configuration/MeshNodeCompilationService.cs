@@ -301,7 +301,7 @@ internal class MeshNodeCompilationService(
                             {
                                 configurations.Add(new NodeTypeConfiguration
                                 {
-                                    NodeType = meshNode.NodeType ?? meshNode.Path,
+                                    NodeType = meshNode.Path,
                                     DataType = typeof(object),
                                     HubConfiguration = hubConfig,
                                     DisplayName = meshNode.Name,
@@ -606,7 +606,7 @@ internal class MeshNodeCompilationService(
                             {
                                 configurations.Add(new NodeTypeConfiguration
                                 {
-                                    NodeType = meshNode.NodeType ?? meshNode.Path,
+                                    NodeType = meshNode.Path,
                                     DataType = typeof(object),
                                     HubConfiguration = hubConfig,
                                     DisplayName = meshNode.Name,
