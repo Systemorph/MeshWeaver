@@ -218,7 +218,8 @@ public static class NodeTypeLayoutAreas
         IReadOnlyCollection<MeshNode>? agents = null)
     {
         var content = node.Content as NodeTypeDefinition;
-        var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false));
+        var navMenu = Controls.NavMenu.WithSkin(s => s.WithWidth(280).WithCollapsible(false))
+            .WithStyle("overflow-y: auto; height: 100%;");
 
         // Search link
         var searchHref = new LayoutAreaReference(SearchArea).ToHref(hubAddress);

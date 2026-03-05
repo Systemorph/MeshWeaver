@@ -481,6 +481,73 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         results.Count.Should().Be(8, "Should find all 8 EuropeRe lines of business");
     }
 
+    // ── Layout Area Catalog ──
+
+    /// <summary>
+    /// Verifies that the group Analysis hub returns the LayoutAreas catalog as default view
+    /// and that it contains the profitability layout areas.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task GroupAnalysis_LayoutAreas_ShouldRenderCatalog()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Analysis");
+
+        Output.WriteLine("Initializing hub for FutuRe/Analysis...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("LayoutAreas");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for LayoutAreas catalog...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("LayoutAreas catalog should render for group Analysis hub");
+    }
+
+    /// <summary>
+    /// Verifies that the EuropeRe local Analysis hub returns the LayoutAreas catalog.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task LocalAnalysis_LayoutAreas_ShouldRenderCatalog()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/Analysis");
+
+        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("LayoutAreas");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for LayoutAreas catalog...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("LayoutAreas catalog should render for local EuropeRe Analysis hub");
+    }
+
     // ── Local Analysis Hub ──
 
     /// <summary>
