@@ -5,7 +5,7 @@
   "nodeType": "FutuRe/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Standalone cyber liability and technology errors & omissions insurance for US and Americas markets",
-  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",

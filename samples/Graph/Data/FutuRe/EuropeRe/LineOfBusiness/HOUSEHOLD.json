@@ -5,7 +5,7 @@
   "nodeType": "FutuRe/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Residential property, home contents, and personal liability coverage bundled for European households",
-  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",

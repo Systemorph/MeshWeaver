@@ -5,7 +5,7 @@
   "nodeType": "FutuRe/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Combined specialty lines and aviation risks for European and global programs",
-  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",

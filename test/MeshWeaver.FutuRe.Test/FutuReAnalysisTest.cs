@@ -484,10 +484,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // ── Local Analysis Hub ──
 
     /// <summary>
-    /// Verifies that the EuropeRe local analysis hub renders its Overview area.
+    /// Verifies that the EuropeRe local analysis hub renders its KeyMetrics area
+    /// with actual profitability data (not empty).
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task EuropeRe_Analysis_Overview_ShouldRender()
+    public async Task EuropeRe_Analysis_KeyMetrics_ShouldRenderWithData()
     {
         var client = GetClient();
         var address = new Address("FutuRe/EuropeRe/Analysis");
@@ -500,17 +501,51 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("Hub initialized.");
 
         var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("Overview");
+        var reference = new LayoutAreaReference("KeyMetrics");
 
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        Output.WriteLine("Waiting for Overview area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        Output.WriteLine("Waiting for KeyMetrics control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync(x => x is not null);
 
-        Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            "Overview area should return a response for EuropeRe local Analysis");
+        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("KeyMetrics should render for local EuropeRe analysis");
+    }
+
+    /// <summary>
+    /// Verifies that the EuropeRe local analysis hub renders ProfitabilityOverview chart.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task EuropeRe_Analysis_ProfitabilityOverview_ShouldRenderChart()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/Analysis");
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("ProfitabilityOverview");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for ProfitabilityOverview control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("ProfitabilityOverview should render for local EuropeRe analysis");
+        control.Should().BeOfType<ChartControl>(
+            "ProfitabilityOverview should render a ChartControl with local data");
     }
 
     // ── Analysis Hub Layout Areas (Group Level) ──
