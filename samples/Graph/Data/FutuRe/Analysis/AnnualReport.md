@@ -1,7 +1,7 @@
 ---
 NodeType: "Markdown"
 Title: "FutuRe Group Annual Profitability Report"
-Icon: "DocumentText"
+Icon: /static/storage/content/FutuRe/icon.svg
 Tags:
   - "Profitability"
   - "Annual Report"
