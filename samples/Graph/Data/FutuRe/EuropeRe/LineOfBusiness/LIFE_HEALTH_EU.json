@@ -12,7 +12,7 @@
     "systemName": "LIFE_HEALTH_EU",
     "displayName": "Life & Health",
     "description": "European life and health reinsurance covering mortality, longevity, disability, and medical expense risks. Operates alongside mandatory social security systems, providing supplementary private coverage. Key products include group life and pension schemes, individual term and endowment policies, disability income protection, and private medical insurance. The market is characterized by long-term treaty relationships and increasing demand for longevity risk transfer as European populations age.",
-    "order": 6,
+    "order": 7,
     "productExamples": "Group life, Pension schemes, Disability income, Private medical, Critical illness, Longevity swaps, Accident & health"
   }
 }
