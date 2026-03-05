@@ -1,7 +1,7 @@
 ---
 NodeType: "Markdown"
 Title: "EuropeRe Profitability Report"
-Icon: "DocumentText"
+Icon: /static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg
 Tags:
   - "Profitability"
   - "EuropeRe"

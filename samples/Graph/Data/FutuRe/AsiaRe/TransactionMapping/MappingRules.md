@@ -1,6 +1,7 @@
 ---
 Name: Mapping Rules
 Description: AsiaRe local-to-group LoB mapping rules
+Icon: /static/storage/content/FutuRe/AsiaRe/LineOfBusiness/icon.svg
 ---
 
 # AsiaRe Transaction Mapping Rules
