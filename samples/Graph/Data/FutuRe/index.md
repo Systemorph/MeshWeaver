@@ -68,7 +68,7 @@ graph LR
 
 ## Report
 
-@@("FutuRe/Analysis/AnnualReport")
+@("FutuRe/Analysis/AnnualReport")
 
 ## Governance
 

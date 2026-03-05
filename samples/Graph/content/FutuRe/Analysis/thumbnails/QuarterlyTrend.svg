@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #f0f6ff; }
+    .nf { fill: #616161; }
+    .af { fill: #1B6EC2; }
+  </style>
+  <rect class="bg" width="140" height="79" rx="8"/>
+  <!-- Chart frame -->
+  <rect class="nf" x="9" y="7" width="122" height="64" rx="5"/>
+  <rect class="bg" x="11" y="9" width="118" height="60" rx="3"/>
+  <!-- Axis -->
+  <rect class="nf" x="20" y="56" width="100" height="1" rx="0.5" opacity="0.3"/>
+  <!-- Quarter columns -->
+  <rect class="af" x="26" y="30" width="16" height="26" rx="2"/>
+  <rect class="af" x="50" y="22" width="16" height="34" rx="2" opacity="0.85"/>
+  <rect class="af" x="74" y="26" width="16" height="30" rx="2" opacity="0.7"/>
+  <rect class="af" x="98" y="18" width="16" height="38" rx="2" opacity="0.55"/>
+  <!-- Expected profit line -->
+  <polyline points="34,26 58,20 82,22 106,16" stroke="#1B6EC2" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+  <circle class="af" cx="34" cy="26" r="2.5" opacity="0.5"/>
+  <circle class="af" cx="58" cy="20" r="2.5" opacity="0.5"/>
+  <circle class="af" cx="82" cy="22" r="2.5" opacity="0.5"/>
+  <circle class="af" cx="106" cy="16" r="2.5" opacity="0.5"/>
+  <!-- Quarter labels -->
+  <rect class="nf" x="30" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="54" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="78" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="102" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+</svg>

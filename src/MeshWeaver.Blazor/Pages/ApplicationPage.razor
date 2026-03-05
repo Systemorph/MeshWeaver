@@ -33,12 +33,10 @@
     }
     else if (!IsInteractive)
     {
-        @* Phase 1: No cached HTML - dots spinner with message *@
+        @* Phase 1: No cached HTML - spinning circle with message *@
         <div class="resolving-container">
-            <h3>Resolving @Path...</h3>
-            <div class="dots-spinner">
-                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-            </div>
+            <div class="spinner"></div>
+            <p>Resolving <strong>@Path</strong>...</p>
         </div>
     }
     else

@@ -621,12 +621,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                             var hubConfig = meshNode.HubConfiguration;
                             if (hubConfig != null)
                             {
-                                var meshNodeTypePath = meshNode.NodeType ?? meshNode.Path;
-                                _hubConfigurations[meshNodeTypePath] = hubConfig;
+                                _hubConfigurations[meshNode.Path] = hubConfig;
 
                                 configurations.Add(new NodeTypeConfiguration
                                 {
-                                    NodeType = meshNodeTypePath,
+                                    NodeType = meshNode.Path,
                                     DataType = typeof(object),
                                     HubConfiguration = hubConfig
                                 });

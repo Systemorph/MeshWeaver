@@ -30,12 +30,12 @@ namespace MeshWeaver.Data.Persistence
         {
             if (identity.Partition is Address partition)
             {
+                // Send plain CollectionsReference to the remote hub (like HubDataSource does).
+                // The partition address is already used as the routing target via GetRemoteStream's owner parameter.
+                // Wrapping in PartitionedWorkspaceReference would cause the remote hub's data source
+                // to create a separate partitioned stream instead of using its default (null-partition) stream.
                 var reference = GetReference();
-                var partitionedReference = new PartitionedWorkspaceReference<EntityStore>(
-                    partition,
-                    reference
-                );
-                return Workspace.GetRemoteStream(partition, partitionedReference);
+                return Workspace.GetRemoteStream(partition, reference);
             }
 
             // Null partition: combine all initialized partition streams into one.

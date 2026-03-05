@@ -92,35 +92,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .AddLayoutClient();
     }
 
-    /// <summary>
-    /// Verifies that the Profitability Analysis hub renders its Overview area.
-    /// This is the group-level view showing profitability charts.
-    /// </summary>
     [Fact(Timeout = 20000)]
     public async Task Profitability_Overview_ShouldRender()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-
-        Output.WriteLine("Initializing hub for FutuRe/Analysis...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("Overview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for Overview area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
-
-        Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            "Overview area should return a response for Profitability");
+        var control = await GetControlAsync("FutuRe/Analysis", "Overview");
+        control.Should().NotBeNull("Overview should render for group Analysis hub");
     }
 
     /// <summary>
@@ -197,61 +173,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
 
-    /// <summary>
-    /// Verifies that the KeyMetrics layout area renders KPI summary.
-    /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task KeyMetrics_ShouldRender()
-    {
-        var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("KeyMetrics");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for KeyMetrics area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
-
-        Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            "KeyMetrics area should render KPI summary");
-    }
-
-    /// <summary>
-    /// Verifies that the ProfitabilityTable layout area renders LoB breakdown.
-    /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task ProfitabilityTable_ShouldRender()
-    {
-        var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("ProfitabilityTable");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for ProfitabilityTable area...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
-
-        Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            "ProfitabilityTable area should render LoB breakdown table");
-    }
 
     /// <summary>
     /// Verifies that TransactionMapping MeshNodes are loaded via IMeshQuery
@@ -483,201 +404,168 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     // ── Layout Area Catalog ──
 
-    /// <summary>
-    /// Verifies that the group Analysis hub returns the LayoutAreas catalog as default view
-    /// and that it contains the profitability layout areas.
-    /// </summary>
     [Fact(Timeout = 20000)]
     public async Task GroupAnalysis_LayoutAreas_ShouldRenderCatalog()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-
-        Output.WriteLine("Initializing hub for FutuRe/Analysis...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("LayoutAreas");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for LayoutAreas catalog...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
-
-        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        var control = await GetControlAsync("FutuRe/Analysis", "LayoutAreas");
         control.Should().NotBeNull("LayoutAreas catalog should render for group Analysis hub");
     }
 
-    /// <summary>
-    /// Verifies that the EuropeRe local Analysis hub returns the LayoutAreas catalog.
-    /// </summary>
     [Fact(Timeout = 20000)]
     public async Task LocalAnalysis_LayoutAreas_ShouldRenderCatalog()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/EuropeRe/Analysis");
-
-        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("LayoutAreas");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for LayoutAreas catalog...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
-
-        Output.WriteLine($"Received control type: {control?.GetType().Name}");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LayoutAreas");
         control.Should().NotBeNull("LayoutAreas catalog should render for local EuropeRe Analysis hub");
     }
 
-    // ── Local Analysis Hub ──
+    // ── Local Analysis Hub (EuropeRe) ──
 
-    /// <summary>
-    /// Verifies that the EuropeRe local analysis hub renders its KeyMetrics area
-    /// with actual profitability data (not empty).
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task EuropeRe_Analysis_KeyMetrics_ShouldRenderWithData()
+    public async Task EuropeRe_KeyMetrics_ShouldHaveNonZeroData()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/EuropeRe/Analysis");
-
-        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Hub initialized.");
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("KeyMetrics");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for KeyMetrics control...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
-
-        Output.WriteLine($"Received control type: {control?.GetType().Name}");
-        control.Should().NotBeNull("KeyMetrics should render for local EuropeRe analysis");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics");
+        var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics");
+        md.Should().Contain("Total Premium", "KeyMetrics should show premium");
+        md.Should().Contain("Loss Ratio", "KeyMetrics should show loss ratio");
     }
 
-    /// <summary>
-    /// Verifies that the EuropeRe local analysis hub renders ProfitabilityOverview chart.
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task EuropeRe_Analysis_ProfitabilityOverview_ShouldRenderChart()
+    public async Task EuropeRe_ProfitabilityTable_ShouldHaveNonZeroData()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/EuropeRe/Analysis");
-
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("ProfitabilityOverview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for ProfitabilityOverview control...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
-
-        Output.WriteLine($"Received control type: {control?.GetType().Name}");
-        control.Should().NotBeNull("ProfitabilityOverview should render for local EuropeRe analysis");
-        control.Should().BeOfType<ChartControl>(
-            "ProfitabilityOverview should render a ChartControl with local data");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityTable");
+        var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe ProfitabilityTable");
+        md.Should().Contain("Line of Business", "table should have headers");
+        md.Should().Contain("Total", "table should have totals row");
     }
 
-    // ── Analysis Hub Layout Areas (Group Level) ──
-
-    /// <summary>
-    /// Verifies that the ProfitabilityOverview chart area renders a ChartControl.
-    /// If Roslyn compilation of ProfitabilityLayoutAreas.cs fails, this area
-    /// will be null (never registered) — the test must detect that.
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ProfitabilityOverview_ShouldRender()
+    public async Task EuropeRe_ProfitabilityOverview_ShouldRenderChart()
     {
-        var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(address),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("ProfitabilityOverview");
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            address, reference);
-
-        Output.WriteLine("Waiting for ProfitabilityOverview control...");
-        var control = await stream
-            .GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .FirstAsync(x => x is not null);
-
-        Output.WriteLine($"Received control type: {control?.GetType().Name}");
-        control.Should().NotBeNull("ProfitabilityOverview should render a control (null means compilation failed)");
-        control.Should().BeOfType<ChartControl>(
-            "ProfitabilityOverview should render a ChartControl, not an error");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityOverview");
+        control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
     }
 
-    /// <summary>
-    /// Verifies that the EstimateVsActual area renders.
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task EstimateVsActual_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Analysis", "EstimateVsActual");
+    public async Task EuropeRe_EstimateVsActual_ShouldHaveData()
+    {
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "EstimateVsActual");
+        control.Should().NotBeNull("EstimateVsActual should render for EuropeRe");
+    }
 
-    /// <summary>
-    /// Verifies that the ProfitByLoB chart area renders.
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task ProfitByLoB_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Analysis", "ProfitByLoB");
+    public async Task EuropeRe_ProfitByLoB_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitByLoB");
+        control.Should().BeOfType<ChartControl>("ProfitByLoB should be a chart");
+    }
 
-    /// <summary>
-    /// Verifies that the LossRatio chart area renders.
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task LossRatio_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Analysis", "LossRatio");
+    public async Task EuropeRe_LossRatio_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LossRatio");
+        control.Should().BeOfType<ChartControl>("LossRatio should be a chart");
+    }
 
-    /// <summary>
-    /// Verifies that the QuarterlyTrend chart area renders.
-    /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task QuarterlyTrend_ShouldRender()
-        => await AssertLayoutAreaRenders("FutuRe/Analysis", "QuarterlyTrend");
+    public async Task EuropeRe_QuarterlyTrend_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "QuarterlyTrend");
+        control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
+    }
+
+    // ── Group Analysis Hub (FutuRe/Analysis) ──
+
+    [Fact(Timeout = 60000)]
+    public async Task Group_KeyMetrics_ShouldHaveNonZeroData()
+    {
+        var client = GetClient();
+
+        // Direct mesh query diagnostic: check if TransactionMapping nodes exist in the graph
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var queryRequest = MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants");
+        var directResults = new List<object>();
+        await foreach (var item in meshQuery.QueryAsync(queryRequest, TestContext.Current.CancellationToken))
+            directResults.Add(item);
+        Output.WriteLine($"Direct mesh query for TransactionMapping: {directResults.Count} nodes");
+
+        var lobRequest = MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness scope:children state:Active");
+        var lobResults = new List<object>();
+        await foreach (var item in meshQuery.QueryAsync(lobRequest, TestContext.Current.CancellationToken))
+            lobResults.Add(item);
+        Output.WriteLine($"Direct mesh query for LineOfBusiness: {lobResults.Count} nodes");
+
+        // Start group hub
+        Output.WriteLine("Starting group hub...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(new Address("FutuRe/Analysis")),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Group hub started.");
+
+        // Check data collections
+        foreach (var coll in new[] { "FutuReDataCube", "TransactionMapping", "LineOfBusiness" })
+        {
+            var resp = await client.AwaitResponse(
+                new GetDataRequest(new CollectionsReference(coll)),
+                o => o.WithTarget(new Address("FutuRe/Analysis")),
+                TestContext.Current.CancellationToken);
+            var store = resp.Message?.Data as EntityStore;
+            var count = store?.Collections.Values.FirstOrDefault()?.Instances.Count ?? 0;
+            Output.WriteLine($"  {coll}: {count} items (Error={resp.Message?.Error})");
+        }
+
+        // Check KeyMetrics
+        var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
+            waitForData: true, timeoutSeconds: 30);
+        var md = AssertMarkdownWithNonZeroNumbers(control, "Group KeyMetrics");
+        md.Should().Contain("Total Premium", "KeyMetrics should show premium");
+        md.Should().Contain("Business Units", "Group KeyMetrics should show BU count");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_ProfitabilityTable_ShouldHaveNonZeroData()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityTable",
+            waitForData: true, timeoutSeconds: 25);
+        var md = AssertMarkdownWithNonZeroNumbers(control, "Group ProfitabilityTable");
+        md.Should().Contain("Line of Business", "table should have headers");
+        md.Should().Contain("Total", "table should have totals row");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_ProfitabilityOverview_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityOverview");
+        control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_EstimateVsActual_ShouldHaveData()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "EstimateVsActual");
+        control.Should().NotBeNull("EstimateVsActual should render for group hub");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_ProfitByLoB_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "ProfitByLoB");
+        control.Should().BeOfType<ChartControl>("ProfitByLoB should be a chart");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_LossRatio_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "LossRatio");
+        control.Should().BeOfType<ChartControl>("LossRatio should be a chart");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_QuarterlyTrend_ShouldRenderChart()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "QuarterlyTrend");
+        control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
+    }
 
     // ── Business Unit Layout Areas ──
 
@@ -834,13 +722,16 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         categories.Should().Contain("DataUpdate");
     }
 
-    // ── Helper ──
+    // ── Helpers ──
 
-    private async Task AssertLayoutAreaRenders(string addressPath, string areaName)
+    private async Task<UiControl?> GetControlAsync(
+        string addressPath, string areaName,
+        bool waitForData = false, int timeoutSeconds = 15)
     {
         var client = GetClient();
         var address = new Address(addressPath);
 
+        Output.WriteLine($"Initializing hub for {addressPath}...");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(address),
@@ -852,11 +743,65 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        Output.WriteLine($"Waiting for {areaName} area at {addressPath}...");
-        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+        Output.WriteLine($"Waiting for {areaName} at {addressPath}{(waitForData ? " (with data)" : "")}...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
+            .FirstAsync(x => x is not null && (!waitForData || HasNonTrivialData(x)));
 
-        Output.WriteLine($"Received {areaName}: {value.Value.ValueKind}");
-        value.Value.ValueKind.Should().NotBe(JsonValueKind.Undefined,
-            $"{areaName} area should render at {addressPath}");
+        Output.WriteLine($"Received {areaName}: {control?.GetType().Name}");
+        control.Should().NotBeNull($"{areaName} should render at {addressPath}");
+        return control;
+    }
+
+    /// <summary>
+    /// Checks if a control has meaningful data (not all zeros).
+    /// Used to wait for PartitionedHubDataSource to deliver data before asserting.
+    /// </summary>
+    private static bool HasNonTrivialData(UiControl? control)
+    {
+        if (control is not MarkdownControl md)
+            return true; // Charts, stacks, etc. are always considered ready
+
+        var text = md.Markdown?.ToString() ?? "";
+        return System.Text.RegularExpressions.Regex.Matches(text, @"\d[\d,]*")
+            .Cast<System.Text.RegularExpressions.Match>()
+            .Select(m => m.Value.Replace(",", ""))
+            .Where(s => double.TryParse(s, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out _))
+            .Select(s => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture))
+            .Any(v => v > 0);
+    }
+
+    /// <summary>
+    /// Asserts that the control is a MarkdownControl and that it contains
+    /// at least one number greater than zero (i.e., not all zeros).
+    /// Returns the markdown text for further assertions.
+    /// </summary>
+    private string AssertMarkdownWithNonZeroNumbers(UiControl? control, string context)
+    {
+        var mdControl = control.Should().BeOfType<MarkdownControl>(
+            $"{context} should render as MarkdownControl").Subject;
+
+        var markdown = mdControl.Markdown?.ToString() ?? string.Empty;
+        Output.WriteLine($"{context} markdown:\n{markdown}");
+
+        markdown.Should().NotBeNullOrWhiteSpace($"{context} markdown should not be empty");
+
+        // Extract numbers from the markdown — look for formatted numbers like "78,750,000"
+        var numbers = System.Text.RegularExpressions.Regex.Matches(markdown, @"[\d,]+\.\d+|[\d,]+")
+            .Cast<System.Text.RegularExpressions.Match>()
+            .Select(m => m.Value.Replace(",", ""))
+            .Where(s => double.TryParse(s, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out _))
+            .Select(s => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture))
+            .ToList();
+
+        Output.WriteLine($"{context} extracted numbers: {string.Join(", ", numbers.Take(10))}");
+
+        numbers.Should().NotBeEmpty($"{context} should contain numeric values");
+        numbers.Should().Contain(n => n > 0, $"{context} should have at least one non-zero value");
+
+        return markdown;
     }
 }
