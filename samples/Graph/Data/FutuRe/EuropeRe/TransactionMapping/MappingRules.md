@@ -1,6 +1,7 @@
 ---
 Name: Mapping Rules
 Description: EuropeRe local-to-group LoB mapping rules with governance discussion
+Icon: /static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg
 ---
 
 # EuropeRe Transaction Mapping Rules

@@ -1,6 +1,7 @@
 ---
 Name: Mapping Rules
 Description: AmericasIns local-to-group LoB mapping rules with governance discussion
+Icon: /static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg
 ---
 
 # AmericasIns Transaction Mapping Rules

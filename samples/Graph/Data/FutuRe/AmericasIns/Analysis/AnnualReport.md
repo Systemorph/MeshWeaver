@@ -1,7 +1,7 @@
 ---
 NodeType: "Markdown"
 Title: "AmericasIns Profitability Report"
-Icon: "DocumentText"
+Icon: /static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg
 Tags:
   - "Profitability"
   - "AmericasIns"
