@@ -1,10 +1,9 @@
 using MeshWeaver.Data;
-using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Hosting.Activity;
 
@@ -14,32 +13,28 @@ namespace MeshWeaver.Hosting.Activity;
 public static class ActivityTrackingExtensions
 {
     /// <summary>
-    /// Adds user activity tracking.
-    /// Activity is tracked at the navigation level (ApplicationPage) via NavigationService,
-    /// not at the persistence layer, to avoid noisy internal data fetches.
-    /// Uses PersistenceActivityStore/PersistenceActivityLogStore when IPersistenceServiceCore is available,
-    /// falls back to InMemory stores otherwise.
+    /// Adds activity tracking via ActivityLogBundler which persists bundled activity logs
+    /// as MeshNodes through IMeshNodeFactory.
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
         return builder.ConfigureServices(services =>
         {
-            services.TryAddSingleton<IActivityStore>(sp =>
+            services.AddScoped<ActivityLogBundler>(sp =>
             {
-                var persistence = sp.GetService<IPersistenceServiceCore>();
-                if (persistence != null)
-                    return new PersistenceActivityStore(persistence);
-                return new InMemoryActivityStore();
-            });
-            services.TryAddSingleton<IActivityLogStore>(sp =>
-            {
-                var persistence = sp.GetService<IPersistenceServiceCore>();
-                if (persistence != null)
+                var hub = sp.GetRequiredService<IMessageHub>();
+                var nodeFactory = sp.GetRequiredService<IMeshNodeFactory>();
+                return new ActivityLogBundler(hub, async log =>
                 {
-                    var adapter = sp.GetService<IStorageAdapter>();
-                    return new PersistenceActivityLogStore(persistence, adapter: adapter);
-                }
-                return new InMemoryActivityLogStore();
+                    var node = MeshNode.FromPath($"{log.HubPath}/ActivityLog/{log.Id}") with
+                    {
+                        NodeType = ActivityLogNodeType.NodeType,
+                        Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
+                        State = MeshNodeState.Active,
+                        Content = log
+                    };
+                    await nodeFactory.CreateNodeAsync(node);
+                });
             });
             return services;
         });

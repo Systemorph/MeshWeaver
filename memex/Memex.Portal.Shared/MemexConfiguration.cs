@@ -306,8 +306,7 @@ public static class MemexConfiguration
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })
-                // Add activity tracking to record user access patterns
-                // Uses PersistenceActivityStore when persistence is available, InMemory fallback otherwise
+                // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();
         }
 

@@ -1,7 +1,9 @@
+using System;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -32,14 +34,29 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         return conf
             .WithServices(services => services.AddInMemoryPersistence(_persistence))
             .WithRoutes(forward => forward
-                .RouteAddressToHostedHub(HostType, ConfigureHost)
+                .RouteAddressToHostedHub(HostType, AddUpdateHandler)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));
     }
 
+    private MessageHubConfiguration AddUpdateHandler(MessageHubConfiguration c)
+        => c.WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
+
+    private async Task<IMessageDelivery> HandleUpdateNodeRequest(
+        IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request, CancellationToken ct)
+    {
+        var node = request.Message.Node;
+        await _persistence.SaveNodeAsync(node, JsonOptions, ct);
+        hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    private IMessageHub GetHostWithHandler(string hostId, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        => Mesh.GetHostedHub(new Address(HostType, hostId), c => AddUpdateHandler(config(c)));
+
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        return base.ConfigureHost(configuration)
-            .AddMeshDataSource(ds => ds.WithContentType<TestContent>());
+        return AddUpdateHandler(base.ConfigureHost(configuration)
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -64,7 +81,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         await _persistence.SaveNodeAsync(node, JsonOptions);
 
         // Act - Start a hub for that path
-        var host = Mesh.GetHostedHub(new Address(HostType, "load-test"), c => c
+        var host = GetHostWithHandler("load-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
 
         var workspace = host.GetWorkspace();
@@ -99,7 +116,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         };
         await _persistence.SaveNodeAsync(node, JsonOptions);
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "persist-test"), c => c
+        var host = GetHostWithHandler("persist-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
 
         var workspace = host.GetWorkspace();
@@ -147,7 +164,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         };
         await _persistence.SaveNodeAsync(node, JsonOptions);
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "sync-test"), c => c
+        var host = GetHostWithHandler("sync-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
 
         var workspace = host.GetWorkspace();
@@ -199,7 +216,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         };
         await _persistence.SaveNodeAsync(node, JsonOptions);
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "transient-test"), c => c
+        var host = GetHostWithHandler("transient-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
 
         var workspace = host.GetWorkspace();
@@ -230,7 +247,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         };
         await _persistence.SaveNodeAsync(node, JsonOptions);
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "nodetype-test"), c => c
+        var host = GetHostWithHandler("nodetype-test", c => c
             .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
 
         var workspace = host.GetWorkspace();

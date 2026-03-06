@@ -30,7 +30,7 @@ public static class NodeCopyHelper
 
         // Collect source node + all descendants
         var nodesToCopy = new List<MeshNode> { sourceNode };
-        await foreach (var descendant in meshQuery.QueryAsync<MeshNode>($"parent:{sourcePath} scope:descendants").WithCancellation(ct))
+        await foreach (var descendant in meshQuery.QueryAsync<MeshNode>($"path:{sourcePath} scope:descendants").WithCancellation(ct))
         {
             nodesToCopy.Add(descendant);
         }

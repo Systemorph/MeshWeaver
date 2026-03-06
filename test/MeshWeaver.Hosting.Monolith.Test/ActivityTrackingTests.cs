@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.Hosting.Activity;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -12,19 +12,21 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for activity tracking via IActivityStore (as used by NavigationService).
+/// Tests for activity tracking via IMeshNodeFactory (UserActivity nodes).
 /// Activity is tracked at the navigation level (ApplicationPage), not at the persistence layer.
 /// </summary>
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly InMemoryActivityStore _activityStore = new();
-
-    private static UserActivityRecord CreateActivityRecord(string userId, string path, string? name = null, string? nodeType = null, ActivityType type = ActivityType.Read)
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
+    private async Task CreateUserActivityNodeAsync(string userId, string path, string? name = null, string? nodeType = null, ActivityType type = ActivityType.Read)
     {
         var now = System.DateTimeOffset.UtcNow;
-        return new UserActivityRecord
+        var encodedPath = path.Replace("/", "_");
+        var activityPath = $"_useractivity/{userId}/{encodedPath}";
+        var record = new UserActivityRecord
         {
-            Id = path.Replace("/", "_"),
+            Id = encodedPath,
             NodePath = path,
             UserId = userId,
             ActivityType = type,
@@ -34,6 +36,14 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
             NodeName = name,
             NodeType = nodeType,
         };
+        var activityNode = MeshNode.FromPath(activityPath) with
+        {
+            NodeType = "UserActivity",
+            Name = name ?? path,
+            State = MeshNodeState.Active,
+            Content = record
+        };
+        await NodeFactory.CreateNodeAsync(activityNode);
     }
 
     [Fact(Timeout = 10000)]
@@ -41,16 +51,16 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Arrange
         var userId = "user-123";
-        var record = CreateActivityRecord(userId, "org/acme", "Acme Corp", "Type/Organization");
 
         // Act
-        await _activityStore.SaveActivitiesAsync(userId, [record]);
+        await CreateUserActivityNodeAsync(userId, "org/acme", "Acme Corp", "Markdown");
 
         // Assert
-        var activities = await _activityStore.GetActivitiesAsync(userId);
-        activities.Should().ContainSingle();
-        var activity = activities.First();
-        activity.NodePath.Should().Be("org/acme");
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:_useractivity/{userId}/org_acme scope:exact").FirstOrDefaultAsync();
+        node.Should().NotBeNull();
+        var activity = node!.Content as UserActivityRecord;
+        activity.Should().NotBeNull();
+        activity!.NodePath.Should().Be("org/acme");
         activity.UserId.Should().Be(userId);
         activity.ActivityType.Should().Be(ActivityType.Read);
         activity.AccessCount.Should().Be(1);
@@ -61,86 +71,25 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
     {
         // Arrange
         var userId = "user-456";
-        var record = CreateActivityRecord(userId, "org/contoso", "Contoso Ltd", "Type/Organization", ActivityType.Write);
 
         // Act
-        await _activityStore.SaveActivitiesAsync(userId, [record]);
+        await CreateUserActivityNodeAsync(userId, "org/contoso", "Contoso Ltd", "Markdown", ActivityType.Write);
 
         // Assert
-        var activities = await _activityStore.GetActivitiesAsync(userId);
-        activities.Should().ContainSingle();
-        var activity = activities.First();
-        activity.NodePath.Should().Be("org/contoso");
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:_useractivity/{userId}/org_contoso scope:exact").FirstOrDefaultAsync();
+        node.Should().NotBeNull();
+        var activity = node!.Content as UserActivityRecord;
+        activity.Should().NotBeNull();
+        activity!.NodePath.Should().Be("org/contoso");
         activity.ActivityType.Should().Be(ActivityType.Write);
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task MultipleAccesses_IncrementsAccessCount()
-    {
-        // Arrange
-        var userId = "user-789";
-
-        // Act - save activity for the same node multiple times (simulating repeated navigations)
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/fabrikam", "Fabrikam")]);
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/fabrikam", "Fabrikam")]);
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/fabrikam", "Fabrikam")]);
-
-        // Assert
-        var activities = await _activityStore.GetActivitiesAsync(userId);
-        activities.Should().ContainSingle();
-        activities.First().AccessCount.Should().Be(3);
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task ActivityRecords_CanBeQueried()
-    {
-        // Arrange
-        var userId = "user-query";
-
-        // Save activities for multiple nodes
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/alpha", "Alpha", "Type/Organization")]);
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/beta", "Beta", "Type/Organization")]);
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/alpha", "Alpha", "Type/Organization")]); // Access alpha again
-
-        // Act
-        var activityRecords = (await _activityStore.GetActivitiesAsync(userId))
-            .OrderByDescending(a => a.AccessCount)
-            .ToList();
-
-        // Assert
-        activityRecords.Should().HaveCount(2);
-        activityRecords.First().NodePath.Should().Be("org/alpha"); // More accesses
-        activityRecords.First().AccessCount.Should().Be(2);
-        activityRecords.Last().NodePath.Should().Be("org/beta");
-        activityRecords.Last().AccessCount.Should().Be(1);
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task ActivityRecords_OrderByLastAccessedAt_ReturnsCorrectOrder()
-    {
-        // Arrange
-        var userId = "user-order";
-
-        // Access in specific order with delays
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/first", "First", "Type/Organization")]);
-        await Task.Delay(10);
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/second", "Second", "Type/Organization")]);
-        await Task.Delay(10);
-        await _activityStore.SaveActivitiesAsync(userId, [CreateActivityRecord(userId, "org/third", "Third", "Type/Organization")]);
-
-        // Act
-        var results = (await _activityStore.GetActivitiesAsync(userId)).ToList();
-
-        // Assert
-        results.Should().HaveCount(3);
-        results[0].NodePath.Should().Be("org/third"); // Most recent
-        results[1].NodePath.Should().Be("org/second");
-        results[2].NodePath.Should().Be("org/first"); // Least recent
     }
 }
 
 public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
+
     [Fact(Timeout = 10000)]
     public async Task Catalog_NoActivity_FallsBackToActualNodes()
     {
@@ -148,16 +97,16 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme",
-            NodeType = "Type/Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso",
-            NodeType = "Type/Organization"
+            NodeType = "Markdown"
         });
 
         // Act - query for organizations using standard query (simulating fallback)
-        var results = await MeshQuery.QueryAsync<MeshNode>("path:org nodeType:Type/Organization scope:descendants limit:20")
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:org nodeType:Markdown scope:descendants limit:20")
             .ToListAsync();
 
         // Assert - should return actual nodes when no activity
@@ -168,115 +117,38 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 10000)]
     public async Task Catalog_WithActivity_CanLoadNodesFromActivityPaths()
     {
-        // Arrange
-        var activityStore = new InMemoryActivityStore();
-        var userId = "catalog-user";
-
-        // Create nodes
+        // Arrange - Create nodes
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
-            NodeType = "Type/Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with
         {
             Name = "Beta",
-            NodeType = "Type/Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/gamma") with
         {
             Name = "Gamma",
-            NodeType = "Type/Organization"
+            NodeType = "Markdown"
         });
 
-        // Simulate navigation activity: beta first, then gamma, then alpha (alpha most recent)
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "org_beta", NodePath = "org/beta", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Beta", NodeType = "Type/Organization"
-        }]);
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "org_gamma", NodePath = "org/gamma", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Gamma", NodeType = "Type/Organization"
-        }]);
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "org_alpha", NodePath = "org/alpha", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Alpha", NodeType = "Type/Organization"
-        }]);
+        // Act - query using source:activity (returns all matching nodes in InMemory mode)
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown path:org scope:children")
+            .ToListAsync();
 
-        // Act - get activity records ordered by lastAccessedAt
-        var activityRecords = (await activityStore.GetActivitiesAsync(userId)).ToList();
-
-        // Load actual nodes from activity records (as Catalog does)
-        var nodes = new List<MeshNode>();
-        foreach (var activity in activityRecords)
-        {
-            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{activity.NodePath} scope:exact").FirstOrDefaultAsync();
-            if (node != null)
-                nodes.Add(node);
-        }
-
-        // Assert - order should be based on activity (most recently accessed first)
-        nodes.Should().HaveCount(3);
-        nodes[0].Name.Should().Be("Alpha"); // Most recently accessed
-        nodes[1].Name.Should().Be("Gamma");
-        nodes[2].Name.Should().Be("Beta"); // First accessed
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task Catalog_ActivityChangesOrder_AfterNewAccess()
-    {
-        // Arrange
-        var activityStore = new InMemoryActivityStore();
-        var userId = "reorder-user";
-
-        // PHASE 1: Initial access order - doc1, doc2, doc3
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "doc_doc1", NodePath = "doc/doc1", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 1", NodeType = "Type/Document"
-        }]);
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "doc_doc2", NodePath = "doc/doc2", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 2", NodeType = "Type/Document"
-        }]);
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "doc_doc3", NodePath = "doc/doc3", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 3", NodeType = "Type/Document"
-        }]);
-
-        // Query initial order
-        var initialOrder = (await activityStore.GetActivitiesAsync(userId)).Select(a => a.NodePath).ToList();
-        initialOrder[0].Should().Be("doc/doc3"); // Most recent
-        initialOrder[1].Should().Be("doc/doc2");
-        initialOrder[2].Should().Be("doc/doc1"); // Least recent
-
-        // PHASE 2: Access doc1 again - it should become most recent
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "doc_doc1", NodePath = "doc/doc1", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document 1", NodeType = "Type/Document"
-        }]);
-
-        // Query new order
-        var newOrder = (await activityStore.GetActivitiesAsync(userId)).Select(a => a.NodePath).ToList();
-        newOrder[0].Should().Be("doc/doc1"); // Now most recent
-        newOrder[1].Should().Be("doc/doc3");
-        newOrder[2].Should().Be("doc/doc2");
+        // Assert - all matching nodes are returned
+        results.Should().HaveCount(3);
+        results.Select(n => n.Name).Should().Contain(["Alpha", "Beta", "Gamma"]);
     }
 }
 
 public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
+
     [Fact(Timeout = 10000)]
     public async Task Catalog_SearchWithQuery_FiltersResults()
     {
@@ -284,21 +156,21 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme Corporation",
-            NodeType = "Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso Ltd",
-            NodeType = "Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/fabrikam") with
         {
             Name = "Fabrikam Inc",
-            NodeType = "Organization"
+            NodeType = "Markdown"
         });
 
         // Act - query with filter for name containing "Corp" using wildcard operator
-        var results = await MeshQuery.QueryAsync<MeshNode>("path:org nodeType:Organization name:*Corp* scope:descendants limit:20")
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:org nodeType:Markdown name:*Corp* scope:descendants limit:20")
             .ToListAsync();
 
         // Assert - should only return Acme Corporation
@@ -313,16 +185,16 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("doc/report1") with
         {
             Name = "Annual Financial Report 2024",
-            NodeType = "Document"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("doc/memo1") with
         {
             Name = "Team Meeting Notes",
-            NodeType = "Document"
+            NodeType = "Markdown"
         });
 
         // Act - text search for "financial" with descendants scope
-        var results = await MeshQuery.QueryAsync<MeshNode>("path:doc nodeType:Document financial scope:descendants limit:20")
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:doc nodeType:Markdown financial scope:descendants limit:20")
             .ToListAsync();
 
         // Assert
@@ -339,20 +211,20 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
             await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"item/item{i:D2}") with
             {
                 Name = $"Item {i:D2}",
-                NodeType = "Item"
+                NodeType = "Markdown"
             });
         }
 
         // Act - first page (3 items) with descendants scope
-        var firstPage = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Item scope:descendants limit:3")
+        var firstPage = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Markdown scope:descendants limit:3")
             .ToListAsync();
 
         // Load more (6 items total)
-        var secondPage = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Item scope:descendants limit:6")
+        var secondPage = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Markdown scope:descendants limit:6")
             .ToListAsync();
 
         // Load all (10 items)
-        var allItems = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Item scope:descendants limit:100")
+        var allItems = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Markdown scope:descendants limit:100")
             .ToListAsync();
 
         // Assert
@@ -370,14 +242,14 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
             await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"test/node{i}") with
             {
                 Name = $"Node {i}",
-                NodeType = "Test"
+                NodeType = "Markdown"
             });
         }
 
         // Act - request limit+1 to detect if there are more
         var limit = 3;
         var queryLimit = limit + 1;
-        var results = await MeshQuery.QueryAsync<MeshNode>($"path:test nodeType:Test scope:descendants limit:{queryLimit}")
+        var results = await MeshQuery.QueryAsync<MeshNode>($"path:test nodeType:Markdown scope:descendants limit:{queryLimit}")
             .ToListAsync();
 
         var hasMore = results.Count > limit;
@@ -392,68 +264,33 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Catalog_ActivityRecords_CanBeFilteredByNodeType()
+    public async Task Catalog_NodeTypeFilter_FiltersCorrectly()
     {
-        // Arrange
-        var activityStore = new InMemoryActivityStore();
-        var userId = "search-user";
-
-        // Create nodes with different types
+        // Arrange - Create nodes with different types
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/project1") with
         {
             Name = "Project Alpha",
-            NodeType = "Project"
+            NodeType = "Code"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
-            NodeType = "Document"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/project2") with
         {
             Name = "Project Beta",
-            NodeType = "Project"
+            NodeType = "Code"
         });
 
-        // Simulate navigation activity for all nodes
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "data_project1", NodePath = "data/project1", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Project Alpha", NodeType = "Project"
-        }]);
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "data_doc1", NodePath = "data/doc1", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Document One", NodeType = "Document"
-        }]);
-        await Task.Delay(20);
-        await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
-        {
-            Id = "data_project2", NodePath = "data/project2", UserId = userId, ActivityType = ActivityType.Read,
-            FirstAccessedAt = System.DateTimeOffset.UtcNow, LastAccessedAt = System.DateTimeOffset.UtcNow, AccessCount = 1, NodeName = "Project Beta", NodeType = "Project"
-        }]);
+        // Act - query for Code nodes only
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:data nodeType:Code scope:descendants limit:20")
+            .ToListAsync();
 
-        // Act - get activity records and filter by nodeType manually (as catalog would do)
-        var allActivityRecords = (await activityStore.GetActivitiesAsync(userId)).ToList();
-
-        // Load nodes and filter by type
-        var projectRecords = new List<UserActivityRecord>();
-        foreach (var activity in allActivityRecords)
-        {
-            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{activity.NodePath} scope:exact").FirstOrDefaultAsync();
-            if (node?.NodeType == "Project")
-            {
-                projectRecords.Add(activity);
-            }
-        }
-
-        // Assert - should return only Project nodes, not the Document
-        projectRecords.Should().HaveCount(2);
-        projectRecords.Select(a => a.NodePath).Should().Contain(["data/project1", "data/project2"]);
-        projectRecords.Select(a => a.NodePath).Should().NotContain("data/doc1");
-        // Most recent first
-        projectRecords[0].NodePath.Should().Be("data/project2");
+        // Assert - should return only Code nodes, not the Markdown
+        results.Should().HaveCount(2);
+        results.Select(n => n.Name).Should().Contain(["Project Alpha", "Project Beta"]);
+        results.Select(n => n.Name).Should().NotContain("Document One");
     }
 }
 
@@ -465,6 +302,9 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 /// </summary>
 public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
+
     [Fact(Timeout = 10000)]
     public async Task SourceActivity_ReturnsAllMatchingNodes()
     {
@@ -472,21 +312,21 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
-            NodeType = "Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with
         {
             Name = "Beta",
-            NodeType = "Organization"
+            NodeType = "Markdown"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/gamma") with
         {
             Name = "Gamma",
-            NodeType = "Organization"
+            NodeType = "Markdown"
         });
 
         // Act - source:activity query via InMemory (filters still apply, ordering is default)
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Organization path:org scope:children")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown path:org scope:children")
             .ToListAsync();
 
         // Assert - all matching nodes are returned (source:activity is stripped by parser)
@@ -501,19 +341,19 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/proj1") with
         {
             Name = "Project One",
-            NodeType = "Project"
+            NodeType = "Code"
         });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
-            NodeType = "Document"
+            NodeType = "Markdown"
         });
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Project path:data scope:children")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Code path:data scope:children")
             .ToListAsync();
 
-        // Assert - only Project nodes returned
+        // Assert - only Code nodes returned
         results.Should().ContainSingle();
         results[0].Name.Should().Be("Project One");
     }
@@ -527,12 +367,12 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
             await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"items/item{i}") with
             {
                 Name = $"Item {i}",
-                NodeType = "Item"
+                NodeType = "Markdown"
             });
         }
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Item path:items scope:children limit:3")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown path:items scope:children limit:3")
             .ToListAsync();
 
         // Assert

@@ -1,7 +1,9 @@
+using System;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -33,18 +35,33 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
             .WithServices(services => services
                 .AddInMemoryPersistence(_persistence))
             .WithRoutes(forward => forward
-                .RouteAddressToHostedHub(HostType, ConfigureHost)
+                .RouteAddressToHostedHub(HostType, AddUpdateHandler)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));
+    }
+
+    private MessageHubConfiguration AddUpdateHandler(MessageHubConfiguration c)
+        => c.WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
+
+    private async Task<IMessageDelivery> HandleUpdateNodeRequest(
+        IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request, CancellationToken ct)
+    {
+        var node = request.Message.Node;
+        await _persistence.SaveNodeAsync(node, JsonOptions, ct);
+        hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request));
+        return request.Processed();
     }
 
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
     {
-        return base.ConfigureHost(configuration)
-            .AddMeshDataSource(ds => ds.WithContentType<TodoItem>());
+        return AddUpdateHandler(base.ConfigureHost(configuration)
+            .AddMeshDataSource(ds => ds.WithContentType<TodoItem>()));
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration);
+
+    private IMessageHub GetHostWithHandler(string hostId, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        => Mesh.GetHostedHub(new Address(HostType, hostId), c => AddUpdateHandler(config(c)));
 
     private string GetHubPath(string hostId = "1") => $"{HostType}/{hostId}";
 
@@ -142,7 +159,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         await SetupInitialNode(hubPath, initialContent, "mapped");
 
         // Create a new host that uses AttributeMappedItem
-        var host = Mesh.GetHostedHub(new Address(HostType, "attr"), c => c
+        var host = GetHostWithHandler("attr", c => c
             .AddMeshDataSource(ds => ds.WithContentType<AttributeMappedItem>()));
 
         var workspace = host.GetWorkspace();
@@ -170,7 +187,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         var initialContent = new NamedItem { Id = "1", FirstName = "John", LastName = "Doe" };
         await SetupInitialNode(hubPath, initialContent, "named");
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "named"), c => c
+        var host = GetHostWithHandler("named", c => c
             .AddMeshDataSource(ds => ds.WithContentType<NamedItem>()));
 
         var workspace = host.GetWorkspace();
@@ -201,7 +218,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         };
         await _persistence.SaveNodeAsync(node, JsonOptions);
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "minimal"), c => c
+        var host = GetHostWithHandler("minimal", c => c
             .AddMeshDataSource(ds => ds.WithContentType<MinimalItem>()));
 
         var workspace = host.GetWorkspace();
@@ -256,7 +273,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         };
         await SetupInitialNode(hubPath, initialContent, "full");
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "full-attr"), c => c
+        var host = GetHostWithHandler("full-attr", c => c
             .AddMeshDataSource(ds => ds.WithContentType<FullMappingItem>()));
 
         var workspace = host.GetWorkspace();
@@ -310,7 +327,7 @@ public class ContentPropertySyncTest(ITestOutputHelper output) : HubTestBase(out
         };
         await SetupInitialNode(hubPath, initialContent, "fullconv");
 
-        var host = Mesh.GetHostedHub(new Address(HostType, "full-conv"), c => c
+        var host = GetHostWithHandler("full-conv", c => c
             .AddMeshDataSource(ds => ds.WithContentType<ConventionalFullItem>()));
 
         var workspace = host.GetWorkspace();

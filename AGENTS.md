@@ -264,6 +264,52 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 **No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshQuery`, or other core interfaces.
 
+### Running Tests — Log Once, Read on Failure
+
+**Never run the same test suite repeatedly** just to see results. Run once, capture output, and analyze failures from the log file.
+
+```bash
+# Run tests and capture all output to a log file
+cd /c/dev/MeshWeaver && dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore 2>&1 | tee /tmp/monolith-test-results.log
+
+# On failure: read the log file for error details (DO NOT re-run)
+cat /tmp/monolith-test-results.log | grep -A 5 "FAIL"
+
+# For detailed TRX output:
+dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore --logger "trx" --results-directory ./TestResults
+```
+
+**Workflow:**
+1. Run tests **once** with output captured to a file
+2. If failures: read the log file to understand errors
+3. Fix the code
+4. Run tests **once** again to verify fixes
+5. Repeat 2–4 until green
+
+### Access Control in Tests
+
+When `AddRowLevelSecurity()` is used, `RlsNodeValidator` blocks all CRUD operations without permissions. To create test data:
+
+```csharp
+// Before creating test data: set up admin context
+var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+await securityService.AddUserRoleAsync("setup-admin", "Admin", null, "system");
+accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
+
+// ... create test nodes ...
+
+// After setup: clear admin context so tests start clean
+accessService.SetCircuitContext(null);
+```
+
+### Node Types
+
+Only use **registered** node types in tests. Standard types registered by `AddGraph()`:
+`Markdown`, `Code`, `Agent`, `Group`, `User`, `VUser`, `Role`, `Notification`, `Approval`, `AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `ActivityLog`, `UserActivity`, `Comment`, `Thread`, `ThreadMessage`
+
+Custom types can be registered via `builder.AddMeshNodes(new MeshNode("MyType") { Name = "My Type" })` in `ConfigureMesh`.
+
 ### MonolithMeshTestBase (recommended for most tests)
 
 Reference `MeshWeaver.Hosting.Monolith.TestBase` and inherit from `MonolithMeshTestBase`:
