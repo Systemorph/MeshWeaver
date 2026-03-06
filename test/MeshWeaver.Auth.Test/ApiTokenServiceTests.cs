@@ -3,6 +3,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -16,6 +17,9 @@ namespace MeshWeaver.Auth.Test;
 
 public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
+
     private ApiTokenService GetService() =>
         new(
             Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>(),

@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
@@ -22,7 +23,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddRowLevelSecurity();
+        => base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
 
     #region AddUserRole creates AccessAssignment MeshNodes
 

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
@@ -19,6 +20,8 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
 
     private async Task SetupMarketingHierarchy()
     {
@@ -315,6 +318,8 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
 /// </summary>
 public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).AddGraph();
 
     [Fact]
     public async Task QueryAsync_Generic_ReturnsTypedResults()

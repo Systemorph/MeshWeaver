@@ -9,6 +9,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
@@ -33,6 +34,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .AddGraph()
             .AddRowLevelSecurity()
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 

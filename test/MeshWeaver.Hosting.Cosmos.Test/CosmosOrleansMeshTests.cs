@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Cosmos;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.Persistence;
@@ -183,6 +184,7 @@ public class CosmosTestSiloConfigurator : ISiloConfigurator, IHostConfigurator
         });
 
         hostBuilder.UseOrleansMeshServer()
-            .ConfigurePortalMesh();
+            .ConfigurePortalMesh()
+            .AddGraph();
     }
 }
