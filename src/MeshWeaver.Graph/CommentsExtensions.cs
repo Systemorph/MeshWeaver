@@ -238,7 +238,7 @@ public static class CommentsView
     /// </summary>
     private static UiControl BuildCommentCreateForm(LayoutAreaHost host, string commentPath, string stateId)
     {
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         var textDataId = $"commentText_{commentPath.Replace("/", "_")}";
 
@@ -324,7 +324,7 @@ public static class CommentsView
                     }
                 };
 
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                 await nodeFactory.CreateTransientAsync(commentNode);
 
                 host.UpdateData(newCommentPathStateId, commentPath);

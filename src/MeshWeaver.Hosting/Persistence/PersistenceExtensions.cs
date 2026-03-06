@@ -351,7 +351,7 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
-    /// Registers the MeshCatalog and its public interfaces (IMeshNodeFactory, IPathResolver).
+    /// Registers the MeshCatalog and its public interfaces (IMeshNodePersistence, IPathResolver).
     /// All three interfaces resolve to the same singleton instance.
     /// Use this from application code instead of registering IMeshCatalog directly (which is internal).
     /// </summary>
@@ -359,7 +359,7 @@ public static class PersistenceExtensions
     {
         services.TryAddSingleton<MeshCatalog>();
         services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
-        services.TryAddSingleton<IMeshNodeFactory>(sp => sp.GetRequiredService<MeshCatalog>());
+        services.TryAddSingleton<IMeshNodePersistence>(sp => sp.GetRequiredService<MeshCatalog>());
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<MeshCatalog>());
         return services;
     }

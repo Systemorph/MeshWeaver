@@ -475,8 +475,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public void Services_AreRegisteredForCreateFlow()
     {
         // Verify all required services are registered
-        var nodeFactory = Mesh.ServiceProvider.GetService<IMeshNodeFactory>();
-        nodeFactory.Should().NotBeNull("IMeshNodeFactory should be registered");
+        var nodeFactory = Mesh.ServiceProvider.GetService<IMeshNodePersistence>();
+        nodeFactory.Should().NotBeNull("IMeshNodePersistence should be registered");
 
         var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
         nodeTypeService.Should().NotBeNull("INodeTypeService should be registered");

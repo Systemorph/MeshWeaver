@@ -154,7 +154,7 @@ public static class GroupLayoutAreas
                             .WithAppearance(Appearance.Stealth)
                             .WithClickAction(async ctx =>
                             {
-                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                                 await nodeFactory.DeleteNodeAsync(member.Path);
                             })));
                 }
@@ -233,7 +233,7 @@ public static class GroupLayoutAreas
                             return;
                         }
 
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                         {
                             var memberName = memberId.Split('/').Last();
                             var memberNode = new MeshNode($"{memberName}_Membership", groupPath)

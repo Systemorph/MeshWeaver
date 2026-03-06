@@ -17,14 +17,14 @@ public class MeshOperations
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshQuery meshQuery;
-    private readonly IMeshNodeFactory nodeFactory;
+    private readonly IMeshNodePersistence nodeFactory;
 
     public MeshOperations(IMessageHub hub)
     {
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
         this.meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-        this.nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        this.nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
     }
 
     /// <summary>
@@ -193,19 +193,8 @@ public class MeshOperations
             var results = new List<string>();
             foreach (var meshNode in nodeList)
             {
-                var tcs = new TaskCompletionSource<UpdateNodeResponse>();
-                var delivery = hub.Post(
-                    new UpdateNodeRequest(meshNode),
-                    o => o.WithTarget(hub.Address));
-                hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
-                {
-                    tcs.TrySetResult(response.Message);
-                    return response;
-                });
-                var updateResponse = await tcs.Task;
-                if (!updateResponse.Success)
-                    throw new InvalidOperationException(updateResponse.Error ?? "Update failed");
-                results.Add($"Updated: {updateResponse.Node!.Path}");
+                var updated = await nodeFactory.UpdateNodeAsync(meshNode);
+                results.Add($"Updated: {updated.Path}");
             }
 
             return string.Join("\n", results);
@@ -235,18 +224,7 @@ public class MeshOperations
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                var tcs = new TaskCompletionSource<DeleteNodeResponse>();
-                var delivery = hub.Post(
-                    new DeleteNodeRequest(resolvedPath),
-                    o => o.WithTarget(hub.Address));
-                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
-                {
-                    tcs.TrySetResult(response.Message);
-                    return response;
-                });
-                var deleteResponse = await tcs.Task;
-                if (!deleteResponse.Success)
-                    throw new InvalidOperationException(deleteResponse.Error ?? "Delete failed");
+                await nodeFactory.DeleteNodeAsync(resolvedPath);
                 results.Add($"Deleted: {resolvedPath}");
             }
 

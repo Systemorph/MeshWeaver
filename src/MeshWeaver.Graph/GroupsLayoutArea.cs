@@ -286,7 +286,7 @@ public static class GroupsLayoutArea
                     else
                     {
                         // Create transient node and navigate to Create view
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                         // Look up the member node to copy their icon
                         string? memberIcon = null;
                         if (query != null)

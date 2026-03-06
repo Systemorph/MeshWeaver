@@ -25,7 +25,7 @@ internal sealed class MeshCatalog(
     MeshConfiguration configuration,
     IPersistenceService persistenceService,
     IMeshQuery? meshQuery = null)
-    : IMeshCatalog, IMeshNodeFactory
+    : IMeshCatalog, IMeshNodePersistence
 {
     public MeshConfiguration Configuration { get; } = configuration;
     internal IPersistenceService Persistence { get; } = persistenceService;
@@ -196,6 +196,52 @@ internal sealed class MeshCatalog(
     }
 
     /// <inheritdoc />
+    public Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
+    {
+        var tcs = new TaskCompletionSource<MeshNode>();
+
+        var request = new UpdateNodeRequest(node) { UpdatedBy = updatedBy };
+        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
+
+        if (delivery == null)
+        {
+            tcs.SetException(new InvalidOperationException("Failed to post UpdateNodeRequest"));
+            return tcs.Task;
+        }
+
+        hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
+        {
+            if (ct.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled(ct);
+                return response;
+            }
+
+            var updateResponse = response.Message;
+            if (updateResponse.Success && updateResponse.Node != null)
+            {
+                cache.Set(updateResponse.Node.Path, updateResponse.Node, cacheOptions);
+                tcs.TrySetResult(updateResponse.Node);
+            }
+            else
+            {
+                Exception exception = updateResponse.RejectionReason switch
+                {
+                    NodeUpdateRejectionReason.ValidationFailed =>
+                        new UnauthorizedAccessException(updateResponse.Error ?? "Access denied"),
+                    NodeUpdateRejectionReason.NodeNotFound =>
+                        new InvalidOperationException($"Node not found: {node.Path}"),
+                    _ => new InvalidOperationException(updateResponse.Error ?? "Node update failed")
+                };
+                tcs.TrySetException(exception);
+            }
+            return response;
+        });
+
+        return tcs.Task;
+    }
+
+    /// <inheritdoc />
     public async Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
@@ -295,23 +341,71 @@ internal sealed class MeshCatalog(
         return confirmedNode;
     }
 
-    /// <inheritdoc />
-    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+    /// <summary>
+    /// IMeshCatalog.DeleteNodeAsync — internal, called by the DeleteNodeRequest handler.
+    /// Deletes directly from persistence and cache.
+    /// </summary>
+    async Task IMeshCatalog.DeleteNodeAsync(string path, bool recursive, CancellationToken ct)
     {
-        // Remove from cache - for recursive, also remove all descendants
         if (recursive)
         {
             await foreach (var descendant in Persistence.GetDescendantsAsync(path).WithCancellation(ct))
-            {
                 cache.Remove(descendant.Path);
-            }
         }
         cache.Remove(path);
-
-        // Delete from persistence
         await Persistence.DeleteNodeAsync(path, recursive, ct);
-
         logger.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
+    }
+
+    /// <summary>
+    /// IMeshNodePersistence.DeleteNodeAsync — public, routes through the message bus.
+    /// The handler recursively deletes children first (bottom-to-top).
+    /// If a child cannot be deleted, the parent is not deleted either.
+    /// </summary>
+    Task IMeshNodePersistence.DeleteNodeAsync(string path, string? deletedBy, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource();
+
+        var request = new DeleteNodeRequest(path) { DeletedBy = deletedBy };
+        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
+
+        if (delivery == null)
+        {
+            tcs.SetException(new InvalidOperationException("Failed to post DeleteNodeRequest"));
+            return tcs.Task;
+        }
+
+        hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+        {
+            if (ct.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled(ct);
+                return response;
+            }
+
+            var deleteResponse = response.Message;
+            if (deleteResponse.Success)
+            {
+                tcs.TrySetResult();
+            }
+            else
+            {
+                Exception exception = deleteResponse.RejectionReason switch
+                {
+                    NodeDeletionRejectionReason.ValidationFailed =>
+                        new UnauthorizedAccessException(deleteResponse.Error ?? "Access denied"),
+                    NodeDeletionRejectionReason.NodeNotFound =>
+                        new InvalidOperationException($"Node not found: {path}"),
+                    NodeDeletionRejectionReason.ChildDeletionFailed =>
+                        new InvalidOperationException(deleteResponse.Error ?? "Child deletion failed"),
+                    _ => new InvalidOperationException(deleteResponse.Error ?? "Node deletion failed")
+                };
+                tcs.TrySetException(exception);
+            }
+            return response;
+        });
+
+        return tcs.Task;
     }
 
     private static bool ValidatePath(MeshNode node)

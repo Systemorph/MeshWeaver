@@ -58,7 +58,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         /// The ChildrenQuery makes the Organization catalog display all nodes
         /// with nodeType=="Organization".
         /// </summary>
-        private static async Task SetupOrganizationsStructureAsync(IMeshNodeFactory nodeFactory)
+        private static async Task SetupOrganizationsStructureAsync(IMeshNodePersistence nodeFactory)
         {
             // 1. Create Organization - the NodeType definition at root level
             // This type uses ChildrenQuery to show all Organization instances

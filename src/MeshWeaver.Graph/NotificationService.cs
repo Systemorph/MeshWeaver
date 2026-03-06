@@ -14,7 +14,7 @@ public static class NotificationService
     /// Creates a notification MeshNode under User/{targetUserId}/{newGuid}.
     /// </summary>
     public static async Task CreateNotificationAsync(
-        IMeshNodeFactory nodeFactory,
+        IMeshNodePersistence nodeFactory,
         string targetUserId,
         string title,
         string message,

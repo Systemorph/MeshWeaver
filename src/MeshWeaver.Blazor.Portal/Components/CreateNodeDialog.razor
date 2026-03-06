@@ -294,7 +294,7 @@
                 State = MeshNodeState.Transient
             };
 
-            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
             await nodeFactory.CreateTransientAsync(transientNode);
 
             // Store result data for navigation

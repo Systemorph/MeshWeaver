@@ -232,7 +232,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Cleanup
         Output.WriteLine("Cleaning up reply node...");
-        await NodeFactory.DeleteNodeAsync(createdReply.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdReply.Path!, ct: TestTimeout);
     }
 
     /// <summary>
@@ -288,7 +288,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         // Cleanup
         foreach (var path in replyPaths)
         {
-            await NodeFactory.DeleteNodeAsync(path, recursive: false, ct: TestTimeout);
+            await NodeFactory.DeleteNodeAsync(path, ct: TestTimeout);
         }
         Output.WriteLine("Cleaned up all reply nodes");
     }

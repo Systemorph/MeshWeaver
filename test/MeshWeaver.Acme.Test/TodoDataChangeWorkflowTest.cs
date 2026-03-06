@@ -616,7 +616,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         createdNode.Should().NotBeNull("Test node should exist after creation");
 
         // Permanently delete it
-        await NodeFactory.DeleteNodeAsync(testPath, recursive: false);
+        await NodeFactory.DeleteNodeAsync(testPath);
         Output.WriteLine("Permanently deleted test node");
 
         // Verify it no longer exists

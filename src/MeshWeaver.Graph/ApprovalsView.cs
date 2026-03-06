@@ -147,7 +147,7 @@ public static class ApprovalsView
             Status = ApprovalStatus.Pending
         };
 
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
 
         var approvalNode = new MeshNode(approvalId, nodePath)
         {

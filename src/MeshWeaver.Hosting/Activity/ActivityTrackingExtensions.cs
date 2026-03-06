@@ -14,7 +14,7 @@ public static class ActivityTrackingExtensions
 {
     /// <summary>
     /// Adds activity tracking via ActivityLogBundler which persists bundled activity logs
-    /// as MeshNodes through IMeshNodeFactory.
+    /// as MeshNodes through IMeshNodePersistence.
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
@@ -23,7 +23,7 @@ public static class ActivityTrackingExtensions
             services.AddScoped<ActivityLogBundler>(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
-                var nodeFactory = sp.GetRequiredService<IMeshNodeFactory>();
+                var nodeFactory = sp.GetRequiredService<IMeshNodePersistence>();
                 return new ActivityLogBundler(hub, async log =>
                 {
                     var node = MeshNode.FromPath($"{log.HubPath}/ActivityLog/{log.Id}") with

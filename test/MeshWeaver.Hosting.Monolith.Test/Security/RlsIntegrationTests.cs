@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
@@ -30,13 +31,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // First configure base (adds persistence), then add Row-Level Security
         // RLS must be added after persistence so it can decorate IPersistenceService
-        var configured = base.ConfigureMesh(builder).AddRowLevelSecurity();
+        var configured = base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
 
-        // Register node types as MeshNodes (including Comment and Thread for permission tests)
+        // Register additional node types as MeshNodes (Comment and Thread are already registered by AddGraph())
         configured.AddMeshNodes(
-            new MeshNode("secure") { Name = "Secure Type" },
-            new MeshNode(CommentNodeType.NodeType) { Name = "Comment" },
-            new MeshNode("Thread") { Name = "Thread" }
+            new MeshNode("secure") { Name = "Secure Type" }
         );
 
         return configured;
@@ -750,7 +749,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     {
         // First configure base (adds persistence), then add Row-Level Security
         // RLS must be added after persistence so it can decorate IPersistenceService
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        return base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
     }
 
     [Fact]

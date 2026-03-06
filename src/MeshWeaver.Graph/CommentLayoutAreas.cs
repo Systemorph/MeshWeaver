@@ -401,7 +401,7 @@ public static class CommentLayoutAreas
     /// </summary>
     private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId)
     {
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
 
@@ -463,7 +463,7 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Reply icon button. Creates a transient reply node via IMeshNodeFactory and shows inline Create area.
+    /// Builds the Reply icon button. Creates a transient reply node via IMeshNodePersistence and shows inline Create area.
     /// </summary>
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
@@ -488,7 +488,7 @@ public static class CommentLayoutAreas
                     }
                 };
 
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                 await nodeFactory.CreateTransientAsync(replyNode);
 
                 // Expand the replies section so the new reply is visible
@@ -540,8 +540,8 @@ public static class CommentLayoutAreas
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #f87171;\" title=\"Delete\">✕</span>")
             .WithClickAction(async _ =>
             {
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
-                await nodeFactory.DeleteNodeAsync(hubPath, recursive: true);
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                await nodeFactory.DeleteNodeAsync(hubPath);
             });
     }
 
@@ -568,8 +568,8 @@ public static class CommentLayoutAreas
                 Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
                     .WithClickAction(async _ =>
                     {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
-                        await nodeFactory.DeleteNodeAsync(hubPath, recursive: true);
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                        await nodeFactory.DeleteNodeAsync(hubPath);
                     }));
         }
 

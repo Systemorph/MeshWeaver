@@ -21,7 +21,7 @@ public class MeshDataSourceThreadManager : IThreadManager
     private readonly AccessService _accessService;
     private readonly IMessageHub _hub;
     private readonly ILogger<MeshDataSourceThreadManager>? _logger;
-    private readonly IMeshNodeFactory _nodeFactory;
+    private readonly IMeshNodePersistence _nodeFactory;
     private readonly IMeshQuery _meshQuery;
 
     internal MeshDataSourceThreadManager(
@@ -32,7 +32,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         _accessService = accessService;
         _hub = hub;
         _logger = logger;
-        _nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        _nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         _meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
     }
 
@@ -138,7 +138,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
     public async Task ClearThreadAsync(string threadId, CancellationToken ct = default)
     {
-        await _nodeFactory.DeleteNodeAsync(threadId, recursive: true, ct);
+        await _nodeFactory.DeleteNodeAsync(threadId, ct: ct);
         _logger?.LogInformation("Cleared thread {ThreadId}", threadId);
     }
 
@@ -160,7 +160,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
     public async Task DeleteThreadAsync(string threadId, CancellationToken ct = default)
     {
-        await _nodeFactory.DeleteNodeAsync(threadId, recursive: true, ct);
+        await _nodeFactory.DeleteNodeAsync(threadId, ct: ct);
         _logger?.LogInformation("Deleted thread {ThreadId}", threadId);
     }
 

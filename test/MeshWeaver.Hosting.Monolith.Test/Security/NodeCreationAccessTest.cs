@@ -64,7 +64,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
-    /// Tests that creating a node with Create permission succeeds via IMeshNodeFactory.CreateNodeAsync.
+    /// Tests that creating a node with Create permission succeeds via IMeshNodePersistence.CreateNodeAsync.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task CreateNode_WithPermission_Succeeds()

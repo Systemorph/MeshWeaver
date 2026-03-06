@@ -242,28 +242,7 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 2. Check for children if not recursive
-            if (!deleteRequest.Recursive)
-            {
-                var hasChildren = false;
-                await foreach (var _ in catalog.QueryAsync(path, maxResults: 1, ct: ct))
-                {
-                    hasChildren = true;
-                    break;
-                }
-
-                if (hasChildren)
-                {
-                    hub.Post(
-                        DeleteNodeResponse.Fail(
-                            $"Node at path '{path}' has children. Use Recursive=true to delete.",
-                            NodeDeletionRejectionReason.HasChildren),
-                        o => o.ResponseFor(request));
-                    return request.Processed();
-                }
-            }
-
-            // 3. Run validators (global + NodeType-specific)
+            // 2. Run validators on this node (global + NodeType-specific)
             var validationError = await RunDeletionValidatorsAsync(hub, catalog, existingNode, deleteRequest, ct);
             if (validationError != null)
             {
@@ -278,13 +257,71 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Delete the node
-            await catalog.DeleteNodeAsync(path, deleteRequest.Recursive, ct);
+            // 3. Get direct children
+            var children = new List<MeshNode>();
+            await foreach (var child in catalog.QueryAsync(path, maxResults: int.MaxValue, ct: ct))
+                children.Add(child);
 
-            // 4. Return success response
-            hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+            if (children.Count == 0)
+            {
+                // Leaf node — delete immediately
+                await catalog.DeleteNodeAsync(path, recursive: false, ct);
+                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
+                return request.Processed();
+            }
 
-            logger.LogInformation("Node deleted successfully at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
+            // 4. Has children — post DeleteNodeRequest for each child, do NOT await.
+            //    Use RegisterCallback to collect responses asynchronously.
+            //    When all children have responded, delete self and post response.
+            var childResponses = new DeleteNodeResponse[children.Count];
+            var remaining = children.Count;
+
+            for (var i = 0; i < children.Count; i++)
+            {
+                var idx = i;
+                var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy };
+                var delivery = hub.Post(childRequest, o => o.WithTarget(hub.Address))!;
+
+                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                {
+                    childResponses[idx] = response.Message;
+
+                    if (Interlocked.Decrement(ref remaining) == 0)
+                    {
+                        // All children responded — decide on parent deletion
+                        hub.InvokeAsync(async _ =>
+                        {
+                            var failed = childResponses.Where(r => !r.Success).Select(r => r.Error).ToList();
+                            if (failed.Count > 0)
+                            {
+                                hub.Post(
+                                    DeleteNodeResponse.Fail(
+                                        $"Cannot delete '{path}': {failed.Count} child deletion(s) failed: {string.Join("; ", failed)}",
+                                        NodeDeletionRejectionReason.ChildDeletionFailed),
+                                    o => o.ResponseFor(request));
+                            }
+                            else
+                            {
+                                await catalog.DeleteNodeAsync(path, recursive: false, ct);
+                                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
+                            }
+                        }, ex =>
+                        {
+                            logger.LogError(ex, "Error completing deletion of {Path}", path);
+                            hub.Post(
+                                DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                                o => o.ResponseFor(request));
+                            return Task.CompletedTask;
+                        });
+                    }
+
+                    return response;
+                });
+            }
+
+            // Return immediately — response will be posted from the callbacks above
             return request.Processed();
         }
         catch (InvalidOperationException ex)

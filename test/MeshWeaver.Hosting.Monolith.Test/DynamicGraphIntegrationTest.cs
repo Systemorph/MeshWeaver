@@ -64,7 +64,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await SeedHierarchyAsync(NodeFactory);
     }
 
-    private static async Task SaveCodeAsChildNodeAsync(IMeshNodeFactory nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
+    private static async Task SaveCodeAsChildNodeAsync(IMeshNodePersistence nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
     {
         var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/Code")
         {
@@ -75,7 +75,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await nodeFactory.CreateNodeAsync(codeNode);
     }
 
-    private static async Task SetupTestConfigurationAsync(IMeshNodeFactory nodeFactory)
+    private static async Task SetupTestConfigurationAsync(IMeshNodePersistence nodeFactory)
     {
         // Create Story type using "type/" Namespace for global types
         var storyCodeConfig = new CodeConfiguration
@@ -200,7 +200,7 @@ public record Graph
         await SaveCodeAsChildNodeAsync(nodeFactory, "type/graph", graphCodeConfig);
     }
 
-    private static async Task SeedHierarchyAsync(IMeshNodeFactory nodeFactory)
+    private static async Task SeedHierarchyAsync(IMeshNodePersistence nodeFactory)
     {
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")

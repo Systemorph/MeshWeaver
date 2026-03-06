@@ -143,7 +143,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Comment found in children query ({children.Count} total children)");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdNode.Path!, ct: TestTimeout);
     }
 
     /// <summary>
@@ -198,7 +198,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Verified text persisted: '{retrievedComment.Text}'");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdNode.Path!, ct: TestTimeout);
     }
 
     /// <summary>
@@ -257,7 +257,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Confirmed: text is still empty (DataChangeRequest to wrong address was ignored)");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdNode.Path!, ct: TestTimeout);
     }
 
     /// <summary>
@@ -325,7 +325,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("View re-rendered after comment creation");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(commentNode.Path, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(commentNode.Path, ct: TestTimeout);
     }
 
     /// <summary>
@@ -406,7 +406,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"   Found in children query: {found.Path}");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(created.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(created.Path!, ct: TestTimeout);
         Output.WriteLine("Cleanup done");
     }
 }

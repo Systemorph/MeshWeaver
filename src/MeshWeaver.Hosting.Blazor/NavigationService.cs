@@ -327,7 +327,7 @@ internal class NavigationService : INavigationService
         {
             try
             {
-                var nodeFactory = _hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                var nodeFactory = _hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                 var encodedPath = node.Path.Replace("/", "_");
                 var activityPath = $"_useractivity/{userId}/{encodedPath}";
 

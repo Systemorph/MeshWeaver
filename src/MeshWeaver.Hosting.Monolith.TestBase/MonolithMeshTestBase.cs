@@ -49,7 +49,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Prefer seeding data via <see cref="ConfigureMesh"/> + <c>builder.AddMeshNodes(...)</c>
     /// for static test data that is known at setup time.
     /// </summary>
-    protected IMeshNodeFactory NodeFactory => Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+    protected IMeshNodePersistence NodeFactory => Mesh.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
 
     /// <summary>
     /// Public API for querying nodes in tests.
@@ -62,7 +62,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
     /// <summary>
-    /// Creates a test node using the public IMeshNodeFactory API.
+    /// Creates a test node using the public IMeshNodePersistence API.
     /// Use this for dynamic test data. For static test data known at setup time,
     /// override <see cref="ConfigureMesh"/> and use <c>builder.AddMeshNodes(...)</c> instead.
     /// </summary>
