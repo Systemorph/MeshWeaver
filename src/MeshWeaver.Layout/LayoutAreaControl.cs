@@ -87,7 +87,7 @@ public record LayoutAreaControl(object Address, LayoutAreaReference Reference)
     /// Gets or initializes the spinner type. Defaults to Ring.
     /// Use Dots for a more discreet loading indicator.
     /// </summary>
-    public SpinnerType SpinnerType { get; init; } = SpinnerType.Dots;
+    public SpinnerType SpinnerType { get; init; } = SpinnerType.Ring;
 
     /// <summary>
     /// Sets the progress message of the layout area control.
