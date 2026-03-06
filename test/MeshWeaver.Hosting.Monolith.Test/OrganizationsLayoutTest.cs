@@ -106,15 +106,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
             };
             await nodeFactory.CreateNodeAsync(fabrikam);
 
-            // 3. Create the graph root node (needed for initialization)
-            var graphNode = MeshNode.FromPath("graph") with
-            {
-                Name = "Graph",
-                NodeType = "type/graph"
-            };
-            await nodeFactory.CreateNodeAsync(graphNode);
-
-            // 4. Create type/graph type definition
+            // 3. Create type/graph type definition (must exist before instances)
             var graphTypeNode = new MeshNode("graph", "type")
             {
                 Name = "Graph",
@@ -137,6 +129,14 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Content = graphCodeConfig
             };
             await nodeFactory.CreateNodeAsync(graphCodeNode);
+
+            // 4. Create the graph root node (needed for initialization)
+            var graphNode = MeshNode.FromPath("graph") with
+            {
+                Name = "Graph",
+                NodeType = "type/graph"
+            };
+            await nodeFactory.CreateNodeAsync(graphNode);
         }
 
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder)

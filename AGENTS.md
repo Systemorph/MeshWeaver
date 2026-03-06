@@ -286,9 +286,17 @@ dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore --logger "trx" --
 4. Run tests **once** again to verify fixes
 5. Repeat 2–4 until green
 
-### Access Control in Tests
+### DevLogin and Access Control in Tests
 
-When `AddRowLevelSecurity()` is used, `RlsNodeValidator` blocks all CRUD operations without permissions. To create test data:
+`MonolithMeshTestBase` automatically logs in `rbuergi@systemorph.com` as Admin via `TestUsers.DevLogin(Mesh)` in `InitializeAsync()`. This means all tests start with a logged-in admin user — no manual setup needed for basic CRUD.
+
+**TestUsers** (`MeshWeaver.Hosting.Monolith.TestBase.TestUsers`):
+- `TestUsers.Admin` — default admin AccessContext
+- `TestUsers.SampleUsers()` — MeshNode array of sample users from `samples/Graph/Data/User/`
+- `TestUsers.DevLogin(mesh)` — logs in the admin user (called automatically by base class)
+- `builder.AddSampleUsers()` — extension to pre-seed user MeshNodes in `ConfigureMesh`
+
+When tests with `AddRowLevelSecurity()` need **per-user** access control (e.g., testing that User1 can't see User2's data), use explicit admin setup for data creation:
 
 ```csharp
 // Before creating test data: set up admin context
@@ -317,9 +325,11 @@ Reference `MeshWeaver.Hosting.Monolith.TestBase` and inherit from `MonolithMeshT
 ```csharp
 public class MyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    // Override ConfigureMesh to add services
+    // Override ConfigureMesh to add services and sample users
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .AddGraph()
+            .AddSampleUsers()
             .ConfigureHub(hub => hub.AddMyHub());
 
     [Fact]

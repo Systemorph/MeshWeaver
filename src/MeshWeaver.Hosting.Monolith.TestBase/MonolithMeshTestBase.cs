@@ -31,23 +31,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
-    /// Called after ServiceProvider is built. Logs in a test user so that
-    /// access control (RLS) allows CRUD operations in tests.
+    /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin)
+    /// so that access control (RLS) allows CRUD operations in tests.
     /// </summary>
     public override ValueTask InitializeAsync()
     {
         var result = base.InitializeAsync();
-
-        // Login a test user so that RLS-enabled tests have a user context
-        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        accessService.SetCircuitContext(new AccessContext
-        {
-            ObjectId = "rbuergi@systemorph.com",
-            Name = "Roland Bürgi",
-            Email = "rbuergi@systemorph.com",
-            Roles = ["Admin"]
-        });
-
+        TestUsers.DevLogin(Mesh);
         return result;
     }
 
