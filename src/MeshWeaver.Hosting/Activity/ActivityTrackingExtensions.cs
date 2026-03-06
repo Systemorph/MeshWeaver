@@ -14,7 +14,7 @@ public static class ActivityTrackingExtensions
 {
     /// <summary>
     /// Adds activity tracking via ActivityLogBundler which persists bundled activity logs
-    /// as MeshNodes through IMeshNodePersistence.
+    /// directly to IPersistenceService (bypassing message handlers to avoid infinite loops).
     /// </summary>
     public static MeshBuilder AddActivityTracking(this MeshBuilder builder)
     {
@@ -23,17 +23,19 @@ public static class ActivityTrackingExtensions
             services.AddScoped<ActivityLogBundler>(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
-                var nodeFactory = sp.GetRequiredService<IMeshNodePersistence>();
+                // Use IPersistenceService directly — NOT IMeshNodePersistence which routes through
+                // handlers and would trigger activity tracking again (infinite loop).
+                var persistence = sp.GetRequiredService<IPersistenceService>();
                 return new ActivityLogBundler(hub, async log =>
                 {
-                    var node = MeshNode.FromPath($"{log.HubPath}/ActivityLog/{log.Id}") with
+                    var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
                     {
                         NodeType = ActivityLogNodeType.NodeType,
                         Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
                         State = MeshNodeState.Active,
                         Content = log
                     };
-                    await nodeFactory.CreateNodeAsync(node);
+                    await persistence.SaveNodeAsync(node);
                 });
             });
             return services;

@@ -42,9 +42,22 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
         var hub = CreateHub(node, address);
         if (hub is null)
         {
+            var errorMessage = $"No node found for address {address}";
             logger.LogWarning("No node found for address {Address}. Node: {NodePath}, NodeType: {NodeType}, HubConfig: {HasHubConfig}",
                 address, node?.Path, node?.NodeType, node?.HubConfiguration != null);
-            return delivery.Failed($"No node found for address {address}");
+            // Post DeliveryFailure response so AwaitResponse callers get an exception.
+            // Guard against infinite loop: don't post DeliveryFailure for DeliveryFailure messages.
+            if (delivery.Message is not DeliveryFailure)
+            {
+                Mesh.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = ErrorType.NotFound,
+                        Message = errorMessage
+                    }, o => o.ResponseFor(delivery)
+                );
+            }
+            return delivery.Failed(errorMessage);
         }
 
         hub.DeliverMessage(delivery);
