@@ -19,7 +19,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for thread creation via IMeshNodeFactory.CreateNodeAsync.
+/// Tests for thread creation via IMeshNodePersistence.CreateNodeAsync.
 /// Threads store messages as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
 public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -282,7 +282,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.ParentPath.Should().Be(parentPath, "ParentPath should point to logical parent");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(parentPath, recursive: true, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(parentPath, ct: TestTimeout);
     }
 
     [Fact]
@@ -335,7 +335,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedContent?.ParentPath.Should().Be(parentPath);
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(parentPath, recursive: true, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(parentPath, ct: TestTimeout);
     }
 
     [Fact]

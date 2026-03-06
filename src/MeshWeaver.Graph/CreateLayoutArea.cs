@@ -99,7 +99,7 @@ public static class CreateLayoutArea
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
             ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
             : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
         // Set up metadata data binding for Name field
@@ -325,7 +325,7 @@ public static class CreateLayoutArea
         logger?.LogInformation("Confirming transient node at {NodePath} with content type {ContentType}",
             nodePath, contentType?.Name ?? "none");
 
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         nodeFactory.CreateNodeAsync(updatedNode)
             .ContinueWith(task =>
             {
@@ -350,7 +350,7 @@ public static class CreateLayoutArea
     private static void HandleIdChangeCreate(
         UiActionContext ctx,
         LayoutAreaHost host,
-        IMeshNodeFactory nodeFactory,
+        IMeshNodePersistence nodeFactory,
         ILogger? logger,
         MeshNode transientNode,
         string? currentName,
@@ -701,7 +701,7 @@ public static class CreateLayoutArea
 
                 try
                 {
-                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                     var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
                     MeshNode? existingNode = null;
                     if (meshQuery != null)

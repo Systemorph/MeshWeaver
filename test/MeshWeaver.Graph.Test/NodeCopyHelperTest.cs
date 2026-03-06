@@ -27,7 +27,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
             .WithServices(services =>
             {
                 services.AddInMemoryPersistence(_persistence);
-                services.AddSingleton<IMeshNodeFactory>(
+                services.AddSingleton<IMeshNodePersistence>(
                     new TestNodeFactory(_persistence, JsonOptions));
                 return services;
             })
@@ -39,8 +39,8 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     private IMeshQuery GetMeshQuery()
         => GetHost().ServiceProvider.GetRequiredService<IMeshQuery>();
 
-    private IMeshNodeFactory GetNodeFactory()
-        => GetHost().ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+    private IMeshNodePersistence GetNodeFactory()
+        => GetHost().ServiceProvider.GetRequiredService<IMeshNodePersistence>();
 
     private async Task<MeshNode?> GetNodeAsync(string path)
         => await GetMeshQuery().QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
@@ -58,9 +58,9 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Simple test implementation of IMeshNodeFactory that saves nodes directly via persistence.
+    /// Simple test implementation of IMeshNodePersistence that saves nodes directly via persistence.
     /// </summary>
-    private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshNodeFactory
+    private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshNodePersistence
     {
         public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
             => await persistence.SaveNodeAsync(node, jsonOptions, ct);

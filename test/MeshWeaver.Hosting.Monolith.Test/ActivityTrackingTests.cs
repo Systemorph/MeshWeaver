@@ -12,7 +12,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for activity tracking via IMeshNodeFactory (UserActivity nodes).
+/// Tests for activity tracking via IMeshNodePersistence (UserActivity nodes).
 /// Activity is tracked at the navigation level (ApplicationPage), not at the persistence layer.
 /// </summary>
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)

@@ -40,13 +40,13 @@ await foreach (var match in query.QueryAsync("name:Report parent:org", maxResult
 - `type:<node-type>` — filter by NodeType
 - Combine filters: `"parent:org type:Team name:Alpha"`
 
-## 2. Creates and Deletes — IMeshNodeFactory
+## 2. Creates and Deletes — IMeshNodePersistence
 
-Node lifecycle operations (create, delete) use the public `IMeshNodeFactory` interface.
+Node lifecycle operations (create, delete) use the public `IMeshNodePersistence` interface.
 
 ```csharp
-// Inject IMeshNodeFactory
-var factory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+// Inject IMeshNodePersistence
+var factory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
 
 // Create a confirmed node
 var node = MeshNode.FromPath("org/Acme/NewTeam") with
@@ -180,9 +180,9 @@ Only infrastructure assemblies (`MeshWeaver.Hosting`, `MeshWeaver.Hosting.Orlean
 | Operation | Pattern | Interface / Type |
 |-----------|---------|-----------------|
 | Read nodes | Query | `IMeshQuery` |
-| Create node | Factory | `IMeshNodeFactory.CreateNodeAsync` |
-| Create transient | Factory | `IMeshNodeFactory.CreateTransientAsync` |
-| Delete node | Factory | `IMeshNodeFactory.DeleteNodeAsync` |
+| Create node | Factory | `IMeshNodePersistence.CreateNodeAsync` |
+| Create transient | Factory | `IMeshNodePersistence.CreateTransientAsync` |
+| Delete node | Factory | `IMeshNodePersistence.DeleteNodeAsync` |
 | Update node | Message | `UpdateNodeRequest` → hub |
 | Move node | Message | `MoveNodeRequest` → hub |
 | Update data | Message | `DataChangeRequest` → hub |

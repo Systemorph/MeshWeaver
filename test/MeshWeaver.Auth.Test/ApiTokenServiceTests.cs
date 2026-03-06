@@ -22,7 +22,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
     private ApiTokenService GetService() =>
         new(
-            Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>(),
+            Mesh.ServiceProvider.GetRequiredService<IMeshNodePersistence>(),
             Mesh.ServiceProvider.GetRequiredService<IMeshQuery>(),
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()

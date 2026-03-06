@@ -86,7 +86,7 @@ public static class ThreadLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
-            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
             var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
             MeshNode? existingNode = null;
             if (meshQuery != null)
@@ -467,7 +467,7 @@ public static class ThreadLayoutAreas
     private static async Task<string> CreateMessageNodeAsync(
         IMessageHub hub, string threadPath, int messageNumber, ThreadMessage message)
     {
-        var nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         var messagePath = $"{threadPath}/{messageNumber}";
 
         var messageNode = new MeshNode(messagePath)

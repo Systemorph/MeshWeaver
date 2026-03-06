@@ -117,7 +117,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         retrievedComment.Text.Should().Be("This is a test comment");
 
         // Cleanup
-        await NodeFactory.DeleteNodeAsync(commentPath, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
     }
 
     [Fact(Timeout = 30000)]
@@ -180,7 +180,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
         // Cleanup: delete reply first, then parent
-        await NodeFactory.DeleteNodeAsync(replyPath, recursive: false, ct: TestTimeout);
-        await NodeFactory.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(replyPath, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(parentCommentPath, ct: TestTimeout);
     }
 }

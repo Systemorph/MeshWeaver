@@ -151,7 +151,12 @@ public enum NodeDeletionRejectionReason
     /// <summary>
     /// Deletion validation failed.
     /// </summary>
-    ValidationFailed
+    ValidationFailed,
+
+    /// <summary>
+    /// A child node could not be deleted, so the parent was not deleted either.
+    /// </summary>
+    ChildDeletionFailed
 }
 
 /// <summary>

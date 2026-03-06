@@ -247,7 +247,7 @@ public static class AccessControlLayoutArea
     /// </summary>
     internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
         try
         {
             await nodeFactory.DeleteNodeAsync(nodePath);

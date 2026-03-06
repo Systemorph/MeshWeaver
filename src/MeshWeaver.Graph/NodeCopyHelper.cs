@@ -16,7 +16,7 @@ public static class NodeCopyHelper
     /// </summary>
     internal static async Task<int> CopyNodeTreeAsync(
         IMeshQuery meshQuery,
-        IMeshNodeFactory nodeFactory,
+        IMeshNodePersistence nodeFactory,
         IMessageHub hub,
         string sourcePath,
         string targetNamespace,

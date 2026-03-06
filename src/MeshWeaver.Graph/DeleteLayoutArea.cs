@@ -113,7 +113,7 @@ public static class DeleteLayoutArea
                 DataContext = LayoutAreaReference.GetDataPointer(dataId)
             }.WithStyle("width: 300px;")));
 
-        // Button row — uses IMeshNodeFactory.DeleteNodeAsync
+        // Button row — uses IMeshNodePersistence.DeleteNodeAsync
         // and runs validators (including RlsNodeValidator)
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -143,8 +143,8 @@ public static class DeleteLayoutArea
 
                     try
                     {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
-                        await nodeFactory.DeleteNodeAsync(nodePath, recursive: true);
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                        await nodeFactory.DeleteNodeAsync(nodePath);
 
                         // Navigate to parent on success
                         var parentPath = GetParentPath(nodePath);
