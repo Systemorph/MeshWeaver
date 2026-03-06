@@ -1,6 +1,6 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh.Services
-@inject IMeshCatalog MeshCatalog
+@inject IPathResolver PathResolver
 
 @if (IsLoading)
 {
@@ -42,13 +42,13 @@ else
 
         try
         {
-            if (MeshCatalog == null)
+            if (PathResolver == null)
             {
-                ErrorMessage = "MeshCatalog service not available";
+                ErrorMessage = "PathResolver service not available";
                 return;
             }
 
-            var resolution = await MeshCatalog.ResolvePathAsync(Path);
+            var resolution = await PathResolver.ResolvePathAsync(Path);
             if (resolution != null)
             {
                 var (area, id) = ParseRemainder(resolution.Remainder);

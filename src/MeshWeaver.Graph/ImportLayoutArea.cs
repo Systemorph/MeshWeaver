@@ -160,13 +160,14 @@ public static class ImportLayoutArea
 
                 try
                 {
-                    var persistence = host.Hub.ServiceProvider.GetRequiredService<IPersistenceService>();
+                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
                     logger?.LogInformation(
                         "Copying node tree from {Source} to namespace {Target}, force={Force}",
                         sourceNode, targetNs, force);
 
                     var nodesCopied = await NodeCopyHelper.CopyNodeTreeAsync(
-                        persistence, sourceNode, targetNs, force, logger);
+                        meshQuery, nodeFactory, host.Hub, sourceNode, targetNs, force, logger);
 
                     logger?.LogInformation("Import complete: {Count} nodes copied", nodesCopied);
 

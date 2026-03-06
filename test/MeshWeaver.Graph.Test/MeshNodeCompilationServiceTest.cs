@@ -13,6 +13,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Namotion.Reflection;
@@ -68,10 +69,19 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
-    private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore)
+    private MeshNodeCompilationService CreateService(InMemoryPersistenceService persistence)
     {
-        var meshQueryProvider = new MeshWeaver.Hosting.Persistence.Query.InMemoryMeshQuery(persistenceCore);
-        var meshQuery = new MeshWeaver.Hosting.Persistence.Query.MeshQuery([meshQueryProvider], _mockHub);
+        IServiceCollection services = new ServiceCollection();
+        // Register all persistence services via the public API with the test instance
+        services.AddInMemoryPersistence(persistence);
+        // Register the mock hub so scoped MeshQuery can resolve it
+        services.AddScoped<IMessageHub>(_ => _mockHub);
+        var sp = services.BuildServiceProvider();
+
+        // Resolve IMeshQuery from a scope (IMeshQuery is registered as scoped)
+        var scope = sp.CreateScope();
+        var meshQuery = scope.ServiceProvider.GetRequiredService<IMeshQuery>();
+
         var serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(IMeshQuery)).Returns(meshQuery);
         _mockHub.ServiceProvider.Returns(serviceProvider);

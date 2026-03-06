@@ -27,7 +27,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 {
 
     private readonly HashSet<Address> subscriptions = new();
-    private readonly IMeshCatalog meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
+    private readonly IMeshQuery meshQuery = serviceProvider.GetRequiredService<IMeshQuery>();
     private readonly ILogger<KernelContainer> logger = serviceProvider.GetRequiredService<ILogger<KernelContainer>>();
 
     /// <summary>
@@ -110,7 +110,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
             }
 
             var innerAddress = request.Target with { Host = null };
-            var meshNode = await meshCatalog.GetNodeAsync(innerAddress);
+            var meshNode = await meshQuery.QueryAsync<MeshNode>($"path:{innerAddress} scope:exact").FirstOrDefaultAsync();
             if (meshNode == null)
                 return DeliveryFailure(kernelHub, request, $"No mesh node was found for {innerAddress}");
 

@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -10,18 +11,20 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NavigationContext = MeshWeaver.Mesh.Services.NavigationContext;
 
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor.Test")]
+
 namespace MeshWeaver.Hosting.Blazor;
 
 /// <summary>
 /// Provides the current navigation path and namespace context from NavigationManager.
 /// Automatically subscribes to location changes and manages path resolution and creatable types.
 /// </summary>
-public class NavigationService : INavigationService
+internal class NavigationService : INavigationService
 {
     private readonly NavigationManager _navigationManager;
-    private readonly IMeshCatalog _meshCatalog;
+    private readonly IPathResolver _pathResolver;
+    private readonly IMeshQuery _meshQuery;
     private readonly IMessageHub _hub;
-    private readonly IActivityStore? _activityStore;
     private readonly ILogger<NavigationService>? _logger;
 
     private NavigationContext? _context;
@@ -33,14 +36,14 @@ public class NavigationService : INavigationService
 
     public NavigationService(
         NavigationManager navigationManager,
-        IMeshCatalog meshCatalog,
-        IMessageHub hub,
-        IActivityStore? activityStore = null)
+        IPathResolver pathResolver,
+        IMeshQuery meshQuery,
+        IMessageHub hub)
     {
         _navigationManager = navigationManager;
-        _meshCatalog = meshCatalog;
+        _pathResolver = pathResolver;
+        _meshQuery = meshQuery;
         _hub = hub;
-        _activityStore = activityStore;
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
     }
 
@@ -141,7 +144,7 @@ public class NavigationService : INavigationService
         OnNavigationContextChanged?.Invoke(_context);
 
         // Resolve the path using pattern matching
-        var resolution = await _meshCatalog.ResolvePathAsync(path);
+        var resolution = await _pathResolver.ResolvePathAsync(path);
 
         if (resolution is null)
         {
@@ -207,7 +210,7 @@ public class NavigationService : INavigationService
             if (CurrentPath != path)
                 return;
 
-            var resolution = await _meshCatalog.ResolvePathAsync(path);
+            var resolution = await _pathResolver.ResolvePathAsync(path);
             if (resolution is not null)
             {
                 // Success — process the result
@@ -232,7 +235,7 @@ public class NavigationService : INavigationService
         try
         {
             var address = (Address)resolution.Prefix;
-            var node = await _meshCatalog.GetNodeAsync(address);
+            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{address} scope:exact").FirstOrDefaultAsync();
             if (node == null)
                 return null;
 
@@ -252,13 +255,11 @@ public class NavigationService : INavigationService
                     node = node with { PreRenderedHtml = html };
 
                     // Fire-and-forget: persist the generated PreRenderedHtml back
-                    _ = Task.Run(async () =>
+                    _ = Task.Run(() =>
                     {
                         try
                         {
-                            var persistence = _hub.ServiceProvider.GetService<IPersistenceService>();
-                            if (persistence != null)
-                                await persistence.SaveNodeAsync(node);
+                            _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address));
                         }
                         catch (Exception ex)
                         {
@@ -296,11 +297,6 @@ public class NavigationService : INavigationService
     private void TrackNavigationActivity(MeshNode node)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        if (_activityStore == null)
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: no IActivityStore registered", node.Path);
-            return;
-        }
         if (accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
         {
             _logger?.LogDebug("Activity tracking skipped for {Path}: no user context (AccessService.Context.ObjectId is null/empty)", node.Path);
@@ -326,27 +322,60 @@ public class NavigationService : INavigationService
             return;
         }
 
-        var now = DateTimeOffset.UtcNow;
-        var record = new UserActivityRecord
-        {
-            Id = node.Path.Replace("/", "_"),
-            NodePath = node.Path,
-            UserId = userId,
-            ActivityType = ActivityType.Read,
-            FirstAccessedAt = now,
-            LastAccessedAt = now,
-            AccessCount = 1,
-            NodeName = node.Name,
-            NodeType = node.NodeType,
-            Namespace = node.Namespace
-        };
-
         _logger?.LogDebug("Recording activity: user={UserId} path={Path} type={NodeType}", userId, node.Path, node.NodeType);
         _ = Task.Run(async () =>
         {
             try
             {
-                await _activityStore.SaveActivitiesAsync(userId, [record]);
+                var nodeFactory = _hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                var encodedPath = node.Path.Replace("/", "_");
+                var activityPath = $"_useractivity/{userId}/{encodedPath}";
+
+                // Try to find existing activity node
+                MeshNode? existing = null;
+                try { existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath} scope:exact").FirstOrDefaultAsync(); }
+                catch { /* ignore */ }
+
+                if (existing?.Content is UserActivityRecord prevRecord)
+                {
+                    var updated = existing with
+                    {
+                        Content = prevRecord with
+                        {
+                            LastAccessedAt = DateTimeOffset.UtcNow,
+                            AccessCount = prevRecord.AccessCount + 1,
+                            ActivityType = ActivityType.Read,
+                            NodeName = node.Name ?? prevRecord.NodeName,
+                            NodeType = node.NodeType ?? prevRecord.NodeType,
+                        }
+                    };
+                    _hub.Post(new UpdateNodeRequest(updated));
+                }
+                else
+                {
+                    var now = DateTimeOffset.UtcNow;
+                    var record = new UserActivityRecord
+                    {
+                        Id = encodedPath,
+                        NodePath = node.Path,
+                        UserId = userId,
+                        ActivityType = ActivityType.Read,
+                        FirstAccessedAt = now,
+                        LastAccessedAt = now,
+                        AccessCount = 1,
+                        NodeName = node.Name,
+                        NodeType = node.NodeType,
+                        Namespace = node.Namespace
+                    };
+                    var activityNode = MeshNode.FromPath(activityPath) with
+                    {
+                        NodeType = "UserActivity",
+                        Name = node.Name ?? node.Path,
+                        State = MeshNodeState.Active,
+                        Content = record
+                    };
+                    await nodeFactory.CreateNodeAsync(activityNode);
+                }
             }
             catch (Exception ex)
             {

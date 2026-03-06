@@ -28,8 +28,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     private readonly string _cacheDirectory;
 
-    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+    private new IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     public SearchQueryTests(ITestOutputHelper output) : base(output)
     {

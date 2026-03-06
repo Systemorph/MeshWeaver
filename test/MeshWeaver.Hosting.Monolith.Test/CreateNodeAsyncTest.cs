@@ -70,7 +70,6 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
     public async Task CreateNodeAsync_ShouldPersistCommentNode()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
         var commentId = Guid.NewGuid().AsString();
         var commentPath = $"{parentPath}/{commentId}";
@@ -95,7 +94,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdNode = await catalog.CreateNodeAsync(node, "TestUser", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, "TestUser", TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -111,21 +110,20 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         createdComment.Status.Should().Be(CommentStatus.Active);
 
         // Verify round-trip via GetNodeAsync
-        var retrievedNode = await catalog.GetNodeAsync(new Address(commentPath));
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath} scope:exact").FirstOrDefaultAsync();
         retrievedNode.Should().NotBeNull();
         retrievedNode!.Path.Should().Be(commentPath);
         var retrievedComment = retrievedNode.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().Be("This is a test comment");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(commentPath, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(commentPath, recursive: false, ct: TestTimeout);
     }
 
     [Fact(Timeout = 30000)]
     public async Task CreateNodeAsync_ReplyNode_ShouldLinkToParent()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
 
         // Create parent comment
@@ -146,7 +144,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             NodeType = CommentNodeType.NodeType,
             Content = parentComment
         };
-        await catalog.CreateNodeAsync(parentNode, "Alice", TestTimeout);
+        await NodeFactory.CreateNodeAsync(parentNode, "Alice", TestTimeout);
 
         // Create reply as child of parent comment node (nested path)
         var replyId = Guid.NewGuid().AsString();
@@ -168,7 +166,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdReply = await catalog.CreateNodeAsync(replyNode, "Bob", TestTimeout);
+        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, "Bob", TestTimeout);
 
         // Assert
         createdReply.Should().NotBeNull();
@@ -177,12 +175,12 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         replyContent.Text.Should().Be("This is a reply");
 
         // Verify reply round-trips via path
-        var retrievedReply = await catalog.GetNodeAsync(new Address(replyPath));
+        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{replyPath} scope:exact").FirstOrDefaultAsync();
         retrievedReply.Should().NotBeNull("Reply should be retrievable by path");
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 
         // Cleanup: delete reply first, then parent
-        await catalog.DeleteNodeAsync(replyPath, recursive: false, ct: TestTimeout);
-        await catalog.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(replyPath, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(parentCommentPath, recursive: false, ct: TestTimeout);
     }
 }

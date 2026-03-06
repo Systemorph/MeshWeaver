@@ -9,7 +9,6 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -20,58 +19,56 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     private async Task SetupMarketingHierarchy()
     {
         // Create the Marketing story hierarchy similar to sample data
         // Parent stories
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing") with
         {
             Name = "Marketing",
             NodeType = "Namespace"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing") with
         {
             Name = "Claims Processing",
             NodeType = "Systemorph/Marketing/Story"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy") with
         {
             Name = "Data Ingestion Strategy",
             NodeType = "Systemorph/Marketing/Story"
         });
 
         // Sub-stories of ClaimsProcessing
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/EmailTriage") with
         {
             Name = "Email Triage",
             NodeType = "Systemorph/Marketing/Story"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/DocumentExtraction") with
         {
             Name = "Document Extraction",
             NodeType = "Systemorph/Marketing/Story"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/ClaimsProcessing/ClientCorrespondence") with
         {
             Name = "Client Correspondence",
             NodeType = "Systemorph/Marketing/Story"
         });
 
         // Sub-stories of DataIngestionStrategy
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/AnnotatedDataModel") with
         {
             Name = "Annotated Data Model",
             NodeType = "Systemorph/Marketing/Story"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Systemorph/Marketing/DataIngestionStrategy/HistoricIngestion") with
         {
             Name = "Historic Ingestion",
             NodeType = "Systemorph/Marketing/Story"
@@ -145,11 +142,11 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Get ClaimsProcessing node
-        var claimsNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing");
+        var claimsNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing scope:exact").FirstOrDefaultAsync();
         claimsNode.Should().NotBeNull();
 
         // Get direct children
-        var children = await Persistence.GetChildrenAsync(claimsNode!.Path).ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{claimsNode!.Path} scope:children").ToListAsync();
 
         children.Should().HaveCount(3);
         children.Select(n => n.Name).Should().Contain([
@@ -165,7 +162,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Get a sub-story
-        var emailTriageNode = await Persistence.GetNodeAsync("Systemorph/Marketing/ClaimsProcessing/EmailTriage");
+        var emailTriageNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:exact").FirstOrDefaultAsync();
         emailTriageNode.Should().NotBeNull();
 
         // Verify parent path
@@ -174,7 +171,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         // Get parent
         var parentPath = emailTriageNode.GetParentPath();
         parentPath.Should().NotBeNull();
-        var parentNode = await Persistence.GetNodeAsync(parentPath!);
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{parentPath} scope:exact").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull();
         parentNode!.Name.Should().Be("Claims Processing");
     }
@@ -318,16 +315,14 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
 /// </summary>
 public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     [Fact]
     public async Task QueryAsync_Generic_ReturnsTypedResults()
     {
         // Arrange - save MeshNodes with nodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Product" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Product" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Order" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/inventory/1") with { Name = "Laptop", NodeType = "Product" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/inventory/2") with { Name = "Phone", NodeType = "Product" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/inventory/order-1") with { Name = "Order 1", NodeType = "Order" });
 
         // Act - query for Product nodes only
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -343,8 +338,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_WithNodeType_FiltersCorrectly()
     {
         // Arrange - save nodes with different types
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Product" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Order" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/data/1") with { Name = "Laptop", NodeType = "Product" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/data/order-1") with { Name = "Order 1", NodeType = "Order" });
 
         // Act - query for Product nodeType
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -362,7 +357,7 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Arrange - save 10 product nodes
         for (int i = 1; i <= 10; i++)
         {
-            await Persistence.SaveNodeAsync(MeshNode.FromPath($"catalog/products/{i}") with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"catalog/products/{i}") with
             {
                 Name = $"Product {i}",
                 NodeType = "Product"
@@ -384,10 +379,10 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_WithAdditionalFilters_CombinesFilters()
     {
         // Arrange - save nodes with different names and types
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Product" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Product" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Product" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Order" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/1") with { Name = "Gaming Laptop", NodeType = "Product" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/2") with { Name = "Business Laptop", NodeType = "Product" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/3") with { Name = "Phone", NodeType = "Product" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/all/order-1") with { Name = "Order 1", NodeType = "Order" });
 
         // Act - query for Product nodes with name filter
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -403,8 +398,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_NoMatchingNodeType_ReturnsEmpty()
     {
         // Arrange - save only Order nodes
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Order" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Order" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/orders/order-1") with { Name = "Order 1", NodeType = "Order" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("shop/orders/order-2") with { Name = "Order 2", NodeType = "Order" });
 
         // Act - query for Product nodeType (none exist)
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -419,8 +414,8 @@ public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     public async Task QueryAsync_Generic_MeshNode_WorksWithNodes()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with { Name = "Contoso Ltd" });
 
         // Act - query for MeshNode type
         var results = await MeshQuery.QueryAsync<MeshNode>(

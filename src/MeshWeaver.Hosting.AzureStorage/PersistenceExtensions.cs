@@ -55,15 +55,7 @@ public static class PersistenceExtensions
         BlobContainerClient containerClient)
     {
         var storageAdapter = new AzureBlobStorageAdapter(containerClient);
-        var persistenceService = new InMemoryPersistenceService(storageAdapter);
-
-        // Initialize the persistence service
-        persistenceService.InitializeAsync().GetAwaiter().GetResult();
-
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
-
-        return services;
+        return services.AddPersistence(storageAdapter);
     }
 
     /// <summary>
@@ -104,13 +96,6 @@ public static class PersistenceExtensions
         await containerClient.CreateIfNotExistsAsync();
 
         var storageAdapter = new AzureBlobStorageAdapter(containerClient);
-        var persistenceService = new InMemoryPersistenceService(storageAdapter);
-
-        await persistenceService.InitializeAsync();
-
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton<IPersistenceServiceCore>(persistenceService);
-
-        return services;
+        return services.AddPersistence(storageAdapter);
     }
 }

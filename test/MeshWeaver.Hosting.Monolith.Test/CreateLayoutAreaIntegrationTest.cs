@@ -174,13 +174,13 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
-    /// Test that IMeshCatalog service is available for CreateLayoutArea.
+    /// Test that IMeshNodeFactory service is available for CreateLayoutArea.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task MeshCatalog_IsRegistered()
+    public async Task MeshNodeFactory_IsRegistered()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetService<IMeshCatalog>();
-        meshCatalog.Should().NotBeNull("IMeshCatalog should be registered for CreateLayoutArea to work");
+        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        nodeFactory.Should().NotBeNull("IMeshNodeFactory should be registered for CreateLayoutArea to work");
 
         await Task.CompletedTask;
     }

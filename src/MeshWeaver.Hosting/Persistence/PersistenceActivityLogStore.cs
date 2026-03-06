@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Stores activity logs under "_activitylogs" partition key.
 /// Works with FileSystem, Cosmos, or any storage adapter.
 /// </summary>
-public class PersistenceActivityLogStore : IActivityLogStore
+internal class PersistenceActivityLogStore : IActivityLogStore
 {
     private const string ActivityLogPartition = "_activitylogs";
     private readonly IPersistenceServiceCore _persistence;

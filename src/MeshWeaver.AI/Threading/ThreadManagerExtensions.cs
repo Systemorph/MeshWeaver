@@ -1,5 +1,4 @@
 using MeshWeaver.AI.Persistence;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -31,11 +30,10 @@ public static class ThreadManagerExtensions
     {
         services.TryAddSingleton<IThreadManager>(sp =>
         {
-            var persistence = sp.GetRequiredService<IPersistenceService>();
             var accessService = sp.GetRequiredService<AccessService>();
             var hub = sp.GetRequiredService<IMessageHub>();
             var logger = sp.GetService<ILogger<MeshDataSourceThreadManager>>();
-            return new MeshDataSourceThreadManager(persistence, accessService, hub, logger);
+            return new MeshDataSourceThreadManager(accessService, hub, logger);
         });
         return services;
     }

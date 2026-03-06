@@ -88,12 +88,11 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     public async Task DenyAssignment_OverridesInheritedGrant()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Grant at parent
         await svc.AddUserRoleAsync("Alice", "Editor", "ACME", "system", TestTimeout);
 
-        // Create a deny AccessAssignment MeshNode at child
+        // Create a deny AccessAssignment MeshNode at child using NodeFactory
         var denyNode = new MeshNode("Alice_Access", "ACME/Project")
         {
             NodeType = "AccessAssignment",
@@ -104,10 +103,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = "Editor", Denied = true }]
             }
         };
-        await persistence.SaveNodeAsync(denyNode, TestTimeout);
-
-        // Clear cache to pick up the new deny
-        (svc as SecurityService)?.ClearPermissionCache();
+        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
 
         var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "Alice", TestTimeout);
         permissions.Should().Be(Permission.None, "denied Editor role should yield no permissions at child");
@@ -117,12 +113,11 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     public async Task DenyAtMiddle_GrantAtChild_ChildOverridesDeny()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Grant at grandparent
         await svc.AddUserRoleAsync("OverrideUser", "Viewer", "Org", "system", TestTimeout);
 
-        // Deny at parent
+        // Deny at parent using NodeFactory
         var denyNode = new MeshNode("OverrideUser_Access", "Org/Team")
         {
             NodeType = "AccessAssignment",
@@ -133,12 +128,10 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = "Viewer", Denied = true }]
             }
         };
-        await persistence.SaveNodeAsync(denyNode, TestTimeout);
+        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
 
         // Grant again at child
         await svc.AddUserRoleAsync("OverrideUser", "Viewer", "Org/Team/Project", "system", TestTimeout);
-
-        (svc as SecurityService)?.ClearPermissionCache();
 
         var permTeam = await svc.GetEffectivePermissionsAsync("Org/Team", "OverrideUser", TestTimeout);
         var permProject = await svc.GetEffectivePermissionsAsync("Org/Team/Project", "OverrideUser", TestTimeout);
@@ -151,14 +144,13 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     public async Task DenyOneRole_KeepsOtherRoles()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
         // Grant Admin globally
         await svc.AddUserRoleAsync("MixedUser", "Admin", null, "system", TestTimeout);
         // Also grant Editor at Software
         await svc.AddUserRoleAsync("MixedUser", "Editor", "ACME", "system", TestTimeout);
 
-        // Deny Admin at Software/Secure
+        // Deny Admin at Software/Secure using NodeFactory
         var denyNode = new MeshNode("MixedUser_Access", "ACME/Secure")
         {
             NodeType = "AccessAssignment",
@@ -169,9 +161,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = "Admin", Denied = true }]
             }
         };
-        await persistence.SaveNodeAsync(denyNode, TestTimeout);
-
-        (svc as SecurityService)?.ClearPermissionCache();
+        await NodeFactory.CreateNodeAsync(denyNode, ct: TestTimeout);
 
         var permissions = await svc.GetEffectivePermissionsAsync("ACME/Secure", "MixedUser", TestTimeout);
 

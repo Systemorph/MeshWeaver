@@ -14,7 +14,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// When no path is specified, fans out to all partitions and merges results.
 /// Queries already-known partitions immediately while discovering new ones in parallel.
 /// </summary>
-public class RoutingMeshQueryProvider : IMeshQueryProvider
+internal class RoutingMeshQueryProvider : IMeshQueryProvider
 {
     private readonly RoutingPersistenceServiceCore _router;
     private readonly QueryParser _parser = new();

@@ -65,23 +65,20 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                                     "OnboardingMiddleware: Creating transient user node for {UserId}",
                                     userContext.ObjectId);
 
-                                var persistence = portalApp.Hub.ServiceProvider.GetService<IPersistenceService>();
-                                if (persistence != null)
+                                var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                                var transientNode = new MeshNode(userContext.ObjectId, "User")
                                 {
-                                    var transientNode = new MeshNode(userContext.ObjectId, "User")
+                                    Name = userContext.Name ?? userContext.ObjectId,
+                                    NodeType = "User",
+                                    State = MeshNodeState.Transient,
+                                    Content = new Dictionary<string, object?>
                                     {
-                                        Name = userContext.Name ?? userContext.ObjectId,
-                                        NodeType = "User",
-                                        State = MeshNodeState.Transient,
-                                        Content = new Dictionary<string, object?>
-                                        {
-                                            ["name"] = userContext.Name,
-                                            ["email"] = userContext.Email,
-                                        }
-                                    };
+                                        ["name"] = userContext.Name,
+                                        ["email"] = userContext.Email,
+                                    }
+                                };
 
-                                    await persistence.SaveNodeAsync(transientNode);
-                                }
+                                await nodeFactory.CreateTransientAsync(transientNode);
                                 context.Response.Redirect("/onboarding");
                                 return;
                             }

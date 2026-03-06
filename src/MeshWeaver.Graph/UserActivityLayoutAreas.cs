@@ -4,7 +4,6 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -111,10 +110,11 @@ public static class UserActivityLayoutAreas
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Activity Feed</div>"));
 
-        var activityLogStore = host.Hub.ServiceProvider.GetService<IActivityLogStore>();
-        var activityLogs = activityLogStore != null
-            ? await activityLogStore.GetRecentActivityLogsAsync(limit: 30)
-            : [];
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var activityLogNodes = new List<MeshNode>();
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
+            activityLogNodes.Add(n);
+        var activityLogs = activityLogNodes.Select(n => n.Content).OfType<ActivityLog>().ToList();
 
         if (activityLogs.Count == 0)
         {
@@ -215,7 +215,6 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        const int fetchLimit = 50;
         const int displayLimit = 10;
 
         // Fixed-height scrollable section
@@ -227,58 +226,29 @@ public static class UserActivityLayoutAreas
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recently Viewed</div>"));
 
-        var activityStore = host.Hub.ServiceProvider.GetService<IActivityStore>();
-        var recentActivities = new List<UserActivityRecord>();
-
-        if (activityStore != null && !string.IsNullOrEmpty(userId))
-        {
-            var activities = await activityStore.GetActivitiesAsync(userId);
-            recentActivities = activities
-                .OrderByDescending(a => a.LastAccessedAt)
-                .Take(fetchLimit)
-                .OrderByDescending(a => a.AccessCount)
-                .ThenByDescending(a => a.LastAccessedAt)
-                .Take(displayLimit)
-                .ToList();
-        }
-
-        // Resolve full nodes via MeshCatalog for proper icons
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var recentNodes = new List<MeshNode>();
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity sort:lastAccessedAt-desc limit:10 scope:descendants"))
+            recentNodes.Add(n);
 
         var grid = Controls.LayoutGrid.WithStyle("gap: 8px;");
 
-        foreach (var activity in recentActivities)
+        foreach (var node in recentNodes)
         {
-            MeshNode? node = null;
-            if (meshCatalog != null)
-            {
-                try { node = await meshCatalog.GetNodeAsync(new Address(activity.NodePath)); }
-                catch { /* ignore lookup failures */ }
-            }
-
-            if (node != null)
-                grid = grid.WithView(
-                    MeshNodeCardControl.FromNode(node, activity.NodePath),
-                    skin => skin.WithXs(12));
-            else
-                grid = grid.WithView(
-                    new MeshNodeCardControl(
-                        NodePath: activity.NodePath,
-                        Title: activity.NodeName ?? activity.NodePath,
-                        Description: activity.NodeType),
-                    skin => skin.WithXs(12));
+            grid = grid.WithView(
+                MeshNodeCardControl.FromNode(node, node.Path ?? ""),
+                skin => skin.WithXs(12));
         }
 
         // Fill remaining slots from catalog
-        var remaining = displayLimit - recentActivities.Count;
+        var remaining = displayLimit - recentNodes.Count;
         if (remaining > 0)
         {
-            var recentPaths = new HashSet<string>(recentActivities.Select(a => a.NodePath));
+            var recentPaths = new HashSet<string>(recentNodes.Where(n => n.Path != null).Select(n => n.Path!));
 
-            if (meshCatalog != null)
             {
                 var fillerNodes = new List<MeshNode>();
-                await foreach (var node in meshCatalog.QueryAsync(null, maxResults: 20))
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "scope:children", Limit = 20 }))
                 {
                     if (node.NodeType != null && SystemNodeTypes.Contains(node.NodeType))
                         continue;
@@ -291,7 +261,7 @@ public static class UserActivityLayoutAreas
                         break;
                 }
 
-                if (fillerNodes.Count > 0 && recentActivities.Count > 0)
+                if (fillerNodes.Count > 0 && recentNodes.Count > 0)
                 {
                     grid = grid.WithView(Controls.Html(
                         "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 4px 8px; " +

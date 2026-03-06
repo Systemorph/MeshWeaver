@@ -6,7 +6,7 @@ namespace MeshWeaver.Mesh.Services;
 /// Each path segment manages its children (segment1 manages segment1/*, etc.)
 /// This is the scoped wrapper that automatically injects JsonSerializerOptions from IMessageHub.
 /// </summary>
-public interface IPersistenceService
+internal interface IPersistenceService
 {
     /// <summary>
     /// Gets a node by its path.

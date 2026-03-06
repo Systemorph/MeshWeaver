@@ -36,6 +36,20 @@ Built-in agent definitions are embedded in src/MeshWeaver.AI/Data/Agent/
 
 Agents: Executor, Navigator, Planner, Research
 
+## Bash Command Guidelines
+
+**Always chain `cd` with the following command using `&&`** so the user only has to approve once:
+```bash
+# CORRECT — single approval
+cd /c/dev/MeshWeaver && dotnet build
+
+# WRONG — requires two separate approvals
+cd /c/dev/MeshWeaver
+dotnet build
+```
+
+When running build or test commands, prefer absolute paths or `&&`-chained commands to avoid multiple prompts.
+
 ## Development Commands
 
 ### Build and Test
@@ -118,6 +132,35 @@ E.g. `{address}/Details/{itemId}` would render a details view for the item with 
 Layout areas are typically kept on the same address as the underlying data.
 
 **Reactive UI**: All UI state changes flow through the message hub. Controls are immutable records that specify their current state.
+
+## Data Access Patterns
+
+**IMPORTANT:** Application code must never use `IPersistenceService` or `IMeshCatalog` directly — these are internal infrastructure interfaces.
+
+### Reads — Use IMeshQuery
+```csharp
+var query = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+var node = await query.QueryAsync("path:org/Acme", maxResults: 1).FirstOrDefaultAsync(ct);
+```
+
+### Creates/Deletes — Use IMeshNodeFactory
+```csharp
+var factory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+await factory.CreateNodeAsync(node, createdBy: userId, ct);
+await factory.DeleteNodeAsync(path, recursive: true, ct);
+```
+
+### Updates/Moves — Use message requests
+```csharp
+hub.Post(new UpdateNodeRequest(updatedNode));
+await hub.AwaitResponse(new MoveNodeRequest(sourcePath, targetPath), ct);
+hub.Post(new DataChangeRequest { Updates = [entity] });
+```
+
+### Service Resolution
+Always use `GetRequiredService<T>()` for core services (`IMeshNodeFactory`, `IMeshQuery`). Never use `GetService<T>()` + null check for services that must be registered.
+
+For full documentation see `src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md`.
 
 ## Development Patterns
 
@@ -219,48 +262,53 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 - `maxParallelThreads: 1`
 - `methodTimeout: 30000ms`
 
-Use `MeshWeaver.Fixture` for test infrastructure:
+**No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshQuery`, or other core interfaces.
+
+### MonolithMeshTestBase (recommended for most tests)
+
+Reference `MeshWeaver.Hosting.Monolith.TestBase` and inherit from `MonolithMeshTestBase`:
 
 ```csharp
-public class MyTest : HubTestBase, IAsyncLifetime
+public class MyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
-    {
-        return base.ConfigureHost(config)
-            .AddNorthwindHub() // Register Northwind hub
-            .WithSomeService(); // Add any required services
-    }
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
-    {
-        return base.ConfigureClient(config)
-            .AddLayoutClient(); // Add any required services
-    }
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        await InitializeSomething();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        await DisposeSomething();
-        await base.DisposeAsync;
-    }
+    // Override ConfigureMesh to add services
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .ConfigureHub(hub => hub.AddMyHub());
 
     [Fact]
     public async Task MyTestMethod()
     {
-        // Arrange
-        var request = new MyRequest("test input");
-        var hub = GetClient();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
 
-        // Act
+        // Create test data
+        await nodeFactory.CreateNodeAsync(new MeshNode("test", "Namespace") { Name = "Test" }, "testuser");
+
+        // Query
+        var result = await meshQuery.QueryAsync<MeshNode>("path:Namespace/test scope:exact").FirstOrDefaultAsync();
+        result.Should().NotBeNull();
+    }
+}
+```
+
+### HubTestBase (for message routing / layout tests)
+
+```csharp
+public class MyTest : HubTestBase, IAsyncLifetime
+{
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
+        => base.ConfigureHost(config).AddNorthwindHub();
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
+        => base.ConfigureClient(config).AddLayoutClient();
+
+    [Fact]
+    public async Task MyTestMethod()
+    {
+        var hub = GetClient();
         var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(new HostAddress()));
-        // Assert
         response.Should().NotBeNull();
-        response.Message.Result.Should().Be("expected result");
     }
 }
 ```

@@ -98,7 +98,8 @@
       "Bash(git blame:*)",
       "WebFetch(domain:fluent2.microsoft.design)",
       "Bash(sips:*)",
-      "Bash(bc:*)"
+      "Bash(bc:*)",
+      "Bash(tasklist:*)"
     ],
     "deny": []
   },

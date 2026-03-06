@@ -1,17 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using System.Reactive.Linq;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -22,30 +17,24 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly DataChangeNotifier _changeNotifier = new();
-    private InMemoryPersistenceService? _persistence;
-    private IMeshQueryProvider? _meshQuery;
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
-    private InMemoryPersistenceService Persistence => _persistence ??= new InMemoryPersistenceService(changeNotifier: _changeNotifier);
-    private IMeshQueryProvider MeshQuery => _meshQuery ??= new InMemoryMeshQuery(Persistence, changeNotifier: _changeNotifier);
+    private IMeshQuery Query => MeshQuery;
 
     [Fact]
     public async Task ObserveQuery_EmitsAddedOnNewTodo()
     {
         // Arrange - Create initial todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
-        var subscription = MeshQuery
+        var subscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -56,13 +45,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Create new todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task2") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task2") with
         {
             Name = "Task 2",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task2", Title = "Task 2", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         await Task.Delay(300);
 
@@ -79,18 +68,18 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     public async Task ObserveQuery_EmitsRemovedOnSoftDelete()
     {
         // Arrange - Create initial todo as Active
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
-        var subscription = MeshQuery
+        var subscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -100,13 +89,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Soft delete by changing state to Deleted
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Deleted,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         await Task.Delay(300);
 
@@ -123,18 +112,18 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     public async Task ObserveQuery_EmitsUpdatedOnStatusChange()
     {
         // Arrange - Create initial todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1 - Pending",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
-        var subscription = MeshQuery
+        var subscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -143,13 +132,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         receivedChanges.Should().HaveCount(1);
 
         // Act - Update the todo status
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1 - Completed",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Task 1", Status = "Completed" }
-        }, JsonOptions);
+        });
 
         await Task.Delay(300);
 
@@ -166,18 +155,18 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     public async Task ObserveQuery_DeletedItemsAppearInDeletedQuery()
     {
         // Arrange - Create initial todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         var deletedChanges = new List<QueryResultChange<MeshNode>>();
-        var deletedSubscription = MeshQuery
+        var deletedSubscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
         await Task.Delay(200);
@@ -188,13 +177,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         deletedChanges[0].Items.Should().BeEmpty();
 
         // Act - Soft delete the todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Deleted,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         await Task.Delay(300);
 
@@ -211,25 +200,25 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
     public async Task ObserveQuery_RestoreMovesFromDeletedToActive()
     {
         // Arrange - Create a deleted todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Deleted,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         var activeChanges = new List<QueryResultChange<MeshNode>>();
         var deletedChanges = new List<QueryResultChange<MeshNode>>();
 
-        var activeSubscription = MeshQuery
+        var activeSubscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
             .Subscribe(change => activeChanges.Add(change));
 
-        var deletedSubscription = MeshQuery
+        var deletedSubscription = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree"))
             .Subscribe(change => deletedChanges.Add(change));
 
         await Task.Delay(200);
@@ -241,13 +230,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         deletedChanges[0].Items.Should().HaveCount(1);
 
         // Act - Restore the todo (change state to Active)
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Task 1",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Task 1", Status = "Pending" }
-        }, JsonOptions);
+        });
 
         await Task.Delay(300);
 
@@ -270,27 +259,27 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         // This test simulates the AllTasks view which combines active and deleted streams
 
         // Arrange - Create one active and one deleted todo
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task1") with
         {
             Name = "Active Task",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task1", Title = "Active Task", Status = "Pending" }
-        }, JsonOptions);
+        });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task2") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task2") with
         {
             Name = "Deleted Task",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Deleted,
             Content = new { Id = "task2", Title = "Deleted Task", Status = "Completed" }
-        }, JsonOptions);
+        });
 
         var combinedResults = new List<(List<MeshNode> Active, List<MeshNode> Deleted)>();
 
-        var activeStream = MeshQuery
+        var activeStream = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Active scope:subtree"))
             .Scan(new List<MeshNode>(), (current, change) =>
             {
                 var result = change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset
@@ -310,9 +299,9 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
                 return result;
             });
 
-        var deletedStream = MeshQuery
+        var deletedStream = Query
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree"), JsonOptions)
+                "path:ACME/Project/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree"))
             .Scan(new List<MeshNode>(), (current, change) =>
             {
                 var result = change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset
@@ -345,13 +334,13 @@ public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshT
         lastResult.Deleted.Should().HaveCount(1);
 
         // Act - Add another active task
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task3") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo/task3") with
         {
             Name = "New Active Task",
             NodeType = "ACME/Project/Todo",
             State = MeshNodeState.Active,
             Content = new { Id = "task3", Title = "New Active Task", Status = "InProgress" }
-        }, JsonOptions);
+        });
 
         await Task.Delay(300);
 

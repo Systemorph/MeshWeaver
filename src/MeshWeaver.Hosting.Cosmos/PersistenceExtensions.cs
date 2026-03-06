@@ -191,26 +191,19 @@ public static class PersistenceExtensions
         var nodesContainer = database.GetContainer(nodesContainerName);
         var partitionsContainer = database.GetContainer(partitionsContainerName);
 
-        // Register the data change notifier as singleton
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
         // Register the storage adapter
         var storageAdapter = new CosmosStorageAdapter(nodesContainer, partitionsContainer);
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
-        services.AddSingleton(storageAdapter); // Also register as concrete type for change feed setup
+        services.AddSingleton(storageAdapter); // Register as concrete type for change feed setup
 
-        // Register persistence service with change notifier
-        services.AddSingleton<IPersistenceServiceCore>(sp =>
-            new InMemoryPersistenceService(
-                storageAdapter,
-                sp.GetService<IDataChangeNotifier>()));
-
-        // Register CosmosMeshQuery with change notifier for native Cosmos SQL queries
+        // Register CosmosMeshQuery BEFORE AddPersistence so TryAddSingleton doesn't override it
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new CosmosMeshQuery(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<MeshConfiguration>()));
+
+        // Register core persistence services (IStorageAdapter, IPersistenceServiceCore, etc.)
+        services.AddPersistence(storageAdapter);
 
         // Register the Change Feed Processor
         services.AddSingleton(sp =>

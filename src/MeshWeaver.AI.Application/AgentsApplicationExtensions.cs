@@ -32,10 +32,8 @@ public static class AgentsApplicationExtensions
                 })
                 // Mesh catalog provider
                 .AddScoped<IAutocompleteProvider>(sp =>
-                {
-                    var meshCatalog = sp.GetService<IMeshCatalog>();
-                    return new MeshCatalogAutocompleteProvider(meshCatalog);
-                })
+                    new MeshCatalogAutocompleteProvider(sp)
+                )
                 // Command provider
                 .AddScoped<IAutocompleteProvider, CommandAutocompleteProvider>())
             .WithHandler<AutocompleteRequest>(HandleAutocompleteRequest);

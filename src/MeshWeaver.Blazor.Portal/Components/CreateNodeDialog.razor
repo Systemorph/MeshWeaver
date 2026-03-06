@@ -277,11 +277,9 @@
                 : SelectedNamespacePath;
             var nodePath = $"{nodeNamespace}/{finalId}";
 
-            // Send CreateNodeRequest to create transient node
-            var meshCatalog = Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
             // Check if a node already exists at this path
-            var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));
+            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
             if (existingNode != null && existingNode.State != MeshNodeState.Transient)
             {
                 errorMessage = $"A node already exists at path: {nodePath}";
@@ -296,11 +294,8 @@
                 State = MeshNodeState.Transient
             };
 
-            var persistence = Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence != null)
-            {
-                await persistence.SaveNodeAsync(transientNode);
-            }
+            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+            await nodeFactory.CreateTransientAsync(transientNode);
 
             // Store result data for navigation
             Content.ResultPath = nodePath;

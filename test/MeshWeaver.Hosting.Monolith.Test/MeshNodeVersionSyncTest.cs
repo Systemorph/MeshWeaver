@@ -13,6 +13,7 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using System.Linq;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -34,7 +35,6 @@ public class MeshNodeVersionSyncTest : MonolithMeshTestBase
     [ThreadStatic]
     private static string? _currentTestDirectory;
 
-    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
     private static string GetOrCreateTestDirectory()
     {
@@ -130,7 +130,7 @@ public record Graph
 
         return builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence))
+            .ConfigureServices(services => services.AddInMemoryPersistence(persistence))
             .AddGraph();
     }
 
@@ -157,8 +157,8 @@ public record Graph
     [Fact(Timeout = 90000)]
     public async Task MeshNode_InitialVersion_IsZero()
     {
-        // Arrange - check initial version in persistence before hub starts
-        var initialNode = await Persistence.GetNodeAsync("graph", TestContext.Current.CancellationToken);
+        // Arrange - check initial version via query before hub starts
+        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert - Version property exists and is initialized to 0
         initialNode.Should().NotBeNull("graph node should exist in persistence");
@@ -177,10 +177,10 @@ public record Graph
         };
 
         // Act - save the node with version
-        await Persistence.SaveNodeAsync(nodeWithVersion, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(nodeWithVersion, ct: TestContext.Current.CancellationToken);
 
         // Assert - version is preserved when reading back
-        var savedNode = await Persistence.GetNodeAsync("test/versioned", TestContext.Current.CancellationToken);
+        var savedNode = await MeshQuery.QueryAsync<MeshNode>("path:test/versioned scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         savedNode.Should().NotBeNull();
         savedNode!.Version.Should().Be(42, "version should be preserved in persistence");
     }

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -229,8 +230,6 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         // Create parent
         var parent = new MeshNode("ImportTestParent", "lifecycle") { Name = "Parent" };
         var createParent = await client.AwaitResponse(
@@ -255,13 +254,13 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify all nodes are gone
-        var parentNode = await catalog.GetNodeAsync(new Address("lifecycle/ImportTestParent"));
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>("path:lifecycle/ImportTestParent scope:exact").FirstOrDefaultAsync();
         parentNode.Should().BeNull();
 
-        var child1Node = await catalog.GetNodeAsync(new Address("lifecycle/ImportTestParent/Child1"));
+        var child1Node = await MeshQuery.QueryAsync<MeshNode>("path:lifecycle/ImportTestParent/Child1 scope:exact").FirstOrDefaultAsync();
         child1Node.Should().BeNull();
 
-        var child2Node = await catalog.GetNodeAsync(new Address("lifecycle/ImportTestParent/Child2"));
+        var child2Node = await MeshQuery.QueryAsync<MeshNode>("path:lifecycle/ImportTestParent/Child2 scope:exact").FirstOrDefaultAsync();
         child2Node.Should().BeNull();
     }
 

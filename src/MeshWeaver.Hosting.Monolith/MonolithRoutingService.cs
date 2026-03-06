@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
+internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
     private readonly INodeTypeService? nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();

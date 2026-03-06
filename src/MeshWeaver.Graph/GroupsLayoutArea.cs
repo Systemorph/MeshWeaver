@@ -286,37 +286,34 @@ public static class GroupsLayoutArea
                     else
                     {
                         // Create transient node and navigate to Create view
-                        var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                        if (catalog != null)
+                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                        // Look up the member node to copy their icon
+                        string? memberIcon = null;
+                        if (query != null)
                         {
-                            // Look up the member node to copy their icon
-                            string? memberIcon = null;
-                            if (query != null)
+                            try
                             {
-                                try
-                                {
-                                    var memberNode = await query.QueryAsync<MeshNode>($"path:{selectedMember} scope:exact")
-                                        .FirstOrDefaultAsync();
-                                    memberIcon = memberNode?.Icon;
-                                }
-                                catch { }
+                                var memberNode = await query.QueryAsync<MeshNode>($"path:{selectedMember} scope:exact")
+                                    .FirstOrDefaultAsync();
+                                memberIcon = memberNode?.Icon;
                             }
-
-                            var newNode = new MeshNode(nodeId, nodePath)
-                            {
-                                NodeType = Configuration.GroupMembershipNodeType.NodeType,
-                                Name = $"{memberName} Membership",
-                                Icon = memberIcon,
-                                Content = new GroupMembership
-                                {
-                                    Member = selectedMember,
-                                    DisplayName = memberName,
-                                    Groups = [new MembershipEntry { Group = "" }]
-                                }
-                            };
-                            await catalog.CreateTransientAsync(newNode);
-                            saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.CreateNodeArea}");
+                            catch { }
                         }
+
+                        var newNode = new MeshNode(nodeId, nodePath)
+                        {
+                            NodeType = Configuration.GroupMembershipNodeType.NodeType,
+                            Name = $"{memberName} Membership",
+                            Icon = memberIcon,
+                            Content = new GroupMembership
+                            {
+                                Member = selectedMember,
+                                DisplayName = memberName,
+                                Groups = [new MembershipEntry { Group = "" }]
+                            }
+                        };
+                        await nodeFactory.CreateTransientAsync(newNode);
+                        saveCtx.NavigateTo($"/{path}/{MeshNodeLayoutAreas.CreateNodeArea}");
                     }
                 }));
 

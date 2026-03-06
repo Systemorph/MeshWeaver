@@ -10,7 +10,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,10 +30,7 @@ public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(outp
         _persistence = new InMemoryPersistenceService();
 
         return conf
-            .WithServices(services => services
-                .AddSingleton<IPersistenceServiceCore>(_persistence)
-                .AddSingleton<IPersistenceService>(sp =>
-                    new PersistenceService(sp.GetRequiredService<IPersistenceServiceCore>(), sp.GetRequiredService<IMessageHub>())))
+            .WithServices(services => services.AddInMemoryPersistence(_persistence))
             .WithRoutes(forward => forward
                 .RouteAddressToHostedHub(HostType, ConfigureHost)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));

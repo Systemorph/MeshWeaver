@@ -16,15 +16,15 @@ public class MeshOperations
 {
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
-    private readonly IMeshQuery? meshQuery;
-    private readonly IMeshCatalog? meshCatalog;
+    private readonly IMeshQuery meshQuery;
+    private readonly IMeshNodeFactory nodeFactory;
 
     public MeshOperations(IMessageHub hub)
     {
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
-        this.meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
-        this.meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+        this.meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        this.nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
     }
 
     /// <summary>
@@ -45,9 +45,6 @@ public class MeshOperations
 
         try
         {
-            if (meshQuery == null)
-                return "Query service not available.";
-
             // Handle children query (path/*)
             if (resolvedPath.EndsWith("/*"))
             {
@@ -127,9 +124,6 @@ public class MeshOperations
     {
         logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
 
-        if (meshQuery == null)
-            return "Query service not available.";
-
         var resolvedBase = basePath != null ? ResolvePath(basePath) : null;
         var fullQuery = string.IsNullOrEmpty(resolvedBase) ? query : $"path:{resolvedBase} {query}";
 
@@ -166,16 +160,13 @@ public class MeshOperations
     {
         logger.LogInformation("Create called");
 
-        if (meshCatalog == null)
-            return "Mesh catalog service not available.";
-
         try
         {
             var meshNode = JsonSerializer.Deserialize<MeshNode>(node, hub.JsonSerializerOptions);
             if (meshNode == null)
                 return "Invalid node: deserialized to null.";
 
-            var created = await meshCatalog.CreateNodeAsync(meshNode);
+            var created = await nodeFactory.CreateNodeAsync(meshNode);
             return $"Created: {created.Path}";
         }
         catch (JsonException ex)

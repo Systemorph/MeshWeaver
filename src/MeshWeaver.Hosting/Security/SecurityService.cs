@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.Security;
 /// - Permission evaluation walks AccessAssignment nodes from root to target path.
 /// - Built-in roles: Admin, Editor, Viewer, Commenter.
 /// </summary>
-public class SecurityService : ISecurityService
+internal class SecurityService : ISecurityService
 {
     private const string AccessPartitionName = "Access";
 

@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Scoped wrapper around IPersistenceServiceCore that automatically injects
 /// JsonSerializerOptions from the current IMessageHub.
 /// </summary>
-public class PersistenceService(IPersistenceServiceCore core, IMessageHub hub) : IPersistenceService
+internal class PersistenceService(IPersistenceServiceCore core, IMessageHub hub) : IPersistenceService
 {
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 

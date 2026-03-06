@@ -1,17 +1,12 @@
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -23,7 +18,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly InMemoryActivityStore _activityStore = new();
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     private static UserActivityRecord CreateActivityRecord(string userId, string path, string? name = null, string? nodeType = null, ActivityType type = ActivityType.Read)
     {
@@ -147,31 +141,23 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
 
 public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
     [Fact(Timeout = 10000)]
     public async Task Catalog_NoActivity_FallsBackToActualNodes()
     {
-        // Arrange - create persistence with nodes but no activity
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        // Create some organization nodes
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with
+        // Arrange - create nodes but no activity
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme",
             NodeType = "Type/Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso",
             NodeType = "Type/Organization"
-        }, JsonOptions);
+        });
 
         // Act - query for organizations using standard query (simulating fallback)
-        var query = "path:org nodeType:Type/Organization scope:descendants limit:20";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:org nodeType:Type/Organization scope:descendants limit:20")
             .ToListAsync();
 
         // Assert - should return actual nodes when no activity
@@ -183,26 +169,25 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task Catalog_WithActivity_CanLoadNodesFromActivityPaths()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
         var activityStore = new InMemoryActivityStore();
         var userId = "catalog-user";
 
         // Create nodes
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/alpha") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Type/Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with
         {
             Name = "Beta",
             NodeType = "Type/Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/gamma") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/gamma") with
         {
             Name = "Gamma",
             NodeType = "Type/Organization"
-        }, JsonOptions);
+        });
 
         // Simulate navigation activity: beta first, then gamma, then alpha (alpha most recent)
         await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
@@ -230,7 +215,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         var nodes = new List<MeshNode>();
         foreach (var activity in activityRecords)
         {
-            var node = await persistence.GetNodeAsync(activity.NodePath, JsonOptions);
+            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{activity.NodePath} scope:exact").FirstOrDefaultAsync();
             if (node != null)
                 nodes.Add(node);
         }
@@ -292,36 +277,28 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
 
 public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
     [Fact(Timeout = 10000)]
     public async Task Catalog_SearchWithQuery_FiltersResults()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        // Create organizations with different names (use simple NodeType like existing tests)
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with
         {
             Name = "Acme Corporation",
             NodeType = "Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/contoso") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/contoso") with
         {
             Name = "Contoso Ltd",
             NodeType = "Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/fabrikam") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/fabrikam") with
         {
             Name = "Fabrikam Inc",
             NodeType = "Organization"
-        }, JsonOptions);
+        });
 
         // Act - query with filter for name containing "Corp" using wildcard operator
-        var query = "path:org nodeType:Organization name:*Corp* scope:descendants limit:20";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:org nodeType:Organization name:*Corp* scope:descendants limit:20")
             .ToListAsync();
 
         // Assert - should only return Acme Corporation
@@ -333,24 +310,19 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     public async Task Catalog_TextSearch_FiltersResults()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        await persistence.SaveNodeAsync(MeshNode.FromPath("doc/report1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("doc/report1") with
         {
             Name = "Annual Financial Report 2024",
             NodeType = "Document"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("doc/memo1") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("doc/memo1") with
         {
             Name = "Team Meeting Notes",
             NodeType = "Document"
-        }, JsonOptions);
+        });
 
         // Act - text search for "financial" with descendants scope
-        var query = "path:doc nodeType:Document financial scope:descendants limit:20";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>("path:doc nodeType:Document financial scope:descendants limit:20")
             .ToListAsync();
 
         // Assert
@@ -361,33 +333,26 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 10000)]
     public async Task Catalog_Pagination_LoadsMoreItems()
     {
-        // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        // Create 10 items
+        // Arrange - create 10 items
         for (int i = 0; i < 10; i++)
         {
-            await persistence.SaveNodeAsync(MeshNode.FromPath($"item/item{i:D2}") with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"item/item{i:D2}") with
             {
                 Name = $"Item {i:D2}",
                 NodeType = "Item"
-            }, JsonOptions);
+            });
         }
 
         // Act - first page (3 items) with descendants scope
-        var firstPage = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery("path:item nodeType:Item scope:descendants limit:3"), JsonOptions)
-            .OfType<MeshNode>()
+        var firstPage = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Item scope:descendants limit:3")
             .ToListAsync();
 
         // Load more (6 items total)
-        var secondPage = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery("path:item nodeType:Item scope:descendants limit:6"), JsonOptions)
-            .OfType<MeshNode>()
+        var secondPage = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Item scope:descendants limit:6")
             .ToListAsync();
 
         // Load all (10 items)
-        var allItems = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery("path:item nodeType:Item scope:descendants limit:100"), JsonOptions)
-            .OfType<MeshNode>()
+        var allItems = await MeshQuery.QueryAsync<MeshNode>("path:item nodeType:Item scope:descendants limit:100")
             .ToListAsync();
 
         // Assert
@@ -399,25 +364,20 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     [Fact(Timeout = 10000)]
     public async Task Catalog_HasMore_DetectedCorrectly()
     {
-        // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        // Create 5 items
+        // Arrange - create 5 items
         for (int i = 0; i < 5; i++)
         {
-            await persistence.SaveNodeAsync(MeshNode.FromPath($"test/node{i}") with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"test/node{i}") with
             {
                 Name = $"Node {i}",
                 NodeType = "Test"
-            }, JsonOptions);
+            });
         }
 
         // Act - request limit+1 to detect if there are more
         var limit = 3;
         var queryLimit = limit + 1;
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:test nodeType:Test scope:descendants limit:{queryLimit}"), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>($"path:test nodeType:Test scope:descendants limit:{queryLimit}")
             .ToListAsync();
 
         var hasMore = results.Count > limit;
@@ -435,26 +395,25 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
     public async Task Catalog_ActivityRecords_CanBeFilteredByNodeType()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
         var activityStore = new InMemoryActivityStore();
         var userId = "search-user";
 
         // Create nodes with different types
-        await persistence.SaveNodeAsync(MeshNode.FromPath("data/project1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/project1") with
         {
             Name = "Project Alpha",
             NodeType = "Project"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("data/doc1") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
             NodeType = "Document"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("data/project2") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/project2") with
         {
             Name = "Project Beta",
             NodeType = "Project"
-        }, JsonOptions);
+        });
 
         // Simulate navigation activity for all nodes
         await activityStore.SaveActivitiesAsync(userId, [new UserActivityRecord
@@ -482,7 +441,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
         var projectRecords = new List<UserActivityRecord>();
         foreach (var activity in allActivityRecords)
         {
-            var node = await persistence.GetNodeAsync(activity.NodePath, JsonOptions);
+            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{activity.NodePath} scope:exact").FirstOrDefaultAsync();
             if (node?.NodeType == "Project")
             {
                 projectRecords.Add(activity);
@@ -499,42 +458,35 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 }
 
 /// <summary>
-/// Tests that source:activity queries work via InMemoryMeshQuery.
+/// Tests that source:activity queries work via IMeshQuery.
 /// InMemory doesn't support SQL JOIN, so source:activity is treated like a normal query
 /// (returns all matching nodes without activity ordering). Activity ordering is only
 /// available with PostgreSQL provider.
 /// </summary>
 public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
-
     [Fact(Timeout = 10000)]
     public async Task SourceActivity_ReturnsAllMatchingNodes()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/alpha") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with
         {
             Name = "Beta",
             NodeType = "Organization"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("org/gamma") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/gamma") with
         {
             Name = "Gamma",
             NodeType = "Organization"
-        }, JsonOptions);
+        });
 
         // Act - source:activity query via InMemory (filters still apply, ordering is default)
-        var query = "source:activity nodeType:Organization path:org scope:children";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Organization path:org scope:children")
             .ToListAsync();
 
         // Assert - all matching nodes are returned (source:activity is stripped by parser)
@@ -546,24 +498,19 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
     public async Task SourceActivity_RespectsNodeTypeFilter()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
-        await persistence.SaveNodeAsync(MeshNode.FromPath("data/proj1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/proj1") with
         {
             Name = "Project One",
             NodeType = "Project"
-        }, JsonOptions);
-        await persistence.SaveNodeAsync(MeshNode.FromPath("data/doc1") with
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/doc1") with
         {
             Name = "Document One",
             NodeType = "Document"
-        }, JsonOptions);
+        });
 
         // Act
-        var query = "source:activity nodeType:Project path:data scope:children";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Project path:data scope:children")
             .ToListAsync();
 
         // Assert - only Project nodes returned
@@ -575,22 +522,17 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
     public async Task SourceActivity_RespectsLimit()
     {
         // Arrange
-        var persistence = new InMemoryPersistenceService();
-        var meshQuery = new InMemoryMeshQuery(persistence);
-
         for (var i = 0; i < 5; i++)
         {
-            await persistence.SaveNodeAsync(MeshNode.FromPath($"items/item{i}") with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"items/item{i}") with
             {
                 Name = $"Item {i}",
                 NodeType = "Item"
-            }, JsonOptions);
+            });
         }
 
         // Act
-        var query = "source:activity nodeType:Item path:items scope:children limit:3";
-        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query), JsonOptions)
-            .OfType<MeshNode>()
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Item path:items scope:children limit:3")
             .ToListAsync();
 
         // Assert

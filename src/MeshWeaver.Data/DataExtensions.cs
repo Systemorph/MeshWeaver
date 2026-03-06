@@ -89,9 +89,7 @@ public static class DataExtensions
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
                 })
                 .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
-                .AddScoped<IDataValidator, RlsDataValidator>()
-                .AddScoped<ActivityLogBundler>())
-            .WithServices(sc => { sc.TryAddSingleton<IActivityLogStore, InMemoryActivityLogStore>(); return sc; })
+                .AddScoped<IDataValidator, RlsDataValidator>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {

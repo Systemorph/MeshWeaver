@@ -147,7 +147,7 @@ public static class ApprovalsView
             Status = ApprovalStatus.Pending
         };
 
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
 
         var approvalNode = new MeshNode(approvalId, nodePath)
         {
@@ -157,11 +157,11 @@ public static class ApprovalsView
             Content = approval
         };
 
-        await meshCatalog.CreateNodeAsync(approvalNode, currentUser);
+        await nodeFactory.CreateNodeAsync(approvalNode, currentUser);
 
         // Create notification for the approver
         await NotificationService.CreateNotificationAsync(
-            meshCatalog,
+            nodeFactory,
             approver,
             "Approval Requested",
             $"{currentUser} requested your approval for \"{purpose}\".",

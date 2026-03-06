@@ -279,12 +279,8 @@ public static class MemexConfiguration
                 .AddKernel()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
-                // Register the mesh catalog
-                .ConfigureServices(services =>
-                {
-                    services.AddSingleton<IMeshCatalog, MeshCatalog>();
-                    return services;
-                })
+                // Register the mesh catalog and its public interfaces
+                .ConfigureServices(services => services.AddMeshCatalog())
                 // Add content collections at mesh level with storage config
                 // The storage collection is registered as a source for node hub mappings
                 .ConfigureHub(hub =>

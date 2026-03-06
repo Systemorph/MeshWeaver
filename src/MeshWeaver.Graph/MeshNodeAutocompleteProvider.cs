@@ -1,15 +1,16 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Generic autocomplete provider that queries child nodes from the mesh catalog.
+/// Generic autocomplete provider that queries child nodes from the mesh query service.
 /// Uses the hub's address as the parent path to find children.
 /// </summary>
-public class MeshNodeAutocompleteProvider(IMeshCatalog meshCatalog, IMessageHub hub) : IAutocompleteProvider
+internal class MeshNodeAutocompleteProvider(IMeshQuery meshQuery, IMessageHub hub) : IAutocompleteProvider
 {
     private const int DefaultMaxResults = 20;
 
@@ -22,9 +23,17 @@ public class MeshNodeAutocompleteProvider(IMeshCatalog meshCatalog, IMessageHub 
         // Use the hub's address as the parent path
         var parentPath = hub.Address.ToString();
 
+        var queryString = $"parent:{parentPath} scope:children";
+        if (!string.IsNullOrWhiteSpace(query))
+            queryString += $" name:{query}";
+
         // Query for child nodes and yield results
-        await foreach (var node in meshCatalog.QueryAsync(parentPath, query, DefaultMaxResults, ct))
+        var count = 0;
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>(queryString).WithCancellation(ct))
         {
+            if (count >= DefaultMaxResults) break;
+            count++;
+
             yield return new AutocompleteItem(
                 Label: $"@{node.Path}/",
                 InsertText: $"@{node.Path}/",

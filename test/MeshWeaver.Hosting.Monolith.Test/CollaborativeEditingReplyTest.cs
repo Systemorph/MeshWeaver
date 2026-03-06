@@ -111,8 +111,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         Output.WriteLine($"Read view rendered with {stack.Areas.Count()} areas");
 
         // Verify comment children are queryable
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var comments = await meshQuery.QueryAsync<MeshNode>(
+        var comments = await MeshQuery.QueryAsync<MeshNode>(
             $"path:MeshWeaver/Documentation/DataMesh/CollaborativeEditing nodeType:{CommentNodeType.NodeType} scope:children"
         ).ToListAsync();
 
@@ -164,10 +163,8 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Step 3: Get existing comment to reply to (c1 = Alice's comment)
         Output.WriteLine("Step 3: Finding parent comment to reply to...");
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var parentComment = await catalog.GetNodeAsync(new Address($"{docPath}/c1"));
+        var parentComment = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/c1 scope:exact").FirstOrDefaultAsync();
         parentComment.Should().NotBeNull("c1 comment should exist");
         var parentContent = parentComment!.Content.Should().BeOfType<Comment>().Subject;
         Output.WriteLine($"Parent comment: '{parentContent.Text}' by {parentContent.Author}");
@@ -191,7 +188,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             Content = replyComment
         };
 
-        var createdReply = await catalog.CreateNodeAsync(replyNode, "TestReviewer", TestTimeout);
+        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, "TestReviewer", TestTimeout);
         createdReply.Should().NotBeNull();
         Output.WriteLine($"Reply created at path: {createdReply.Path}");
 
@@ -217,7 +214,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Step 6: Verify the reply persisted with text
         Output.WriteLine("Step 6: Verifying reply persistence...");
-        var retrievedReply = await catalog.GetNodeAsync(replyAddress);
+        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{createdReply.Path} scope:exact").FirstOrDefaultAsync();
         retrievedReply.Should().NotBeNull("Reply should be retrievable after save");
         var retrievedContent = retrievedReply!.Content.Should().BeOfType<Comment>().Subject;
         retrievedContent.Author.Should().Be("TestReviewer");
@@ -225,7 +222,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Step 7: Verify the reply appears in comment children query
         Output.WriteLine("Step 7: Verifying reply in children query...");
-        var allComments = await meshQuery.QueryAsync<MeshNode>(
+        var allComments = await MeshQuery.QueryAsync<MeshNode>(
             $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
         ).ToListAsync();
 
@@ -235,7 +232,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Cleanup
         Output.WriteLine("Cleaning up reply node...");
-        await catalog.DeleteNodeAsync(createdReply.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdReply.Path!, recursive: false, ct: TestTimeout);
     }
 
     /// <summary>
@@ -245,11 +242,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     public async Task MultipleReplies_ShouldAllLinkToParent()
     {
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         // Get parent comment c2
-        var parentNode = await catalog.GetNodeAsync(new Address($"{docPath}/c2"));
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/c2 scope:exact").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("c2 comment should exist");
         var parentContent = (Comment)parentNode!.Content!;
 
@@ -274,13 +269,13 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 Content = reply
             };
 
-            var created = await catalog.CreateNodeAsync(replyNode, $"Reviewer{i + 1}", TestTimeout);
+            var created = await NodeFactory.CreateNodeAsync(replyNode, $"Reviewer{i + 1}", TestTimeout);
             replyPaths.Add(created.Path!);
             Output.WriteLine($"Created reply {i + 1}: {created.Path}");
         }
 
         // Verify all replies are queryable and linked to parent
-        var allComments = await meshQuery.QueryAsync<MeshNode>(
+        var allComments = await MeshQuery.QueryAsync<MeshNode>(
             $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
         ).ToListAsync();
 
@@ -293,7 +288,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         // Cleanup
         foreach (var path in replyPaths)
         {
-            await catalog.DeleteNodeAsync(path, recursive: false, ct: TestTimeout);
+            await NodeFactory.DeleteNodeAsync(path, recursive: false, ct: TestTimeout);
         }
         Output.WriteLine("Cleaned up all reply nodes");
     }

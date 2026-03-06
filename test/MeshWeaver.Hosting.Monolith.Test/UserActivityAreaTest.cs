@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -77,15 +78,11 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 15000)]
     public void UserNodeType_IsRegistered()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var config = meshCatalog.Configuration;
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        config.Nodes.Should().ContainKey("User",
-            "User node type should be registered via AddGraph() → AddUserType()");
-
-        var userNode = config.Nodes["User"];
-        userNode.HubConfiguration.Should().NotBeNull(
-            "User MeshNode should have a HubConfiguration lambda that calls AddUserActivityViews()");
+        var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
+        cachedConfig.Should().NotBeNull(
+            "User node type should be registered via AddGraph() → AddUserType() with HubConfiguration");
     }
 
     /// <summary>
@@ -94,10 +91,9 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 15000)]
     public void NodeTypeService_HasCachedConfig_ForUserType()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered by AddGraph()");
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        var cachedConfig = nodeTypeService!.GetCachedHubConfiguration("User");
+        var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
         cachedConfig.Should().NotBeNull(
             "NodeTypeService should have cached HubConfiguration for 'User' node type");
     }
@@ -108,20 +104,16 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 15000)]
     public async Task UserNode_Roland_CanBeLoaded()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        var node = await persistence.GetNodeAsync("User/Roland");
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:User/Roland scope:exact").FirstOrDefaultAsync();
         node.Should().NotBeNull("Roland user node should exist in samples/Graph/Data/User/Roland.json");
         node!.NodeType.Should().Be("User");
 
         // Enrich with node type — this should attach HubConfiguration
-        if (nodeTypeService != null)
-        {
-            var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
-            enriched.HubConfiguration.Should().NotBeNull(
-                "After enrichment, User node should have HubConfiguration from UserNodeType");
-        }
+        var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
+        enriched.HubConfiguration.Should().NotBeNull(
+            "After enrichment, User node should have HubConfiguration from UserNodeType");
     }
 
     /// <summary>

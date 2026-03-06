@@ -42,7 +42,9 @@ public static class GraphConfigurationExtensions
                 .AddRoleType()
                 .AddGroupMembershipType()
                 .AddApprovalType()
-                .AddNotificationType();
+                .AddNotificationType()
+                .AddActivityLogType()
+                .AddUserActivityType();
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
@@ -105,13 +107,7 @@ public static class GraphConfigurationExtensions
 
         try
         {
-            var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
-            {
-                hub.Post(new GetDataResponse(null, 0) { Error = "IPersistenceService not available" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
+            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
 
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();
@@ -119,7 +115,7 @@ public static class GraphConfigurationExtensions
             // Get CodeConfiguration from child MeshNodes under the Code path
             CodeConfiguration? codeFile = null;
             var codeParentPath = $"{nodeTypePath}/Code";
-            await foreach (var child in persistence.GetChildrenAsync(codeParentPath).WithCancellation(ct))
+            await foreach (var child in meshQuery.QueryAsync<MeshNode>($"parent:{codeParentPath} scope:children").WithCancellation(ct))
             {
                 if (child.Content is CodeConfiguration cf)
                 {

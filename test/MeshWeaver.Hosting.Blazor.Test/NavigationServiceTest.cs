@@ -22,7 +22,8 @@ namespace MeshWeaver.Hosting.Blazor.Test;
 public class NavigationServiceTest
 {
     private readonly MockNavigationManager _navigationManager;
-    private readonly IMeshCatalog _meshCatalog;
+    private readonly IPathResolver _pathResolver;
+    private readonly IMeshQuery _meshQuery;
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
     private readonly INodeTypeService _nodeTypeService;
@@ -30,7 +31,8 @@ public class NavigationServiceTest
     public NavigationServiceTest()
     {
         _navigationManager = new MockNavigationManager();
-        _meshCatalog = Substitute.For<IMeshCatalog>();
+        _pathResolver = Substitute.For<IPathResolver>();
+        _meshQuery = Substitute.For<IMeshQuery>();
         _hub = Substitute.For<IMessageHub>();
         _hubServiceProvider = Substitute.For<IServiceProvider>();
         _nodeTypeService = Substitute.For<INodeTypeService>();
@@ -41,7 +43,7 @@ public class NavigationServiceTest
     }
 
     private NavigationService CreateService() =>
-        new(_navigationManager, _meshCatalog, _hub);
+        new(_navigationManager, _pathResolver, _meshQuery, _hub);
 
     #region InitializeAsync Tests
 
@@ -50,7 +52,7 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME/Project", null));
 
         // Act
@@ -60,7 +62,7 @@ public class NavigationServiceTest
         NavigationContext? receivedContext = null;
         service.OnNavigationContextChanged += ctx => receivedContext = ctx;
 
-        _meshCatalog.ResolvePathAsync("ACME/Project/Overview")
+        _pathResolver.ResolvePathAsync("ACME/Project/Overview")
             .Returns(new AddressResolution("ACME/Project", "Overview"));
 
         _navigationManager.SimulateLocationChanged("http://localhost/ACME/Project/Overview");
@@ -77,7 +79,7 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
 
         // Act
@@ -101,7 +103,7 @@ public class NavigationServiceTest
         // Arrange
         var service = CreateService();
         _navigationManager.SetUri("http://localhost/ACME/Project");
-        _meshCatalog.ResolvePathAsync("ACME/Project")
+        _pathResolver.ResolvePathAsync("ACME/Project")
             .Returns(new AddressResolution("ACME/Project", null));
 
         // Act
@@ -121,11 +123,11 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME/Project", null));
         await service.InitializeAsync();
 
-        _meshCatalog.ResolvePathAsync("ACME/Project/Dashboard/123")
+        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard/123")
             .Returns(new AddressResolution("ACME/Project", "Dashboard/123"));
 
         // Act
@@ -143,14 +145,14 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 
         NavigationContext? receivedContext = null;
         service.OnNavigationContextChanged += ctx => receivedContext = ctx;
 
-        _meshCatalog.ResolvePathAsync("ACME/Project")
+        _pathResolver.ResolvePathAsync("ACME/Project")
             .Returns(new AddressResolution("ACME/Project", null));
 
         // Act
@@ -167,7 +169,7 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 
@@ -178,7 +180,7 @@ public class NavigationServiceTest
         };
         service.OnNavigationContextChanged += ctx => receivedContext = ctx;
 
-        _meshCatalog.ResolvePathAsync("unknown/path")
+        _pathResolver.ResolvePathAsync("unknown/path")
             .Returns((AddressResolution?)null);
 
         // Act
@@ -196,11 +198,11 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 
-        _meshCatalog.ResolvePathAsync("ACME/Project/Dashboard/item-123")
+        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard/item-123")
             .Returns(new AddressResolution("ACME/Project", "Dashboard/item-123"));
 
         // Act
@@ -218,11 +220,11 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 
-        _meshCatalog.ResolvePathAsync("ACME/Project")
+        _pathResolver.ResolvePathAsync("ACME/Project")
             .Returns(new AddressResolution("ACME/Project", null));
 
         // Act
@@ -240,11 +242,11 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 
-        _meshCatalog.ResolvePathAsync("ACME/Project/Dashboard")
+        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard")
             .Returns(new AddressResolution("ACME/Project", "Dashboard"));
 
         // Act
@@ -269,7 +271,7 @@ public class NavigationServiceTest
         CreatableTypesSnapshot? lastSnapshot = null;
         service.CreatableTypes.Subscribe(s => lastSnapshot = s);
 
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
@@ -279,7 +281,7 @@ public class NavigationServiceTest
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Change to different node path
-        _meshCatalog.ResolvePathAsync("ACME/Project")
+        _pathResolver.ResolvePathAsync("ACME/Project")
             .Returns(new AddressResolution("ACME/Project", null));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
@@ -303,7 +305,7 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME/Project", null));
 
         var loadCount = 0;
@@ -318,7 +320,7 @@ public class NavigationServiceTest
         await Task.Delay(100, TestContext.Current.CancellationToken);
 
         // Navigate to different area within same node
-        _meshCatalog.ResolvePathAsync("ACME/Project/Dashboard")
+        _pathResolver.ResolvePathAsync("ACME/Project/Dashboard")
             .Returns(new AddressResolution("ACME/Project", "Dashboard"));
 
         // Act
@@ -338,7 +340,7 @@ public class NavigationServiceTest
 
         service.CreatableTypes.Subscribe(s => snapshots.Add(s));
 
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME/Project", null));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME/Project", Arg.Any<CancellationToken>())
@@ -365,7 +367,7 @@ public class NavigationServiceTest
 
         service.CreatableTypes.Subscribe(s => loadingStates.Add(s.IsLoading));
 
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
 
         _nodeTypeService.GetCreatableTypesAsync("ACME", Arg.Any<CancellationToken>())
@@ -389,7 +391,7 @@ public class NavigationServiceTest
     {
         // Arrange
         var service = CreateService();
-        _meshCatalog.ResolvePathAsync(Arg.Any<string>())
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
             .Returns(new AddressResolution("ACME", null));
         await service.InitializeAsync();
 

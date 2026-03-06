@@ -62,7 +62,6 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 30000)]
     public async Task Overview_ShouldShowCompilationError_WhenCodeIsBroken()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var ct = TestContext.Current.CancellationToken;
 
         // 1. Create a NodeType definition with broken code
@@ -73,7 +72,7 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = MeshNode.NodeTypePath,
             Content = new NodeTypeDefinition()
         };
-        await persistence.SaveNodeAsync(nodeTypeNode, ct);
+        await NodeFactory.CreateNodeAsync(nodeTypeNode, ct: ct);
 
         // Code with a compile error: missing required parameter
         var codeNode = new MeshNode("BrokenCode", $"{nodeTypePath}/Code")
@@ -92,7 +91,7 @@ public record BrokenType
 }"
             }
         };
-        await persistence.SaveNodeAsync(codeNode, ct);
+        await NodeFactory.CreateNodeAsync(codeNode, ct: ct);
 
         // 2. Create an instance node of the broken type
         var instanceNode = MeshNode.FromPath("test/broken-instance") with
@@ -101,7 +100,7 @@ public record BrokenType
             NodeType = nodeTypePath,
             LastModified = DateTimeOffset.UtcNow
         };
-        await persistence.SaveNodeAsync(instanceNode, ct);
+        await NodeFactory.CreateNodeAsync(instanceNode, ct: ct);
 
         // 3. Initialize the hub — this triggers compilation
         var client = GetClient();

@@ -13,14 +13,13 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for thread creation via IMeshCatalog.CreateNodeAsync.
+/// Tests for thread creation via IMeshNodeFactory.CreateNodeAsync.
 /// Threads store messages as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
 public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -39,7 +38,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var userId = "TestUser";
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {
             ParentPath = $"User/{userId}"
@@ -53,7 +51,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -67,8 +65,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange - Create thread and then add a message as a child node
         var userId = "TestUser";
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         var threadContent = new MeshThread
         {
@@ -83,7 +79,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Create the thread
-        var createdThread = await catalog.CreateNodeAsync(threadNode, userId, TestTimeout);
+        var createdThread = await NodeFactory.CreateNodeAsync(threadNode, userId, TestTimeout);
 
         // Create a message as child node
         var messageId = Guid.NewGuid().AsString();
@@ -103,7 +99,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act - Create the message child node
-        var createdMessage = await catalog.CreateNodeAsync(messageNode, userId, TestTimeout);
+        var createdMessage = await NodeFactory.CreateNodeAsync(messageNode, userId, TestTimeout);
 
         // Assert
         createdThread.Should().NotBeNull();
@@ -116,7 +112,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.Type.Should().Be(ThreadMessageType.ExecutedInput);
 
         // Query child messages
-        var children = await meshQuery.QueryAsync<MeshNode>(
+        var children = await MeshQuery.QueryAsync<MeshNode>(
             $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
         ).ToListAsync();
 
@@ -130,7 +126,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var userId = "TestUser";
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {
             ParentPath = $"User/{userId}"
@@ -144,10 +139,10 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act - Create
-        var createdNode = await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
 
         // Act - Retrieve
-        var retrievedNode = await catalog.GetNodeAsync(new Messaging.Address(threadPath));
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
 
         // Assert
         retrievedNode.Should().NotBeNull();
@@ -163,7 +158,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange - Create a malformed path that mimics the bug
         var nonExistentPath = "User/Roland/User/Roland/IOvAlUVOUUubAUdRoDaPwQ";
         var address = new Messaging.Address(nonExistentPath);
-        var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
+        var hub = Mesh;
 
         // Act - Send GetDataRequest to non-existent node
         // Must return a DeliveryFailureException quickly, NOT wait for cancellation timeout
@@ -190,7 +185,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange - Thread path that looks valid but doesn't exist
         var nonExistentPath = "User/TestUser/nonexistent123";
         var address = new Messaging.Address(nonExistentPath);
-        var hub = Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
+        var hub = Mesh;
 
         // Act - Send GetDataRequest to non-existent node
         // Must return a DeliveryFailureException quickly, NOT wait for cancellation timeout
@@ -217,7 +212,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange - Threads are stored as direct children: {parentPath}/{threadId}
         var userId = "TestUser";
         var parentPath = "ACME/ProductLaunch";
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadContent = new MeshThread
         {
             ParentPath = parentPath  // Store where the thread was created
@@ -231,7 +225,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -240,7 +234,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.ParentPath.Should().Be(parentPath, "ParentPath should be preserved");
 
         // Verify it can be retrieved with ParentPath intact
-        var retrievedNode = await catalog.GetNodeAsync(new Messaging.Address(threadPath));
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
         var retrievedContent = retrievedNode?.Content.Should().BeOfType<MeshThread>().Subject;
         retrievedContent?.ParentPath.Should().Be(parentPath, "ParentPath should be preserved after retrieval");
     }
@@ -253,7 +247,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var userId = "TestUser";
         var parentPath = "TestProject";
         var threadId = Guid.NewGuid().ToString("N");
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create parent node first
         var parentNode = new MeshNode(parentPath)
@@ -261,7 +254,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Test Project",
             NodeType = "Markdown"
         };
-        await catalog.CreateNodeAsync(parentNode, userId, TestTimeout);
+        await NodeFactory.CreateNodeAsync(parentNode, userId, TestTimeout);
 
         // Create thread as direct child
         var threadPath = $"{parentPath}/{threadId}";
@@ -277,7 +270,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await catalog.CreateNodeAsync(threadNode, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(threadNode, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -289,7 +282,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.ParentPath.Should().Be(parentPath, "ParentPath should point to logical parent");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(parentPath, recursive: true, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(parentPath, recursive: true, ct: TestTimeout);
     }
 
     [Fact]
@@ -301,7 +294,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var userId = "TestUser";
         var parentPath = $"TestParent_{Guid.NewGuid()}";
         var threadId = Guid.NewGuid().ToString();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create parent node first
         var parentNode = new MeshNode(parentPath)
@@ -309,7 +301,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Test Parent",
             NodeType = "Markdown"
         };
-        await catalog.CreateNodeAsync(parentNode, userId, TestTimeout);
+        await NodeFactory.CreateNodeAsync(parentNode, userId, TestTimeout);
 
         // Create thread as direct child: {parentPath}/{threadId}
         var threadPath = $"{parentPath}/{threadId}";
@@ -325,7 +317,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await catalog.CreateNodeAsync(threadNode, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(threadNode, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -337,13 +329,13 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.ParentPath.Should().Be(parentPath, "ParentPath should be preserved for navigation");
 
         // Verify the thread can be retrieved by full path
-        var retrievedNode = await catalog.GetNodeAsync(new Messaging.Address(threadPath));
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
         retrievedNode.Should().NotBeNull();
         var retrievedContent = retrievedNode?.Content.Should().BeOfType<MeshThread>().Subject;
         retrievedContent?.ParentPath.Should().Be(parentPath);
 
         // Cleanup
-        await catalog.DeleteNodeAsync(parentPath, recursive: true, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(parentPath, recursive: true, ct: TestTimeout);
     }
 
     [Fact]
@@ -477,7 +469,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange
         var userId = "TestUser";
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var threadPath = $"User/{userId}/{Guid.NewGuid()}";
 
         // Use a longer timeout since we're creating multiple nodes
@@ -490,7 +481,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeType = ThreadNodeType.NodeType,
             Content = new MeshThread { ParentPath = $"User/{userId}" }
         };
-        await catalog.CreateNodeAsync(threadNode, userId, longTimeout);
+        await NodeFactory.CreateNodeAsync(threadNode, userId, longTimeout);
 
         // Create a single message to test type preservation (simplify test)
         var responseMessage = new ThreadMessage
@@ -508,7 +499,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = responseMessage
         };
 
-        var createdResponse = await catalog.CreateNodeAsync(responseNode, userId, longTimeout);
+        var createdResponse = await NodeFactory.CreateNodeAsync(responseNode, userId, longTimeout);
 
         // Assert - Type should be preserved
         var responseContent = createdResponse.Content.Should().BeOfType<ThreadMessage>().Subject;

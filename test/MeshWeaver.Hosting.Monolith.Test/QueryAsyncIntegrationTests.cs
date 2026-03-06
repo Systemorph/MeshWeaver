@@ -6,23 +6,20 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     [Fact]
     public async Task QueryAsync_FilterByProperty_ReturnsMatchingNodes()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products nodeType:Electronics scope:descendants";
@@ -37,8 +34,8 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_FilterWithTextSearch_ReturnsFuzzyMatches()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Gaming Laptop Pro" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products laptop scope:descendants";
@@ -54,9 +51,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_CombinedFilterAndSearch_ReturnsMatchingResults()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop1") with { Name = "Gaming Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop2") with { Name = "Business Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Gaming Chair", NodeType = "Furniture" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop1") with { Name = "Gaming Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop2") with { Name = "Business Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Gaming Chair", NodeType = "Furniture" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products nodeType:Electronics gaming scope:descendants";
@@ -72,10 +69,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeDescendants_SearchesAllChildren()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organization", NodeType = "container" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("org") { Name = "Organization", NodeType = "container" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act
         var query = "path:org nodeType:company scope:descendants";
@@ -91,9 +88,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeAncestors_SearchesParentPaths()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("org") { Name = "Organization Root", NodeType = "root" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("org") { Name = "Organization Root", NodeType = "root" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
 
         // Act
         var query = "path:org/acme/project nodeType:root scope:ancestors";
@@ -109,10 +106,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_InOperator_MatchesMultipleValues()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products nodeType:(Electronics OR Furniture) scope:descendants";
@@ -127,9 +124,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_LikeOperator_MatchesWildcard()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-pro") with { Name = "Laptop Pro", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop-basic") with { Name = "Laptop Basic", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop-pro") with { Name = "Laptop Pro", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop-basic") with { Name = "Laptop Basic", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/desktop") with { Name = "Desktop Computer", NodeType = "Electronics" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products name:*Laptop* scope:descendants";
@@ -144,9 +141,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_OrLogic_MatchesEitherCondition()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/food") with { Name = "Food", NodeType = "Groceries" });
 
         // Act - use path: in query string with scope:descendants
         var query = "path:products (nodeType:Electronics OR nodeType:Furniture) scope:descendants";
@@ -161,9 +158,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_EmptyQuery_ReturnsAllAtPath()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/chair") with { Name = "Chair" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other/chair") with { Name = "Chair" });
 
         // Act - Empty query with path should return the node at the exact path only
         var query = "path:products";
@@ -177,9 +174,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NotEqualOperator_ExcludesMatches()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/chair") with { Name = "Chair", NodeType = "Furniture" });
 
         // Act
         var query = "path:products -nodeType:Electronics scope:descendants";
@@ -197,10 +194,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithoutScope_SearchesImmediateChildrenOnly()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act - namespace:org without scope defaults to children (immediate only, not recursive)
         var query = "namespace:org";
@@ -217,10 +214,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithDescendants_SearchesRecursively()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project/task") with { Name = "Task A", NodeType = "task" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/project/task") with { Name = "Task A", NodeType = "task" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other/company") with { Name = "Other Company", NodeType = "company" });
 
         // Act - namespace:org with scope:descendants should find all nested nodes
         var query = "namespace:org scope:descendants";
@@ -236,10 +233,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithFilter_SearchesImmediateChildrenWithFilter()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/project") with { Name = "Org Project", NodeType = "project" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/child") with { Name = "Acme Child", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/project") with { Name = "Org Project", NodeType = "project" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/child") with { Name = "Acme Child", NodeType = "company" });
 
         // Act - namespace:org with filter searches immediate children only and applies filter
         var query = "namespace:org nodeType:company";
@@ -256,10 +253,10 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeChildren_SearchesImmediateChildrenOnly()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(new MeshNode("products") { Name = "Products", NodeType = "container" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("products/laptop/accessories") with { Name = "Accessories", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("products") { Name = "Products", NodeType = "container" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop") with { Name = "Laptop", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/phone") with { Name = "Phone", NodeType = "Electronics" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("products/laptop/accessories") with { Name = "Accessories", NodeType = "Electronics" });
 
         // Act - path:products with scope:children should find immediate children only
         var query = "path:products scope:children";
@@ -275,9 +272,9 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_NamespaceWithScopeChildren_LimitsToImmediateChildren()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme") with { Name = "Acme Corp", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with { Name = "Beta Inc", NodeType = "company" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/acme/project") with { Name = "Project X", NodeType = "project" });
 
         // Act - namespace:org with scope:children limits to immediate children
         var query = "namespace:org scope:children";
@@ -309,21 +306,21 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     {
         // Arrange - Set up the sample data structure
         // NodeType definition at ACME/Project
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
         });
 
         // Agent defined as a child of the NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
         });
 
         // Instance of the NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "ACME/Project"  // This points to the NodeType
@@ -353,26 +350,26 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_FindsMultipleAgentsUnderNodeType()
     {
         // Arrange - Multiple agents under a NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/ReportAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/ReportAgent") with
         {
             Name = "Project Report Agent",
             NodeType = "Agent"
         });
 
         // A non-agent child should not be included
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/Todo") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/Todo") with
         {
             Name = "Todo NodeType",
             NodeType = "NodeType"
@@ -394,13 +391,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_IncludesSelfIfMatchesFilter()
     {
         // Arrange - The NodeType path itself could also be an agent
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project Agent",
             NodeType = "Agent"  // The path itself is an Agent
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
@@ -427,34 +424,34 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     {
         // Arrange
         // Root-level agent (at namespace root)
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("Navigator") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Navigator") with
         {
             Name = "Navigator",
             NodeType = "Agent"
         });
 
         // ACME namespace agent
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME") with
         {
             Name = "ACME Organization",
             NodeType = "Organization"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ACMEAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/ACMEAgent") with
         {
             Name = "ACME Agent",
             NodeType = "Agent"
         });
 
         // NodeType at ACME/Project
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project") with
         {
             Name = "Project",
             NodeType = "NodeType"
         });
 
         // Agent under the NodeType
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project/TodoAgent") with
         {
             Name = "Project Task Agent",
             NodeType = "Agent"
@@ -483,13 +480,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         // It does NOT check children of ancestors
 
         // Root agent at exact path "ACME"
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME") with
         {
             Name = "ACME Root Agent",
             NodeType = "Agent"  // The ACME node itself is an Agent
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "Project"
@@ -513,7 +510,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         // Arrange - This test verifies that selfAndAncestors DOES find
         // children at each ancestor level (for agent discovery)
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME") with
         {
             Name = "ACME Root",
             NodeType = "Organization"
@@ -521,13 +518,13 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
 
         // GlobalAgent is a CHILD of ACME - should be found when searching from ACME/ProductLaunch
         // because ACME is an ancestor, and we search children of ancestors
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/GlobalAgent") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/GlobalAgent") with
         {
             Name = "Global Agent",
             NodeType = "Agent"
         });
 
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/ProductLaunch") with
         {
             Name = "MeshFlow Product Launch",
             NodeType = "Project"
@@ -552,26 +549,26 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_DevLogin_FindsUserNodesUnderUserNamespace()
     {
         // Arrange - replicate the User folder from samples/Graph/Data
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Alice") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Alice") with
         {
             Name = "Alice Chen",
             NodeType = "User",
             Content = new { name = "Alice Chen", email = "alice.chen@example.com", role = "Senior Software Engineer" }
         });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Bob") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Bob") with
         {
             Name = "Bob Wilson",
             NodeType = "User",
             Content = new { name = "Bob Wilson", email = "bob.wilson@example.com", role = "Product Manager" }
         });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Carol") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Carol") with
         {
             Name = "Carol Martinez",
             NodeType = "User",
             Content = new { name = "Carol Martinez", email = "carol.martinez@example.com" }
         });
         // Non-User node under User namespace (should be excluded by nodeType filter)
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Public_Access") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Public_Access") with
         {
             Name = "Public Access",
             NodeType = "AccessAssignment",
@@ -592,12 +589,12 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_DevLogin_NamespaceUserWithoutScope_FindsImmediateChildren()
     {
         // Arrange - same data but test without explicit scope (defaults to Children)
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Alice") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Alice") with
         {
             Name = "Alice Chen",
             NodeType = "User"
         });
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Bob") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Bob") with
         {
             Name = "Bob Wilson",
             NodeType = "User"
@@ -620,7 +617,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task DevLogin_Signin_FindsUserByPath()
     {
         // Arrange - save a User node like in samples/Graph/Data
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("User/Roland") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("User/Roland") with
         {
             Name = "Roland Buergi",
             NodeType = "User",

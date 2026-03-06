@@ -25,7 +25,7 @@ public static class DeleteLayoutArea
     {
         var nodePath = host.Hub.Address.ToString();
         var backHref = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
 
         // Count descendants and check permissions asynchronously
         return Observable.FromAsync(async () =>
@@ -36,9 +36,10 @@ public static class DeleteLayoutArea
                 return -1; // Sentinel value for access denied
 
             var descendantCount = 0;
-            if (persistence != null)
+            if (meshQuery != null)
             {
-                await foreach (var _ in persistence.GetDescendantsAsync(nodePath))
+                await foreach (var _ in meshQuery.QueryAsync(
+                    MeshQueryRequest.FromQuery($"path:{nodePath} scope:descendants")))
                     descendantCount++;
             }
             return descendantCount;
@@ -112,7 +113,7 @@ public static class DeleteLayoutArea
                 DataContext = LayoutAreaReference.GetDataPointer(dataId)
             }.WithStyle("width: 300px;")));
 
-        // Button row — uses IMeshCatalog.DeleteNodeAsync which routes through message flow
+        // Button row — uses IMeshNodeFactory.DeleteNodeAsync
         // and runs validators (including RlsNodeValidator)
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -142,14 +143,8 @@ public static class DeleteLayoutArea
 
                     try
                     {
-                        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                        if (meshCatalog == null)
-                        {
-                            ShowDialog(ctx, "Error", "Catalog service is not available.");
-                            return;
-                        }
-
-                        await meshCatalog.DeleteNodeAsync(nodePath, recursive: true);
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                        await nodeFactory.DeleteNodeAsync(nodePath, recursive: true);
 
                         // Navigate to parent on success
                         var parentPath = GetParentPath(nodePath);

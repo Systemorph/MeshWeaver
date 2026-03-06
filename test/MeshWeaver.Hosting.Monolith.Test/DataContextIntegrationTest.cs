@@ -12,6 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
@@ -41,8 +42,6 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDataContextTests");
     private string? _testDirectory;
 
-    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
     private string GetOrCreateTestDirectory()
     {
@@ -151,7 +150,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
         return builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddPersistence(persistence).Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
+            .ConfigureServices(services => services.AddInMemoryPersistence(persistence).Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddGraph();
     }
 
@@ -189,7 +188,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
         // Verify graph node exists in persistence with correct NodeType
         // (Name comes from persistence, NodeType references type/graph definition)
-        var graphNode = await Persistence.GetNodeAsync("graph", TestContext.Current.CancellationToken);
+        var graphNode = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         graphNode.Should().NotBeNull("Graph node should exist in persistence");
         graphNode!.NodeType.Should().Be("type/graph");
     }
@@ -201,7 +200,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // and can be loaded back from the persistence service
 
         // Get story node from persistence (directly, without routing)
-        var storyNode = await Persistence.GetNodeAsync("graph/story1", TestContext.Current.CancellationToken);
+        var storyNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert - content should be available
         storyNode.Should().NotBeNull("Story node should exist in persistence");
@@ -262,10 +261,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 21
             }
         };
-        await Persistence.SaveNodeAsync(newStory, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(newStory, ct: TestContext.Current.CancellationToken);
 
         // Assert - verify the node with content is persisted
-        var persistedNode = await Persistence.GetNodeAsync("graph/story3", TestContext.Current.CancellationToken);
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story3 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull("New story should be persisted");
         persistedNode!.Name.Should().Be("Story 3");
         persistedNode.NodeType.Should().Be("type/story");
@@ -284,7 +283,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // This test verifies that nodes with Content can be updated via IPersistenceService
 
         // Verify initial data exists
-        var initialNode = await Persistence.GetNodeAsync("graph/story1", TestContext.Current.CancellationToken);
+        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         initialNode.Should().NotBeNull();
         var initialContent = initialNode!.Content as TestStory;
         initialContent!.Points.Should().Be(5);
@@ -300,10 +299,10 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
                 Points = 13
             }
         };
-        await Persistence.SaveNodeAsync(updatedNode, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(updatedNode, ct: TestContext.Current.CancellationToken);
 
         // Assert - get updated data from persistence
-        var persistedNode = await Persistence.GetNodeAsync("graph/story1", TestContext.Current.CancellationToken);
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;
         content.Should().NotBeNull();

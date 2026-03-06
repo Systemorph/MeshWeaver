@@ -1,6 +1,7 @@
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
-@inject IMeshCatalog MeshCatalog
+@inject IPathResolver PathResolver
+@inject IMeshQuery MeshQuery
 
 <a href="@Href" class="ucr-link" title="@Tooltip" data-raw-path="@Path">@DisplayText</a>
 
@@ -27,10 +28,10 @@
 
         try
         {
-            var resolution = await MeshCatalog.ResolvePathAsync(Path);
+            var resolution = await PathResolver.ResolvePathAsync(Path);
             if (resolution != null)
             {
-                var node = await MeshCatalog.GetNodeAsync(resolution.Prefix);
+                var node = await MeshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix} scope:exact").FirstOrDefaultAsync();
                 if (node != null)
                 {
                     Name = node.Name;

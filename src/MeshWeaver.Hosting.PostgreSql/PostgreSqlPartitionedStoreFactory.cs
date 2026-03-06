@@ -1,6 +1,5 @@
 using System.Text.RegularExpressions;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Npgsql;
@@ -70,11 +69,10 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         // Create the storage adapter using the schema-specific data source
         var adapter = new PostgreSqlStorageAdapter(schemaDataSource, _embeddingProvider);
 
-        // Create persistence core and query provider
-        var core = new InMemoryPersistenceService(adapter, _changeNotifier);
+        // Create query provider — RoutingPersistenceServiceCore creates the persistence core internally
         var queryProvider = new PostgreSqlMeshQuery(adapter, _changeNotifier, _accessService);
 
-        return new PartitionedStore(core, queryProvider);
+        return new PartitionedStore(adapter, queryProvider);
     }
 
     public async Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default)

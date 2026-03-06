@@ -12,7 +12,6 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Completion;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,8 +32,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     private readonly string _cacheDirectory;
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
-    private IMeshCatalog MeshCatalog => Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+    private MeshConfiguration MeshConfig => Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
 
     public UnifiedReferenceAutocompleteProviderTest(ITestOutputHelper output) : base(output)
     {
@@ -66,18 +64,18 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     #region Configuration Validation Tests
 
     [Fact(Timeout = 30000)]
-    public void MeshCatalog_HasTopLevelNodes()
+    public void MeshConfig_HasTopLevelNodes()
     {
-        // Verify the mesh catalog is populated with top-level nodes
-        var nodes = MeshCatalog.Configuration.Nodes.Values.ToArray();
+        // Verify the mesh configuration is populated with top-level nodes
+        var nodes = MeshConfig.Nodes.Values.ToArray();
 
-        Output.WriteLine($"MeshCatalog has {nodes.Length} total nodes:");
+        Output.WriteLine($"MeshConfig has {nodes.Length} total nodes:");
         foreach (var node in nodes.Take(20))
         {
             Output.WriteLine($"  - {node.Path}: Segments.Count={node.Segments.Count}, Name={node.Name}");
         }
 
-        nodes.Should().NotBeEmpty("MeshCatalog should contain nodes from samples/Graph/Data");
+        nodes.Should().NotBeEmpty("MeshConfig should contain nodes from samples/Graph/Data");
 
         // Check for expected top-level nodes (Segments.Count == 1)
         var topLevelNodes = nodes.Where(n => n.Segments.Count == 1).ToArray();
@@ -118,15 +116,21 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
     #region Provider Tests
 
+    private IAutocompleteProvider GetUnifiedReferenceProvider()
+    {
+        // Get all autocomplete providers from DI and find the unified reference one
+        var providers = Hub.ServiceProvider.GetServices<IAutocompleteProvider>().ToList();
+        // The unified reference provider handles "@" queries - find it by checking type name
+        var provider = providers.FirstOrDefault(p => p.GetType().Name.Contains("UnifiedReference"));
+        provider.Should().NotBeNull("UnifiedReferenceAutocompleteProvider should be registered via AddMeshNavigation()");
+        return provider!;
+    }
+
     [Fact(Timeout = 30000)]
     public async Task Provider_AtSymbol_ReturnsTopLevelSuggestions()
     {
-        // Arrange - create provider with injected services
-        var provider = new UnifiedReferenceAutocompleteProvider(
-            MeshCatalog,
-            MeshQuery,
-            navigationContext: null,
-            hub: Hub);
+        // Arrange - get provider from DI
+        var provider = GetUnifiedReferenceProvider();
 
         // Act - query with just "@"
         var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -144,12 +148,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Provider_AtSys_ReturnsSystemorphSuggestion()
     {
-        // Arrange - create provider with injected services
-        var provider = new UnifiedReferenceAutocompleteProvider(
-            MeshCatalog,
-            MeshQuery,
-            navigationContext: null,
-            hub: Hub);
+        // Arrange - get provider from DI
+        var provider = GetUnifiedReferenceProvider();
 
         // Act - query with "@Sys" (partial match for Systemorph)
         var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -174,12 +174,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Provider_AtOrg_ReturnsOrganizationSuggestion()
     {
-        // Arrange
-        var provider = new UnifiedReferenceAutocompleteProvider(
-            MeshCatalog,
-            MeshQuery,
-            navigationContext: null,
-            hub: Hub);
+        // Arrange - get provider from DI
+        var provider = GetUnifiedReferenceProvider();
 
         // Act - query with "@Org" (partial match for Organization)
         var items = await provider.GetItemsAsync("@Org", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -200,12 +196,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Provider_AtUse_ReturnsUserSuggestion()
     {
-        // Arrange
-        var provider = new UnifiedReferenceAutocompleteProvider(
-            MeshCatalog,
-            MeshQuery,
-            navigationContext: null,
-            hub: Hub);
+        // Arrange - get provider from DI
+        var provider = GetUnifiedReferenceProvider();
 
         // Act - query with "@Use" (partial match for User)
         var items = await provider.GetItemsAsync("@Use", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -226,12 +218,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Provider_CaseInsensitive_MatchesLowercase()
     {
-        // Arrange
-        var provider = new UnifiedReferenceAutocompleteProvider(
-            MeshCatalog,
-            MeshQuery,
-            navigationContext: null,
-            hub: Hub);
+        // Arrange - get provider from DI
+        var provider = GetUnifiedReferenceProvider();
 
         // Act - query with lowercase "@sys"
         var items = await provider.GetItemsAsync("@sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -257,28 +245,28 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void DI_AutocompleteProvider_IsRegistered()
     {
         // Verify the MeshNodeAutocompleteProvider is registered (it doesn't require INavigationService)
-        // Note: UnifiedReferenceAutocompleteProvider requires INavigationService which is only
-        // available in Blazor hosting, so we test it with manual instantiation instead
-        var meshNodeProvider = Mesh.ServiceProvider.GetService<IMeshQuery>();
-        meshNodeProvider.Should().NotBeNull("IMeshQuery should be registered for autocomplete");
+        var meshQuery = Mesh.ServiceProvider.GetService<IMeshQuery>();
+        meshQuery.Should().NotBeNull("IMeshQuery should be registered for autocomplete");
 
-        Output.WriteLine($"IMeshQuery is registered: {meshNodeProvider?.GetType().Name}");
+        Output.WriteLine($"IMeshQuery is registered: {meshQuery?.GetType().Name}");
 
-        // Test that we can manually create the UCR provider with available services
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        // Test that the unified reference provider is available from DI
+        var providers = Hub.ServiceProvider.GetServices<IAutocompleteProvider>().ToList();
+        Output.WriteLine($"Found {providers.Count} IAutocompleteProvider instances");
+        foreach (var p in providers)
+        {
+            Output.WriteLine($"  - {p.GetType().Name}");
+        }
 
-        var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null, Hub);
-        provider.Should().NotBeNull("UnifiedReferenceAutocompleteProvider can be instantiated with available services");
+        var unifiedProvider = providers.FirstOrDefault(p => p.GetType().Name.Contains("UnifiedReference"));
+        unifiedProvider.Should().NotBeNull("UnifiedReferenceAutocompleteProvider should be registered via AddMeshNavigation()");
     }
 
     [Fact(Timeout = 30000)]
-    public async Task DI_ManualProvider_ReturnsSystemorphForAtSys()
+    public async Task DI_Provider_ReturnsSystemorphForAtSys()
     {
-        // Create provider manually with available services (no INavigationService in test env)
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var provider = new UnifiedReferenceAutocompleteProvider(meshCatalog, meshQuery, null, Hub);
+        // Get provider from DI
+        var provider = GetUnifiedReferenceProvider();
 
         // Act
         var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);

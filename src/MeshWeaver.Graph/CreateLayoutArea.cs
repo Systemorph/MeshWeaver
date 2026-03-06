@@ -99,7 +99,7 @@ public static class CreateLayoutArea
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
             ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
             : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
         // Set up metadata data binding for Name field
@@ -152,7 +152,7 @@ public static class CreateLayoutArea
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
                     {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
                         ctx.NavigateTo(cancelUrl);
                     }))
                 .WithView(Controls.Button("Create")
@@ -219,7 +219,7 @@ public static class CreateLayoutArea
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
                     {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
                         ctx.NavigateTo(cancelUrl);
                     }))
                 .WithView(Controls.Button("Create")
@@ -265,7 +265,7 @@ public static class CreateLayoutArea
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
                     {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
                         ctx.NavigateTo(cancelUrl);
                     }))
                 .WithView(Controls.Button("Create")
@@ -325,8 +325,8 @@ public static class CreateLayoutArea
         logger?.LogInformation("Confirming transient node at {NodePath} with content type {ContentType}",
             nodePath, contentType?.Name ?? "none");
 
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        meshCatalog.CreateNodeAsync(updatedNode)
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        nodeFactory.CreateNodeAsync(updatedNode)
             .ContinueWith(task =>
             {
                 if (task.IsCompletedSuccessfully)
@@ -350,7 +350,7 @@ public static class CreateLayoutArea
     private static void HandleIdChangeCreate(
         UiActionContext ctx,
         LayoutAreaHost host,
-        IMeshCatalog meshCatalog,
+        IMeshNodeFactory nodeFactory,
         ILogger? logger,
         MeshNode transientNode,
         string? currentName,
@@ -376,7 +376,7 @@ public static class CreateLayoutArea
         logger?.LogInformation("Creating new node at {NewPath} (Id changed from transient {TransientPath})",
             newPath, transientPath);
 
-        meshCatalog.CreateNodeAsync(newNode)
+        nodeFactory.CreateNodeAsync(newNode)
             .ContinueWith(task =>
             {
                 if (task.IsCompletedSuccessfully)
@@ -388,7 +388,7 @@ public static class CreateLayoutArea
                     {
                         try
                         {
-                            await meshCatalog.DeleteNodeAsync(transientPath);
+                            await nodeFactory.DeleteNodeAsync(transientPath);
                             logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
                         }
                         catch (Exception ex)
@@ -701,9 +701,17 @@ public static class CreateLayoutArea
 
                 try
                 {
-                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-                    var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));
+                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    MeshNode? existingNode = null;
+                    if (meshQuery != null)
+                    {
+                        await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{nodePath}"))
+                        {
+                            existingNode = n;
+                            break;
+                        }
+                    }
                     if (existingNode != null && existingNode.State != MeshNodeState.Transient)
                     {
                         ShowErrorDialog(actx, "Node Already Exists",
@@ -720,7 +728,7 @@ public static class CreateLayoutArea
                     };
 
                     logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, selectedType);
-                    await meshCatalog.CreateTransientAsync(newNode, CancellationToken.None);
+                    await nodeFactory.CreateTransientAsync(newNode, CancellationToken.None);
                     logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
                     var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);

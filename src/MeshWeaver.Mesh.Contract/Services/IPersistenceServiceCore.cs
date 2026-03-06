@@ -9,7 +9,7 @@ namespace MeshWeaver.Mesh.Services;
 /// This is the internal interface that accepts JsonSerializerOptions per method.
 /// Use IPersistenceService for the scoped wrapper that injects options automatically.
 /// </summary>
-public interface IPersistenceServiceCore
+internal interface IPersistenceServiceCore
 {
     /// <summary>
     /// Gets a node by its path.

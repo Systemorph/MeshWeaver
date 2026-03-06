@@ -14,7 +14,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// In-memory implementation of IMeshQuery.
 /// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
 /// </summary>
-public class InMemoryMeshQuery(
+internal class InMemoryMeshQuery(
     IPersistenceServiceCore persistence,
     ISecurityService? securityService = null,
     AccessService? accessService = null,

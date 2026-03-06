@@ -91,8 +91,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task NewComment_TwoArgConstructor_ShouldPersistAndBeQueryable()
     {
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
 
         var commentId = Guid.NewGuid().AsString();
@@ -120,7 +118,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             "MeshNode(commentId, docPath) should produce Path = docPath/commentId");
 
         // Act — create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
-        var createdNode = await catalog.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
 
         // Assert — node should be retrievable
         createdNode.Should().NotBeNull("CreateNodeAsync should return the created node");
@@ -128,7 +126,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Created node path: {createdNode.Path}");
 
         // Assert — node should be retrievable by GetNodeAsync
-        var retrieved = await catalog.GetNodeAsync(new Address(createdNode.Path!));
+        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
         retrieved.Should().NotBeNull("Comment should be retrievable after creation");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Author.Should().Be("TestAuthor");
@@ -136,7 +134,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
         // Assert — node should appear in scope:children query (this is how ReadView finds comments)
-        var children = await meshQuery.QueryAsync<MeshNode>(
+        var children = await MeshQuery.QueryAsync<MeshNode>(
             $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
         ).ToListAsync();
 
@@ -145,7 +143,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Comment found in children query ({children.Count} total children)");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
     }
 
     /// <summary>
@@ -159,8 +157,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task NewComment_DoneButton_ShouldPersistTextViaPersistenceService()
     {
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
 
         // Step 1: Create empty comment (same as BuildNewCommentForm "Comment" click)
@@ -181,18 +177,18 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await catalog.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
         Output.WriteLine($"Created empty comment at: {createdNode.Path}");
 
-        // Step 2: Update text via persistence.SaveNodeAsync (same as BuildReplyEditArea Done button)
+        // Step 2: Update text via NodeFactory.CreateNodeAsync (same as BuildReplyEditArea Done button)
         var updatedComment = comment with { Text = "This is my comment text" };
         var updatedNode = createdNode with { Content = updatedComment };
 
-        Output.WriteLine("Saving updated comment via persistence.SaveNodeAsync...");
-        await persistence.SaveNodeAsync(updatedNode);
+        Output.WriteLine("Saving updated comment via NodeFactory.CreateNodeAsync...");
+        await NodeFactory.CreateNodeAsync(updatedNode, ct: TestTimeout);
 
-        // Step 3: Verify the text persisted via persistence (bypasses catalog cache)
-        var retrieved = await persistence.GetNodeAsync(createdNode.Path!);
+        // Step 3: Verify the text persisted
+        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
         retrieved.Should().NotBeNull("Comment should still exist after update");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().Be("This is my comment text",
@@ -202,7 +198,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Verified text persisted: '{retrievedComment.Text}'");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
     }
 
     /// <summary>
@@ -214,7 +210,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task NewComment_DataChangeToWrongAddress_ShouldNotUpdateComment()
     {
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
@@ -240,7 +235,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await catalog.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
         Output.WriteLine($"Created comment at: {createdNode.Path}");
 
         // Send DataChangeRequest to WRONG address (the markdown document, not the comment)
@@ -254,7 +249,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             TestTimeout); // BUG: targeting parent instead of comment
 
         // Verify comment text did NOT change (still empty)
-        var retrieved = await catalog.GetNodeAsync(new Address(createdNode.Path!));
+        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
         retrieved.Should().NotBeNull();
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().BeEmpty(
@@ -262,7 +257,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Confirmed: text is still empty (DataChangeRequest to wrong address was ignored)");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(createdNode.Path!, recursive: false, ct: TestTimeout);
     }
 
     /// <summary>
@@ -274,7 +269,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task ReadView_WithNewComment_ShouldShowCommentInSidebar()
     {
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
@@ -314,7 +308,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine("Creating comment...");
-        await catalog.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
 
         // Wait for the view to re-render with the new comment
         Output.WriteLine("Waiting for view to update with new comment...");
@@ -331,7 +325,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine("View re-rendered after comment creation");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(commentNode.Path, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(commentNode.Path, recursive: false, ct: TestTimeout);
     }
 
     /// <summary>
@@ -342,8 +336,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task FullFlow_CreateComment_EditText_Reload_ShouldPersist()
     {
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
@@ -374,12 +366,11 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine($"2. Creating empty comment: Path={commentNode.Path}");
-        var created = await catalog.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var created = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
         created.Should().NotBeNull();
         Output.WriteLine($"   Created at: {created.Path}");
 
-        // 3. Update text via persistence.SaveNodeAsync (simulating "Done" button)
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
+        // 3. Update text via NodeFactory.CreateNodeAsync (simulating "Done" button)
         var editedComment = comment with
         {
             Text = "This is my important feedback about the document.",
@@ -388,12 +379,12 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
         var editedNode = created with { Content = editedComment };
 
-        Output.WriteLine("3. Updating comment text via persistence.SaveNodeAsync...");
-        await persistence.SaveNodeAsync(editedNode);
+        Output.WriteLine("3. Updating comment text via NodeFactory.CreateNodeAsync...");
+        await NodeFactory.CreateNodeAsync(editedNode, ct: TestTimeout);
 
-        // 4. "Reload" — query fresh from persistence (bypasses catalog cache)
+        // 4. "Reload" — query fresh from persistence
         Output.WriteLine("4. Simulating reload — querying from persistence...");
-        var reloaded = await persistence.GetNodeAsync(created.Path!);
+        var reloaded = await MeshQuery.QueryAsync<MeshNode>($"path:{created.Path} scope:exact").FirstOrDefaultAsync();
         reloaded.Should().NotBeNull("Comment must survive reload");
         var reloadedComment = reloaded!.Content.Should().BeOfType<Comment>().Subject;
         reloadedComment.Text.Should().Be("This is my important feedback about the document.",
@@ -404,7 +395,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 5. Also verify via scope:children query (how ReadView finds comments)
         Output.WriteLine("5. Verifying via scope:children query...");
-        var children = await meshQuery.QueryAsync<MeshNode>(
+        var children = await MeshQuery.QueryAsync<MeshNode>(
             $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
         ).ToListAsync();
 
@@ -415,7 +406,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"   Found in children query: {found.Path}");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(created.Path!, recursive: false, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(created.Path!, recursive: false, ct: TestTimeout);
         Output.WriteLine("Cleanup done");
     }
 }

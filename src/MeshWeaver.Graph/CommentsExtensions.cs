@@ -238,8 +238,8 @@ public static class CommentsView
     /// </summary>
     private static UiControl BuildCommentCreateForm(LayoutAreaHost host, string commentPath, string stateId)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         var textDataId = $"commentText_{commentPath.Replace("/", "_")}";
 
         host.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = "" });
@@ -267,7 +267,7 @@ public static class CommentsView
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(async _ =>
                 {
-                    try { await meshCatalog.DeleteNodeAsync(commentPath); } catch { }
+                    try { await nodeFactory.DeleteNodeAsync(commentPath); } catch { }
                     host.UpdateData(stateId, "");
                 }))
             .WithView(Controls.Button("Create")
@@ -279,19 +279,16 @@ public static class CommentsView
                         .Take(1)
                         .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
 
-                    if (persistence != null)
+                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{commentPath} scope:exact").FirstOrDefaultAsync();
+                    if (node != null)
                     {
-                        var node = await persistence.GetNodeAsync(commentPath);
-                        if (node != null)
+                        var comment = node.Content as Comment ?? new Comment();
+                        var activeNode = node with
                         {
-                            var comment = node.Content as Comment ?? new Comment();
-                            var activeNode = node with
-                            {
-                                State = MeshNodeState.Active,
-                                Content = comment with { Text = text }
-                            };
-                            await persistence.SaveNodeAsync(activeNode);
-                        }
+                            State = MeshNodeState.Active,
+                            Content = comment with { Text = text }
+                        };
+                        host.Hub.Post(new UpdateNodeRequest(activeNode));
                     }
 
                     host.UpdateData(stateId, "");
@@ -327,8 +324,8 @@ public static class CommentsView
                     }
                 };
 
-                var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                await meshCatalog.CreateTransientAsync(commentNode);
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                await nodeFactory.CreateTransientAsync(commentNode);
 
                 host.UpdateData(newCommentPathStateId, commentPath);
             });

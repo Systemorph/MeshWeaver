@@ -1,12 +1,15 @@
 ﻿using MeshWeaver.Messaging;
 
-[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
+// Infrastructure assemblies that need internal access to IPersistenceService, IPersistenceServiceCore, IMeshCatalog
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Hosting")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Graph")]
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Catalog service for managing mesh nodes and their configuration.
 /// </summary>
-public interface IMeshCatalog
+internal interface IMeshCatalog : IPathResolver
 {
     /// <summary>
     /// Gets the mesh configuration.

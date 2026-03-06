@@ -31,7 +31,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     /// <param name="hubPath">The hub's path (e.g., "Type/Organizations").</param>
     /// <param name="subPartition">The relative sub-partition name (e.g., "Code"). If null, uses hubPath directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
-    public PartitionTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath, string? subPartition = null, string? collectionName = null)
+    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath, string? subPartition = null, string? collectionName = null)
         : base(workspace, dataSource)
     {
         _workspace = workspace;

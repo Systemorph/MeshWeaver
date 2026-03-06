@@ -15,7 +15,7 @@ public partial class AreaPage : ComponentBase
     [Inject]
     private NavigationManager Navigation { get; set; } = null!;
     [Inject] private IMessageHub Hub { get; set; } = null!;
-    [Inject] private IMeshCatalog MeshCatalog { get; set; } = null!;
+    [Inject] private IPathResolver PathResolver { get; set; } = null!;
 
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
@@ -35,7 +35,7 @@ public partial class AreaPage : ComponentBase
     protected override async Task OnParametersSetAsync()
     {
         // Resolve the entire path using pattern matching
-        Resolution = await MeshCatalog.ResolvePathAsync(Path ?? "");
+        Resolution = await PathResolver.ResolvePathAsync(Path ?? "");
 
         if (Resolution is null)
         {

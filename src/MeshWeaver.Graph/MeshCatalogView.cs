@@ -119,11 +119,11 @@ public static class MeshCatalogView
     public static IObservable<UiControl> Editor(LayoutAreaHost host, RenderingContext ctx)
     {
         var nodePath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         return Observable.FromAsync(async ct =>
         {
-            var node = await persistence?.GetNodeAsync(nodePath, ct)!;
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync(ct);
 
             // Wrap editor control with a back button
             var stack = Controls.Stack.WithWidth("100%");

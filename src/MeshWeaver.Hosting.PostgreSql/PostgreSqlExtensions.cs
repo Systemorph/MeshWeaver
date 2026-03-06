@@ -152,25 +152,18 @@ public static class PostgreSqlExtensions
         var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
         var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
 
-        // Register the data change notifier
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        // Register the storage adapter
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
+        // Register concrete adapter type for change listener
         services.AddSingleton(storageAdapter);
 
-        // Register persistence service
-        services.AddSingleton<IPersistenceServiceCore>(sp =>
-            new InMemoryPersistenceService(
-                storageAdapter,
-                sp.GetService<IDataChangeNotifier>()));
-
-        // Register PostgreSqlMeshQuery with change notifier
+        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton doesn't override it
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<AccessService>()));
+
+        // Register core persistence services (IStorageAdapter, IPersistenceServiceCore, etc.)
+        services.AddPersistence(storageAdapter);
 
         // Register the Change Listener
         services.AddSingleton(sp =>
