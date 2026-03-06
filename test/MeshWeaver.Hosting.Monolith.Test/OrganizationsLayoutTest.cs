@@ -47,8 +47,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
             await base.InitializeAsync();
 
             // Seed test data using async methods
-            var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-            await SetupOrganizationsStructureAsync(persistence);
+            await SetupOrganizationsStructureAsync(NodeFactory);
         }
 
         /// <summary>
@@ -59,7 +58,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         /// The ChildrenQuery makes the Organization catalog display all nodes
         /// with nodeType=="Organization".
         /// </summary>
-        private static async Task SetupOrganizationsStructureAsync(IPersistenceService persistence)
+        private static async Task SetupOrganizationsStructureAsync(IMeshNodeFactory nodeFactory)
         {
             // 1. Create Organization - the NodeType definition at root level
             // This type uses ChildrenQuery to show all Organization instances
@@ -77,7 +76,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     ChildrenQuery = "$source=activity;nodeType==Organization;$orderBy=lastAccessedAt:desc;$limit=20"
                 }
             };
-            await persistence.SaveNodeAsync(organizationTypeNode);
+            await nodeFactory.CreateNodeAsync(organizationTypeNode);
 
             // 2. Create some Organization instances that will be found by ChildrenQuery
             var acme = new MeshNode("Acme")
@@ -87,7 +86,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Icon = "Building",
                 Content = new { Id = "Acme", Name = "Acme Corporation", Description = "A famous company", Logo = "/static/Organization/logos/acme.png" }
             };
-            await persistence.SaveNodeAsync(acme);
+            await nodeFactory.CreateNodeAsync(acme);
 
             var contoso = new MeshNode("Contoso")
             {
@@ -96,7 +95,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Icon = "Building",
                 Content = new { Id = "Contoso", Name = "Contoso Ltd", Description = "Another company", Logo = "/static/Organization/logos/contoso.png" }
             };
-            await persistence.SaveNodeAsync(contoso);
+            await nodeFactory.CreateNodeAsync(contoso);
 
             var fabrikam = new MeshNode("Fabrikam")
             {
@@ -105,7 +104,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Icon = "Building",
                 Content = new { Id = "Fabrikam", Name = "Fabrikam Inc", Description = "Yet another company", Logo = "/static/Organization/logos/fabrikam.png" }
             };
-            await persistence.SaveNodeAsync(fabrikam);
+            await nodeFactory.CreateNodeAsync(fabrikam);
 
             // 3. Create the graph root node (needed for initialization)
             var graphNode = MeshNode.FromPath("graph") with
@@ -113,7 +112,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
                 Name = "Graph",
                 NodeType = "type/graph"
             };
-            await persistence.SaveNodeAsync(graphNode);
+            await nodeFactory.CreateNodeAsync(graphNode);
 
             // 4. Create type/graph type definition
             var graphTypeNode = new MeshNode("graph", "type")
@@ -125,13 +124,19 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     Configuration = "config => config"
                 }
             };
-            await persistence.SaveNodeAsync(graphTypeNode);
+            await nodeFactory.CreateNodeAsync(graphTypeNode);
 
             var graphCodeConfig = new CodeConfiguration
             {
                 Code = "public record Graph { }"
             };
-            await persistence.SavePartitionObjectsAsync("type/graph", null, [graphCodeConfig]);
+            var graphCodeNode = new MeshNode("Graph", "type/graph/Code")
+            {
+                NodeType = "Code",
+                Name = "Graph",
+                Content = graphCodeConfig
+            };
+            await nodeFactory.CreateNodeAsync(graphCodeNode);
         }
 
         protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -201,10 +206,10 @@ namespace MeshWeaver.Hosting.Monolith.Test
         [Fact(Timeout = 10000)]
         public async Task Organization_CanBeResolved()
         {
-            var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+            var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
             // Act
-            var resolution = await meshCatalog.ResolvePathAsync("Organization");
+            var resolution = await pathResolver.ResolvePathAsync("Organization");
 
             // Assert
             resolution.Should().NotBeNull("Organization should be resolvable");
@@ -217,16 +222,13 @@ namespace MeshWeaver.Hosting.Monolith.Test
         [Fact(Timeout = 10000)]
         public async Task PersistenceService_FindsNodeTypeNode_ForOrganization()
         {
-            // Arrange
-            var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
-            // Act - get the Organization node directly from persistence
-            var nodeTypeNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
+            // Act - get the Organization node via query
+            var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
             // Assert
             nodeTypeNode.Should().NotBeNull(
-                "PersistenceService should find the NodeType node for 'Organization'.");
-            nodeTypeNode.Path.Should().Be("Organization");
+                "MeshQuery should find the NodeType node for 'Organization'.");
+            nodeTypeNode!.Path.Should().Be("Organization");
             nodeTypeNode.NodeType.Should().Be("NodeType");
         }
 
@@ -237,15 +239,12 @@ namespace MeshWeaver.Hosting.Monolith.Test
         [Fact(Timeout = 10000)]
         public async Task NodeTypeDefinition_HasChildrenQuery_ForOrganization()
         {
-            // Arrange
-            var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
             // Act - get the Organization node
-            var nodeTypeNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
+            var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
             // Assert
             nodeTypeNode.Should().NotBeNull("Organization should exist");
-            nodeTypeNode.Content.Should().BeOfType<NodeTypeDefinition>();
+            nodeTypeNode!.Content.Should().BeOfType<NodeTypeDefinition>();
 
             var nodeTypeDef = (NodeTypeDefinition)nodeTypeNode.Content!;
             nodeTypeDef.ChildrenQuery.Should().NotBeNullOrEmpty(
@@ -261,15 +260,12 @@ namespace MeshWeaver.Hosting.Monolith.Test
         [Fact(Timeout = 10000)]
         public async Task NodeTypeDefinition_HasConfiguration_ForOrganization()
         {
-            // Arrange
-            var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
             // Act - get the Organization node
-            var nodeTypeNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
+            var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
             // Assert
             nodeTypeNode.Should().NotBeNull("Organization should exist");
-            var nodeTypeDef = (NodeTypeDefinition)nodeTypeNode.Content!;
+            var nodeTypeDef = (NodeTypeDefinition)nodeTypeNode!.Content!;
             nodeTypeDef.Configuration.Should().NotBeNullOrEmpty(
                 "Organization should have Configuration set");
             nodeTypeDef.Configuration.Should().Contain("WithContentType<",
@@ -306,15 +302,12 @@ namespace MeshWeaver.Hosting.Monolith.Test
         [Fact(Timeout = 10000)]
         public async Task OrganizationInstances_HaveLogoUrls()
         {
-            // Arrange
-            var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
             // Act - get an organization instance
-            var acmeNode = await persistence.GetNodeAsync("Acme", TestContext.Current.CancellationToken);
+            var acmeNode = await MeshQuery.QueryAsync<MeshNode>("path:Acme scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
             // Assert
             acmeNode.Should().NotBeNull("Acme should exist");
-            acmeNode.Content.Should().NotBeNull("Acme should have content");
+            acmeNode!.Content.Should().NotBeNull("Acme should have content");
 
             // Content should contain Logo property
             var contentJson = System.Text.Json.JsonSerializer.Serialize(acmeNode.Content);

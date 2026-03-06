@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting
 {
-    public abstract class RoutingServiceBase(IMessageHub hub) : IRoutingService
+    internal abstract class RoutingServiceBase(IMessageHub hub) : IRoutingService
     {
         protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;

@@ -12,7 +12,6 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -25,19 +24,12 @@ namespace MeshWeaver.Graph.Test;
 public class ImportLayoutAreaTest(ITestOutputHelper output) : HubTestBase(output)
 {
     private const string ImportView = "ImportMeshNodes";
-    private InMemoryPersistenceService _persistence = null!;
-    private static readonly JsonSerializerOptions JsonOptions = new();
 
     protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
-        _persistence = new InMemoryPersistenceService();
-
         return conf
             .WithServices(services => services
-                .AddSingleton<IPersistenceServiceCore>(_persistence)
-                .AddSingleton<IPersistenceService>(sp =>
-                    new PersistenceService(sp.GetRequiredService<IPersistenceServiceCore>(),
-                        sp.GetRequiredService<IMessageHub>())))
+                .AddInMemoryPersistence())
             .WithRoutes(forward => forward
                 .RouteAddressToHostedHub(HostType, ConfigureHost)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));

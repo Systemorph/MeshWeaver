@@ -147,6 +147,18 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Adds an existing in-memory persistence service instance.
+    /// Useful for tests that need to seed data before the hub is initialized.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="instance">The pre-created persistence service instance</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, InMemoryPersistenceService instance)
+    {
+        return services.AddPersistence(instance);
+    }
+
+    /// <summary>
     /// Adds file system persistence that reads directly from disk.
     /// Uses the hub's JsonSerializerOptions for proper type polymorphism.
     /// </summary>
@@ -185,7 +197,7 @@ public static class PersistenceExtensions
     /// <param name="services">The service collection</param>
     /// <param name="persistenceServiceCore">The custom persistence core service</param>
     /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceServiceCore persistenceServiceCore)
+    internal static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceServiceCore persistenceServiceCore)
     {
         // Register the data change notifier as singleton
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
@@ -289,7 +301,9 @@ public static class PersistenceExtensions
 
         // Register the routing persistence core
         services.AddSingleton<RoutingPersistenceServiceCore>(sp =>
-            new RoutingPersistenceServiceCore(sp.GetRequiredService<IPartitionedStoreFactory>()));
+            new RoutingPersistenceServiceCore(
+                sp.GetRequiredService<IPartitionedStoreFactory>(),
+                sp.GetService<IDataChangeNotifier>()));
         services.AddSingleton<IPersistenceServiceCore>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
@@ -333,6 +347,20 @@ public static class PersistenceExtensions
         services.AddScoped<IPersistenceService, PersistenceService>();
         services.AddScoped<IMeshQuery, MeshQuery>();
 
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the MeshCatalog and its public interfaces (IMeshNodeFactory, IPathResolver).
+    /// All three interfaces resolve to the same singleton instance.
+    /// Use this from application code instead of registering IMeshCatalog directly (which is internal).
+    /// </summary>
+    public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
+    {
+        services.TryAddSingleton<MeshCatalog>();
+        services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
+        services.TryAddSingleton<IMeshNodeFactory>(sp => sp.GetRequiredService<MeshCatalog>());
+        services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<MeshCatalog>());
         return services;
     }
 }

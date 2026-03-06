@@ -7,7 +7,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.PostgreSql.Test")]
 
 namespace MeshWeaver.Hosting;
 
@@ -16,15 +20,15 @@ namespace MeshWeaver.Hosting;
 /// Configure with AddFileSystemPersistence() for file-backed storage
 /// or AddInMemoryPersistence() for transient storage.
 /// </summary>
-public sealed class MeshCatalog(
+internal sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
     IPersistenceService persistenceService,
     IMeshQuery? meshQuery = null)
-    : IMeshCatalog
+    : IMeshCatalog, IMeshNodeFactory
 {
     public MeshConfiguration Configuration { get; } = configuration;
-    public IPersistenceService Persistence { get; } = persistenceService;
+    internal IPersistenceService Persistence { get; } = persistenceService;
     private readonly IMeshQuery? _meshQuery = meshQuery;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };

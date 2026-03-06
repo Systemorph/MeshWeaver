@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -198,9 +199,8 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
             TestTimeout);
         response.Message.Success.Should().BeTrue();
 
-        // Verify via catalog
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var retrievedNode = await catalog.GetNodeAsync(new Address("persist/test/PersistNode"));
+        // Verify via query
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>("path:persist/test/PersistNode scope:exact").FirstOrDefaultAsync();
 
         // Assert
         retrievedNode.Should().NotBeNull();
@@ -236,8 +236,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify node is gone
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var deletedNode = await catalog.GetNodeAsync(new Address("delete/test/ToDelete"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:delete/test/ToDelete scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 
@@ -322,9 +321,8 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify both parent and child are gone
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var deletedParent = await catalog.GetNodeAsync(new Address("recursive/RecursiveParent"));
-        var deletedChild = await catalog.GetNodeAsync(new Address("recursive/RecursiveParent/RecursiveChild"));
+        var deletedParent = await MeshQuery.QueryAsync<MeshNode>("path:recursive/RecursiveParent scope:exact").FirstOrDefaultAsync();
+        var deletedChild = await MeshQuery.QueryAsync<MeshNode>("path:recursive/RecursiveParent/RecursiveChild scope:exact").FirstOrDefaultAsync();
         deletedParent.Should().BeNull();
         deletedChild.Should().BeNull();
     }
@@ -346,8 +344,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         createResponse.Message.Node!.State.Should().Be(MeshNodeState.Active);
 
         // Verify exists
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var existingNode = await catalog.GetNodeAsync(new Address(nodePath));
+        var existingNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
         existingNode.Should().NotBeNull();
 
         // Act - Delete
@@ -358,7 +355,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify deleted
-        var deletedNode = await catalog.GetNodeAsync(new Address(nodePath));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 
@@ -404,8 +401,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         response.Message.Error.Should().Contain("not allowed by hub policy");
 
         // Verify the transient node was deleted (not left behind)
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var deletedNode = await catalog.GetNodeAsync(new Address("hubvalidation/test/RejectedByHub"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:hubvalidation/test/RejectedByHub scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 
@@ -438,7 +434,6 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var nodePath = "transientcleanup/test/RejectedTransient";
 
         var node = new MeshNode("RejectedTransient", "transientcleanup/test")
@@ -457,12 +452,11 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
         response.Message.Success.Should().BeFalse();
 
         // Verify no trace of the node exists
-        var nodeAfterRejection = await catalog.GetNodeAsync(new Address(nodePath));
+        var nodeAfterRejection = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
         nodeAfterRejection.Should().BeNull("transient node should be deleted after rejection");
 
-        // Also verify via persistence directly
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var existsInPersistence = await persistence.ExistsAsync(nodePath);
+        // Also verify via query that node does not exist in persistence
+        var existsInPersistence = (await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync()) != null;
         existsInPersistence.Should().BeFalse("transient node should be removed from persistence after rejection");
     }
 }
@@ -512,8 +506,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
         response.Message.Error.Should().Contain("Content");
 
         // Verify the transient node was cleaned up
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var deletedNode = await catalog.GetNodeAsync(new Address("content/validation/NoContentNode"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:content/validation/NoContentNode scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 
@@ -590,7 +583,6 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create a protected node
         var node = new MeshNode("ProtectedNode", "deletion/validation")
@@ -616,7 +608,7 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
         deleteResponse.Message.Error.Should().Contain("protected");
 
         // Verify the node still exists
-        var existingNode = await catalog.GetNodeAsync(new Address("deletion/validation/ProtectedNode"));
+        var existingNode = await MeshQuery.QueryAsync<MeshNode>("path:deletion/validation/ProtectedNode scope:exact").FirstOrDefaultAsync();
         existingNode.Should().NotBeNull();
     }
 
@@ -625,7 +617,6 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create an unprotected node
         var node = new MeshNode("UnprotectedNode", "deletion/validation")
@@ -649,7 +640,7 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify the node is deleted
-        var deletedNode = await catalog.GetNodeAsync(new Address("deletion/validation/UnprotectedNode"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:deletion/validation/UnprotectedNode scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 
@@ -658,7 +649,6 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create a node with different content type (not ProtectedContent)
         var node = new MeshNode("RegularNode", "deletion/validation")
@@ -682,7 +672,7 @@ public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) :
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify the node is deleted
-        var deletedNode = await catalog.GetNodeAsync(new Address("deletion/validation/RegularNode"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:deletion/validation/RegularNode scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 }
@@ -786,8 +776,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         response.Message.Error.Should().Contain("Title");
 
         // Verify transient node was cleaned up
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var deletedNode = await catalog.GetNodeAsync(new Address("nodetype/validation/NoTitleNode"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:nodetype/validation/NoTitleNode scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 
@@ -844,7 +833,6 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create a node with locked description
         var node = new MeshNode("LockedNode", "nodetype/deletion")
@@ -871,7 +859,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         deleteResponse.Message.Error.Should().Contain("locked");
 
         // Verify node still exists
-        var existingNode = await catalog.GetNodeAsync(new Address("nodetype/deletion/LockedNode"));
+        var existingNode = await MeshQuery.QueryAsync<MeshNode>("path:nodetype/deletion/LockedNode scope:exact").FirstOrDefaultAsync();
         existingNode.Should().NotBeNull();
     }
 
@@ -880,7 +868,6 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
     {
         // Arrange
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         // Create a node with unlocked description
         var node = new MeshNode("UnlockedNode", "nodetype/deletion")
@@ -905,7 +892,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
         deleteResponse.Message.Success.Should().BeTrue();
 
         // Verify node is deleted
-        var deletedNode = await catalog.GetNodeAsync(new Address("nodetype/deletion/UnlockedNode"));
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>("path:nodetype/deletion/UnlockedNode scope:exact").FirstOrDefaultAsync();
         deletedNode.Should().BeNull();
     }
 }
@@ -1068,7 +1055,6 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
     {
         // Arrange - create a hidden node
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var node = new MeshNode("HiddenNode", "read/validation")
         {
@@ -1083,7 +1069,7 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
         createResponse.Message.Success.Should().BeTrue();
 
         // Act - try to read the hidden node
-        var readNode = await catalog.GetNodeAsync(new Address("read/validation/HiddenNode"));
+        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:read/validation/HiddenNode scope:exact").FirstOrDefaultAsync();
 
         // Assert - should return null because the node is hidden
         readNode.Should().BeNull();
@@ -1094,7 +1080,6 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
     {
         // Arrange - create a visible node
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var node = new MeshNode("VisibleNode", "read/validation")
         {
@@ -1109,7 +1094,7 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
         createResponse.Message.Success.Should().BeTrue();
 
         // Act - read the visible node
-        var readNode = await catalog.GetNodeAsync(new Address("read/validation/VisibleNode"));
+        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:read/validation/VisibleNode scope:exact").FirstOrDefaultAsync();
 
         // Assert - should return the node
         readNode.Should().NotBeNull();
@@ -1121,7 +1106,6 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
     {
         // Arrange - create a node without NodeType (validator should not apply)
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var node = new MeshNode("NoTypeHiddenNode", "read/validation")
         {
@@ -1136,7 +1120,7 @@ public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : Mon
         createResponse.Message.Success.Should().BeTrue();
 
         // Act - read the node
-        var readNode = await catalog.GetNodeAsync(new Address("read/validation/NoTypeHiddenNode"));
+        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:read/validation/NoTypeHiddenNode scope:exact").FirstOrDefaultAsync();
 
         // Assert - should return the node because validator doesn't apply to nodes without NodeType
         readNode.Should().NotBeNull();
@@ -1184,7 +1168,6 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
     {
         // Arrange - create a node with "blocked" in name
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var node = new MeshNode("BlockedByPolicy", "global/read")
         {
@@ -1197,7 +1180,7 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
         createResponse.Message.Success.Should().BeTrue();
 
         // Act - try to read the blocked node
-        var readNode = await catalog.GetNodeAsync(new Address("global/read/BlockedByPolicy"));
+        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:global/read/BlockedByPolicy scope:exact").FirstOrDefaultAsync();
 
         // Assert - should return null because the node is blocked
         readNode.Should().BeNull();
@@ -1208,7 +1191,6 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
     {
         // Arrange - create a node without "blocked" in name
         var client = GetClient();
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
 
         var node = new MeshNode("AllowedNode", "global/read")
         {
@@ -1221,7 +1203,7 @@ public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output)
         createResponse.Message.Success.Should().BeTrue();
 
         // Act - read the allowed node
-        var readNode = await catalog.GetNodeAsync(new Address("global/read/AllowedNode"));
+        var readNode = await MeshQuery.QueryAsync<MeshNode>("path:global/read/AllowedNode scope:exact").FirstOrDefaultAsync();
 
         // Assert - should return the node
         readNode.Should().NotBeNull();

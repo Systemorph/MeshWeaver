@@ -7,7 +7,8 @@
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
 @inject AccessService AccessService
-@inject IMeshCatalog MeshCatalog
+@inject IMeshNodeFactory NodeFactory
+@inject IMeshQuery MeshQuery
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 
@@ -122,7 +123,7 @@
 
             // Check if this is the first user (no existing User nodes = platform admin)
             var isFirstUser = true;
-            await foreach (var _ in MeshCatalog.QueryAsync("User", maxResults: 1))
+            await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "parent:User scope:children", Limit = 1 }))
             {
                 isFirstUser = false;
                 break;
@@ -136,7 +137,7 @@
                 Content = content
             };
 
-            await MeshCatalog.CreateNodeAsync(node, userId);
+            await NodeFactory.CreateNodeAsync(node, userId);
 
             // First user becomes PlatformAdmin
             if (isFirstUser)

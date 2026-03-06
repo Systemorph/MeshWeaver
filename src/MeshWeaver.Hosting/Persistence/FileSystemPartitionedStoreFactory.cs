@@ -9,7 +9,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// All partitions share the same FileSystemStorageAdapter at the base directory.
 /// Each partition gets its own FileSystemPersistenceService (with separate cache).
 /// </summary>
-public class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
+internal class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
 {
     private readonly string _baseDirectory;
     private readonly Func<JsonSerializerOptions, JsonSerializerOptions>? _writeOptionsModifier;
@@ -36,13 +36,8 @@ public class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
         var partitionDir = Path.Combine(_baseDirectory, firstSegment);
         Directory.CreateDirectory(partitionDir);
 
-        // Create a persistence core that shares the adapter but has its own cache
-        var core = new FileSystemPersistenceService(_sharedAdapter, _changeNotifier);
-
-        // Create an InMemoryMeshQuery wrapping the persistence core
-        var queryProvider = new InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
-
-        return Task.FromResult(new PartitionedStore(core, queryProvider));
+        // Return the shared adapter — RoutingPersistenceServiceCore creates the core internally
+        return Task.FromResult(new PartitionedStore(_sharedAdapter));
     }
 
     public Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default)

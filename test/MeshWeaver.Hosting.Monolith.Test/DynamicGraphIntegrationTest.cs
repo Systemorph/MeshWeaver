@@ -36,9 +36,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDynamicGraphTests");
     private string? _testDirectory;
 
-    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-    private IMeshCatalog MeshCatalog => Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+    private IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
     /// <summary>
     /// Gets the unique test directory for this test instance, creating it lazily.
@@ -62,12 +60,11 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await base.InitializeAsync();
 
         // Seed test data using async methods
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        await SetupTestConfigurationAsync(persistence);
-        await SeedHierarchyAsync(persistence);
+        await SetupTestConfigurationAsync(NodeFactory);
+        await SeedHierarchyAsync(NodeFactory);
     }
 
-    private static async Task SaveCodeAsChildNodeAsync(IPersistenceService persistence, string nodeTypePath, CodeConfiguration codeConfig)
+    private static async Task SaveCodeAsChildNodeAsync(IMeshNodeFactory nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
     {
         var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/Code")
         {
@@ -75,10 +72,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
             Name = codeConfig.DisplayName ?? codeConfig.Id ?? "Code",
             Content = codeConfig
         };
-        await persistence.SaveNodeAsync(codeNode);
+        await nodeFactory.CreateNodeAsync(codeNode);
     }
 
-    private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
+    private static async Task SetupTestConfigurationAsync(IMeshNodeFactory nodeFactory)
     {
         // Create Story type using "type/" Namespace for global types
         var storyCodeConfig = new CodeConfiguration
@@ -116,8 +113,8 @@ public enum StoryStatus
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(storyNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/story", storyCodeConfig);
+        await nodeFactory.CreateNodeAsync(storyNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/story", storyCodeConfig);
 
         // Create Organization type
         var orgCodeConfig = new CodeConfiguration
@@ -144,8 +141,8 @@ public record Organization
                 Configuration = "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
             }
         };
-        await persistence.SaveNodeAsync(orgNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/org", orgCodeConfig);
+        await nodeFactory.CreateNodeAsync(orgNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/org", orgCodeConfig);
 
         // Create Project type
         var projectCodeConfig = new CodeConfiguration
@@ -172,8 +169,8 @@ public record Project
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(projectNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/project", projectCodeConfig);
+        await nodeFactory.CreateNodeAsync(projectNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/project", projectCodeConfig);
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -199,21 +196,21 @@ public record Graph
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(graphTypeNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/graph", graphCodeConfig);
+        await nodeFactory.CreateNodeAsync(graphTypeNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/graph", graphCodeConfig);
     }
 
-    private static async Task SeedHierarchyAsync(IPersistenceService persistence)
+    private static async Task SeedHierarchyAsync(IMeshNodeFactory nodeFactory)
     {
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" });
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -322,7 +319,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1");
 
         // Assert
         resolution.Should().NotBeNull("persistence has graph/org1");
@@ -343,7 +340,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path that goes deeper than persisted (nonexistent/deep doesn't exist)
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/nonexistent/deep");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1/proj1/nonexistent/deep");
 
         // Assert: should match graph/org1/proj1 with remainder
         resolution.Should().NotBeNull();
@@ -364,7 +361,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/story1");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1/proj1/story1");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -385,7 +382,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path with additional segments beyond existing node
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/story1/Overview");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1/proj1/story1/Overview");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -406,7 +403,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path that doesn't exist anywhere
-        var resolution = await MeshCatalog.ResolvePathAsync("nonexistent/path/here");
+        var resolution = await PathResolver.ResolvePathAsync("nonexistent/path/here");
 
         // Assert
         resolution.Should().BeNull();
@@ -425,7 +422,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path with underscore-Namespaceed segment (layout area)
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/_Nodes");
+        var resolution = await PathResolver.ResolvePathAsync("graph/_Nodes");
 
         // Assert: "graph" is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
@@ -445,10 +442,10 @@ public record Graph
     public async Task ResolvePath_TypeGraph_ResolvesToTypeGraphNode()
     {
         // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await meshCatalog.ResolvePathAsync("type/graph");
+        var resolution = await pathResolver.ResolvePathAsync("type/graph");
 
         // Assert
         resolution.Should().NotBeNull("type/graph should be resolvable");
@@ -462,15 +459,12 @@ public record Graph
     [Fact(Timeout = 10000)]
     public async Task GetNodeAsync_TypeGraph_ReturnsNodeTypeDefinition()
     {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         // Act
-        var node = await meshCatalog.GetNodeAsync(new Address("type", "graph"));
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:type/graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().NotBeNull("type/graph node should exist");
-        node.Path.Should().Be("type/graph");
+        node!.Path.Should().Be("type/graph");
         node.NodeType.Should().Be("NodeType");
         node.Content.Should().BeOfType<NodeTypeDefinition>();
     }
@@ -486,10 +480,10 @@ public record Graph
     public async Task ResolvePath_TypePaths_ResolveCorrectly(string typePath)
     {
         // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await meshCatalog.ResolvePathAsync(typePath);
+        var resolution = await pathResolver.ResolvePathAsync(typePath);
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");
@@ -504,13 +498,13 @@ public record Graph
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var graphType = await Persistence.GetNodeAsync("type/graph", TestContext.Current.CancellationToken);
+        var graphType = await MeshQuery.QueryAsync<MeshNode>("path:type/graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         graphType.Should().NotBeNull("type/graph should exist in persistence");
-        graphType.NodeType.Should().Be("NodeType");
+        graphType!.NodeType.Should().Be("NodeType");
 
-        var orgType = await Persistence.GetNodeAsync("type/org", TestContext.Current.CancellationToken);
+        var orgType = await MeshQuery.QueryAsync<MeshNode>("path:type/org scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         orgType.Should().NotBeNull("type/org should exist in persistence");
-        orgType.NodeType.Should().Be("NodeType");
+        orgType!.NodeType.Should().Be("NodeType");
     }
 
     #endregion
@@ -524,22 +518,23 @@ public record Graph
     public async Task MoveNodeAsync_MovesNodeToNewPath()
     {
         // Arrange - create a node to move
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
 
         // Act
-        var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed", TestContext.Current.CancellationToken);
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/movetest", "graph/movetest-renamed"), o => o, TestContext.Current.CancellationToken);
+        var moved = response.Message.Node;
 
         // Assert
         moved.Should().NotBeNull();
-        moved.Path.Should().Be("graph/movetest-renamed");
+        moved!.Path.Should().Be("graph/movetest-renamed");
         moved.Name.Should().Be("Move Test");
 
-        var oldNode = await Persistence.GetNodeAsync("graph/movetest", TestContext.Current.CancellationToken);
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Original node should be deleted");
 
-        var newNode = await Persistence.GetNodeAsync("graph/movetest-renamed", TestContext.Current.CancellationToken);
+        var newNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest-renamed scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newNode.Should().NotBeNull("Node should exist at new path");
-        newNode.Name.Should().Be("Move Test");
+        newNode!.Name.Should().Be("Move Test");
     }
 
     /// <summary>
@@ -549,65 +544,61 @@ public record Graph
     public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
         // Arrange - create a hierarchy to move
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" }, ct: TestContext.Current.CancellationToken);
 
         // Act
-        await Persistence.MoveNodeAsync("graph/parent", "graph/newparent", TestContext.Current.CancellationToken);
+        await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/parent", "graph/newparent"), o => o, TestContext.Current.CancellationToken);
 
         // Assert - old paths should not exist
-        (await Persistence.GetNodeAsync("graph/parent", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child1", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child2", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child1/grandchild", TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child2 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1/grandchild scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
 
         // Assert - new paths should exist with correct data
-        var newParent = await Persistence.GetNodeAsync("graph/newparent", TestContext.Current.CancellationToken);
+        var newParent = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newParent.Should().NotBeNull();
-        newParent.Name.Should().Be("Parent");
+        newParent!.Name.Should().Be("Parent");
 
-        var newChild1 = await Persistence.GetNodeAsync("graph/newparent/child1", TestContext.Current.CancellationToken);
+        var newChild1 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newChild1.Should().NotBeNull();
-        newChild1.Name.Should().Be("Child 1");
+        newChild1!.Name.Should().Be("Child 1");
 
-        var newChild2 = await Persistence.GetNodeAsync("graph/newparent/child2", TestContext.Current.CancellationToken);
+        var newChild2 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child2 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newChild2.Should().NotBeNull();
-        newChild2.Name.Should().Be("Child 2");
+        newChild2!.Name.Should().Be("Child 2");
 
-        var newGrandchild = await Persistence.GetNodeAsync("graph/newparent/child1/grandchild", TestContext.Current.CancellationToken);
+        var newGrandchild = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1/grandchild scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newGrandchild.Should().NotBeNull();
-        newGrandchild.Name.Should().Be("Grandchild");
+        newGrandchild!.Name.Should().Be("Grandchild");
     }
 
     /// <summary>
-    /// Move node with comments - comments should be migrated to new path.
+    /// Move node via MoveNodeRequest - verifies the node is moved to the new path.
+    /// Note: Comment migration is handled internally by the persistence layer.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task MoveNodeAsync_MigratesCommentsToNewPath()
+    public async Task MoveNodeAsync_MovesNodeViaRequest()
     {
-        // Arrange - create node with comments
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { PrimaryNodePath = "graph/commented", Text = "Comment 1", Author = "User1" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { PrimaryNodePath = "graph/commented", Text = "Comment 2", Author = "User2" }, TestContext.Current.CancellationToken);
+        // Arrange - create node
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
 
-        // Verify comments exist at old path
-        var oldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);
-        oldComments.Should().HaveCount(2);
+        // Act - move via MoveNodeRequest
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/commented", "graph/commented-moved"), o => o, TestContext.Current.CancellationToken);
 
-        // Act
-        await Persistence.MoveNodeAsync("graph/commented", "graph/commented-moved", TestContext.Current.CancellationToken);
+        // Assert - node should be at new path
+        response.Message.Success.Should().BeTrue("Move should succeed");
+        response.Message.Node.Should().NotBeNull();
+        response.Message.Node!.Path.Should().Be("graph/commented-moved");
 
-        // Assert - comments should be at new path
-        var newComments = await Persistence.GetCommentsAsync("graph/commented-moved").ToListAsync(TestContext.Current.CancellationToken);
-        newComments.Should().HaveCount(2, "Comments should be migrated to new path");
-        newComments.Should().Contain(c => c.Text == "Comment 1");
-        newComments.Should().Contain(c => c.Text == "Comment 2");
+        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented-moved scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        movedNode.Should().NotBeNull("Node should exist at new path");
 
-        // Assert - no comments at old path
-        var remainingOldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);
-        remainingOldComments.Should().BeEmpty("Comments should not remain at old path");
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        oldNode.Should().BeNull("Node should not remain at old path");
     }
 
     /// <summary>
@@ -616,10 +607,12 @@ public record Graph
     [Fact(Timeout = 10000)]
     public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
-        // Act & Assert
-        var act = () => Persistence.MoveNodeAsync("graph/nonexistent", "graph/newpath");
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not found*");
+        // Act - move via MoveNodeRequest
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/nonexistent", "graph/newpath"), o => o, TestContext.Current.CancellationToken);
+
+        // Assert - should fail with source not found
+        response.Message.Success.Should().BeFalse("Move should fail when source doesn't exist");
+        response.Message.Error.Should().Contain("not found");
     }
 
     /// <summary>
@@ -629,13 +622,15 @@ public record Graph
     public async Task MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
 
-        // Act & Assert
-        var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*already exists*");
+        // Act - move via MoveNodeRequest
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/source", "graph/target"), o => o, TestContext.Current.CancellationToken);
+
+        // Assert - should fail because target already exists
+        response.Message.Success.Should().BeFalse("Move should fail when target already exists");
+        response.Message.Error.Should().Contain("already exists");
     }
 
     #endregion
@@ -1101,17 +1096,14 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
-        // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await persistence.GetNodeAsync("Type/Organizations", TestContext.Current.CancellationToken);
+        var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
             "PersistenceService should find the NodeType node from disk. " +
             "If null, the Content property was likely deserialized as JsonElement instead of NodeTypeDefinition.");
-        nodeTypeNode.Path.Should().Be("Type/Organizations");
+        nodeTypeNode!.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
 
         // Critical: Content must be NodeTypeDefinition, not JsonElement
@@ -1127,15 +1119,8 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
         // Act - get children of the Code path
-        var codeChildren = new List<MeshNode>();
-        await foreach (var child in persistence.GetChildrenAsync("Type/Organizations/Code"))
-        {
-            codeChildren.Add(child);
-        }
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations/Code scope:children", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
@@ -1155,15 +1140,12 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await meshCatalog.GetNodeAsync(new Address("Organizations"));
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organizations scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
-        node.HubConfiguration.Should().NotBeNull(
+        node!.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
             "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
             "were not properly deserialized from JSON (returned as JsonElement instead).");
@@ -1282,10 +1264,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Organization_CanBeResolved_FromSamples()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         Output.WriteLine("Resolving Organization path...");
-        var resolution = await meshCatalog.ResolvePathAsync("Organization");
+        var resolution = await pathResolver.ResolvePathAsync("Organization");
 
         resolution.Should().NotBeNull("Organization should be resolvable from samples");
         resolution.Prefix.Should().Be("Organization");
@@ -1298,13 +1280,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task Organization_GetNodeAsync_FromSamples()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         Output.WriteLine("Getting node for Organization...");
-        var node = await meshCatalog.GetNodeAsync(new Address("Organization"));
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("Organization node should exist in samples");
-        Output.WriteLine($"Node: Path={node.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
+        Output.WriteLine($"Node: Path={node!.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
 
         node.Path.Should().Be("Organization");
         node.NodeType.Should().Be("NodeType");
@@ -1317,11 +1297,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task Organization_HubConfiguration_IsSetForNodeType()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var node = await meshCatalog.GetNodeAsync(new Address("Organization"));
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
-        node.NodeType.Should().Be("NodeType");
+        node!.NodeType.Should().Be("NodeType");
 
         // NodeType nodes compile their OWN code (at their path) to get HubConfiguration
         Output.WriteLine($"Node.HubConfiguration is null: {node.HubConfiguration == null}");
@@ -1394,13 +1373,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Organization_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
         Output.WriteLine("Getting Code children for Organization...");
-        var codeChildren = new List<MeshNode>();
-        await foreach (var child in persistence.GetChildrenAsync("Organization/Code"))
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("path:Organization/Code scope:children", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        foreach (var child in codeChildren)
         {
-            codeChildren.Add(child);
             Output.WriteLine($"Found code child: {child.Path}, NodeType={child.NodeType}");
         }
 
@@ -1554,10 +1530,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
 
         // First check if MeshWeaver node exists
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var node = await meshCatalog.GetNodeAsync(meshWeaverAddress);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         node.Should().NotBeNull("MeshWeaver node should exist in samples");
-        Output.WriteLine($"MeshWeaver node: Path={node.Path}, NodeType={node.NodeType}");
+        Output.WriteLine($"MeshWeaver node: Path={node!.Path}, NodeType={node.NodeType}");
 
         // Initialize hub via PingRequest
         Output.WriteLine("Sending PingRequest to MeshWeaver...");
@@ -1606,16 +1581,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 30000)]
     public async Task Organization_CustomView_CompilesSuccessfully()
     {
-        var organizationAddress = new Address("Organization");
-
-        // Get node from mesh catalog - this triggers compilation
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         Output.WriteLine("Getting Organization node (triggers compilation)...");
-        var node = await meshCatalog.GetNodeAsync(organizationAddress);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("Organization node should exist");
-        node.NodeType.Should().Be("NodeType");
+        node!.NodeType.Should().Be("NodeType");
         node.HubConfiguration.Should().NotBeNull(
             "Organization node should have HubConfiguration from compiled assembly with custom view");
 

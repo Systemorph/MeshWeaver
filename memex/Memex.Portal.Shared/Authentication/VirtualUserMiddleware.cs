@@ -80,17 +80,10 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 
     private static async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
     {
+        var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+
         try
         {
-            var persistence = portalApp.Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
-                return;
-
-            var userPath = $"VUser/{virtualUserId}";
-            var exists = await persistence.ExistsAsync(userPath);
-            if (exists)
-                return;
-
             var userNode = new MeshNode(virtualUserId, "VUser")
             {
                 Name = "Guest",
@@ -103,12 +96,11 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
                     IsVirtual = true
                 }
             };
-
-            await persistence.SaveNodeAsync(userNode);
+            await nodeFactory.CreateNodeAsync(userNode, "VirtualUserMiddleware");
         }
-        catch
+        catch (InvalidOperationException)
         {
-            // Non-critical — if node creation fails, the user can still browse
+            // Node already exists — ignore
         }
     }
 }

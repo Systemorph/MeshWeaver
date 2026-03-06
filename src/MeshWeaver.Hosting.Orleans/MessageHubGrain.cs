@@ -15,7 +15,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 {
 
     private ModulesAssemblyLoadContext? loadContext;
-    private readonly IMeshCatalog meshCatalog = meshHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+    private readonly IMeshQuery meshQuery = meshHub.ServiceProvider.GetRequiredService<IMeshQuery>();
     private IMessageHub? Hub { get; set; }
 
 
@@ -25,7 +25,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var streamId = this.GetPrimaryKeyString();
 
         var address = meshHub.GetAddress(streamId);
-        var node = await meshCatalog.GetNodeAsync(address);
+        var node = await meshQuery.QueryAsync<MeshNode>($"path:{address} scope:exact").FirstOrDefaultAsync();
 
         if(node is null)
             throw new MeshException(

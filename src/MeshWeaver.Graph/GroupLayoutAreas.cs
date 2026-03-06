@@ -154,9 +154,8 @@ public static class GroupLayoutAreas
                             .WithAppearance(Appearance.Stealth)
                             .WithClickAction(async ctx =>
                             {
-                                var catalog = ctx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                                if (catalog != null)
-                                    await catalog.DeleteNodeAsync(member.Path);
+                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                                await nodeFactory.DeleteNodeAsync(member.Path);
                             })));
                 }
             }
@@ -234,8 +233,7 @@ public static class GroupLayoutAreas
                             return;
                         }
 
-                        var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                        if (catalog != null)
+                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
                         {
                             var memberName = memberId.Split('/').Last();
                             var memberNode = new MeshNode($"{memberName}_Membership", groupPath)
@@ -248,7 +246,7 @@ public static class GroupLayoutAreas
                                     Groups = [new MembershipEntry { Group = groupPath }]
                                 }
                             };
-                            await catalog.CreateNodeAsync(memberNode);
+                            await nodeFactory.CreateNodeAsync(memberNode);
                         }
 
                         saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);

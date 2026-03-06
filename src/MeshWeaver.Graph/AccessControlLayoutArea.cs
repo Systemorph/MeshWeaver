@@ -247,21 +247,18 @@ public static class AccessControlLayoutArea
     /// </summary>
     internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog != null)
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        try
         {
-            try
-            {
-                await meshCatalog.DeleteNodeAsync(nodePath);
-            }
-            catch (Exception ex)
-            {
-                var dialog = Controls.Dialog(
-                    Controls.Markdown($"Failed to delete: {ex.Message}"),
-                    "Error"
-                ).WithSize("S").WithClosable(true);
-                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-            }
+            await nodeFactory.DeleteNodeAsync(nodePath);
+        }
+        catch (Exception ex)
+        {
+            var dialog = Controls.Dialog(
+                Controls.Markdown($"Failed to delete: {ex.Message}"),
+                "Error"
+            ).WithSize("S").WithClosable(true);
+            ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
         }
     }
 
@@ -363,40 +360,36 @@ public static class AccessControlLayoutArea
                     else
                     {
                         // Create the node directly with the role already set
-                        var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                        if (catalog != null)
+                        // Look up the subject node to copy their icon
+                        string? subjectIcon = null;
+                        if (query != null)
                         {
-                            // Look up the subject node to copy their icon
-                            string? subjectIcon = null;
-                            if (query != null)
+                            try
                             {
-                                try
-                                {
-                                    var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject} scope:exact")
-                                        .FirstOrDefaultAsync();
-                                    subjectIcon = subjectNode?.Icon;
-                                }
-                                catch { }
+                                var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject} scope:exact")
+                                    .FirstOrDefaultAsync();
+                                subjectIcon = subjectNode?.Icon;
                             }
-
-                            var newNode = new MeshNode(nodeId, nodePath)
-                            {
-                                NodeType = Configuration.AccessAssignmentNodeType.NodeType,
-                                Name = $"{subjectName} Access",
-                                Icon = subjectIcon,
-                                Content = new AccessAssignment
-                                {
-                                    AccessObject = selectedSubject,
-                                    DisplayName = subjectName,
-                                    Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
-                                }
-                            };
-
-                            // Save directly — no transient/Create view needed
-                            saveCtx.Hub.Post(
-                                new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
-                                o => o.WithTarget(saveCtx.Hub.Address));
+                            catch { }
                         }
+
+                        var newNode = new MeshNode(nodeId, nodePath)
+                        {
+                            NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+                            Name = $"{subjectName} Access",
+                            Icon = subjectIcon,
+                            Content = new AccessAssignment
+                            {
+                                AccessObject = selectedSubject,
+                                DisplayName = subjectName,
+                                Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
+                            }
+                        };
+
+                        // Save directly — no transient/Create view needed
+                        saveCtx.Hub.Post(
+                            new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
+                            o => o.WithTarget(saveCtx.Hub.Address));
                     }
                 }));
 

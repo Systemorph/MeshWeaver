@@ -34,6 +34,9 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
         config.TypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeUpdateRejectionReason), nameof(NodeUpdateRejectionReason));
+        config.TypeRegistry.WithType(typeof(MoveNodeRequest), nameof(MoveNodeRequest));
+        config.TypeRegistry.WithType(typeof(MoveNodeResponse), nameof(MoveNodeResponse));
+        config.TypeRegistry.WithType(typeof(NodeMoveRejectionReason), nameof(NodeMoveRejectionReason));
 
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
@@ -54,7 +57,8 @@ public static class MeshExtensions
         return config
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
-            .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
+            .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
+            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest);
     }
 
     private static async Task<IMessageDelivery> HandleCreateNodeRequest(
@@ -556,5 +560,124 @@ public static class MeshExtensions
         }
 
         return null; // All validators passed
+    }
+
+    private static async Task<IMessageDelivery> HandleMoveNodeRequest(
+        IMessageHub hub,
+        IMessageDelivery<MoveNodeRequest> request,
+        CancellationToken ct)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+
+        if (persistence == null)
+        {
+            hub.Post(
+                MoveNodeResponse.Fail("IPersistenceService not available", NodeMoveRejectionReason.Unknown),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        try
+        {
+            var moveRequest = request.Message;
+
+            // 1. Check source exists
+            var sourceNode = await persistence.GetNodeAsync(moveRequest.SourcePath, ct);
+            if (sourceNode == null)
+            {
+                hub.Post(
+                    MoveNodeResponse.Fail(
+                        $"Source node not found at path: {moveRequest.SourcePath}",
+                        NodeMoveRejectionReason.SourceNotFound),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 2. Check target does not exist
+            if (await persistence.ExistsAsync(moveRequest.TargetPath, ct))
+            {
+                hub.Post(
+                    MoveNodeResponse.Fail(
+                        $"Target path already exists: {moveRequest.TargetPath}",
+                        NodeMoveRejectionReason.TargetAlreadyExists),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 3. Run validators
+            var validationError = await RunMoveValidatorsAsync(hub, sourceNode, moveRequest, ct);
+            if (validationError != null)
+            {
+                logger.LogWarning("Validator rejected node move from {Source} to {Target}: {Error}",
+                    moveRequest.SourcePath, moveRequest.TargetPath, validationError.Value.ErrorMessage);
+
+                hub.Post(
+                    MoveNodeResponse.Fail(
+                        validationError.Value.ErrorMessage ?? "Validation failed",
+                        validationError.Value.Reason),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 4. Move the node
+            var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
+
+            // 5. Return success
+            hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
+
+            logger.LogInformation("Node moved from {Source} to {Target}",
+                moveRequest.SourcePath, moveRequest.TargetPath);
+            return request.Processed();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error moving node from {Source} to {Target}",
+                request.Message.SourcePath, request.Message.TargetPath);
+            hub.Post(
+                MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+    }
+
+    private static async Task<(string? ErrorMessage, NodeMoveRejectionReason Reason)?> RunMoveValidatorsAsync(
+        IMessageHub hub,
+        MeshNode node,
+        MoveNodeRequest request,
+        CancellationToken ct)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Move,
+            Node = node,
+            Request = request,
+            AccessContext = accessService?.Context
+        };
+
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
+        foreach (var validator in validators)
+        {
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Move))
+            {
+                continue;
+            }
+
+            var result = await validator.ValidateAsync(context, ct);
+            if (!result.IsValid)
+            {
+                var reason = result.Reason switch
+                {
+                    NodeRejectionReason.NodeNotFound => NodeMoveRejectionReason.SourceNotFound,
+                    NodeRejectionReason.Unauthorized => NodeMoveRejectionReason.ValidationFailed,
+                    _ => NodeMoveRejectionReason.ValidationFailed
+                };
+                return (result.ErrorMessage, reason);
+            }
+        }
+
+        return null;
     }
 }

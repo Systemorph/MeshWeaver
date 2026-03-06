@@ -11,17 +11,19 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Routes operations based on the first segment of the path.
 /// Auto-provisions new partitions on first access via IPartitionedStoreFactory.
 /// </summary>
-public class RoutingPersistenceServiceCore : IPersistenceServiceCore
+internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
 {
     private readonly IPartitionedStoreFactory _factory;
+    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ConcurrentDictionary<string, IPersistenceServiceCore> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
 
-    public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory)
+    public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory, IDataChangeNotifier? changeNotifier = null)
     {
         _factory = factory;
+        _changeNotifier = changeNotifier;
     }
 
     /// <summary>
@@ -69,13 +71,13 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
                 continue;
 
             var partition = await _factory.CreateStoreAsync(segment, ct);
-            if (_stores.TryAdd(segment, partition.PersistenceCore))
+            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            if (_stores.TryAdd(segment, core))
             {
-                if (partition.QueryProvider != null)
-                {
-                    _queryProviders[segment] = partition.QueryProvider;
-                    yield return partition.QueryProvider;
-                }
+                var queryProvider = partition.QueryProvider
+                    ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                _queryProviders[segment] = queryProvider;
+                yield return queryProvider;
             }
         }
     }
@@ -92,10 +94,12 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
                 return existing;
 
             var partition = await _factory.CreateStoreAsync(firstSegment, ct);
-            _stores[firstSegment] = partition.PersistenceCore;
-            if (partition.QueryProvider != null)
-                _queryProviders[firstSegment] = partition.QueryProvider;
-            return partition.PersistenceCore;
+            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            _stores[firstSegment] = core;
+            var queryProvider = partition.QueryProvider
+                ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+            _queryProviders[firstSegment] = queryProvider;
+            return core;
         }
         finally
         {

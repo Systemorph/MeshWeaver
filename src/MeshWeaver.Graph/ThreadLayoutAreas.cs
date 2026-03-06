@@ -86,8 +86,17 @@ public static class ThreadLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
-            var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-            var existingNode = await meshCatalog.GetNodeAsync(new Address(currentPath));
+            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+            MeshNode? existingNode = null;
+            if (meshQuery != null)
+            {
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{currentPath}"))
+                {
+                    existingNode = n;
+                    break;
+                }
+            }
 
             if (existingNode == null)
             {
@@ -111,7 +120,7 @@ public static class ThreadLayoutAreas
 
             try
             {
-                var createdNode = await meshCatalog.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
+                var createdNode = await nodeFactory.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
                 return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ThreadArea));
             }
             catch (Exception ex)
@@ -458,7 +467,7 @@ public static class ThreadLayoutAreas
     private static async Task<string> CreateMessageNodeAsync(
         IMessageHub hub, string threadPath, int messageNumber, ThreadMessage message)
     {
-        var meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
         var messagePath = $"{threadPath}/{messageNumber}";
 
         var messageNode = new MeshNode(messagePath)
@@ -470,7 +479,7 @@ public static class ThreadLayoutAreas
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var userId = accessService?.Context?.ObjectId;
-        await meshCatalog.CreateNodeAsync(messageNode, userId);
+        await nodeFactory.CreateNodeAsync(messageNode, userId);
         return messagePath;
     }
 
@@ -526,10 +535,15 @@ public static class ThreadLayoutAreas
                 chatClient.SetAttachments(request.Attachments);
 
             // 5. Load persistent thread ID from thread content if present
-            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-            if (meshCatalog != null)
+            var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+            if (meshQuery != null)
             {
-                var threadNode = await meshCatalog.GetNodeAsync(new Address(request.ThreadPath));
+                MeshNode? threadNode = null;
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{request.ThreadPath}"))
+                {
+                    threadNode = n;
+                    break;
+                }
                 if (threadNode?.Content is MeshThread threadContent
                     && !string.IsNullOrEmpty(threadContent.PersistentThreadId))
                 {
@@ -601,10 +615,16 @@ public static class ThreadLayoutAreas
     {
         try
         {
-            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-            var existingNode = meshCatalog != null
-                ? await meshCatalog.GetNodeAsync(new Address(threadPath))
-                : null;
+            var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+            MeshNode? existingNode = null;
+            if (meshQuery != null)
+            {
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{threadPath}"))
+                {
+                    existingNode = n;
+                    break;
+                }
+            }
 
             if (existingNode != null)
             {

@@ -243,10 +243,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 15000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
         // Load parent comment
-        var parentNode = await persistence.GetNodeAsync(CommentC1Path);
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:exact").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
         parentNode.Namespace.Should().Be(DocPath);
@@ -256,7 +254,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Parent: Id={parentNode.Id}, Path={parentNode.Path}, Author={parentComment!.Author}");
 
         // Load reply — verify Id is the local name, not the full path
-        var replyNode = await persistence.GetNodeAsync(ReplyPath);
+        var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath} scope:exact").FirstOrDefaultAsync();
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
         replyNode.Namespace.Should().Be(CommentC1Path);
@@ -266,10 +264,9 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
         // Load children of c1
-        var children = new List<MeshNode>();
-        await foreach (var child in persistence.GetChildrenAsync(CommentC1Path))
+        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:children").ToListAsync();
+        foreach (var child in children)
         {
-            children.Add(child);
             Output.WriteLine($"Child: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");
         }
 

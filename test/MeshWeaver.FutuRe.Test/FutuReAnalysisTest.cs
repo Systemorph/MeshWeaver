@@ -720,12 +720,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task ActivityLogs_ShouldLoadFromFileSystem()
     {
-        var storageAdapter = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceServiceCore>();
-
-        // Create PersistenceActivityLogStore directly to bypass DI ordering
-        // (InMemoryActivityLogStore is registered first via TryAddSingleton in DataExtensions)
-        var activityLogStore = new PersistenceActivityLogStore(persistence, adapter: storageAdapter);
+        var activityLogStore = Mesh.ServiceProvider.GetRequiredService<IActivityLogStore>();
 
         var logs = await activityLogStore.GetRecentActivityLogsAsync(limit: 30);
 

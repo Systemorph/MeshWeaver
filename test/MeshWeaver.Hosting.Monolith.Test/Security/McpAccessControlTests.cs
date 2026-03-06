@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -64,38 +65,37 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     private async Task SetupTestData()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
 
-        // Create namespace nodes
-        await persistence.SaveNodeAsync(new MeshNode("SharedOrg")
+        // Create namespace nodes using the public NodeFactory API
+        await NodeFactory.CreateNodeAsync(new MeshNode("SharedOrg")
         {
             Name = "Shared Organization",
             NodeType = "Organization",
-        }, TestTimeout);
+        }, ct: TestTimeout);
 
-        await persistence.SaveNodeAsync(new MeshNode("Public", "SharedOrg")
+        await NodeFactory.CreateNodeAsync(new MeshNode("Public", "SharedOrg")
         {
             Name = "Public Project",
             NodeType = "Project",
-        }, TestTimeout);
+        }, ct: TestTimeout);
 
-        await persistence.SaveNodeAsync(new MeshNode("Confidential", "SharedOrg")
+        await NodeFactory.CreateNodeAsync(new MeshNode("Confidential", "SharedOrg")
         {
             Name = "Confidential Project",
             NodeType = "Project",
-        }, TestTimeout);
+        }, ct: TestTimeout);
 
-        await persistence.SaveNodeAsync(new MeshNode("PrivateOrg")
+        await NodeFactory.CreateNodeAsync(new MeshNode("PrivateOrg")
         {
             Name = "Private Organization",
             NodeType = "Organization",
-        }, TestTimeout);
+        }, ct: TestTimeout);
 
-        await persistence.SaveNodeAsync(new MeshNode("Secret", "PrivateOrg")
+        await NodeFactory.CreateNodeAsync(new MeshNode("Secret", "PrivateOrg")
         {
             Name = "Secret Data",
             NodeType = "Document",
-        }, TestTimeout);
+        }, ct: TestTimeout);
 
         // User1: Viewer on SharedOrg (can read), no access to PrivateOrg
         await securityService.AddUserRoleAsync(User1, "Viewer", "SharedOrg", "system", TestTimeout);
@@ -211,9 +211,8 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         var plugin = CreatePlugin();
         var options = Mesh.JsonSerializerOptions;
 
-        // Get the Public node directly (no user context needed for raw persistence read)
-        var publicNode = await Mesh.ServiceProvider.GetRequiredService<IPersistenceService>()
-            .GetNodeAsync("SharedOrg/Public", TestTimeout);
+        // Get the Public node via query
+        var publicNode = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public scope:exact").FirstOrDefaultAsync();
         publicNode.Should().NotBeNull();
 
         // User1 (Viewer on SharedOrg) should NOT be able to update the Public node
@@ -232,8 +231,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         updateResult2.Should().Contain("Updated");
 
         // Verify the update persisted
-        var reloaded = await Mesh.ServiceProvider.GetRequiredService<IPersistenceService>()
-            .GetNodeAsync("SharedOrg/Public", TestTimeout);
+        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public scope:exact").FirstOrDefaultAsync();
         reloaded!.Name.Should().Be("Updated by User2");
     }
 
@@ -244,8 +242,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         var plugin = CreatePlugin();
         var options = Mesh.JsonSerializerOptions;
 
-        var secretNode = await Mesh.ServiceProvider.GetRequiredService<IPersistenceService>()
-            .GetNodeAsync("PrivateOrg/Secret", TestTimeout);
+        var secretNode = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret scope:exact").FirstOrDefaultAsync();
         secretNode.Should().NotBeNull();
 
         // User1 should NOT be able to update Secret node (no permissions at all)
@@ -257,8 +254,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
             "User1 should not be able to update nodes in PrivateOrg");
 
         // Verify name was NOT changed
-        var reloaded = await Mesh.ServiceProvider.GetRequiredService<IPersistenceService>()
-            .GetNodeAsync("PrivateOrg/Secret", TestTimeout);
+        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret scope:exact").FirstOrDefaultAsync();
         reloaded!.Name.Should().Be("Secret Data");
     }
 }

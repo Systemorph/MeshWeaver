@@ -28,8 +28,7 @@ public class FileSystemChangeWatcherTests(ITestOutputHelper output) : MonolithMe
     private readonly DataChangeNotifier _changeNotifier = new();
     private FileSystemStorageAdapter? _storageAdapterInstance;
     private FileSystemStorageAdapter _storageAdapter => _storageAdapterInstance ??= CreateStorageAdapter();
-    protected IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    protected IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+    protected new IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
     private FileSystemChangeWatcher? _watcherInstance;
     private FileSystemChangeWatcher _watcher => _watcherInstance ??= new(_testDirectory, _storageAdapter, _changeNotifier, JsonOptions) { DebounceIntervalMs = 50 };
     private JsonSerializerOptions JsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;

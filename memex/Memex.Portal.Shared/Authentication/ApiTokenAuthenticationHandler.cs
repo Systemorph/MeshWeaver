@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -15,7 +16,7 @@ public class ApiTokenAuthenticationHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options,
     ILoggerFactory loggerFactory,
     UrlEncoder encoder,
-    ApiTokenService tokenService)
+    IServiceProvider serviceProvider)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, loggerFactory, encoder)
 {
     public const string SchemeName = "ApiToken";
@@ -30,6 +31,7 @@ public class ApiTokenAuthenticationHandler(
         if (string.IsNullOrEmpty(rawToken))
             return AuthenticateResult.NoResult();
 
+        var tokenService = serviceProvider.GetRequiredService<ApiTokenService>();
         var apiToken = await tokenService.ValidateTokenAsync(rawToken);
         if (apiToken == null)
             return AuthenticateResult.Fail("Invalid or expired API token");

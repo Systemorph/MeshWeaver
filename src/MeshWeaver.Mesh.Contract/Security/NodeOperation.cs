@@ -24,5 +24,10 @@ public enum NodeOperation
     /// <summary>
     /// Deleting a node.
     /// </summary>
-    Delete
+    Delete,
+
+    /// <summary>
+    /// Moving a node to a new path.
+    /// </summary>
+    Move
 }

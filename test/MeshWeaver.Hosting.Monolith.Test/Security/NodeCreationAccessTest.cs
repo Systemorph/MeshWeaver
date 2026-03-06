@@ -1,13 +1,11 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -46,8 +44,6 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateNode_WithoutPermission_ThrowsUnauthorized()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         const string userId = "unauthorized-user";
         const string parentPath = "Restricted/Parent";
         var nodePath = $"{parentPath}/TestNode_{Guid.NewGuid().AsString()}";
@@ -61,20 +57,19 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
-        var act = async () => await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        var act = async () => await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
         var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
         exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
         Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
     }
 
     /// <summary>
-    /// Tests that creating a node with Create permission succeeds via IMeshCatalog.CreateNodeAsync.
+    /// Tests that creating a node with Create permission succeeds via IMeshNodeFactory.CreateNodeAsync.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task CreateNode_WithPermission_Succeeds()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         const string userId = "authorized-user";
@@ -93,7 +88,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act - Use public CreateNodeAsync which goes through message-based validation
-        var createdNode = await catalog.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull("Node should be created");
@@ -102,13 +97,13 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         createdNode.Name.Should().Be("Test Node With Permission");
         createdNode.DesiredId.Should().Be("MyDesiredId", "DesiredId should be preserved");
 
-        // Verify node exists in catalog
-        var fetchedNode = await catalog.GetNodeAsync(new Address(nodePath));
-        fetchedNode.Should().NotBeNull("Node should be retrievable from catalog");
+        // Verify node exists via query
+        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        fetchedNode.Should().NotBeNull("Node should be retrievable from query");
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await catalog.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
     }
 
     /// <summary>
@@ -119,7 +114,6 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateNode_IdChanged_CreatesNewNodeAndDeletesTransient()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         const string userId = "editor-user";
@@ -141,7 +135,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             DesiredId = desiredId // User wants this as final Id
         };
 
-        var createdTransient = await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, userId, TestTimeout);
+        var createdTransient = await NodeFactory.CreateTransientAsync(transientNode, TestTimeout);
         createdTransient.Should().NotBeNull("Transient node should be created");
         Output.WriteLine($"Transient node created at: {createdTransient.Path}");
 
@@ -154,25 +148,25 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Create the final node
-        var createdFinal = await catalog.CreateNodeAsync(finalNode, userId, TestTimeout);
+        var createdFinal = await NodeFactory.CreateNodeAsync(finalNode, userId, TestTimeout);
         createdFinal.Should().NotBeNull("Final node should be created");
         createdFinal.State.Should().Be(MeshNodeState.Active, "Final node should be Active");
         createdFinal.Path.Should().Be(finalPath, "Final node should be at desired path");
         Output.WriteLine($"Final node created at: {createdFinal.Path}");
 
         // Step 3: Delete the transient node
-        await catalog.DeleteNodeAsync(transientPath, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(transientPath, ct: TestTimeout);
 
         // Verify: Transient should be gone, final should exist
-        var transientAfterDelete = await catalog.GetNodeAsync(new Address(transientPath));
+        var transientAfterDelete = await MeshQuery.QueryAsync<MeshNode>($"path:{transientPath} scope:exact").FirstOrDefaultAsync();
         transientAfterDelete.Should().BeNull("Transient node should be deleted");
 
-        var finalAfterCreate = await catalog.GetNodeAsync(new Address(finalPath));
+        var finalAfterCreate = await MeshQuery.QueryAsync<MeshNode>($"path:{finalPath} scope:exact").FirstOrDefaultAsync();
         finalAfterCreate.Should().NotBeNull("Final node should exist");
         finalAfterCreate!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await catalog.DeleteNodeAsync(finalPath, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(finalPath, ct: TestTimeout);
     }
 
     /// <summary>
@@ -182,7 +176,6 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task CreateTransientNode_PreservesDesiredId()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         const string userId = "test-user";
@@ -203,19 +196,19 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act
-        var createdNode = await ((MeshCatalog)catalog).CreateTransientNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateTransientAsync(node, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
         createdNode.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after creation");
 
         // Verify it can be retrieved
-        var fetchedNode = await catalog.GetNodeAsync(new Address(nodePath));
+        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
         fetchedNode.Should().NotBeNull();
         fetchedNode!.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after fetch");
 
         // Cleanup
-        await catalog.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
     }
 
     /// <summary>
@@ -226,7 +219,6 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     public async Task ConfirmTransientNode_UpdatesStateToActive()
     {
         // Arrange
-        var catalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         const string userId = "confirm-user";
@@ -237,7 +229,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         // Grant permissions
         await securityService.AddUserRoleAsync(userId, "Admin", parentPath, "system", TestTimeout);
 
-        // Step 1: Create transient node via catalog
+        // Step 1: Create transient node via NodeFactory
         var transientNode = MeshNode.FromPath(nodePath) with
         {
             Name = "Confirm Test Node",
@@ -245,23 +237,31 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Transient
         };
 
-        var createdTransient = await ((MeshCatalog)catalog).CreateTransientNodeAsync(transientNode, userId, TestTimeout);
+        var createdTransient = await NodeFactory.CreateTransientAsync(transientNode, TestTimeout);
         createdTransient.State.Should().Be(MeshNodeState.Transient);
 
-        // Step 2: Confirm via ConfirmNodeAsync
-        var confirmedNode = await ((MeshCatalog)catalog).ConfirmNodeAsync(nodePath, TestTimeout);
+        // Step 2: Confirm by creating with Active state via CreateNodeAsync
+        // Re-create the node at the same path - the handler will confirm it
+        var activeNode = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Confirm Test Node",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active
+        };
+
+        var confirmedNode = await NodeFactory.CreateNodeAsync(activeNode, userId, TestTimeout);
 
         // Assert
         confirmedNode.Should().NotBeNull("Confirmed node should be returned");
-        confirmedNode!.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
+        confirmedNode.State.Should().Be(MeshNodeState.Active, "Node should be Active after confirmation");
         confirmedNode.Path.Should().Be(nodePath, "Path should remain the same");
 
         // Verify persistence
-        var fetchedNode = await catalog.GetNodeAsync(new Address(nodePath));
+        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
         fetchedNode.Should().NotBeNull();
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
         // Cleanup
-        await catalog.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Fixture;
@@ -23,18 +24,26 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         _persistence = new InMemoryPersistenceService();
 
         return conf
-            .WithServices(services => services
-                .AddSingleton<IPersistenceServiceCore>(_persistence)
-                .AddSingleton<IPersistenceService>(sp =>
-                    new PersistenceService(sp.GetRequiredService<IPersistenceServiceCore>(),
-                        sp.GetRequiredService<IMessageHub>())))
+            .WithServices(services =>
+            {
+                services.AddInMemoryPersistence(_persistence);
+                services.AddSingleton<IMeshNodeFactory>(
+                    new TestNodeFactory(_persistence, JsonOptions));
+                return services;
+            })
             .WithRoutes(forward => forward
                 .RouteAddressToHostedHub(HostType, ConfigureHost)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));
     }
 
-    private IPersistenceService GetPersistenceService()
-        => GetHost().ServiceProvider.GetRequiredService<IPersistenceService>();
+    private IMeshQuery GetMeshQuery()
+        => GetHost().ServiceProvider.GetRequiredService<IMeshQuery>();
+
+    private IMeshNodeFactory GetNodeFactory()
+        => GetHost().ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+
+    private async Task<MeshNode?> GetNodeAsync(string path)
+        => await GetMeshQuery().QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
 
     private async Task SaveNode(string path, string? name = null, string? nodeType = null, object? content = null)
     {
@@ -48,18 +57,33 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await _persistence.SaveNodeAsync(node, JsonOptions);
     }
 
+    /// <summary>
+    /// Simple test implementation of IMeshNodeFactory that saves nodes directly via persistence.
+    /// </summary>
+    private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshNodeFactory
+    {
+        public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+            => await persistence.SaveNodeAsync(node, jsonOptions, ct);
+
+        public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
+            => persistence.SaveNodeAsync(node, jsonOptions, ct);
+
+        public Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+            => persistence.DeleteNodeAsync(path, recursive, ct);
+    }
+
     [HubFact]
     public async Task CopySingleNode_ToNewNamespace()
     {
         await SaveNode("org/Acme", "Acme Corp", "Organization");
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "org/Acme", "workspace", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var target = await persistence.GetNodeAsync("workspace/Acme");
+        var target = await GetNodeAsync("workspace/Acme");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Acme Corp");
         target.NodeType.Should().Be("Organization");
@@ -73,19 +97,19 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         await SaveNode("org/Acme/Team1", "Team One", "Team");
         await SaveNode("org/Acme/Team2", "Team Two", "Team");
         await SaveNode("org/Acme/Team1/Alice", "Alice", "Person");
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "org/Acme", "workspace", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: false);
 
         copied.Should().Be(4);
 
-        (await persistence.GetNodeAsync("workspace/Acme")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("workspace/Acme/Team1")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("workspace/Acme/Team2")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("workspace/Acme/Team1/Alice")).Should().NotBeNull();
+        (await GetNodeAsync("workspace/Acme")).Should().NotBeNull();
+        (await GetNodeAsync("workspace/Acme/Team1")).Should().NotBeNull();
+        (await GetNodeAsync("workspace/Acme/Team2")).Should().NotBeNull();
+        (await GetNodeAsync("workspace/Acme/Team1/Alice")).Should().NotBeNull();
 
-        var alice = await persistence.GetNodeAsync("workspace/Acme/Team1/Alice");
+        var alice = await GetNodeAsync("workspace/Acme/Team1/Alice");
         alice!.Name.Should().Be("Alice");
         alice.NodeType.Should().Be("Person");
     }
@@ -99,14 +123,14 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         // Pre-create target node with different name
         await SaveNode("workspace/Acme", "Existing Acme", "Organization");
 
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "org/Acme", "workspace", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: false);
 
         copied.Should().Be(1); // Only Team1 copied, Acme skipped
 
-        var existing = await persistence.GetNodeAsync("workspace/Acme");
+        var existing = await GetNodeAsync("workspace/Acme");
         existing!.Name.Should().Be("Existing Acme"); // Not overwritten
     }
 
@@ -118,24 +142,24 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         // Pre-create target node with different name
         await SaveNode("workspace/Acme", "Existing Acme", "Organization");
 
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "org/Acme", "workspace", force: true);
+            GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "workspace", force: true);
 
         copied.Should().Be(1);
 
-        var overwritten = await persistence.GetNodeAsync("workspace/Acme");
+        var overwritten = await GetNodeAsync("workspace/Acme");
         overwritten!.Name.Should().Be("Acme Corp"); // Overwritten
     }
 
     [HubFact]
     public async Task CopyNodeTree_ThrowsWhenSourceNotFound()
     {
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var act = () => NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "nonexistent/path", "workspace", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "nonexistent/path", "workspace", force: false);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Source node not found*");
@@ -146,16 +170,16 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     {
         await SaveNode("org/Acme", "Acme Corp", "Organization");
         await SaveNode("org/Acme/Sub", "Sub Node", "Markdown");
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "org/Acme", "", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "org/Acme", "", force: false);
 
         copied.Should().Be(2);
 
         // With empty target namespace, nodes go to root with source relative paths
-        (await persistence.GetNodeAsync("Acme")).Should().NotBeNull();
-        (await persistence.GetNodeAsync("Acme/Sub")).Should().NotBeNull();
+        (await GetNodeAsync("Acme")).Should().NotBeNull();
+        (await GetNodeAsync("Acme/Sub")).Should().NotBeNull();
     }
 
     [HubFact]
@@ -163,14 +187,14 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var content = new Dictionary<string, object?> { ["key"] = "value" };
         await SaveNode("src/Doc", "My Doc", "Markdown", content);
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "src/Doc", "dest", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "src/Doc", "dest", force: false);
 
         copied.Should().Be(1);
 
-        var target = await persistence.GetNodeAsync("dest/Doc");
+        var target = await GetNodeAsync("dest/Doc");
         target.Should().NotBeNull();
         target!.Content.Should().NotBeNull();
     }
@@ -179,14 +203,14 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     public async Task CopyRootLevelNode_ToNamespace()
     {
         await SaveNode("TopLevel", "Top Level Node", "Markdown");
-        var persistence = GetPersistenceService();
+        var hub = GetHost();
 
         var copied = await NodeCopyHelper.CopyNodeTreeAsync(
-            persistence, "TopLevel", "workspace", force: false);
+            GetMeshQuery(), GetNodeFactory(), hub, "TopLevel", "workspace", force: false);
 
         copied.Should().Be(1);
 
-        var target = await persistence.GetNodeAsync("workspace/TopLevel");
+        var target = await GetNodeAsync("workspace/TopLevel");
         target.Should().NotBeNull();
         target!.Name.Should().Be("Top Level Node");
     }

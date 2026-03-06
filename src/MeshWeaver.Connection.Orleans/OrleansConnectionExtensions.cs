@@ -56,7 +56,7 @@ public static class OrleansConnectionExtensions
                 );
             });
             // Use TryAdd so user can register their own catalog first
-            services.TryAddSingleton<IMeshCatalog, MeshCatalog>();
+            services.AddMeshCatalog();
             return services;
         });
         builder.ConfigureHub(conf => conf

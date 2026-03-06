@@ -9,7 +9,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// Stores user activity records under "_useractivity" partition key with userId as sub-path.
 /// Works with FileSystem, Cosmos, or any storage adapter.
 /// </summary>
-public class PersistenceActivityStore : IActivityStore
+internal class PersistenceActivityStore : IActivityStore
 {
     private const string Partition = "_useractivity";
     private readonly IPersistenceServiceCore _persistence;

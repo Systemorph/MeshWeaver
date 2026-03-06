@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -9,7 +10,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for address resolution via IMeshCatalog.ResolvePath.
+/// Tests for address resolution via IPathResolver.ResolvePathAsync.
 /// Verifies that paths are correctly resolved to addresses with remainder using score-based matching.
 /// Nodes are registered as persistence nodes.
 /// </summary>
@@ -20,20 +21,20 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private async Task EnsureNodesCreated()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        if (await persistence.GetNodeAsync(PricingPath) == null)
+        var existingPricing = await MeshQuery.QueryAsync<MeshNode>("path:pricing scope:exact").FirstOrDefaultAsync();
+        if (existingPricing == null)
         {
-            await persistence.SaveNodeAsync(MeshNode.FromPath(PricingPath) with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath(PricingPath) with
             {
                 Name = "Pricing",
                 Icon = "Calculator",
             });
         }
 
-        if (await persistence.GetNodeAsync(AppPath) == null)
+        var existingApp = await MeshQuery.QueryAsync<MeshNode>("path:app scope:exact").FirstOrDefaultAsync();
+        if (existingApp == null)
         {
-            await persistence.SaveNodeAsync(MeshNode.FromPath(AppPath) with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath(AppPath) with
             {
                 Name = "Applications",
                 Icon = "App",
@@ -47,9 +48,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_SingleSegmentNode_MatchesAndReturnsRemainder()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft/2026/Overview/details");
+        var resolution = await PathResolver.ResolvePathAsync("pricing/Microsoft/2026/Overview/details");
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -60,9 +59,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_AppPath_ReturnsPrefixAndRemainder()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("app/Todo/Dashboard/123");
+        var resolution = await PathResolver.ResolvePathAsync("app/Todo/Dashboard/123");
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("app");
@@ -73,9 +70,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_ExactMatch_ReturnsNullRemainder()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("pricing");
+        var resolution = await PathResolver.ResolvePathAsync("pricing");
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -86,9 +81,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_WithLeadingSlash_ParsesCorrectly()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("/pricing/Microsoft/2026");
+        var resolution = await PathResolver.ResolvePathAsync("/pricing/Microsoft/2026");
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -99,9 +92,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_UnknownPath_ReturnsNull()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("unknown/test/path");
+        var resolution = await PathResolver.ResolvePathAsync("unknown/test/path");
 
         resolution.Should().BeNull();
     }
@@ -118,9 +109,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
         string path, string expectedPrefix, string? expectedRemainder)
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync(path);
+        var resolution = await PathResolver.ResolvePathAsync(path);
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be(expectedPrefix);
@@ -130,9 +119,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 10000)]
     public async Task ResolvePath_EmptyPath_ReturnsNull()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("");
+        var resolution = await PathResolver.ResolvePathAsync("");
 
         resolution.Should().BeNull();
     }
@@ -140,9 +127,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     [Fact(Timeout = 10000)]
     public async Task ResolvePath_NullPath_ReturnsNull()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync(null!);
+        var resolution = await PathResolver.ResolvePathAsync(null!);
 
         resolution.Should().BeNull();
     }
@@ -155,9 +140,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_MultipleNodes_HighestScoreWins()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-        var resolution = await meshCatalog.ResolvePathAsync("pricing/Microsoft/2026");
+        var resolution = await PathResolver.ResolvePathAsync("pricing/Microsoft/2026");
 
         resolution.Should().NotBeNull();
         resolution!.Prefix.Should().Be("pricing");
@@ -168,10 +151,8 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task ResolvePath_CaseInsensitive_MatchesCorrectly()
     {
         await EnsureNodesCreated();
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         // Persistence paths may be case-sensitive
-        var resolution = await meshCatalog.ResolvePathAsync("PRICING/Microsoft/2026");
+        var resolution = await PathResolver.ResolvePathAsync("PRICING/Microsoft/2026");
 
         // Case-insensitive match depends on persistence backend
         if (resolution != null)
