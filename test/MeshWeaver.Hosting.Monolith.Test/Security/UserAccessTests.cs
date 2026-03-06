@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
@@ -25,7 +26,21 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        return base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
+    }
+
+    private async Task LoginAdminForSetup()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await securityService.AddUserRoleAsync("setup-admin", "Admin", null, "system", TestTimeout);
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
+    }
+
+    private void ClearAdminContext()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(null);
     }
 
     #region AccessAssignment CRUD Operations
@@ -207,9 +222,11 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("PublicArea") { Name = "Public Area" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("Doc1", "PublicArea") { Name = "Document 1" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("Doc2", "PublicArea") { Name = "Document 2" });
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("PublicArea") { Name = "Public Area", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("Doc1", "PublicArea") { Name = "Document 1", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("Doc2", "PublicArea") { Name = "Document 2", NodeType = "Group" });
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "PublicArea", "system", TestTimeout);
 
@@ -227,8 +244,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("PrivateArea") { Name = "Private Area" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1" });
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("PrivateArea") { Name = "Private Area", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1", NodeType = "Group" });
+        ClearAdminContext();
 
         var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:PrivateArea scope:children", UserId = "" }).ToListAsync();
 
@@ -240,8 +259,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("OpenProject") { Name = "Open Project" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("ClosedProject") { Name = "Closed Project" });
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("OpenProject") { Name = "Open Project", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("ClosedProject") { Name = "Closed Project", NodeType = "Group" });
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "OpenProject", "system", TestTimeout);
 
@@ -334,29 +355,25 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("Organization")
-        {
-            Name = "Organization",
-            NodeType = "NodeType"
-        });
-
+        await LoginAdminForSetup();
         await NodeFactory.CreateNodeAsync(new MeshNode("Systemorph")
         {
             Name = "Systemorph",
-            NodeType = "Organization"
+            NodeType = "Group"
         });
 
         await NodeFactory.CreateNodeAsync(new MeshNode("ACME")
         {
             Name = "ACME",
-            NodeType = "Organization"
+            NodeType = "Group"
         });
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Systemorph", "system", TestTimeout);
 
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:Organization scope:children",
+            Query = "nodeType:Group scope:children",
             UserId = ""
         };
         var results = await MeshQuery.QueryAsync(request, TestTimeout).ToListAsync();
@@ -372,23 +389,19 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("Organization2")
-        {
-            Name = "Organization2",
-            NodeType = "NodeType"
-        });
-
+        await LoginAdminForSetup();
         await NodeFactory.CreateNodeAsync(new MeshNode("MeshWeaver2")
         {
             Name = "MeshWeaver2",
-            NodeType = "Organization2"
+            NodeType = "Group"
         });
 
         await NodeFactory.CreateNodeAsync(new MeshNode("SecretOrg")
         {
             Name = "SecretOrg",
-            NodeType = "Organization2"
+            NodeType = "Group"
         });
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "MeshWeaver2", "system", TestTimeout);
 
@@ -396,7 +409,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:Organization2 scope:children"
+            Query = "nodeType:Group scope:children"
         };
         var results = await MeshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
@@ -410,13 +423,15 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        var publicNode = new MeshNode("PublicDoc", "Public") { Name = "Public Document" };
-        var restrictedNode = new MeshNode("PrivateDoc", "Private") { Name = "Private Document" };
+        var publicNode = new MeshNode("PublicDoc", "Public") { Name = "Public Document", NodeType = "Group" };
+        var restrictedNode = new MeshNode("PrivateDoc", "Private") { Name = "Private Document", NodeType = "Group" };
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("Public") { Name = "Public" });
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("Public") { Name = "Public", NodeType = "Group" });
         await NodeFactory.CreateNodeAsync(publicNode);
-        await NodeFactory.CreateNodeAsync(new MeshNode("Private") { Name = "Private" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("Private") { Name = "Private", NodeType = "Group" });
         await NodeFactory.CreateNodeAsync(restrictedNode);
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Public", "system", TestTimeout);
 
@@ -438,9 +453,11 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        var restrictedNode = new MeshNode("SecretDoc", "Secret") { Name = "Secret Document" };
-        await NodeFactory.CreateNodeAsync(new MeshNode("Secret") { Name = "Secret" });
+        var restrictedNode = new MeshNode("SecretDoc", "Secret") { Name = "Secret Document", NodeType = "Group" };
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("Secret") { Name = "Secret", NodeType = "Group" });
         await NodeFactory.CreateNodeAsync(restrictedNode);
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync("QueryUser", "Editor", "Secret", "system", TestTimeout);
 
@@ -457,23 +474,19 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var accessService = Mesh.ServiceProvider.GetService<AccessService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("OrgType3")
-        {
-            Name = "OrgType3",
-            NodeType = "NodeType"
-        });
-
+        await LoginAdminForSetup();
         await NodeFactory.CreateNodeAsync(new MeshNode("PublicOrg3")
         {
             Name = "PublicOrg3",
-            NodeType = "OrgType3"
+            NodeType = "Code"
         });
 
         await NodeFactory.CreateNodeAsync(new MeshNode("PrivateOrg3")
         {
             Name = "PrivateOrg3",
-            NodeType = "OrgType3"
+            NodeType = "Code"
         });
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Public, "Viewer", "PublicOrg3", "system", TestTimeout);
 
@@ -486,7 +499,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:OrgType3 scope:children",
+            Query = "nodeType:Code scope:children",
             UserId = WellKnownUsers.Public
         };
         var results = await MeshQuery.QueryAsync(request, TestTimeout).ToListAsync();
@@ -525,8 +538,10 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("User") { Name = "User" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("AliceProfile", "User") { Name = "Alice Profile", NodeType = "Person" });
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("User") { Name = "User", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("AliceProfile", "User") { Name = "Alice Profile", NodeType = "Markdown" });
+        ClearAdminContext();
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "User", "system", TestTimeout);
 
@@ -538,31 +553,35 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact]
     public async Task SecurePersistence_NodeTypeDefinition_AlwaysVisibleToAnonymous()
     {
-        await NodeFactory.CreateNodeAsync(new MeshNode("Organization")
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("CustomType")
         {
-            Name = "Organization",
+            Name = "CustomType",
             NodeType = "NodeType"
         });
 
-        await NodeFactory.CreateNodeAsync(new MeshNode("ACME")
+        await NodeFactory.CreateNodeAsync(new MeshNode("CustomInstance")
         {
-            Name = "ACME",
-            NodeType = "Organization"
+            Name = "CustomInstance",
+            NodeType = "Group"
         });
+        ClearAdminContext();
 
-        var typeDef = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:Organization scope:exact", UserId = "" }).FirstOrDefaultAsync();
-        var orgInstance = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:ACME scope:exact", UserId = "" }).FirstOrDefaultAsync();
+        var typeDef = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomType scope:exact", UserId = "" }).FirstOrDefaultAsync();
+        var instance = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomInstance scope:exact", UserId = "" }).FirstOrDefaultAsync();
 
         typeDef.Should().NotBeNull("NodeType definitions are always publicly readable");
-        typeDef!.Name.Should().Be("Organization");
-        orgInstance.Should().BeNull("Organization instances require explicit access grants");
+        typeDef!.Name.Should().Be("CustomType");
+        instance.Should().BeNull("Non-NodeType instances require explicit access grants");
     }
 
     [Fact]
     public async Task SecurePersistence_NodeInPrivateNamespace_HiddenWithoutGrant()
     {
-        await NodeFactory.CreateNodeAsync(new MeshNode("SecretArea") { Name = "Secret Area" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc" });
+        await LoginAdminForSetup();
+        await NodeFactory.CreateNodeAsync(new MeshNode("SecretArea") { Name = "Secret Area", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc", NodeType = "Group" });
+        ClearAdminContext();
 
         var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:SecretArea scope:children", UserId = "" }).ToListAsync();
 

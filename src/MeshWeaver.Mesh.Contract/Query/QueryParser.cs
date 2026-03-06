@@ -318,17 +318,14 @@ public partial class QueryParser
             return value;
         }
 
-        // Unquoted value - read until whitespace, ), or OR keyword
+        // Unquoted value - read until whitespace or parentheses.
+        // OR keywords are handled by ParseListValues, not here —
+        // detecting OR mid-value causes false positives (e.g. "Operator" → "Operat" + OR).
         var valueStart = i;
         while (i < input.Length)
         {
             var c = input[i];
             if (char.IsWhiteSpace(c) || c == ')' || c == '(')
-                break;
-
-            // Check for OR keyword
-            if (i + 2 <= input.Length && input.Substring(i, 2).Equals("OR", StringComparison.OrdinalIgnoreCase) &&
-                (i + 2 >= input.Length || !char.IsLetterOrDigit(input[i + 2])))
                 break;
 
             i++;

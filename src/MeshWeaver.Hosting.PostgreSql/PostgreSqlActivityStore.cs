@@ -5,9 +5,10 @@ using NpgsqlTypes;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL implementation of IActivityStore using the user_activity table.
+/// PostgreSQL activity store using the user_activity table.
+/// Kept for later refactoring to work with the MeshNode-based activity system.
 /// </summary>
-public class PostgreSqlActivityStore : IActivityStore
+public class PostgreSqlActivityStore
 {
     private readonly NpgsqlDataSource _dataSource;
 

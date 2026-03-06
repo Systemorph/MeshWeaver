@@ -72,8 +72,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         {
             foreach (var node in _providerNodes)
             {
-                // When included via path constraint (not field filter), apply path matching
-                if (!HasFieldFilter(parsed) && !MatchesPath(node, parsed))
+                // Always apply path matching when a path constraint is present
+                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed))
                     continue;
                 if (!_evaluator.Matches(node, parsed))
                     continue;

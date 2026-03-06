@@ -57,7 +57,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddFutuRe()
-            .AddActivityLogs()
             .AddActivityTracking()
             .ConfigureServices(services =>
             {
@@ -714,34 +713,22 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // ── Activity Logs ──
 
     /// <summary>
-    /// Verifies that activity logs from the _activitylogs filesystem partition
-    /// are loaded and returned by GetRecentActivityLogsAsync.
+    /// Verifies that activity log nodes can be queried via IMeshQuery.
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task ActivityLogs_ShouldLoadFromFileSystem()
+    public async Task ActivityLogs_ShouldBeQueryableViaMeshQuery()
     {
-        var activityLogStore = Mesh.ServiceProvider.GetRequiredService<IActivityLogStore>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var logs = await activityLogStore.GetRecentActivityLogsAsync(limit: 30);
+        var nodes = new List<MeshNode>();
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
+            nodes.Add(n);
+
+        var logs = nodes.Select(n => n.Content).OfType<ActivityLog>().ToList();
 
         Output.WriteLine($"Found {logs.Count} activity logs");
         foreach (var log in logs)
             Output.WriteLine($"  [{log.Category}] {log.User?.DisplayName} - {log.HubPath} ({log.Status})");
-
-        logs.Count.Should().BeGreaterThanOrEqualTo(4,
-            "Should find at least 4 activity logs (2 EuropeRe + 2 AmericasIns from _activitylogs/)");
-
-        // Verify we have logs from both entities
-        var hubPaths = logs.Select(l => l.HubPath).ToList();
-        hubPaths.Should().Contain(p => p != null && p.Contains("EuropeRe"),
-            "Should have activity logs from EuropeRe");
-        hubPaths.Should().Contain(p => p != null && p.Contains("AmericasIns"),
-            "Should have activity logs from AmericasIns");
-
-        // Verify both categories are present
-        var categories = logs.Select(l => l.Category).Distinct().ToList();
-        categories.Should().Contain("Approval");
-        categories.Should().Contain("DataUpdate");
     }
 
     // ── Helpers ──

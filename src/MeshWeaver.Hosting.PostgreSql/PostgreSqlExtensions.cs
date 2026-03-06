@@ -1,6 +1,4 @@
-using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -85,20 +83,6 @@ public static class PostgreSqlExtensions
             var changeNotifier = sp.GetService<IDataChangeNotifier>();
             var accessService = sp.GetService<AccessService>();
             return new PostgreSqlMeshQuery(adapter, changeNotifier, accessService);
-        });
-
-        // Register PostgreSqlActivityStore for activity tracking
-        services.TryAddSingleton<IActivityStore>(sp =>
-        {
-            var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
-            return new PostgreSqlActivityStore(dataSource);
-        });
-
-        // Register PostgreSqlActivityLogStore for bundled activity logs
-        services.TryAddSingleton<IActivityLogStore>(sp =>
-        {
-            var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
-            return new PostgreSqlActivityLogStore(dataSource);
         });
 
         return services;

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Blazor.AI;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
@@ -31,7 +32,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        return base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
     }
 
     /// <summary>
@@ -64,38 +65,47 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     /// </summary>
     private async Task SetupTestData()
     {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Set up admin context for data seeding — NodeFactory.CreateNodeAsync sends a
+        // CreateNodeRequest that goes through RlsNodeValidator, which requires permissions.
+        await securityService.AddUserRoleAsync("setup-admin", "Admin", null, "system", TestTimeout);
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
 
         // Create namespace nodes using the public NodeFactory API
         await NodeFactory.CreateNodeAsync(new MeshNode("SharedOrg")
         {
             Name = "Shared Organization",
-            NodeType = "Organization",
+            NodeType = "Group",
         }, ct: TestTimeout);
 
         await NodeFactory.CreateNodeAsync(new MeshNode("Public", "SharedOrg")
         {
             Name = "Public Project",
-            NodeType = "Project",
+            NodeType = "Markdown",
         }, ct: TestTimeout);
 
         await NodeFactory.CreateNodeAsync(new MeshNode("Confidential", "SharedOrg")
         {
             Name = "Confidential Project",
-            NodeType = "Project",
+            NodeType = "Markdown",
         }, ct: TestTimeout);
 
         await NodeFactory.CreateNodeAsync(new MeshNode("PrivateOrg")
         {
             Name = "Private Organization",
-            NodeType = "Organization",
+            NodeType = "Group",
         }, ct: TestTimeout);
 
         await NodeFactory.CreateNodeAsync(new MeshNode("Secret", "PrivateOrg")
         {
             Name = "Secret Data",
-            NodeType = "Document",
+            NodeType = "Markdown",
         }, ct: TestTimeout);
+
+        // Clear admin context so tests start clean
+        accessService.SetCircuitContext(null);
 
         // User1: Viewer on SharedOrg (can read), no access to PrivateOrg
         await securityService.AddUserRoleAsync(User1, "Viewer", "SharedOrg", "system", TestTimeout);
@@ -174,14 +184,14 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // User1 search under SharedOrg should only return Public, not Confidential
         SetCurrentUser(User1);
-        var result1 = await plugin.Search("nodeType:Project scope:children", "SharedOrg");
+        var result1 = await plugin.Search("nodeType:Markdown scope:children", "SharedOrg");
         result1.Should().Contain("Public");
         result1.Should().NotContain("Confidential",
             "User1 (Viewer) should not see Confidential project in search results");
 
         // User2 search under SharedOrg should return both
         SetCurrentUser(User2);
-        var result2 = await plugin.Search("nodeType:Project scope:children", "SharedOrg");
+        var result2 = await plugin.Search("nodeType:Markdown scope:children", "SharedOrg");
         result2.Should().Contain("Public");
         result2.Should().Contain("Confidential");
     }
