@@ -80,7 +80,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 
     private static async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
     {
-        var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+        var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
 
         try
         {

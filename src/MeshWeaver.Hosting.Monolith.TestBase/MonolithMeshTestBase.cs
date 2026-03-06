@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,13 +33,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     /// <summary>
     /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin)
-    /// so that access control (RLS) allows CRUD operations in tests.
+    /// and creates anonymous Editor access so that access control allows operations in tests.
     /// </summary>
-    public override ValueTask InitializeAsync()
+    public override async ValueTask InitializeAsync()
     {
-        var result = base.InitializeAsync();
+        await base.InitializeAsync();
         TestUsers.DevLogin(Mesh);
-        return result;
+        await NodeFactory.CreateNodeAsync(TestUsers.PublicEditorAccess());
     }
 
     protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();

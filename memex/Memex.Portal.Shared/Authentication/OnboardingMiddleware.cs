@@ -65,7 +65,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                                     "OnboardingMiddleware: Creating transient user node for {UserId}",
                                     userContext.ObjectId);
 
-                                var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+                                var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
                                 var transientNode = new MeshNode(userContext.ObjectId, "User")
                                 {
                                     Name = userContext.Name ?? userContext.ObjectId,

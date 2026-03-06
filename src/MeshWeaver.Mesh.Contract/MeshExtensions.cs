@@ -509,22 +509,13 @@ public static class MeshExtensions
             var persistence = hub.ServiceProvider.GetRequiredService<IPersistenceService>();
             await persistence.SaveNodeAsync(nodeToSave, ct);
 
-            // 6. Update workspace stream via DataChangeRequest so GetDataRequest returns updated state
-            var changeResponse = await hub.AwaitResponse(
+            // 6. Update workspace stream via DataChangeRequest (fire-and-forget, non-blocking)
+            //    Do NOT await — posting to the same hub inside a handler would deadlock.
+            var changeDelivery = hub.Post(
                 DataChangeRequest.Update([nodeToSave]),
-                o => o.WithTarget(hub.Address), ct);
-            if (changeResponse.Message.Status == DataChangeStatus.Failed)
-            {
-                var errorMsg = changeResponse.Message.Log?.Messages
-                    .FirstOrDefault(m => m.LogLevel == LogLevel.Error)?.Message
-                    ?? "Data change failed";
-                hub.Post(
-                    UpdateNodeResponse.Fail(errorMsg, NodeUpdateRejectionReason.ValidationFailed),
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
+                o => o.WithTarget(hub.Address));
 
-            // 7. Return success response
+            // 7. Return success response immediately after persistence
             hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
 
             logger.LogInformation("Node updated successfully at {Path} by {UpdatedBy}",

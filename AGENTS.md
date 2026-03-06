@@ -260,7 +260,7 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 - `parallelizeAssembly: false`
 - `parallelizeTestCollections: false`
 - `maxParallelThreads: 1`
-- `methodTimeout: 30000ms`
+- `methodTimeout: 60000ms` (1 minute per test method)
 
 **No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshQuery`, or other core interfaces.
 
@@ -268,19 +268,18 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 **Never run the same test suite repeatedly** just to see results. Run once, capture output, and analyze failures from the log file.
 
+**CRITICAL: Always use `run_in_background: true`** for test runs. Tests can take minutes — never block the conversation waiting for them. Use `timeout: 180000` (3 min) max for Bash test commands. The xunit.runner.json `methodTimeout` is 60000ms (1 min) per test method.
+
 ```bash
-# Run tests and capture all output to a log file
+# Run tests in background, capture output — ALWAYS use run_in_background
 cd /c/dev/MeshWeaver && dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore 2>&1 | tee /tmp/monolith-test-results.log
 
 # On failure: read the log file for error details (DO NOT re-run)
 cat /tmp/monolith-test-results.log | grep -A 5 "FAIL"
-
-# For detailed TRX output:
-dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore --logger "trx" --results-directory ./TestResults
 ```
 
 **Workflow:**
-1. Run tests **once** with output captured to a file
+1. Run tests **once** in background with output captured to a file
 2. If failures: read the log file to understand errors
 3. Fix the code
 4. Run tests **once** again to verify fixes

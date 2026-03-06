@@ -480,6 +480,16 @@ public static class DataExtensions
         return request.Processed();
     }
 
+    /// <summary>
+    /// Checks if a DataChangeRequest only contains ISatelliteContent changes.
+    /// Satellite content (ActivityLog, Comment, Thread) should not trigger activity tracking.
+    /// </summary>
+    private static bool IsSatelliteContentChange(DataChangeRequest request)
+    {
+        var allEntities = request.Creations.Concat(request.Updates).Concat(request.Deletions);
+        return allEntities.Any() && allEntities.All(e => e is MeshWeaver.Mesh.ISatelliteContent);
+    }
+
     private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
         IMessageDelivery<DataChangeRequest> request, CancellationToken ct)
     {
@@ -497,8 +507,9 @@ public static class DataExtensions
 
         // Record change in the bundler for debounced persistent logging.
         // The Activity is still used for validation error reporting in the response.
+        // Skip activity tracking for activity hubs and for ISatelliteContent changes.
         var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
-        if (!isActivityHub)
+        if (!isActivityHub && !IsSatelliteContentChange(changeRequest))
         {
             var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
             bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);

@@ -45,28 +45,21 @@ namespace MeshWeaver.Hosting
                 }
 
                 var hostAddress = GetHostAddress(address);
-                var result = await RouteMessageAsync(delivery, hostAddress, cancellationToken);
-
-                // If routing failed (e.g. no node found), send a DeliveryFailure response
-                // so the caller gets an error instead of waiting indefinitely
-                if (result.State == MessageDeliveryState.Failed)
-                {
-                    Mesh.Post(new DeliveryFailure(delivery, $"Routing failed for {delivery.Target}")
-                    {
-                        ErrorType = ErrorType.NotFound
-                    },
-                        o => o.ResponseFor(delivery));
-                }
+                await RouteMessageAsync(delivery, hostAddress, cancellationToken);
             }
             catch (Exception e)
             {
-                Mesh.Post(new DeliveryFailure(delivery)
+                // Guard against infinite loop: don't post DeliveryFailure for DeliveryFailure messages
+                if (delivery.Message is not DeliveryFailure)
                 {
-                    Message = e.Message,
-                    ExceptionType = e.GetType().Name,
-                    StackTrace = e.StackTrace!
-                },
-                    o => o.ResponseFor(delivery));
+                    Mesh.Post(new DeliveryFailure(delivery)
+                    {
+                        Message = e.Message,
+                        ExceptionType = e.GetType().Name,
+                        StackTrace = e.StackTrace!
+                    },
+                        o => o.ResponseFor(delivery));
+                }
             }
         }
 

@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -36,6 +37,24 @@ public static class TestUsers
         new("david.kim@example.com", "User") { Name = "David Kim", NodeType = "User" },
         new("emma.johnson@example.com", "User") { Name = "Emma Johnson", NodeType = "User" },
     ];
+
+    /// <summary>
+    /// AccessAssignment granting Public users Editor rights.
+    /// Every authenticated user inherits Public permissions, so this gives
+    /// all logged-in users read/write access — suitable for tests.
+    /// </summary>
+    public static MeshNode PublicEditorAccess() =>
+        new(WellKnownUsers.Public + "_Access", "")
+        {
+            NodeType = "AccessAssignment",
+            Name = "Public Access",
+            Content = new AccessAssignment
+            {
+                AccessObject = WellKnownUsers.Public,
+                DisplayName = "Public",
+                Roles = [new RoleAssignment { Role = "Editor" }]
+            }
+        };
 
     /// <summary>
     /// Adds sample users and access assignments as pre-seeded MeshNodes.

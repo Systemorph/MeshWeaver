@@ -65,11 +65,14 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
             => await persistence.SaveNodeAsync(node, jsonOptions, ct);
 
+        public async Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
+            => await persistence.SaveNodeAsync(node, jsonOptions, ct);
+
         public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
             => persistence.SaveNodeAsync(node, jsonOptions, ct);
 
-        public Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
-            => persistence.DeleteNodeAsync(path, recursive, ct);
+        public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
+            => persistence.DeleteNodeAsync(path, true, ct);
     }
 
     [HubFact]

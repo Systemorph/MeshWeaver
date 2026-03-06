@@ -1,0 +1,1 @@
+{"$type":"MeshNode","id":"Public_Access","namespace":"","path":"Public_Access","name":"Public Access","nodeType":"AccessAssignment","icon":"/static/NodeTypeIcons/shield.svg","lastModified":"2026-03-06T22:44:49.1953319+00:00","state":"Active","content":{"$type":"AccessAssignment","accessObject":"Public","displayName":"Public","roles":[{"$type":"RoleAssignment","role":"Editor"}]}}
