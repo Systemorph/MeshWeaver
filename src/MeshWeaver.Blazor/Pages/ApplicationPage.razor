@@ -11,7 +11,7 @@
     {
         @* Show spinner until interactive rendering is established and loading completes *@
         <div class="resolving-container">
-            <div class="spinner"></div>
+            <FluentProgressRing style="width: 40px; height: 40px;" />
             <p>Looking up <strong>@Path</strong>...</p>
         </div>
     }
@@ -35,7 +35,7 @@
     {
         @* Phase 1: No cached HTML - spinning circle with message *@
         <div class="resolving-container">
-            <div class="spinner"></div>
+            <FluentProgressRing style="width: 40px; height: 40px;" />
             <p>Resolving <strong>@Path</strong>...</p>
         </div>
     }

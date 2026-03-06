@@ -685,22 +685,53 @@ public static class MeshNodeLayoutAreas
                 .WithAppearance(Appearance.Lightweight)
                 .WithIconStart(FluentIcons.ArrowLeft())
                 .WithNavigateToHref(backHref));
+
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.Where(c => c.IsEditable).ToList();
 
-        if (collections is { Count: > 0 })
-        {
-            foreach (var config in collections)
-            {
-                stack = stack.WithView(Controls.H3(config.DisplayName ?? config.Name)
-                    .WithStyle("margin: 16px 0 8px 0;"));
-                stack = stack.WithView(new FileBrowserControl(config.Name));
-            }
-        }
-        else
+        if (collections is not { Count: > 0 })
         {
             stack = stack.WithView(new FileBrowserControl("content"));
+            return stack;
         }
+
+        if (collections.Count == 1)
+        {
+            stack = stack.WithView(new FileBrowserControl(collections[0].Name));
+            return stack;
+        }
+
+        // Multiple collections: show combobox for selection
+        var initialCollection = host.GetQueryStringParamValue("collection") ?? collections[0].Name;
+
+        var options = collections
+            .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
+            .ToArray();
+
+        var selectDataId = "filesCollectionSelect";
+        var optionsDataId = "filesCollectionOptions";
+
+        host.UpdateData(selectDataId, new Dictionary<string, object?> { ["collection"] = initialCollection });
+        host.UpdateData(optionsDataId, options);
+
+        stack = stack.WithView(new ComboboxControl(
+            new JsonPointerReference("collection"),
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer(optionsDataId)))
+        {
+            Label = "Collection",
+            Autocomplete = ComboboxAutocomplete.Both,
+            DataContext = LayoutAreaReference.GetDataPointer(selectDataId)
+        });
+
+        stack = stack.WithView((h, _2) =>
+            h.Stream.GetDataStream<Dictionary<string, object?>>(selectDataId)
+                .Select(data =>
+                {
+                    var selected = data?.GetValueOrDefault("collection")?.ToString();
+                    if (string.IsNullOrEmpty(selected))
+                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
+                    return (UiControl?)new FileBrowserControl(selected);
+                }));
 
         return stack;
     }

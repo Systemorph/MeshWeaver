@@ -22,7 +22,7 @@
 @if (ShowProgress && RootControl == null)
 {
     <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
-        Orientation="Orientation.Vertical" Style="height: 100%">
+        Orientation="Orientation.Vertical" Style="min-height: 100vh; min-height: 100dvh;">
         @if (!string.IsNullOrEmpty(ProgressMessage))
         {
             <h3>@ProgressMessage</h3>
@@ -37,7 +37,7 @@
         }
         else
         {
-            <FluentProgressRing style="width: 102px; height: 102px;" />
+            <FluentProgressRing style="width: 40px; height: 40px;" />
         }
     </FluentStack>
 }

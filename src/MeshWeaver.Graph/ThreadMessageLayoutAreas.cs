@@ -44,14 +44,15 @@ public static class ThreadMessageLayoutAreas
         return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return BuildMessageView(host, node, hubPath);
+            var isLast = node != null && !nodes.Any(n => n.Order > node.Order);
+            return BuildMessageView(host, node, hubPath, isLast);
         });
     }
 
     /// <summary>
     /// Builds the appropriate view for a ThreadMessage based on its Type.
     /// </summary>
-    private static UiControl BuildMessageView(LayoutAreaHost host, MeshNode? node, string messagePath)
+    private static UiControl BuildMessageView(LayoutAreaHost host, MeshNode? node, string messagePath, bool isLast)
     {
         var message = node?.Content as ThreadMessage;
         if (message == null)
@@ -68,7 +69,7 @@ public static class ThreadMessageLayoutAreas
 
         return message.Type switch
         {
-            ThreadMessageType.EditingPrompt => BuildEditingPromptView(host, message, messagePath),
+            ThreadMessageType.EditingPrompt => BuildEditingPromptView(host, message, messagePath, isLast),
             ThreadMessageType.ExecutedInput => BuildUserMessageView(message),
             ThreadMessageType.AgentResponse => BuildAgentResponseView(message),
             _ => BuildUserMessageView(message) // Default fallback
@@ -77,8 +78,9 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Builds an editing view with MarkdownEditorControl for EditingPrompt messages.
+    /// When isLast is true, adds a Submit button to execute the prompt.
     /// </summary>
-    private static UiControl BuildEditingPromptView(LayoutAreaHost host, ThreadMessage message, string messagePath)
+    private static UiControl BuildEditingPromptView(LayoutAreaHost host, ThreadMessage message, string messagePath, bool isLast)
     {
         var container = Controls.Stack
             .WithWidth("100%")
@@ -89,15 +91,50 @@ public static class ThreadMessageLayoutAreas
         container = container.WithView(Controls.Html(
             $"<div style=\"font-weight: 600; font-size: 0.85rem; color: var(--accent-fill-rest); margin-bottom: 8px;\">{System.Web.HttpUtility.HtmlEncode(authorName)} (editing)</div>"));
 
-        // MarkdownEditorControl for editing
-        var editor = new MarkdownEditorControl()
+        // Store text in host data for two-way binding with the editor
+        var textDataId = $"editingText_{messagePath.Replace("/", "_")}";
+        host.UpdateData(textDataId, message.Text ?? "");
+
+        // MarkdownEditorControl for editing, bound to host data
+        var editor = new MarkdownEditorControl() { Value = new JsonPointerReference(LayoutAreaReference.GetDataPointer(textDataId)) }
             .WithDocumentId(messagePath)
-            .WithValue(message.Text)
             .WithHeight("200px")
             .WithMaxHeight("300px")
             .WithPlaceholder("Type your message...");
 
         container = container.WithView(editor);
+
+        // Submit button when this is the last cell in the thread
+        if (isLast)
+        {
+            var threadPath = messagePath.Contains('/')
+                ? messagePath[..messagePath.LastIndexOf('/')]
+                : messagePath;
+
+            var buttonRow = Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: flex-end; margin-top: 8px;");
+
+            buttonRow = buttonRow.WithView(Controls.Button("Submit")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Send(IconSize.Size16))
+                .WithClickAction(async ctx =>
+                {
+                    var text = await ctx.Host.Stream
+                        .GetDataStream<string>(textDataId).FirstAsync();
+
+                    if (string.IsNullOrWhiteSpace(text))
+                        return;
+
+                    ctx.Hub.Post(new ExecuteThreadMessageRequest
+                    {
+                        ThreadPath = threadPath,
+                        UserMessageText = text
+                    }, o => o.WithTarget(new Address(threadPath)));
+                }));
+
+            container = container.WithView(buttonRow);
+        }
 
         return container;
     }

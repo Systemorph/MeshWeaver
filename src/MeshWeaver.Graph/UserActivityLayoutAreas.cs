@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -243,18 +242,17 @@ public static class UserActivityLayoutAreas
                 .ToList();
         }
 
-        // Resolve full nodes from persistence for proper icons
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceServiceCore>();
-        var jsonOptions = new JsonSerializerOptions();
+        // Resolve full nodes via MeshCatalog for proper icons
+        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
 
         var grid = Controls.LayoutGrid.WithStyle("gap: 8px;");
 
         foreach (var activity in recentActivities)
         {
             MeshNode? node = null;
-            if (persistence != null)
+            if (meshCatalog != null)
             {
-                try { node = await persistence.GetNodeAsync(activity.NodePath, jsonOptions); }
+                try { node = await meshCatalog.GetNodeAsync(new Address(activity.NodePath)); }
                 catch { /* ignore lookup failures */ }
             }
 
@@ -276,7 +274,6 @@ public static class UserActivityLayoutAreas
         if (remaining > 0)
         {
             var recentPaths = new HashSet<string>(recentActivities.Select(a => a.NodePath));
-            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
 
             if (meshCatalog != null)
             {

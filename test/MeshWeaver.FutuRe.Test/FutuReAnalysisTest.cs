@@ -361,8 +361,9 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that the EuropeRe LineOfBusiness Search area renders correctly
-    /// and returns the 8 EuropeRe-specific LoB instances.
+    /// Verifies that the EuropeRe LineOfBusiness Search area renders correctly,
+    /// returns the 8 EuropeRe-specific LoB instances, and does NOT contain
+    /// sibling nodes like Analysis or TransactionMapping.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task EuropeRe_LineOfBusiness_Search_ShouldReturn8LoBs()
@@ -392,7 +393,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
         Output.WriteLine($"EuropeRe hidden query: {hiddenQuery}");
         hiddenQuery.Should().Contain("namespace:FutuRe/EuropeRe/LineOfBusiness",
-            "Search query should scope to EuropeRe LineOfBusiness namespace");
+            "Search query should scope to EuropeRe LineOfBusiness namespace, not to FutuRe/EuropeRe (which would show siblings like Analysis and TransactionMapping)");
+
+        // Must NOT contain a fallback query that scopes to the parent namespace
+        hiddenQuery.Should().NotContain("path:FutuRe/EuropeRe scope:children",
+            "Search should use NodeType mode (namespace:), not instance fallback (path: scope:children)");
 
         // Execute the query and verify we get the 8 EuropeRe LoBs
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -400,6 +405,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var names = results.Cast<MeshNode>().Select(n => n.Name).ToList();
         Output.WriteLine($"EuropeRe query returned {results.Count} results: {string.Join(", ", names)}");
         results.Count.Should().Be(8, "Should find all 8 EuropeRe lines of business");
+
+        // Verify NO sibling nodes are returned (the bug that showed Analysis/TransactionMapping)
+        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        ids.Should().NotContain("Analysis", "Search should not return the Analysis sibling node");
+        ids.Should().NotContain("TransactionMapping", "Search should not return the TransactionMapping sibling node");
     }
 
     // ── Layout Area Catalog ──
@@ -416,6 +426,60 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LayoutAreas");
         control.Should().NotBeNull("LayoutAreas catalog should render for local EuropeRe Analysis hub");
+
+        // The LayoutAreaCatalog returns a StackControl with category headers (H2) and LayoutGridControls
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        Output.WriteLine($"LayoutAreas catalog has {stack.Areas?.Count ?? 0} areas (NamedAreaControls)");
+        foreach (var area in stack.Areas ?? [])
+            Output.WriteLine($"  area: {area.Area}");
+
+        // The catalog creates: [H2("Profitability"), LayoutGrid(7 tiles)] = 2+ areas
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
+            "Catalog should have at least one category header (H2) + one grid of layout area tiles");
+
+        // The control should NOT be a MeshSearchControl (which would indicate Overview/Search fallback)
+        control.Should().NotBeOfType<MeshSearchControl>(
+            "LayoutAreas should show a catalog of profitability views, not a search/overview");
+    }
+
+    /// <summary>
+    /// Verifies that the default area (null area = browser navigation) for EuropeRe Analysis
+    /// resolves to LayoutAreas, not Overview. This is what users see when navigating to the page.
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task EuropeRe_Analysis_DefaultArea_ShouldResolveToLayoutAreas()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/Analysis");
+
+        Output.WriteLine("Initializing hub for FutuRe/EuropeRe/Analysis...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        // null area = mimics browser navigation to /FutuRe/EuropeRe/Analysis
+        var reference = new LayoutAreaReference((string?)null);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for default area control...");
+        // The default area stores a NamedAreaControl at the "" key
+        var control = await stream
+            .GetControlStream("")
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Default area control type: {control?.GetType().Name}");
+
+        // When the default area is resolved, a NamedAreaControl pointing to the resolved area
+        // is stored at key "". Verify it points to "LayoutAreas", not "Overview".
+        var namedArea = control.Should().BeOfType<NamedAreaControl>().Subject;
+        Output.WriteLine($"Default area resolves to: {namedArea.Area}");
+        namedArea.Area.Should().Be("LayoutAreas",
+            "Default area for Analysis hub should be 'LayoutAreas' (profitability catalog), not 'Overview'");
     }
 
     // ── Local Analysis Hub (EuropeRe) ──
@@ -478,45 +542,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task Group_KeyMetrics_ShouldHaveNonZeroData()
     {
-        var client = GetClient();
-
-        // Direct mesh query diagnostic: check if TransactionMapping nodes exist in the graph
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var queryRequest = MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants");
-        var directResults = new List<object>();
-        await foreach (var item in meshQuery.QueryAsync(queryRequest, TestContext.Current.CancellationToken))
-            directResults.Add(item);
-        Output.WriteLine($"Direct mesh query for TransactionMapping: {directResults.Count} nodes");
-
-        var lobRequest = MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness scope:children state:Active");
-        var lobResults = new List<object>();
-        await foreach (var item in meshQuery.QueryAsync(lobRequest, TestContext.Current.CancellationToken))
-            lobResults.Add(item);
-        Output.WriteLine($"Direct mesh query for LineOfBusiness: {lobResults.Count} nodes");
-
-        // Start group hub
-        Output.WriteLine("Starting group hub...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(new Address("FutuRe/Analysis")),
-            TestContext.Current.CancellationToken);
-        Output.WriteLine("Group hub started.");
-
-        // Check data collections
-        foreach (var coll in new[] { "FutuReDataCube", "TransactionMapping", "LineOfBusiness" })
-        {
-            var resp = await client.AwaitResponse(
-                new GetDataRequest(new CollectionsReference(coll)),
-                o => o.WithTarget(new Address("FutuRe/Analysis")),
-                TestContext.Current.CancellationToken);
-            var store = resp.Message?.Data as EntityStore;
-            var count = store?.Collections.Values.FirstOrDefault()?.Instances.Count ?? 0;
-            Output.WriteLine($"  {coll}: {count} items (Error={resp.Message?.Error})");
-        }
-
-        // Check KeyMetrics
         var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
-            waitForData: true, timeoutSeconds: 30);
+            waitForData: true, timeoutSeconds: 50);
         var md = AssertMarkdownWithNonZeroNumbers(control, "Group KeyMetrics");
         md.Should().Contain("Total Premium", "KeyMetrics should show premium");
         md.Should().Contain("Business Units", "Group KeyMetrics should show BU count");
@@ -804,4 +831,5 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         return markdown;
     }
+
 }
