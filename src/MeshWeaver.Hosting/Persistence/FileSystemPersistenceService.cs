@@ -21,6 +21,7 @@ public class FileSystemPersistenceService : IPersistenceServiceCore, IDisposable
         SlidingExpiration = TimeSpan.FromMinutes(15)
     };
     private readonly IDisposable? _changeSubscription;
+    private long _versionCounter;
 
     public FileSystemPersistenceService(
         IStorageAdapter storageAdapter,
@@ -117,7 +118,8 @@ public class FileSystemPersistenceService : IPersistenceServiceCore, IDisposable
 
         var savedNode = node with
         {
-            LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified
+            LastModified = node.LastModified == default ? DateTimeOffset.UtcNow : node.LastModified,
+            Version = Interlocked.Increment(ref _versionCounter)
         };
 
         // Update cache and notify BEFORE disk write so observers see the change immediately.

@@ -20,7 +20,7 @@ public class Activity : ILogger, IDisposable
         Hub = parentHub.GetHostedHub(Address, conf => ConfigureActivityHub(this, conf));
         logger = Hub.ServiceProvider.GetRequiredService<ILogger<Activity>>();
         this.autoClose = autoClose;
-        activityLog = new(category);
+        activityLog = new(category) { StartVersion = (int)parentHub.Version };
     }
 
     public IMessageHub Hub { get; }
@@ -61,6 +61,11 @@ public class Activity : ILogger, IDisposable
         return tcs.Task;
     }
 
+    public void RecordAffectedPaths(IEnumerable<string> paths)
+    {
+        Hub.Post(new UpdateActivityLogRequest(log =>
+            log with { AffectedPaths = log.AffectedPaths.AddRange(paths) }));
+    }
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {

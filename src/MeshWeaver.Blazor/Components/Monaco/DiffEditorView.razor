@@ -1,0 +1,74 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Layout.Client
+@using MeshWeaver.Data
+@using MeshWeaver.Blazor.Components.Monaco
+@using System.Text.Json
+@inherits BlazorView<DiffEditorControl, DiffEditorView>
+@inject IJSRuntime JSRuntime
+
+<div style="height: @(ViewModel?.Height ?? "500px"); width: 100%;">
+    <StandaloneDiffEditor @ref="diffEditor"
+                          ConstructionOptions="GetDiffEditorOptions"
+                          OnDidInit="OnEditorInit"
+                          CssClass="diff-editor-view" />
+</div>
+
+@code {
+    private StandaloneDiffEditor? diffEditor;
+    private bool isDarkMode = false;
+
+    [CascadingParameter(Name = "ThemeMode")]
+    public DesignThemeModes Mode { get; set; }
+
+    private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
+
+    private StandaloneDiffEditorConstructionOptions GetDiffEditorOptions(StandaloneDiffEditor editor)
+    {
+        return new StandaloneDiffEditorConstructionOptions
+        {
+            AutomaticLayout = true,
+            ReadOnly = true,
+            RenderSideBySide = true,
+            OriginalEditable = false,
+            EnableSplitViewResizing = true
+        };
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        isDarkMode = Mode switch
+        {
+            DesignThemeModes.Dark => true,
+            DesignThemeModes.Light => false,
+            _ => false
+        };
+    }
+
+    private async Task OnEditorInit()
+    {
+        if (diffEditor == null || ViewModel == null)
+            return;
+
+        // Set the theme
+        await BlazorMonaco.Editor.Global.SetTheme(JSRuntime, GetMonacoTheme());
+
+        var language = ViewModel.Language ?? "markdown";
+        var originalModel = await BlazorMonaco.Editor.Global.CreateModel(
+            JSRuntime,
+            ViewModel.OriginalContent ?? "",
+            language,
+            null);
+        var modifiedModel = await BlazorMonaco.Editor.Global.CreateModel(
+            JSRuntime,
+            ViewModel.ModifiedContent ?? "",
+            language,
+            null);
+
+        await diffEditor.SetModel(new DiffEditorModel
+        {
+            Original = originalModel,
+            Modified = modifiedModel
+        });
+    }
+}

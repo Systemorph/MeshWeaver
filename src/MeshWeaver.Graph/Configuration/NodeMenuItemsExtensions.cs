@@ -94,6 +94,10 @@ public static class NodeMenuItemsExtensions
             yield return new("Files", MeshNodeLayoutAreas.FilesArea, Order: 25);
 
         yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, Order: 50);
+
+        if (perms.HasFlag(Permission.Read))
+            yield return new("Versions", MeshNodeLayoutAreas.VersionsArea, Order: 55);
+
         if (perms.HasFlag(Permission.Read))
             yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, Order: 90);
 

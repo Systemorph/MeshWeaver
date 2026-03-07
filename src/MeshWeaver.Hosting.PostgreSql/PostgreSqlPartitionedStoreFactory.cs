@@ -71,8 +71,9 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
 
         // Create query provider — RoutingPersistenceServiceCore creates the persistence core internally
         var queryProvider = new PostgreSqlMeshQuery(adapter, _changeNotifier, _accessService);
+        var versionQuery = new PostgreSqlVersionQuery(schemaDataSource);
 
-        return new PartitionedStore(adapter, queryProvider);
+        return new PartitionedStore(adapter, queryProvider, versionQuery);
     }
 
     public async Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default)

@@ -97,6 +97,7 @@ public static class BlazorViewRegistry
                     => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
                 CollaborativeMarkdownControl collaborativeMarkdown => StandardView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
                 CodeEditorControl codeEditor => StandardView<CodeEditorControl, CodeEditorView>(codeEditor, stream, area),
+                DiffEditorControl diffEditor => StandardView<DiffEditorControl, DiffEditorView>(diffEditor, stream, area),
                 MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
                 MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
                 NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),

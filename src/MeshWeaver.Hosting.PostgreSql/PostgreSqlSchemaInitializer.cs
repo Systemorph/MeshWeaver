@@ -58,6 +58,7 @@ public static class PostgreSqlSchemaInitializer
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
+                is_satellite    BOOLEAN     NOT NULL DEFAULT FALSE,
                 embedding       vector({{dim}}),
                 PRIMARY KEY (namespace, id)
             );
@@ -355,6 +356,61 @@ public static class PostgreSqlSchemaInitializer
                     CREATE TRIGGER mesh_node_notify
                         AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
                         FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
+                END IF;
+            END;
+            $$;
+
+            -- mesh_node_history: versioned copies of mesh_nodes
+            CREATE TABLE IF NOT EXISTS mesh_node_history (
+                namespace       TEXT        NOT NULL DEFAULT '',
+                id              TEXT        NOT NULL,
+                path            TEXT        GENERATED ALWAYS AS (
+                                    CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
+                                ) STORED,
+                name            TEXT,
+                node_type       TEXT,
+                description     TEXT,
+                category        TEXT,
+                icon            TEXT,
+                display_order   INTEGER,
+                last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                version         BIGINT      NOT NULL DEFAULT 0,
+                state           SMALLINT    NOT NULL DEFAULT 0,
+                content         JSONB,
+                desired_id      TEXT,
+                changed_by      TEXT,
+                PRIMARY KEY (namespace, id, version)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mnh_path ON mesh_node_history (path);
+            CREATE INDEX IF NOT EXISTS idx_mnh_path_version ON mesh_node_history (path, version DESC);
+
+            -- Trigger to copy non-satellite rows to history on every insert/update
+            CREATE OR REPLACE FUNCTION trg_mesh_node_to_history() RETURNS TRIGGER AS $$
+            BEGIN
+                IF NEW.is_satellite THEN
+                    RETURN NEW;
+                END IF;
+                INSERT INTO mesh_node_history (
+                    namespace, id, name, node_type, description, category, icon,
+                    display_order, last_modified, version, state, content, desired_id
+                )
+                VALUES (
+                    NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.description,
+                    NEW.category, NEW.icon, NEW.display_order, NEW.last_modified,
+                    NEW.version, NEW.state, NEW.content, NEW.desired_id
+                )
+                ON CONFLICT (namespace, id, version) DO NOTHING;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_copy_to_history') THEN
+                    CREATE TRIGGER mesh_node_copy_to_history
+                        AFTER INSERT OR UPDATE ON mesh_nodes
+                        FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_to_history();
                 END IF;
             END;
             $$;

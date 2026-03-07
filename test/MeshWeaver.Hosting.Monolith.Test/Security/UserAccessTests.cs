@@ -25,9 +25,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-    {
-        return base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
-    }
+        => ConfigureMeshBase(builder).AddRowLevelSecurity();
 
     private async Task LoginAdminForSetup()
     {

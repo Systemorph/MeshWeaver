@@ -36,14 +36,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     private string? _tokenUser2;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-    {
-        return base.ConfigureMesh(builder).AddMcp().AddRowLevelSecurity();
-    }
-
-    /// <summary>
-    /// Skip PublicAdminAccess — security tests need granular permissions.
-    /// </summary>
-    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
+        => ConfigureMeshBase(builder).AddMcp().AddRowLevelSecurity();
 
     /// <summary>
     /// Creates an API token for a user and stores it as a MeshNode.

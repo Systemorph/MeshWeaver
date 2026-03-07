@@ -18,6 +18,11 @@ public class FileSystemStorageAdapter : IStorageAdapter
     private readonly FileFormatParserRegistry _parserRegistry = new();
 
     /// <summary>
+    /// The base directory for file storage.
+    /// </summary>
+    public string BaseDirectory => _baseDirectory;
+
+    /// <summary>
     /// Supported file extensions in priority order for reading.
     /// </summary>
     private static readonly string[] SupportedExtensions = [".md", ".cs", ".json"];

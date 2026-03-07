@@ -69,6 +69,8 @@ public static class MeshNodeLayoutAreas
     public const string DeleteArea = "Delete";
     public const string ThreadsArea = "Threads";
     public const string ImportMeshNodesArea = "ImportMeshNodes";
+    public const string VersionsArea = "Versions";
+    public const string VersionDiffArea = "VersionDiff";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -88,6 +90,8 @@ public static class MeshNodeLayoutAreas
             .AddMeshDataSource()
             .AddDefaultMeshMenu()
             .AddDefaultSettingsMenuItems()
+            .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
+            .WithHandler<UndoActivityRequest>(VersionLayoutArea.HandleUndoActivityRequest)
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
@@ -105,6 +109,8 @@ public static class MeshNodeLayoutAreas
             .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
+            .WithView(VersionsArea, VersionLayoutArea.Versions)
+            .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
             // UCR special areas
             .WithView(DataArea, Data)

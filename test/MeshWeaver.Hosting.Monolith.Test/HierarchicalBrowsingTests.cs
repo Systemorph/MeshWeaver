@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     private async Task SetupMarketingHierarchy()
     {
@@ -319,7 +319,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
 public class TypedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     [Fact]
     public async Task QueryAsync_Generic_ReturnsTypedResults()

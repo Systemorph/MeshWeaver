@@ -23,12 +23,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
-
-    /// <summary>
-    /// Skip PublicAdminAccess — security tests need granular permissions.
-    /// </summary>
-    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
+        => ConfigureMeshBase(builder).AddRowLevelSecurity();
 
     #region AddUserRole creates AccessAssignment MeshNodes
 

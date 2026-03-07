@@ -33,8 +33,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     private const string NodePath = "TestOrg/TestProject";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            .AddGraph()
+        => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 

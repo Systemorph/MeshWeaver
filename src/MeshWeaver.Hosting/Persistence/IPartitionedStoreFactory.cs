@@ -37,5 +37,6 @@ public interface IPartitionedStoreFactory
 /// When null, the InMemoryMeshQuery wrapping the storage adapter is used.</param>
 public record PartitionedStore(
     IStorageAdapter StorageAdapter,
-    IMeshQueryProvider? QueryProvider = null
+    IMeshQueryProvider? QueryProvider = null,
+    IVersionQuery? VersionQuery = null
 );

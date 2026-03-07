@@ -311,6 +311,16 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new RoutingMeshQueryProvider(sp.GetRequiredService<RoutingPersistenceServiceCore>()));
 
+        // Register the routing version query
+        services.AddSingleton<IVersionQuery>(sp =>
+        {
+            var routingCore = sp.GetRequiredService<RoutingPersistenceServiceCore>();
+            var routingVersionQuery = new RoutingVersionQuery();
+            foreach (var (partition, vq) in routingCore.VersionQueries)
+                routingVersionQuery.Register(partition, vq);
+            return routingVersionQuery;
+        });
+
         // Always add static node provider
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new StaticNodeQueryProvider(
@@ -342,6 +352,15 @@ public static class PersistenceExtensions
             new StaticNodeQueryProvider(
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
+
+        // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
+        services.TryAddSingleton<IVersionQuery>(sp =>
+        {
+            var adapter = sp.GetService<IStorageAdapter>();
+            if (adapter is FileSystemStorageAdapter fsAdapter)
+                return new FileSystemVersionStore(fsAdapter.BaseDirectory);
+            return new NoOpVersionQuery();
+        });
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IPersistenceService, PersistenceService>();
