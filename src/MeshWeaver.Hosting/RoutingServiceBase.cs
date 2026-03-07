@@ -32,6 +32,10 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
             )
         {
+            // Don't route during shutdown - recipients are likely also disposing
+            if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                return;
+
             try
             {
                 var address = GetHostAddress(delivery.Target!);
@@ -49,8 +53,8 @@ namespace MeshWeaver.Hosting
             }
             catch (Exception e)
             {
-                // Guard against infinite loop: don't post DeliveryFailure for DeliveryFailure messages
-                if (delivery.Message is not DeliveryFailure)
+                // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown
+                if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 {
                     Mesh.Post(new DeliveryFailure(delivery)
                     {
