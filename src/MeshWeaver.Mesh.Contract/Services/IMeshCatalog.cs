@@ -20,8 +20,9 @@ internal interface IMeshCatalog : IPathResolver
     /// Gets a mesh node by its address.
     /// </summary>
     /// <param name="address">The address of the node to retrieve.</param>
+    /// <param name="skipValidation">If true, bypass RLS validation (used by routing layer).</param>
     /// <returns>The mesh node, or null if not found.</returns>
-    Task<MeshNode?> GetNodeAsync(Address address);
+    Task<MeshNode?> GetNodeAsync(Address address, bool skipValidation = false);
 
     /// <summary>
     /// Creates a new node in the catalog with validation.

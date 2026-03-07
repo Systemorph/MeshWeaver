@@ -53,7 +53,7 @@ internal sealed class MeshCatalog(
         }
     }
 
-    public async Task<MeshNode?> GetNodeAsync(Address address)
+    public async Task<MeshNode?> GetNodeAsync(Address address, bool skipValidation = false)
     {
         var addressKey = address.ToString();
 
@@ -61,7 +61,7 @@ internal sealed class MeshCatalog(
         if (cache.TryGetValue(addressKey, out var ret))
         {
             var cachedNode = (MeshNode?)ret;
-            if (cachedNode != null && !await ValidateReadAsync(cachedNode))
+            if (cachedNode != null && !skipValidation && !await ValidateReadAsync(cachedNode))
                 return null;
             return cachedNode;
         }
@@ -75,7 +75,7 @@ internal sealed class MeshCatalog(
                 node = await NodeTypeService.EnrichWithNodeTypeAsync(node);
             }
             cache.Set(node.Path, node, cacheOptions);
-            if (!await ValidateReadAsync(node))
+            if (!skipValidation && !await ValidateReadAsync(node))
                 return null;
             return node;
         }
@@ -98,7 +98,7 @@ internal sealed class MeshCatalog(
             }
 
             cache.Set(persistenceNode.Path, persistenceNode, cacheOptions);
-            if (!await ValidateReadAsync(persistenceNode))
+            if (!skipValidation && !await ValidateReadAsync(persistenceNode))
                 return null;
             return persistenceNode;
         }
