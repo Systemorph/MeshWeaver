@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
     private async Task CreateUserActivityNodeAsync(string userId, string path, string? name = null, string? nodeType = null, ActivityType type = ActivityType.Read)
     {
         var now = System.DateTimeOffset.UtcNow;
@@ -88,7 +88,7 @@ public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestB
 public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
     public async Task Catalog_NoActivity_FallsBackToActualNodes()
@@ -147,7 +147,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
 public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
     public async Task Catalog_SearchWithQuery_FiltersResults()
@@ -303,7 +303,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
     public async Task SourceActivity_ReturnsAllMatchingNodes()

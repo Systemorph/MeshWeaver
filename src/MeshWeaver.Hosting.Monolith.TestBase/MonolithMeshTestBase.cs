@@ -16,11 +16,23 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 {
     protected static Address CreateClientAddress() => new("client", "1");
 
-    protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
+    /// <summary>
+    /// Base mesh configuration without access control setup.
+    /// Security tests can call this directly instead of base.ConfigureMesh().
+    /// </summary>
+    protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
             .AddGraph();
+
+    /// <summary>
+    /// Default mesh configuration with PublicAdminAccess (grants all users Admin).
+    /// Override to customize. Security tests should call ConfigureMeshBase() instead.
+    /// </summary>
+    protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder)
+            .AddMeshNodes(TestUsers.PublicAdminAccess());
 
     protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
     {
@@ -46,21 +58,11 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     /// <summary>
-    /// Sets up default access rights for tests. Override in security tests
-    /// to skip the PublicAdminAccess and test granular permissions.
+    /// Sets up access rights for tests. Default is a no-op since PublicAdminAccess
+    /// is added as a configuration node in ConfigureMesh (never persisted to disk).
+    /// Override to set up custom permissions for security tests.
     /// </summary>
-    protected virtual async Task SetupAccessRightsAsync()
-    {
-        var accessNode = TestUsers.PublicAdminAccess();
-        try
-        {
-            await NodeFactory.CreateNodeAsync(accessNode);
-        }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("already exists"))
-        {
-            await NodeFactory.UpdateNodeAsync(accessNode);
-        }
-    }
+    protected virtual Task SetupAccessRightsAsync() => Task.CompletedTask;
 
     protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();
     protected IRoutingService RoutingService => ServiceProvider.GetRequiredService<IRoutingService>();

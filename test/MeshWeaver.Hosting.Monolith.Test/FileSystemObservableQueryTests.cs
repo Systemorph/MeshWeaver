@@ -21,7 +21,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class FileSystemObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     #region Create Tests
 

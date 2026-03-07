@@ -9,6 +9,7 @@ using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
@@ -516,6 +517,15 @@ public static class DataExtensions
         }
 
         var activity = isActivityHub ? null : new Activity(ActivityCategory.DataUpdate, hub);
+
+        // Capture affected entity paths for undo support (exclude satellite content)
+        if (activity != null && !IsSatelliteContentChange(changeRequest))
+        {
+            var hubPath = hub.Address.ToString();
+            if (!string.IsNullOrEmpty(hubPath))
+                activity.RecordAffectedPaths([hubPath]);
+        }
+
         hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity, request);
         if (activity is null)
             hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),

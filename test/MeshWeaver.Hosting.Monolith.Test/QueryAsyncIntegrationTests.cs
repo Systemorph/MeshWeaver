@@ -15,7 +15,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     // Use unique prefixes per test to avoid cross-test contamination (shared mesh instance)
     private static string P([CallerMemberName] string name = "") => name;

@@ -184,6 +184,14 @@ public static class MeshExtensions
                 newNode = await persistence.SaveNodeAsync(newNode, ct);
             }
 
+            // 7. Write version history snapshot (non-critical)
+            var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+            if (versionQuery != null)
+            {
+                try { await versionQuery.WriteVersionAsync(newNode, hub.JsonSerializerOptions, ct); }
+                catch { /* version write failure is non-critical */ }
+            }
+
             logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
 
             // 7. Return success response
@@ -507,7 +515,15 @@ public static class MeshExtensions
 
             // 5. Persist the validated node
             var persistence = hub.ServiceProvider.GetRequiredService<IPersistenceService>();
-            await persistence.SaveNodeAsync(nodeToSave, ct);
+            var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
+
+            // 5b. Write version history snapshot (non-critical)
+            var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+            if (versionQuery != null)
+            {
+                try { await versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, ct); }
+                catch { /* version write failure is non-critical */ }
+            }
 
             // 6. Update workspace stream via DataChangeRequest (fire-and-forget, non-blocking)
             //    Do NOT await — posting to the same hub inside a handler would deadlock.

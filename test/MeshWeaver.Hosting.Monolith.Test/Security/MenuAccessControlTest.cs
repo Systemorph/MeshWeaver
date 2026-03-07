@@ -32,10 +32,8 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     private const string TestUserId = "TestUser";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
+        => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
-            .AddRoleType()
-            .AddAccessAssignmentType()
             .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)

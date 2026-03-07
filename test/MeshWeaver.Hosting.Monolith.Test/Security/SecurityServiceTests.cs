@@ -30,7 +30,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
     /// <summary>
@@ -263,7 +263,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
     [Fact(Timeout = 10000)]
@@ -453,7 +453,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder).AddRowLevelSecurity();
+        return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
     [Fact(Timeout = 10000)]
@@ -640,8 +640,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder)
-            .AddGraph()
+        return ConfigureMeshBase(builder)
             .AddDocumentation()
             .AddRowLevelSecurity();
     }

@@ -26,7 +26,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder);
 
     [Fact]
     public async Task Delete_LeafNode_Succeeds()

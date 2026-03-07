@@ -31,7 +31,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     {
         // First configure base (adds persistence), then add Row-Level Security
         // RLS must be added after persistence so it can decorate IPersistenceService
-        var configured = base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
+        var configured = ConfigureMeshBase(builder).AddRowLevelSecurity();
 
         // Register additional node types as MeshNodes (Comment and Thread are already registered by AddGraph())
         configured.AddMeshNodes(
@@ -749,7 +749,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     {
         // First configure base (adds persistence), then add Row-Level Security
         // RLS must be added after persistence so it can decorate IPersistenceService
-        return base.ConfigureMesh(builder).AddGraph().AddRowLevelSecurity();
+        return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
     [Fact]

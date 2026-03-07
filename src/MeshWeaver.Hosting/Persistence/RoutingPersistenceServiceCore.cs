@@ -17,6 +17,7 @@ internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ConcurrentDictionary<string, IPersistenceServiceCore> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
 
@@ -50,6 +51,7 @@ internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
     /// Gets all registered query providers (for use by RoutingMeshQueryProvider).
     /// </summary>
     internal IReadOnlyDictionary<string, IMeshQueryProvider> QueryProviders => _queryProviders;
+    internal IReadOnlyDictionary<string, IVersionQuery> VersionQueries => _versionQueries;
 
     /// <summary>
     /// Gets all registered partition names.
@@ -77,6 +79,8 @@ internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
                 var queryProvider = partition.QueryProvider
                     ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
                 _queryProviders[segment] = queryProvider;
+                if (partition.VersionQuery != null)
+                    _versionQueries[segment] = partition.VersionQuery;
                 yield return queryProvider;
             }
         }
@@ -99,6 +103,8 @@ internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
             var queryProvider = partition.QueryProvider
                 ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
             _queryProviders[firstSegment] = queryProvider;
+            if (partition.VersionQuery != null)
+                _versionQueries[firstSegment] = partition.VersionQuery;
             return core;
         }
         finally
