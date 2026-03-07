@@ -36,6 +36,11 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// Skip PublicAdminAccess — security tests need granular permissions.
+    /// </summary>
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
+
+    /// <summary>
     /// Sets the access context on the AccessService to simulate an authenticated API token user.
     /// Uses SetCircuitContext (not SetContext) because message handlers run on the hub's
     /// processing loop which has a different AsyncLocal context. CircuitContext is a

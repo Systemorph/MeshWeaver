@@ -33,6 +33,11 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         return base.ConfigureMesh(builder).AddRowLevelSecurity();
     }
 
+    /// <summary>
+    /// Skip PublicAdminAccess — security tests need granular permissions.
+    /// </summary>
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
+
     [Fact(Timeout = 10000)]
     public async Task GetEffectivePermissions_WithAdminRole_ReturnsAllPermissions()
     {

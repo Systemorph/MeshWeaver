@@ -65,11 +65,12 @@ internal class SecurityService : ISecurityService
         _hub = hub;
         _logger = logger;
 
-        // Collect PartitionAccessPolicy nodes from static providers
+        // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
         _staticPolicies = staticNodeProviders
             .SelectMany(p => p.GetStaticNodes())
             .Where(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy" && n.Content is PartitionAccessPolicy)
-            .ToDictionary(n => n.Namespace ?? "", n => (PartitionAccessPolicy)n.Content!);
+            .GroupBy(n => n.Namespace ?? "")
+            .ToDictionary(g => g.Key, g => (PartitionAccessPolicy)g.Last().Content!);
     }
 
     private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
