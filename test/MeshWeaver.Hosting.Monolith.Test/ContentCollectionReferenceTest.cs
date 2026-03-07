@@ -61,7 +61,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddUserData()
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);

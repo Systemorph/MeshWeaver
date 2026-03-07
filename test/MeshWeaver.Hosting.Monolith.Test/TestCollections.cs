@@ -1,5 +1,7 @@
 using Xunit;
 
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
+
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
@@ -15,3 +17,6 @@ public class KernelTestsCollection;
 /// </summary>
 [CollectionDefinition("FileSystemWatcherTests", DisableParallelization = true)]
 public class FileSystemWatcherTestsCollection;
+
+[CollectionDefinition("NodeOperationsTests", DisableParallelization = true)]
+public class NodeOperationsTestsCollection;

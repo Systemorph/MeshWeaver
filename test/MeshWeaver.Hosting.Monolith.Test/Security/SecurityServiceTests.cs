@@ -338,21 +338,14 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
 
-    private static string SamplesDataPath
-    {
-        get
-        {
-            var currentDir = AppContext.BaseDirectory;
-            var solutionDir = Path.GetFullPath(Path.Combine(currentDir, "..", "..", "..", "..", ".."));
-            return Path.Combine(solutionDir, "samples", "Graph", "Data");
-        }
-    }
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataPath)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddMeshWeaverDocs()
+            .AddAcme()
+            .AddDoc()
             .AddRowLevelSecurity();
     }
 

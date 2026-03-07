@@ -69,7 +69,10 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddMeshWeaverDocs()
+            .AddSystemorph()
+            .AddKernelData()
             .AddKernel()  // Required for interactive markdown code execution
             .ConfigureServices(services =>
             {

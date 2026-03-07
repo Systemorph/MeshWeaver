@@ -121,21 +121,26 @@ public class RlsNodeValidator : INodeValidator
 
     /// <summary>
     /// Extracts the user ID from the validation context.
-    /// Prioritizes AccessContext, then falls back to request-specific properties.
+    /// Prioritizes the request-specific user (explicit identity for the operation),
+    /// then falls back to AccessContext (authenticated session user).
     /// </summary>
     private static string? GetUserId(NodeValidationContext context)
     {
-        // First try AccessContext (set during authenticated requests)
-        if (!string.IsNullOrEmpty(context.AccessContext?.ObjectId))
-            return context.AccessContext.ObjectId;
-
-        // Fall back to request-specific user properties
-        return context.Request switch
+        // First try request-specific user properties (explicit identity for the operation)
+        var requestUserId = context.Request switch
         {
             CreateNodeRequest createReq => createReq.CreatedBy,
             UpdateNodeRequest updateReq => updateReq.UpdatedBy,
             DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
             _ => null
         };
+        if (!string.IsNullOrEmpty(requestUserId))
+            return requestUserId;
+
+        // Fall back to AccessContext (authenticated session user)
+        if (!string.IsNullOrEmpty(context.AccessContext?.ObjectId))
+            return context.AccessContext.ObjectId;
+
+        return null;
     }
 }

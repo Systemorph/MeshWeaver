@@ -152,6 +152,10 @@ internal sealed class MeshCatalog(
     {
         var tcs = new TaskCompletionSource<MeshNode>();
 
+        // Cancel the TCS if the token fires before the callback arrives
+        if (ct.CanBeCanceled)
+            ct.Register(() => tcs.TrySetCanceled(ct));
+
         // Post CreateNodeRequest to the mesh hub where handlers are registered
         var request = new CreateNodeRequest(node) { CreatedBy = createdBy };
         var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
@@ -165,12 +169,6 @@ internal sealed class MeshCatalog(
         // Use typed callback for proper response handling
         hub.RegisterCallback<CreateNodeResponse>(delivery, response =>
         {
-            if (ct.IsCancellationRequested)
-            {
-                tcs.TrySetCanceled(ct);
-                return response;
-            }
-
             var createResponse = response.Message;
             if (createResponse.Success && createResponse.Node != null)
             {
@@ -200,6 +198,9 @@ internal sealed class MeshCatalog(
     {
         var tcs = new TaskCompletionSource<MeshNode>();
 
+        if (ct.CanBeCanceled)
+            ct.Register(() => tcs.TrySetCanceled(ct));
+
         var request = new UpdateNodeRequest(node) { UpdatedBy = updatedBy };
         var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
 
@@ -211,12 +212,6 @@ internal sealed class MeshCatalog(
 
         hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
         {
-            if (ct.IsCancellationRequested)
-            {
-                tcs.TrySetCanceled(ct);
-                return response;
-            }
-
             var updateResponse = response.Message;
             if (updateResponse.Success && updateResponse.Node != null)
             {
@@ -366,7 +361,10 @@ internal sealed class MeshCatalog(
     {
         var tcs = new TaskCompletionSource();
 
-        var request = new DeleteNodeRequest(path) { DeletedBy = deletedBy };
+        if (ct.CanBeCanceled)
+            ct.Register(() => tcs.TrySetCanceled(ct));
+
+        var request = new DeleteNodeRequest(path) { DeletedBy = deletedBy, Recursive = true };
         var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
 
         if (delivery == null)
@@ -377,12 +375,6 @@ internal sealed class MeshCatalog(
 
         hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
         {
-            if (ct.IsCancellationRequested)
-            {
-                tcs.TrySetCanceled(ct);
-                return response;
-            }
-
             var deleteResponse = response.Message;
             if (deleteResponse.Success)
             {

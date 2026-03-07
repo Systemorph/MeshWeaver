@@ -23,9 +23,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class SearchQueryTests : MonolithMeshTestBase
 {
 
-    private static readonly string SamplesDataDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
     private readonly string _cacheDirectory;
 
     private new IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -40,7 +37,11 @@ public class SearchQueryTests : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataDirectory)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddUserData()
+            .AddOrganization()
+            .AddNorthwind()
+            .AddSystemorph()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph();
     }

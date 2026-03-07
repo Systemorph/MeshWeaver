@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
@@ -19,7 +20,9 @@ internal class InMemoryMeshQuery(
     ISecurityService? securityService = null,
     AccessService? accessService = null,
     IDataChangeNotifier? changeNotifier = null,
-    MeshConfiguration? meshConfiguration = null)
+    MeshConfiguration? meshConfiguration = null,
+    IEnumerable<INodeValidator>? nodeValidators = null,
+    ILogger<InMemoryMeshQuery>? logger = null)
     : IMeshQueryProvider
 {
     private readonly QueryParser _parser = new();
@@ -117,6 +120,10 @@ internal class InMemoryMeshQuery(
                         continue;
                 }
             }
+
+            // Apply INodeValidator Read validators (same as MeshCatalog.ValidateReadAsync)
+            if (node is MeshNode meshNode && !await ValidateReadAsync(meshNode, userId, ct))
+                continue;
 
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
@@ -218,6 +225,47 @@ internal class InMemoryMeshQuery(
             return pathProp.GetValue(item) as string;
 
         return null;
+    }
+
+    /// <summary>
+    /// Validates a node read operation using INodeValidator instances from DI.
+    /// Mirrors MeshCatalog.ValidateReadAsync logic.
+    /// </summary>
+    private async Task<bool> ValidateReadAsync(MeshNode node, string userId, CancellationToken ct = default)
+    {
+        if (nodeValidators == null)
+            return true;
+
+        // Use the existing AccessContext if available, or create one from the effective userId
+        var accessContext = accessService?.Context;
+        if (accessContext == null && !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous)
+        {
+            accessContext = new AccessContext { ObjectId = userId };
+        }
+
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Read,
+            Node = node,
+            AccessContext = accessContext
+        };
+
+        foreach (var validator in nodeValidators)
+        {
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Read))
+                continue;
+
+            var result = await validator.ValidateAsync(context, ct);
+            if (!result.IsValid)
+            {
+                logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
+                    validator.GetType().Name, node.Path, result.ErrorMessage);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <inheritdoc />

@@ -52,7 +52,10 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddUserData()
+            .AddCornerstone()
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

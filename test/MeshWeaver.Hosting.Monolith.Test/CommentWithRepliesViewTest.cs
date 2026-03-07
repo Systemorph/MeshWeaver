@@ -57,7 +57,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

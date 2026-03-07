@@ -17,8 +17,8 @@ public static class TestUsers
     /// </summary>
     public static readonly AccessContext Admin = new()
     {
-        ObjectId = "rbuergi@systemorph.com",
-        Name = "Roland Bürgi",
+        ObjectId = "Roland",
+        Name = "Roland",
         Email = "rbuergi@systemorph.com",
         Roles = ["Admin"]
     };
@@ -29,13 +29,13 @@ public static class TestUsers
     /// </summary>
     public static MeshNode[] SampleUsers() =>
     [
-        new("rbuergi@systemorph.com", "User") { Name = "Roland Bürgi", NodeType = "User" },
-        new("sglauser@systemorph.com", "User") { Name = "Samuel Glauser", NodeType = "User" },
-        new("alice.chen@example.com", "User") { Name = "Alice Chen", NodeType = "User" },
-        new("bob.wilson@example.com", "User") { Name = "Bob Wilson", NodeType = "User" },
-        new("carol.martinez@example.com", "User") { Name = "Carol Martinez", NodeType = "User" },
-        new("david.kim@example.com", "User") { Name = "David Kim", NodeType = "User" },
-        new("emma.johnson@example.com", "User") { Name = "Emma Johnson", NodeType = "User" },
+        new("Roland", "User") { Name = "Roland", NodeType = "User" },
+        new("Samuel", "User") { Name = "Samuel", NodeType = "User" },
+        new("Alice", "User") { Name = "Alice", NodeType = "User" },
+        new("Bob", "User") { Name = "Bob", NodeType = "User" },
+        new("Carol", "User") { Name = "Carol", NodeType = "User" },
+        new("David", "User") { Name = "David", NodeType = "User" },
+        new("Emma", "User") { Name = "Emma", NodeType = "User" },
     ];
 
     /// <summary>

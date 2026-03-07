@@ -37,7 +37,8 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         builder
             .UseMonolithMesh()
-            .ConfigureServices(services => services.AddFileSystemPersistence(TestPaths.SamplesGraphData))
+            .ConfigureServices(services => services.AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData))
+            .AddCornerstone()
             .AddGraph();
 
     /// <summary>

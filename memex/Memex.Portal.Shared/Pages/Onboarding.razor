@@ -33,17 +33,16 @@
             <DataAnnotationsValidator />
 
             <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
-                <FluentTextField Label="Name"
+                <FluentTextField Label="Username"
                                  Required="true"
-                                 @bind-Value="model.Name"
-                                 Placeholder="Your full name"
+                                 @bind-Value="model.Username"
+                                 Placeholder="Pick a username"
                                  Style="width: 100%;" />
 
                 <FluentTextField Label="Email"
-                                 Required="true"
+                                 ReadOnly="true"
                                  @bind-Value="model.Email"
-                                 Placeholder="you@example.com"
-                                 Style="width: 100%;" />
+                                 Style="width: 100%; opacity: 0.7;" />
 
                 <FluentTextArea Label="Bio"
                                 @bind-Value="model.Bio"
@@ -83,16 +82,19 @@
         var context = AccessService?.Context;
         if (context != null)
         {
-            model.Name = context.Name ?? "";
             model.Email = context.Email ?? "";
+            // Suggest the part before '@' as default username
+            model.Username = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@')
+                ? context.Email.Split('@')[0]
+                : context.Name ?? "";
         }
     }
 
     private async Task HandleSubmit()
     {
-        if (string.IsNullOrWhiteSpace(model.Name) || string.IsNullOrWhiteSpace(model.Email))
+        if (string.IsNullOrWhiteSpace(model.Username))
         {
-            errorMessage = "Name and Email are required.";
+            errorMessage = "Username is required.";
             return;
         }
 
@@ -108,9 +110,9 @@
                 return;
             }
 
+            var username = model.Username.Trim();
             var content = new Dictionary<string, object?>
             {
-                ["name"] = model.Name.Trim(),
                 ["email"] = model.Email.Trim(),
             };
 
@@ -129,15 +131,32 @@
                 break;
             }
 
-            var node = new MeshNode(userId, "User")
+            // Check that the username is not already taken
+            var existingNode = await MeshQuery.QueryAsync<MeshNode>(
+                $"path:User/{username} scope:self").FirstOrDefaultAsync();
+            if (existingNode != null)
             {
-                Name = model.Name.Trim(),
+                errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
+                return;
+            }
+
+            var node = new MeshNode(username, "User")
+            {
+                Name = username,
                 NodeType = "User",
                 State = MeshNodeState.Active,
                 Content = content
             };
 
-            await NodeFactory.CreateNodeAsync(node, userId);
+            await NodeFactory.CreateNodeAsync(node, username);
+
+            // Remove the transient email-based node created during onboarding redirect
+            var email = model.Email.Trim();
+            if (email != username)
+            {
+                try { await NodeFactory.DeleteNodeAsync($"User/{email}", username); }
+                catch { /* transient node may not exist */ }
+            }
 
             // First user becomes PlatformAdmin
             if (isFirstUser)
@@ -145,7 +164,7 @@
                 var securityService = PortalApplication.Hub.ServiceProvider
                     .GetService<ISecurityService>();
                 if (securityService != null)
-                    await securityService.AddUserRoleAsync(userId, "PlatformAdmin", null, userId);
+                    await securityService.AddUserRoleAsync(username, "PlatformAdmin", null, username);
             }
 
             Navigation.NavigateTo("/", forceLoad: true);
@@ -162,7 +181,7 @@
 
     private class OnboardingModel
     {
-        public string Name { get; set; } = "";
+        public string Username { get; set; } = "";
         public string Email { get; set; } = "";
         public string? Bio { get; set; }
         public string? Role { get; set; }

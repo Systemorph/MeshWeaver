@@ -8,7 +8,7 @@
     "$type": "Comment",
     "id": "reply1",
     "primaryNodePath": "FutuRe/AmericasIns/TransactionMapping/MappingRules",
-    "author": "alice.chen@example.com",
+    "author": "Alice",
     "text": "We can add validation in the TransactionMapping NodeType — when a mapping is saved, check that all splits for the same (BusinessUnit, LocalLoB) sum to 1.0. I'd also add a visual warning in the overview table if any group is out of balance.",
     "createdAt": "2026-01-15T10:15:00+00:00"
   },

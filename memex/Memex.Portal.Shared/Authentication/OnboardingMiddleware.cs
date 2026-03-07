@@ -54,27 +54,28 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                     {
                         try
                         {
-                            // Use IMeshQuery to bypass security — user is not yet fully authenticated
+                            var email = userContext.Email ?? userContext.ObjectId;
+
+                            // Look up User node by email stored in content
                             var node = await meshQuery.QueryAsync<MeshNode>(
-                                $"path:User/{userContext.ObjectId} scope:self").FirstOrDefaultAsync();
+                                $"namespace:User nodeType:User content.email:{email}").FirstOrDefaultAsync();
 
                             if (node == null)
                             {
-                                // No node yet — create a Transient node with claims data
+                                // No user node yet — create a Transient node to hold claims data
                                 logger.LogInformation(
-                                    "OnboardingMiddleware: Creating transient user node for {UserId}",
-                                    userContext.ObjectId);
+                                    "OnboardingMiddleware: Creating transient user node for {Email}",
+                                    email);
 
                                 var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
-                                var transientNode = new MeshNode(userContext.ObjectId, "User")
+                                var transientNode = new MeshNode(email, "User")
                                 {
-                                    Name = userContext.Name ?? userContext.ObjectId,
+                                    Name = userContext.Name ?? email,
                                     NodeType = "User",
                                     State = MeshNodeState.Transient,
                                     Content = new Dictionary<string, object?>
                                     {
-                                        ["name"] = userContext.Name,
-                                        ["email"] = userContext.Email,
+                                        ["email"] = email,
                                     }
                                 };
 
@@ -87,13 +88,21 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                             {
                                 // Incomplete onboarding — redirect back
                                 logger.LogDebug(
-                                    "OnboardingMiddleware: Resuming onboarding for {UserId}",
-                                    userContext.ObjectId);
+                                    "OnboardingMiddleware: Resuming onboarding for {Email}",
+                                    email);
                                 context.Response.Redirect("/onboarding");
                                 return;
                             }
 
-                            // Active (or other state) — pass through
+                            // Active user — update AccessContext with username (node ID)
+                            var username = node.Id;
+                            var updatedContext = userContext with
+                            {
+                                ObjectId = username,
+                                Name = username
+                            };
+                            accessService.SetContext(updatedContext);
+                            accessService.SetCircuitContext(updatedContext);
                         }
                         catch (Exception ex)
                         {

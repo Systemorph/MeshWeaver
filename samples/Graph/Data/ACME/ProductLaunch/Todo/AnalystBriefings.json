@@ -13,7 +13,7 @@
     "description": "Reach out to Gartner, Forrester, and IDC analysts covering workflow automation. Schedule pre-launch briefings and prepare analyst-specific materials.",
     "category": "PR",
     "priority": "Medium",
-    "assignee": "emma.johnson@example.com",
+    "assignee": "Emma",
     "dueDateOffsetDays": 12,
     "status": "Pending"
   }

@@ -51,7 +51,8 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

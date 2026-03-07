@@ -54,7 +54,13 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
+            .AddSystemorph()
+            .AddCornerstone()
+            .AddUserData()
+            .AddNorthwind()
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
