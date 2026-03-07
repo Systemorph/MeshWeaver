@@ -261,16 +261,16 @@ public class StorageImporterTests : IDisposable
         var fullResult = await importer.ImportAsync(ct: ct);
         fullResult.NodesImported.Should().BeGreaterThan(0);
 
-        // Verify Cornerstone and Northwind exist in target (both are root-level .md nodes)
-        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
+        // Verify Organization and Northwind exist in target (both are root-level nodes)
+        (await target.ExistsAsync("Organization", ct)).Should().BeTrue();
         (await target.ExistsAsync("Northwind", ct)).Should().BeTrue();
 
-        // Now create a partial source with only Cornerstone
+        // Now create a partial source with only Organization
         var partialSourceDir = Path.Combine(_targetDir, "partial_source");
         Directory.CreateDirectory(partialSourceDir);
-        var sampleCornerstone = Path.Combine(_sourceDir, "Cornerstone.md");
-        File.Exists(sampleCornerstone).Should().BeTrue();
-        File.Copy(sampleCornerstone, Path.Combine(partialSourceDir, "Cornerstone.md"));
+        var sampleOrg = Path.Combine(_sourceDir, "Organization.json");
+        File.Exists(sampleOrg).Should().BeTrue();
+        File.Copy(sampleOrg, Path.Combine(partialSourceDir, "Organization.json"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
@@ -278,10 +278,10 @@ public class StorageImporterTests : IDisposable
         // Act - re-import partial source with RemoveMissing
         var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true }, ct);
 
-        // Assert - Cornerstone should still exist, Northwind should be removed
+        // Assert - Organization should still exist, Northwind should be removed
         result.NodesImported.Should().Be(1);
         result.NodesRemoved.Should().BeGreaterThan(0);
-        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue("Cornerstone was in the source");
+        (await target.ExistsAsync("Organization", ct)).Should().BeTrue("Organization was in the source");
         (await target.ExistsAsync("Northwind", ct)).Should().BeFalse("Northwind was not in partial source and should be removed");
     }
 
@@ -350,12 +350,12 @@ public class StorageImporterTests : IDisposable
         // Full import first
         await importer.ImportAsync(ct: ct);
 
-        // Create partial source with only Cornerstone
+        // Create partial source with only Organization
         var partialSourceDir = Path.Combine(_targetDir, "partial_no_remove");
         Directory.CreateDirectory(partialSourceDir);
         File.Copy(
-            Path.Combine(_sourceDir, "Cornerstone.md"),
-            Path.Combine(partialSourceDir, "Cornerstone.md"));
+            Path.Combine(_sourceDir, "Organization.json"),
+            Path.Combine(partialSourceDir, "Organization.json"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
@@ -365,7 +365,7 @@ public class StorageImporterTests : IDisposable
 
         // Assert - nothing should be removed
         result.NodesRemoved.Should().Be(0);
-        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Organization", ct)).Should().BeTrue();
         (await target.ExistsAsync("Northwind", ct)).Should().BeTrue("Northwind should still exist when RemoveMissing is false");
     }
 
