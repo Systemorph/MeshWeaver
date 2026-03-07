@@ -63,8 +63,8 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
 
             var errorMessage = $"No node found for address {address}";
             // Post DeliveryFailure response so AwaitResponse callers get an exception.
-            // Guard against infinite loop: don't post DeliveryFailure for DeliveryFailure messages.
-            if (delivery.Message is not DeliveryFailure)
+            // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown.
+            if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
             {
                 Mesh.Post(
                     new DeliveryFailure(delivery)
