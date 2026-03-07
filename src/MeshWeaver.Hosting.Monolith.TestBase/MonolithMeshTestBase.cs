@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -18,7 +19,8 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
-            .AddInMemoryPersistence();
+            .AddInMemoryPersistence()
+            .AddGraph();
 
     protected MonolithMeshTestBase(ITestOutputHelper output) : base(output)
     {
@@ -38,8 +40,17 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
+        MeshWeaver.Messaging.MessageService.ResetMessageCounter();
         TestUsers.DevLogin(Mesh);
-        await NodeFactory.CreateNodeAsync(TestUsers.PublicEditorAccess());
+        var accessNode = TestUsers.PublicAdminAccess();
+        try
+        {
+            await NodeFactory.CreateNodeAsync(accessNode);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("already exists"))
+        {
+            await NodeFactory.UpdateNodeAsync(accessNode);
+        }
     }
 
     protected IMessageHub Mesh => ServiceProvider.GetRequiredService<IMessageHub>();

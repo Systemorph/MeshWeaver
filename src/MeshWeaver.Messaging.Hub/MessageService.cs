@@ -12,6 +12,18 @@ namespace MeshWeaver.Messaging;
 
 public class MessageService : IMessageService
 {
+    // Temporary: global message counter to detect infinite message loops
+    private static long _globalMessageCount;
+    private static readonly ConcurrentDictionary<string, long> _messageTypeCounts = new();
+    private const long MaxGlobalMessages = 10000;
+
+    /// <summary>Resets the global message counter. Call between tests.</summary>
+    public static void ResetMessageCounter()
+    {
+        Interlocked.Exchange(ref _globalMessageCount, 0);
+        _messageTypeCounts.Clear();
+    }
+
     private readonly ILogger<MessageService> logger;
     private readonly IMessageHub hub;
     private readonly BufferBlock<Func<Task<IMessageDelivery>>> buffer = new();
@@ -174,9 +186,35 @@ public class MessageService : IMessageService
         return delivery.Forwarded();
     }
 
+    // Temporary: track NotifyAsync calls per hub to detect infinite loops
+    private long _notifyCount;
+    private static readonly ConcurrentDictionary<string, long> _notifyTypeCounts = new();
+
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var name = GetMessageType(delivery);
+        var count = Interlocked.Increment(ref _notifyCount);
+        _notifyTypeCounts.AddOrUpdate($"{Address}|{name}", 1, (_, c) => c + 1);
+
+        if (count % 1000 == 0)
+        {
+            var topTypes = _notifyTypeCounts.OrderByDescending(x => x.Value).Take(20)
+                .Select(x => $"  {x.Key}: {x.Value}");
+            logger.LogWarning("NotifyAsync count={Count} in hub {Address}. Current: {MessageType} target={Target}\nTop types:\n{TopTypes}",
+                count, Address, name, delivery.Target, string.Join("\n", topTypes));
+        }
+
+        if (count > 50000)
+        {
+            var topTypes = _notifyTypeCounts.OrderByDescending(x => x.Value).Take(30)
+                .Select(x => $"  {x.Key}: {x.Value}");
+            var diagnostics = $"INFINITE LOOP in NotifyAsync: {count} calls in hub {Address}.\n" +
+                $"Current: {name}, target={delivery.Target}, sender={delivery.Sender}\n" +
+                $"Top types:\n{string.Join("\n", topTypes)}";
+            logger.LogCritical(diagnostics);
+            throw new InvalidOperationException(diagnostics);
+        }
+
         logger.LogDebug(
             "MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
             name, Address, delivery.Id, delivery.Target);
@@ -434,6 +472,22 @@ public class MessageService : IMessageService
         {
             if (message == null)
                 return null;
+
+            // Temporary: detect infinite message loops
+            var count = Interlocked.Increment(ref _globalMessageCount);
+            var typeName = typeof(TMessage).Name;
+            _messageTypeCounts.AddOrUpdate(typeName, 1, (_, c) => c + 1);
+            if (count == MaxGlobalMessages)
+            {
+                var topTypes = _messageTypeCounts.OrderByDescending(x => x.Value).Take(20)
+                    .Select(x => $"  {x.Key}: {x.Value}");
+                var diagnostics = $"INFINITE LOOP DETECTED: {count} messages posted globally.\n" +
+                    $"Current post: {typeName} in hub {Address}, target={opt.Target}, sender={opt.Sender}\n" +
+                    $"Top message types:\n{string.Join("\n", topTypes)}";
+                logger.LogCritical(diagnostics);
+                throw new InvalidOperationException(diagnostics);
+            }
+
             var ret = PostImpl(message, opt);
             if (ShouldLogMessage(message))
                 logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",

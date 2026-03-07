@@ -455,7 +455,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete a todo to ensure Deleted section has content
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        await NodeFactory.CreateNodeAsync(deletedNode);
+        await NodeFactory.UpdateNodeAsync(deletedNode);
         Output.WriteLine("Soft-deleted a todo item");
 
         // Request the AllTasks view - this will trigger dynamic compilation
@@ -491,7 +491,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Perform soft delete by setting state to Deleted
         var deletedNode = originalNode with { State = MeshNodeState.Deleted };
-        await NodeFactory.CreateNodeAsync(deletedNode);
+        await NodeFactory.UpdateNodeAsync(deletedNode);
 
         // Verify the state changed
         var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
@@ -515,7 +515,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete the node
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        await NodeFactory.CreateNodeAsync(deletedNode);
+        await NodeFactory.UpdateNodeAsync(deletedNode);
 
         // Query for active items only
         var activeQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Active scope:subtree";
@@ -543,7 +543,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Soft delete the node
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        await NodeFactory.CreateNodeAsync(deletedNode);
+        await NodeFactory.UpdateNodeAsync(deletedNode);
 
         // Query for deleted items only
         var deletedQuery = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo state:Deleted scope:subtree";
@@ -571,7 +571,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // First soft delete
         var deletedNode = originalNode! with { State = MeshNodeState.Deleted };
-        await NodeFactory.CreateNodeAsync(deletedNode);
+        await NodeFactory.UpdateNodeAsync(deletedNode);
 
         // Verify it's deleted
         var deletedCheck = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
@@ -580,7 +580,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Now restore
         var restoredNode = deletedCheck with { State = MeshNodeState.Active };
-        await NodeFactory.CreateNodeAsync(restoredNode);
+        await NodeFactory.UpdateNodeAsync(restoredNode);
 
         // Verify it's active again
         var activeCheck = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();

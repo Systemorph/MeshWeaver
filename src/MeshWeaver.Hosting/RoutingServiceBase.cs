@@ -100,6 +100,11 @@ namespace MeshWeaver.Hosting
             // Get node - HubConfiguration is now an IObservable so no deadlock
             var node = await MeshCatalog.GetNodeAsync(address);
 
+            var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
+            logger?.LogDebug("RouteMessageAsync: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
+                delivery.Message.GetType().Name, address, originalAddress,
+                resolution?.Prefix, node != null, node?.NodeType, node?.HubConfiguration != null);
+
             return await RouteImplAsync(delivery, node, address, cancellationToken);
         }
 
@@ -109,11 +114,13 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken);
 
 
-        private Address GetHostAddress(Address address)
+        private Address GetHostAddress(Address address, int depth = 0)
         {
+            if (depth > 50)
+                throw new InvalidOperationException($"GetHostAddress recursion depth exceeded 50. Address: {address}");
             if (address.Host != null)
             {
-                var host = GetHostAddress(address.Host);
+                var host = GetHostAddress(address.Host, depth + 1);
                 if (host.Type == AddressExtensions.MeshType)
                     return address with { Host = null };
                 return host;

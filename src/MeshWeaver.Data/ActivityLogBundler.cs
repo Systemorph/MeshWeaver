@@ -90,9 +90,17 @@ public class ActivityLogBundler : IDisposable
 
         var log = bundle.ToActivityLog() with { HubPath = _hubPath };
 
+        // Fire-and-forget: avoid blocking the timer/threadpool thread.
+        // Blocking here with .GetAwaiter().GetResult() can cause stack overflow
+        // or thread pool starvation when _onFlush posts messages back into the hub.
+        _ = FlushBundleAsync(log);
+    }
+
+    private async Task FlushBundleAsync(ActivityLog log)
+    {
         try
         {
-            _onFlush(log).GetAwaiter().GetResult();
+            await _onFlush(log);
         }
         catch (Exception ex)
         {

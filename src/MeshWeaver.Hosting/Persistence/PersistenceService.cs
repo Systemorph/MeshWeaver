@@ -1,16 +1,23 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
 /// Scoped wrapper around IPersistenceServiceCore that automatically injects
 /// JsonSerializerOptions from the current IMessageHub.
+/// When ISecurityService is available, secure methods filter results by user permissions.
 /// </summary>
-internal class PersistenceService(IPersistenceServiceCore core, IMessageHub hub) : IPersistenceService
+internal class PersistenceService(
+    IPersistenceServiceCore core,
+    IMessageHub hub,
+    ISecurityService? securityService = null,
+    ILogger<PersistenceService>? logger = null) : IPersistenceService
 {
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
@@ -75,14 +82,71 @@ internal class PersistenceService(IPersistenceServiceCore core, IMessageHub hub)
 
     #region Secure Operations
 
-    public Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
-        => core.GetNodeSecureAsync(path, userId, Options, ct);
+    /// <summary>
+    /// NodeType definitions are always publicly readable.
+    /// </summary>
+    private static bool IsPubliclyReadable(MeshNode node)
+        => node.NodeType == MeshNode.NodeTypePath;
 
-    public IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
-        => core.GetChildrenSecureAsync(parentPath, userId, Options);
+    public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
+    {
+        var node = await core.GetNodeAsync(path, Options, ct);
+        if (node == null || securityService == null)
+            return node;
 
-    public IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
-        => core.GetDescendantsSecureAsync(parentPath, userId, Options);
+        if (IsPubliclyReadable(node))
+            return node;
+
+        var hasPermission = string.IsNullOrEmpty(userId)
+            ? await securityService.HasPermissionAsync(path, Permission.Read, ct)
+            : await securityService.HasPermissionAsync(path, userId, Permission.Read, ct);
+
+        if (!hasPermission)
+        {
+            logger?.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+            return null;
+        }
+
+        return node;
+    }
+
+    public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
+    {
+        await foreach (var node in core.GetChildrenAsync(parentPath, Options))
+        {
+            if (securityService == null || IsPubliclyReadable(node))
+            {
+                yield return node;
+                continue;
+            }
+
+            var hasPermission = string.IsNullOrEmpty(userId)
+                ? await securityService.HasPermissionAsync(node.Path, Permission.Read)
+                : await securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
+
+            if (hasPermission)
+                yield return node;
+        }
+    }
+
+    public async IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
+    {
+        await foreach (var node in core.GetDescendantsAsync(parentPath, Options))
+        {
+            if (securityService == null || IsPubliclyReadable(node))
+            {
+                yield return node;
+                continue;
+            }
+
+            var hasPermission = string.IsNullOrEmpty(userId)
+                ? await securityService.HasPermissionAsync(node.Path, Permission.Read)
+                : await securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
+
+            if (hasPermission)
+                yield return node;
+        }
+    }
 
     #endregion
 }

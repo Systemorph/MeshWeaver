@@ -72,15 +72,15 @@ public static class MeshDataSourceExtensions
             return request; // Let default handler process it
 
         var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        var persistenceCore = hub.ServiceProvider.GetService<IPersistenceServiceCore>();
         var hubPath = hub.Address.ToString();
 
-        if (nodeTypeService == null || meshQuery == null)
+        if (nodeTypeService == null || persistenceCore == null)
             return request; // Let default handler process it
 
         try
         {
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:exact").FirstOrDefaultAsync(ct);
+            var node = await persistenceCore.GetNodeAsync(hubPath, hub.JsonSerializerOptions, ct);
 
             // Only handle NodeType nodes
             if (node?.NodeType != MeshNode.NodeTypePath)
@@ -137,7 +137,7 @@ public static class MeshDataSourceExtensions
 /// </summary>
 public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 {
-    private readonly IMeshQuery? _meshQuery;
+    private readonly IPersistenceServiceCore? _persistenceCore;
     private readonly IPersistenceService? _persistence;
     private readonly string _hubPath;
     private readonly ILogger? _logger;
@@ -150,7 +150,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
-        _meshQuery = workspace.Hub.ServiceProvider.GetService<IMeshQuery>();
+        _persistenceCore = workspace.Hub.ServiceProvider.GetService<IPersistenceServiceCore>();
         _persistence = workspace.Hub.ServiceProvider.GetService<IPersistenceService>();
         _hubPath = workspace.Hub.Address.ToString();
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
@@ -192,14 +192,14 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
                 .WithInitialData([staticNode]));
         }
 
-        if (_meshQuery == null)
+        if (_persistenceCore == null)
         {
-            _logger?.LogWarning("MeshDataSource: No query service, using basic MeshNode type source");
+            _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
             return WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
         }
 
         return WithTypeSource(typeof(MeshNode),
-            new MeshNodeTypeSource(Workspace, Id, _meshQuery, _hubPath)
+            new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
                 .WithKey(n => n.Path));
     }
 

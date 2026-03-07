@@ -498,10 +498,10 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Update the node - preserve State and HubConfiguration from existing
+            // 4. Update the node - preserve HubConfiguration from existing; allow State changes
             var nodeToSave = updatedNode with
             {
-                State = existingNode.State,
+                State = updatedNode.State != default ? updatedNode.State : existingNode.State,
                 HubConfiguration = existingNode.HubConfiguration
             };
 
