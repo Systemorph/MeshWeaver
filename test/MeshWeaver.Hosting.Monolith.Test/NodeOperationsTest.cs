@@ -82,6 +82,7 @@ public class ProtectedNodeDeletionValidator : INodeValidator
 /// </summary>
 public record ProtectedContent(string Title, bool IsProtected = false);
 
+[Collection("NodeOperationsTests")]
 public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
@@ -365,6 +366,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
 /// <summary>
 /// Test class with a hub validator registered to test rejection scenarios.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
@@ -464,6 +466,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
 /// <summary>
 /// Test class with RequireContentValidator injected into NodeType to test that Content must be set.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ContentRequiredNodeType = "content-required";
@@ -565,6 +568,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
 /// <summary>
 /// Test class with ProtectedNodeDeletionValidator to test deletion protection.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
@@ -730,6 +734,7 @@ public class PreventLockedDeletionValidator : INodeValidator
 /// <summary>
 /// Test class that registers validators via NodeTypeConfiguration.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ValidatedNodeType = "validated";
@@ -900,6 +905,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
 /// <summary>
 /// Test class that combines global DI validators with NodeType validators.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ValidatedNodeType = "combined";
@@ -1033,6 +1039,7 @@ public class HiddenNodeReadValidator : INodeValidator
 /// <summary>
 /// Test class with read validators via NodeType configuration.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ReadableNodeType = "readable";
@@ -1150,6 +1157,7 @@ public class BlockedNodeReadValidator : INodeValidator
 /// <summary>
 /// Test class with global read validator via DI.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
@@ -1253,6 +1261,7 @@ public class NoVersionDowngradeValidator : INodeValidator
 /// <summary>
 /// Test class with update validators via NodeType configuration.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string UpdatableNodeType = "updatable";
@@ -1450,6 +1459,7 @@ public class ForbiddenNameUpdateValidator : INodeValidator
 /// <summary>
 /// Test class with global update validator via DI.
 /// </summary>
+[Collection("NodeOperationsTests")]
 public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;

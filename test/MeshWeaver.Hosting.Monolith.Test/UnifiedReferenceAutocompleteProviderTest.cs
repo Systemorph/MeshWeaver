@@ -26,9 +26,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 [Collection("UnifiedReferenceAutocompleteProviderTest")]
 public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 {
-    private static readonly string SamplesDataDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
     private readonly string _cacheDirectory;
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
@@ -44,7 +41,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataDirectory)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddSystemorph()
+            .AddAcme()
+            .AddOrganization()
+            .AddUserData()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph()
             .ConfigureHub(hub => hub.AddMeshNavigation());  // Register the autocomplete provider

@@ -13,7 +13,7 @@
     "description": "Design a 15-slide sales deck covering problem statement, solution overview, key features, customer success stories, pricing, and next steps.",
     "category": "Sales",
     "priority": "High",
-    "assignee": "rbuergi@systemorph.com",
+    "assignee": "Roland",
     "dueDateOffsetDays": -5,
     "status": "InProgress"
   }

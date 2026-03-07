@@ -59,7 +59,8 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

@@ -6,7 +6,7 @@
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "accessObject": "sglauser@systemorph.com",
+    "accessObject": "Samuel",
     "displayName": "Samuel Glauser",
     "roles": [
       {

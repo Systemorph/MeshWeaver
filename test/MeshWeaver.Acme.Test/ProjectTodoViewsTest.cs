@@ -475,7 +475,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             var assignee = root.TryGetProperty("assignee", out var assigneeProp) ? assigneeProp.GetString() : null;
             var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : "unknown";
 
-            if (assignee == "rbuergi@systemorph.com" && status != "Completed")
+            if (assignee == "Roland" && status != "Completed")
             {
                 rolandsTasks.Add(id ?? "unknown");
             }

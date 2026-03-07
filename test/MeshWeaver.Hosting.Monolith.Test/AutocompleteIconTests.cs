@@ -19,9 +19,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 [Collection("AutocompleteIconTests")]
 public class AutocompleteIconTests : MonolithMeshTestBase
 {
-    private static readonly string SamplesDataDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
     private readonly string _cacheDirectory;
     private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
@@ -35,7 +32,10 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataDirectory)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddSystemorph()
+            .AddAcme()
+            .AddOrganization()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph();
     }

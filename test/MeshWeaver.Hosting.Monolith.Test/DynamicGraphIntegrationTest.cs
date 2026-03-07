@@ -670,7 +670,7 @@ public record Graph
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value (with timeout from test attribute)
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Default layout area should return content");
@@ -707,8 +707,8 @@ public record Graph
         var reference = new LayoutAreaReference(string.Empty);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
-        // Wait for the stream to emit a value (with timeout from test attribute)
-        var value = await stream.FirstAsync();
+        // Wait for the stream to emit a value
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Empty area should return default view content");
@@ -1171,10 +1171,6 @@ public class DynamicGraphIntegrationTestsCollection
 [Collection("SamplesGraphDataTests")]
 public class SamplesGraphDataTest : MonolithMeshTestBase
 {
-    // Use the actual samples directory
-    private static readonly string SamplesDataDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
     private readonly string _cacheDirectory;
 
     public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
@@ -1187,7 +1183,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataDirectory)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddOrganization()
+            .AddUserData()
+            .AddTypeData()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph();
     }
@@ -1216,8 +1215,8 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Get a client with data services configured
         var client = GetClient(c => c.AddData(data => data));
 
-        Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
-        Output.WriteLine($"Directory exists: {Directory.Exists(SamplesDataDirectory)}");
+        Output.WriteLine($"Samples data directory: {TestPaths.SamplesGraphData}");
+        Output.WriteLine($"Directory exists: {Directory.Exists(TestPaths.SamplesGraphData)}");
 
         // Act: Request the default layout area (empty = default view)
         var workspace = client.GetWorkspace();
@@ -1228,7 +1227,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         Output.WriteLine("Waiting for first value from stream...");
         // Wait for the stream to emit a value - this is where deadlock would occur
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         Output.WriteLine($"Received value: {value}");
 
@@ -1244,16 +1243,16 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact]
     public void SamplesDirectory_Exists_WithExpectedStructure()
     {
-        Output.WriteLine($"Checking samples directory: {SamplesDataDirectory}");
+        Output.WriteLine($"Checking samples directory: {TestPaths.SamplesGraphData}");
 
-        Directory.Exists(SamplesDataDirectory).Should().BeTrue(
-            $"Samples directory should exist at {SamplesDataDirectory}");
+        Directory.Exists(TestPaths.SamplesGraphData).Should().BeTrue(
+            $"Samples directory should exist at {TestPaths.SamplesGraphData}");
 
-        var organizationPath = Path.Combine(SamplesDataDirectory, "Organization.json");
+        var organizationPath = Path.Combine(TestPaths.SamplesGraphData, "Organization.json");
         File.Exists(organizationPath).Should().BeTrue(
             $"Organization.json should exist at {organizationPath}");
 
-        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "Organization.cs");
+        var codeConfigPath = Path.Combine(TestPaths.SamplesGraphData, "Organization", "Code", "Organization.cs");
         File.Exists(codeConfigPath).Should().BeTrue(
             $"Organization/Code/Organization.cs should exist at {codeConfigPath}");
     }
@@ -1527,7 +1526,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
-        Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
+        Output.WriteLine($"Samples data directory: {TestPaths.SamplesGraphData}");
 
         // First check if MeshWeaver node exists
         var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
@@ -1551,7 +1550,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         Output.WriteLine("Waiting for first value from stream...");
         // Wait for the stream to emit a value - this is where eternal spinner would occur
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         Output.WriteLine($"Received value: {value}");
 
@@ -1567,7 +1566,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact]
     public void Organization_ViewsCs_Exists()
     {
-        var viewsCsPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "OrganizationViews.cs");
+        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "Organization", "Code", "OrganizationViews.cs");
         Output.WriteLine($"Checking for OrganizationViews.cs at: {viewsCsPath}");
 
         File.Exists(viewsCsPath).Should().BeTrue(
@@ -1788,7 +1787,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Output.WriteLine("Getting Search area for MeshWeaver...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
 
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
         Output.WriteLine($"Received Search area value");
 
         // Assert

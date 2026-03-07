@@ -52,7 +52,8 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddMeshWeaverDocs()
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IConfiguration>(configuration);

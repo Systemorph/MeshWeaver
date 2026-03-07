@@ -39,16 +39,22 @@ public class DevAuthController : ControllerBase
             return BadRequest("Could not extract person info");
         }
 
-        // Create claims: ObjectId = email address (UPN), always
-        var email = person.Email ?? node.Id;
+        // Create claims: username is the node ID, email in content
+        var email = person.Email ?? "";
+        var username = node.Id;
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, email),
-            new(ClaimTypes.Name, person.Name),
-            new("name", person.Name),
-            new(ClaimTypes.Email, email),
-            new("email", email),
+            new(ClaimTypes.NameIdentifier, username),
+            new(ClaimTypes.Name, username),
+            new("name", username),
         };
+
+        if (!string.IsNullOrEmpty(email))
+        {
+            claims.Add(new Claim(ClaimTypes.Email, email));
+            claims.Add(new Claim("email", email));
+            claims.Add(new Claim("preferred_username", email));
+        }
 
         if (!string.IsNullOrEmpty(person.Role))
         {

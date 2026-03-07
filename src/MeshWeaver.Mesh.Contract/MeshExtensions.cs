@@ -279,6 +279,17 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
+            // Non-recursive delete with children — reject
+            if (!deleteRequest.Recursive)
+            {
+                hub.Post(
+                    DeleteNodeResponse.Fail(
+                        $"Node at '{path}' has children. Use recursive delete to remove it.",
+                        NodeDeletionRejectionReason.HasChildren),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
             // 4. Has children — post DeleteNodeRequest for each child, do NOT await.
             //    Use RegisterCallback to collect responses asynchronously.
             //    When all children have responded, delete self and post response.
@@ -288,7 +299,7 @@ public static class MeshExtensions
             for (var i = 0; i < children.Count; i++)
             {
                 var idx = i;
-                var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy };
+                var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy, Recursive = true };
                 var delivery = hub.Post(childRequest, o => o.WithTarget(hub.Address))!;
 
                 hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>

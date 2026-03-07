@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Completion;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,7 +27,12 @@ public static class GraphExtensions
         /// </summary>
         public MessageHubConfiguration AddUnifiedReferenceAutocomplete()
             => configuration.WithServices(services =>
-                services.AddScoped<IAutocompleteProvider, UnifiedReferenceAutocompleteProvider>());
+                services.AddScoped<IAutocompleteProvider>(sp =>
+                    new UnifiedReferenceAutocompleteProvider(
+                        sp.GetService<IMeshCatalog>(),
+                        sp.GetService<IMeshQuery>(),
+                        sp.GetService<INavigationService>(),
+                        sp.GetRequiredService<IMessageHub>())));
 
         /// <summary>
         /// Adds both the mesh node autocomplete provider and the mesh catalog view.

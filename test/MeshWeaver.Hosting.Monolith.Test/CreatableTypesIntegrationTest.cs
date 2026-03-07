@@ -1004,35 +1004,22 @@ public class CreatableTypesIntegrationTestsCollection
 [Collection("SamplesGraphData")]
 public class CreatableTypesFileSystemTest : MonolithMeshTestBase
 {
-    private static readonly string SampleDataPath = GetSampleDataPath();
-
     private new IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
     private INodeTypeService NodeTypeService => Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
     public CreatableTypesFileSystemTest(ITestOutputHelper output) : base(output)
     {
-        output.WriteLine($"Using sample data from: {SampleDataPath}");
+        output.WriteLine($"Using sample data from: {TestPaths.SamplesGraphData}");
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SampleDataPath)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddAcme()
+            .AddOrganization()
+            .AddSystemorph()
             .AddGraph();
-
-    private static string GetSampleDataPath()
-    {
-        // Find the samples/Graph/Data directory relative to the test assembly
-        var assemblyLocation = Path.GetDirectoryName(typeof(CreatableTypesFileSystemTest).Assembly.Location)!;
-        var sampleDataPath = Path.GetFullPath(Path.Combine(assemblyLocation, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
-        if (!Directory.Exists(sampleDataPath))
-        {
-            throw new DirectoryNotFoundException($"Sample data directory not found at: {sampleDataPath}");
-        }
-
-        return sampleDataPath;
-    }
 
     [Fact(Timeout = 30000)]
     public async Task FileSystem_VerifyDataStructure()

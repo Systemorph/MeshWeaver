@@ -51,7 +51,8 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

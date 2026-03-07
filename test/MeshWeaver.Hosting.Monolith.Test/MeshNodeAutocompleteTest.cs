@@ -25,9 +25,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 [Collection("MeshNodeAutocompleteTest")]
 public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 {
-    private static readonly string SamplesDataDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
     private readonly string _cacheDirectory;
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
     private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -42,7 +39,10 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataDirectory)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddSystemorph()
+            .AddAcme()
+            .AddOrganization()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph()
             .ConfigureHub(hub => hub.AddMeshNavigation());
