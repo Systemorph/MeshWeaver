@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
@@ -100,17 +102,48 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h));
 
-    public override async ValueTask DisposeAsync()
+    private static readonly string DisposeLogFile = Path.Combine(
+        AppContext.BaseDirectory, "test-logs", "dispose-trace.log");
+
+    private static void TraceDispose(string message)
     {
         try
         {
+            var dir = Path.GetDirectoryName(DisposeLogFile)!;
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.AppendAllText(DisposeLogFile,
+                $"[{DateTime.Now:HH:mm:ss.fff}] {message}{Environment.NewLine}");
+        }
+        catch { /* best effort */ }
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        var testName = GetType().Name;
+        var sw = Stopwatch.StartNew();
+        TraceDispose($"DISPOSE START: {testName} (MeshAddress={Mesh.Address})");
+        try
+        {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            TraceDispose($"  {testName}: Calling Mesh.Dispose()...");
             Mesh.Dispose();
+            TraceDispose($"  {testName}: Mesh.Dispose() returned in {sw.ElapsedMilliseconds}ms. Awaiting Mesh.Disposal...");
             await Mesh.Disposal!.WaitAsync(cts.Token);
+            TraceDispose($"  {testName}: Mesh.Disposal completed in {sw.ElapsedMilliseconds}ms");
+        }
+        catch (OperationCanceledException)
+        {
+            TraceDispose($"  {testName}: TIMEOUT waiting for Mesh.Disposal after {sw.ElapsedMilliseconds}ms!");
+        }
+        catch (Exception ex)
+        {
+            TraceDispose($"  {testName}: ERROR during dispose after {sw.ElapsedMilliseconds}ms: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
+            TraceDispose($"  {testName}: Calling base.DisposeAsync()...");
             await base.DisposeAsync();
+            TraceDispose($"DISPOSE END: {testName} in {sw.ElapsedMilliseconds}ms total");
         }
     }
 }
