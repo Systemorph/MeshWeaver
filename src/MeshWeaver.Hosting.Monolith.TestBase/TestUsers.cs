@@ -39,11 +39,11 @@ public static class TestUsers
     ];
 
     /// <summary>
-    /// AccessAssignment granting Public users Editor rights.
+    /// AccessAssignment granting Public users Admin rights.
     /// Every authenticated user inherits Public permissions, so this gives
-    /// all logged-in users read/write access — suitable for tests.
+    /// all logged-in users full access — suitable for tests.
     /// </summary>
-    public static MeshNode PublicEditorAccess() =>
+    public static MeshNode PublicAdminAccess() =>
         new(WellKnownUsers.Public + "_Access", "")
         {
             NodeType = "AccessAssignment",
@@ -52,7 +52,7 @@ public static class TestUsers
             {
                 AccessObject = WellKnownUsers.Public,
                 DisplayName = "Public",
-                Roles = [new RoleAssignment { Role = "Editor" }]
+                Roles = [new RoleAssignment { Role = "Admin" }]
             }
         };
 

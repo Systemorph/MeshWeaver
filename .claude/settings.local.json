@@ -99,7 +99,8 @@
       "WebFetch(domain:fluent2.microsoft.design)",
       "Bash(sips:*)",
       "Bash(bc:*)",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(dotnet-dump analyze:*)"
     ],
     "deny": []
   },

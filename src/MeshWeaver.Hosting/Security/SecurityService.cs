@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -15,12 +16,15 @@ namespace MeshWeaver.Hosting.Security;
 /// - AccessAssignment MeshNodes: namespace = scope, id = {Subject}_Access, content has Id + Roles[] array
 /// - Permission evaluation walks AccessAssignment nodes from root to target path.
 /// - Built-in roles: Admin, Editor, Viewer, Commenter.
+///
+/// IMPORTANT: This service uses the UNSECURED persistence core directly to avoid
+/// circular dependency (security checking cannot go through security-filtered persistence).
 /// </summary>
 internal class SecurityService : ISecurityService
 {
     private const string AccessPartitionName = "Access";
 
-    private readonly IPersistenceService _persistence;
+    private readonly IPersistenceServiceCore _persistenceCore;
     private readonly AccessService _accessService;
     private readonly ILogger<SecurityService> _logger;
     private readonly IMessageHub _hub;
@@ -50,13 +54,13 @@ internal class SecurityService : ISecurityService
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
 
     public SecurityService(
-        IPersistenceService persistence,
+        IPersistenceServiceCore persistenceCore,
         AccessService accessService,
         IMessageHub hub,
         ILogger<SecurityService> logger,
         IEnumerable<IStaticNodeProvider> staticNodeProviders)
     {
-        _persistence = persistence;
+        _persistenceCore = persistenceCore;
         _accessService = accessService;
         _hub = hub;
         _logger = logger;
@@ -67,6 +71,8 @@ internal class SecurityService : ISecurityService
             .Where(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy" && n.Content is PartitionAccessPolicy)
             .ToDictionary(n => n.Namespace ?? "", n => (PartitionAccessPolicy)n.Content!);
     }
+
+    private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
 
     #region Permission Evaluation
 
@@ -136,7 +142,7 @@ internal class SecurityService : ISecurityService
                 permissionCap &= staticPolicy.GetPermissionCap();
             }
 
-            await foreach (var node in _persistence.GetChildrenAsync(scope).WithCancellation(ct))
+            await foreach (var node in _persistenceCore.GetChildrenAsync(scope, Options).WithCancellation(ct))
             {
                 if (node.Content == null)
                     continue;
@@ -247,7 +253,7 @@ internal class SecurityService : ISecurityService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), _hub.JsonSerializerOptions);
+                return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), Options);
             }
             catch
             {
@@ -265,7 +271,7 @@ internal class SecurityService : ISecurityService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<PartitionAccessPolicy>(je.GetRawText(), _hub.JsonSerializerOptions);
+                return System.Text.Json.JsonSerializer.Deserialize<PartitionAccessPolicy>(je.GetRawText(), Options);
             }
             catch
             {
@@ -317,7 +323,7 @@ internal class SecurityService : ISecurityService
             throw new InvalidOperationException($"Cannot modify built-in role: {role.Id}");
 
         var objects = new List<object>();
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
+        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(AccessPartitionName, null, Options).WithCancellation(ct))
         {
             if (obj is Role existing && existing.Id == role.Id)
                 continue;
@@ -325,7 +331,7 @@ internal class SecurityService : ISecurityService
         }
 
         objects.Add(role);
-        await _persistence.SavePartitionObjectsAsync(AccessPartitionName, null, objects, ct);
+        await _persistenceCore.SavePartitionObjectsAsync(AccessPartitionName, null, objects, Options, ct);
         _customRoleCache[role.Id] = role;
     }
 
@@ -334,7 +340,7 @@ internal class SecurityService : ISecurityService
         if (_customRolesLoaded)
             return;
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
+        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(AccessPartitionName, null, Options).WithCancellation(ct))
         {
             if (obj is Role role && !BuiltInRoles.ContainsKey(role.Id))
                 _customRoleCache[role.Id] = role;
@@ -361,7 +367,7 @@ internal class SecurityService : ISecurityService
         var path = string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}";
 
         // Try to load existing AccessAssignment node
-        var existingNode = await _persistence.GetNodeAsync(path, ct);
+        var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
         var roles = existingAssignment?.Roles?.ToList() ?? [];
@@ -382,7 +388,7 @@ internal class SecurityService : ISecurityService
             }
         };
 
-        await _persistence.SaveNodeAsync(node, ct);
+        await _persistenceCore.SaveNodeAsync(node, Options, ct);
         ClearPermissionCache();
     }
 
@@ -399,7 +405,7 @@ internal class SecurityService : ISecurityService
         var nodeId = $"{userId}_Access";
         var path = string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}";
 
-        var existingNode = await _persistence.GetNodeAsync(path, ct);
+        var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
         if (existingAssignment == null)
@@ -410,7 +416,7 @@ internal class SecurityService : ISecurityService
         if (roles.Count == 0)
         {
             // No roles left, delete the node
-            await _persistence.DeleteNodeAsync(path, false, ct);
+            await _persistenceCore.DeleteNodeAsync(path, false, ct);
         }
         else
         {
@@ -426,7 +432,7 @@ internal class SecurityService : ISecurityService
                     Roles = roles
                 }
             };
-            await _persistence.SaveNodeAsync(node, ct);
+            await _persistenceCore.SaveNodeAsync(node, Options, ct);
         }
 
         ClearPermissionCache();
@@ -453,7 +459,7 @@ internal class SecurityService : ISecurityService
             return cached;
 
         var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
-        var node = await _persistence.GetNodeAsync(path, ct);
+        var node = await _persistenceCore.GetNodeAsync(path, Options, ct);
         var policy = node != null ? DeserializePolicy(node) : null;
         _policyCache[ns] = policy;
         return policy;
@@ -474,7 +480,7 @@ internal class SecurityService : ISecurityService
             Content = policy
         };
 
-        await _persistence.SaveNodeAsync(node, ct);
+        await _persistenceCore.SaveNodeAsync(node, Options, ct);
         _policyCache[ns] = policy;
         ClearPermissionCache();
     }
@@ -488,7 +494,7 @@ internal class SecurityService : ISecurityService
             string.IsNullOrEmpty(ns) ? "(global)" : ns);
 
         var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
-        await _persistence.DeleteNodeAsync(path, false, ct);
+        await _persistenceCore.DeleteNodeAsync(path, false, ct);
         _policyCache.TryRemove(ns, out _);
         ClearPermissionCache();
     }

@@ -2,10 +2,8 @@ using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Security;
 
@@ -17,10 +15,9 @@ public static class SecurityServiceExtensions
     /// <summary>
     /// Adds Row-Level Security services to the mesh.
     /// This includes:
-    /// - ISecurityService for permission evaluation
+    /// - ISecurityService for permission evaluation (uses unsecured IPersistenceServiceCore directly)
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
-    /// - SecurePersistenceServiceDecorator for filtering query results
-    /// - Per-namespace Access partition storage via IPersistenceServiceCore
+    /// - PersistenceService handles secure query filtering via ISecurityService
     ///
     /// Storage structure:
     /// - Access/ - Global roles (Admin with null namespace) and custom role definitions
@@ -31,50 +28,14 @@ public static class SecurityServiceExtensions
         return builder
             .ConfigureServices(services =>
             {
-                // Register security service (uses IPersistenceService directly for all storage)
+                // Register security service (uses IPersistenceServiceCore directly for all storage,
+                // bypassing any security filtering to avoid circular dependency)
                 services.TryAddSingleton<ISecurityService, SecurityService>();
 
                 // Register RLS validator
                 services.AddSingleton<INodeValidator, RlsNodeValidator>();
 
-                // Decorate IPersistenceServiceCore with security filtering
-                DecorateWithSecurity(services);
-
                 return services;
             });
-    }
-
-    /// <summary>
-    /// Decorates IPersistenceServiceCore with SecurePersistenceServiceDecorator.
-    /// </summary>
-    private static void DecorateWithSecurity(IServiceCollection services)
-    {
-        // Find the existing IPersistenceServiceCore registration
-        var descriptor = services.FirstOrDefault(d => d.ServiceType == typeof(IPersistenceServiceCore));
-        if (descriptor == null)
-            return; // No persistence service registered yet
-
-        // Remove the original registration
-        services.Remove(descriptor);
-
-        // Add the decorator that wraps the original
-        services.Add(ServiceDescriptor.Describe(
-            typeof(IPersistenceServiceCore),
-            sp =>
-            {
-                // Create the original service
-                var inner = descriptor.ImplementationFactory != null
-                    ? (IPersistenceServiceCore)descriptor.ImplementationFactory(sp)
-                    : descriptor.ImplementationInstance != null
-                        ? (IPersistenceServiceCore)descriptor.ImplementationInstance
-                        : (IPersistenceServiceCore)ActivatorUtilities.CreateInstance(sp, descriptor.ImplementationType!);
-
-                // Wrap it with the security decorator (use Lazy to avoid circular dependency)
-                return new SecurePersistenceServiceDecorator(
-                    inner,
-                    new Lazy<ISecurityService>(() => sp.GetRequiredService<ISecurityService>()),
-                    sp.GetRequiredService<ILogger<SecurePersistenceServiceDecorator>>());
-            },
-            descriptor.Lifetime));
     }
 }

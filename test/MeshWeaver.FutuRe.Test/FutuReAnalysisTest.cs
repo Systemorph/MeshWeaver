@@ -753,8 +753,41 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             address, reference);
 
         Output.WriteLine($"Waiting for {areaName} at {addressPath}{(waitForData ? " (with data)" : "")}...");
+
+        // Check for compilation errors
+        var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
+        if (hostedHub != null)
+        {
+            var meshQuery2 = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            await foreach (var n in meshQuery2.QueryAsync<MeshNode>($"path:{addressPath} scope:exact"))
+            {
+                Output.WriteLine($"  [DIAG] Node found: {n.Path}, NodeType={n.NodeType}, HubConfig={n.HubConfiguration != null}");
+                if (!string.IsNullOrEmpty(n.NodeType))
+                {
+                    // Check if NodeType compilation produced a config
+                    var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
+                    var cachedConfig = nodeTypeService?.GetCachedHubConfiguration(n.NodeType);
+                    Output.WriteLine($"  [DIAG] CachedHubConfig for {n.NodeType}: {cachedConfig != null}");
+                    var nodeTypeData = nodeTypeService != null ? await nodeTypeService.GetNodeTypeDataAsync(n.NodeType) : null;
+                    Output.WriteLine($"  [DIAG] NodeTypeData for {n.NodeType}: {nodeTypeData != null}");
+                    Output.WriteLine($"  [DIAG] NodeTypeData.Definition: {nodeTypeData?.Definition?.Configuration}");
+                }
+                break;
+            }
+            // Check workspace and data context
+            var ws = hostedHub.GetWorkspace();
+            Output.WriteLine($"  [DIAG] Workspace={ws != null}");
+            var uiSvc = hostedHub.ServiceProvider.GetService<IUiControlService>();
+            Output.WriteLine($"  [DIAG] IUiControlService={uiSvc != null}, renderers={uiSvc?.LayoutDefinition.Count ?? 0}");
+        }
+        else
+        {
+            Output.WriteLine($"  [DIAG] No hosted hub found for {addressPath} after PingRequest");
+        }
+
         var control = await stream
             .GetControlStream(reference.Area!)
+            .Do(c => Output.WriteLine($"  [CTRL] {areaName} control={c?.GetType().Name ?? "null"}, hasData={c != null && HasNonTrivialData(c)}"))
             .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
             .FirstAsync(x => x is not null && (!waitForData || HasNonTrivialData(x)));
 

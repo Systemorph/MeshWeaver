@@ -270,6 +270,8 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 **CRITICAL: Always use `run_in_background: true`** for test runs. Tests can take minutes — never block the conversation waiting for them. Use `timeout: 180000` (3 min) max for Bash test commands. The xunit.runner.json `methodTimeout` is 60000ms (1 min) per test method.
 
+**Do NOT use `--verbosity minimal`** (or `-v m`) when tests are expected to fail. Minimal verbosity hides error details (stack traces, assertion messages), forcing you to re-run with normal verbosity — wasting time and frustrating the user. Use default verbosity or `--verbosity normal` so failures are visible on the first run. Only use `--verbosity minimal` when you are confident all tests will pass and just need a quick green/red check.
+
 ```bash
 # Run tests in background, capture output — ALWAYS use run_in_background
 cd /c/dev/MeshWeaver && dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore 2>&1 | tee /tmp/monolith-test-results.log

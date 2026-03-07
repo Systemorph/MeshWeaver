@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
 {
-    private readonly IMeshQuery _meshQuery;
+    private readonly IPersistenceServiceCore _persistenceCore;
     private readonly string _hubPath;  // e.g., "graph/org1"
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -29,11 +29,11 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private Timer? _debounceTimer;
     private readonly object _timerLock = new();
 
-    internal MeshNodeTypeSource(IWorkspace workspace, object dataSource, IMeshQuery meshQuery, string hubPath)
+    internal MeshNodeTypeSource(IWorkspace workspace, object dataSource, IPersistenceServiceCore persistenceCore, string hubPath)
         : base(workspace, dataSource)
     {
         _workspace = workspace;
-        _meshQuery = meshQuery;
+        _persistenceCore = persistenceCore;
         _hubPath = hubPath;
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshNodeTypeSource>>();
         _logger?.LogDebug("MeshNodeTypeSource: Created for hubPath={HubPath}", hubPath);
@@ -172,7 +172,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         WorkspaceReference<InstanceCollection> reference,
         CancellationToken ct)
     {
-        var ownNode = await _meshQuery.QueryAsync<MeshNode>($"path:{_hubPath} scope:exact").FirstOrDefaultAsync(ct);
+        var ownNode = await _persistenceCore.GetNodeAsync(_hubPath, _workspace.Hub.JsonSerializerOptions, ct);
 
         if (ownNode != null)
             ownNode = ResolveJsonElementContent(ownNode);

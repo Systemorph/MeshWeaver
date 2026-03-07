@@ -262,30 +262,28 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    private async Task<IMessageDelivery> HandleMessageAsync(
+    private Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
+    ) => HandleMessageAsyncImpl(delivery, node, cancellationToken, 0);
+
+    private async Task<IMessageDelivery> HandleMessageAsyncImpl(
+        IMessageDelivery delivery,
+        LinkedListNode<AsyncDelivery> node,
+        CancellationToken cancellationToken,
+        int depth
     )
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        if (depth > 500)
+            throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
 
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
-
         if (node.Next == null)
-        {
-            logger.LogTrace("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
-        }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
-        return await HandleMessageAsync(delivery, node.Next, cancellationToken);
+        return await HandleMessageAsyncImpl(delivery, node.Next, cancellationToken, depth + 1);
     }
 
     public bool OpenGate(string name)

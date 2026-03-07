@@ -30,6 +30,10 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
     }
 
 
+    // Temporary: track routing failures to find infinite loops
+    private static long _routeFailCount;
+    private static readonly ConcurrentDictionary<string, long> _routeFailTypes = new();
+
     protected override async Task<IMessageDelivery> RouteImplAsync(
         IMessageDelivery delivery,
         MeshNode? node,
@@ -42,9 +46,22 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
         var hub = CreateHub(node, address);
         if (hub is null)
         {
+            var failCount = Interlocked.Increment(ref _routeFailCount);
+            var msgType = delivery.Message.GetType().Name;
+            var key = $"{msgType}→{address}";
+            _routeFailTypes.AddOrUpdate(key, 1, (_, c) => c + 1);
+
+            logger.LogWarning("ROUTE_FAIL #{Count}: {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, HubConfig: {HasHubConfig}, Sender: {Sender}",
+                failCount, msgType, address, node?.Path, node?.NodeType, node?.HubConfiguration != null, delivery.Sender);
+
+            if (failCount % 100 == 0)
+            {
+                var topFails = _routeFailTypes.OrderByDescending(x => x.Value).Take(10)
+                    .Select(x => $"  {x.Key}: {x.Value}");
+                logger.LogError("ROUTE_FAIL summary after {Count} failures:\n{TopFails}", failCount, string.Join("\n", topFails));
+            }
+
             var errorMessage = $"No node found for address {address}";
-            logger.LogWarning("No node found for address {Address}. Node: {NodePath}, NodeType: {NodeType}, HubConfig: {HasHubConfig}",
-                address, node?.Path, node?.NodeType, node?.HubConfiguration != null);
             // Post DeliveryFailure response so AwaitResponse callers get an exception.
             // Guard against infinite loop: don't post DeliveryFailure for DeliveryFailure messages.
             if (delivery.Message is not DeliveryFailure)
