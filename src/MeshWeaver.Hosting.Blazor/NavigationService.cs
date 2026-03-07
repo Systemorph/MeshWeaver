@@ -141,15 +141,17 @@ internal class NavigationService : INavigationService
     private async Task ProcessLocationChangeAsync(string path)
     {
         IsResolving = true;
-        OnNavigationContextChanged?.Invoke(_context);
 
         // Resolve the path using pattern matching
         var resolution = await _pathResolver.ResolvePathAsync(path);
 
         if (resolution is null)
         {
-            // Catalog may still be initializing — retry in background with backoff.
-            // IsResolving stays true so the UI shows a spinner instead of "Page Not Found".
+            // Clear context immediately so callers see null for unresolvable paths.
+            // Then retry in background (catalog may still be initializing).
+            _context = null;
+            CurrentNamespace = null;
+            OnNavigationContextChanged?.Invoke(null);
             _ = RetryResolutionAsync(path);
             return;
         }

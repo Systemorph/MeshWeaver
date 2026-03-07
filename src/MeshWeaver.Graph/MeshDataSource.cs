@@ -138,7 +138,6 @@ public static class MeshDataSourceExtensions
 public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 {
     private readonly IPersistenceServiceCore? _persistenceCore;
-    private readonly IPersistenceService? _persistence;
     private readonly string _hubPath;
     private readonly ILogger? _logger;
 
@@ -151,7 +150,6 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
         _persistenceCore = workspace.Hub.ServiceProvider.GetService<IPersistenceServiceCore>();
-        _persistence = workspace.Hub.ServiceProvider.GetService<IPersistenceService>();
         _hubPath = workspace.Hub.Address.ToString();
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
     }
@@ -240,9 +238,9 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
     public MeshDataSource WithType<T>(string? subPartition, string? collectionName = null) where T : class
     {
-        if (_persistence == null)
+        if (_persistenceCore == null)
         {
-            _logger?.LogWarning("MeshDataSource: No persistence service, using basic type source for {Type}", typeof(T).Name);
+            _logger?.LogWarning("MeshDataSource: No persistence core, using basic type source for {Type}", typeof(T).Name);
             return WithType<T>(null);
         }
 
@@ -253,7 +251,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             Workspace.Hub.TypeRegistry.WithType(typeof(T), effectiveCollectionName);
         }
 
-        var partitionTypeSource = new PartitionTypeSource<T>(Workspace, Id, _persistence, _hubPath, subPartition, collectionName);
+        var partitionTypeSource = new PartitionTypeSource<T>(Workspace, Id, _persistenceCore, _hubPath, subPartition, collectionName);
         return WithTypeSource(typeof(T), partitionTypeSource);
     }
 

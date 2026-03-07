@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource<T>> where T : class
 {
-    private readonly IPersistenceService _persistence;
+    private readonly IPersistenceServiceCore _persistenceCore;
     private readonly string _partitionPath;
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -27,15 +27,15 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     /// </summary>
     /// <param name="workspace">The workspace.</param>
     /// <param name="dataSource">The data source identifier.</param>
-    /// <param name="persistence">The persistence service.</param>
+    /// <param name="persistenceCore">The persistence core service (unsecured, for internal state loading).</param>
     /// <param name="hubPath">The hub's path (e.g., "Type/Organizations").</param>
     /// <param name="subPartition">The relative sub-partition name (e.g., "Code"). If null, uses hubPath directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
-    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IPersistenceService persistence, string hubPath, string? subPartition = null, string? collectionName = null)
+    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IPersistenceServiceCore persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
         : base(workspace, dataSource)
     {
         _workspace = workspace;
-        _persistence = persistence;
+        _persistenceCore = persistenceCore;
         _partitionPath = string.IsNullOrEmpty(subPartition) ? hubPath : $"{hubPath}/{subPartition}";
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<PartitionTypeSource<T>>>();
         _logger?.LogDebug("PartitionTypeSource<{Type}>: Created for partitionPath={PartitionPath}", typeof(T).Name, _partitionPath);
@@ -85,7 +85,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         {
             _logger?.LogDebug("PartitionTypeSource<{Type}>.UpdateImpl: Saving object to partition {PartitionPath}",
                 typeof(T).Name, _partitionPath);
-            _ = _persistence.SavePartitionObjectsAsync(_partitionPath, null, [obj]);
+            _ = _persistenceCore.SavePartitionObjectsAsync(_partitionPath, null, [obj], _workspace.Hub.JsonSerializerOptions);
         }
 
         // Note: Delete of partition objects is not yet supported
@@ -104,7 +104,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
 
         var items = new List<T>();
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(_partitionPath, null).WithCancellation(ct))
+        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(_partitionPath, null, _workspace.Hub.JsonSerializerOptions).WithCancellation(ct))
         {
             if (obj is T typedObj)
             {
