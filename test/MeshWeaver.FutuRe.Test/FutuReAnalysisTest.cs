@@ -768,9 +768,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                     var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
                     var cachedConfig = nodeTypeService?.GetCachedHubConfiguration(n.NodeType);
                     Output.WriteLine($"  [DIAG] CachedHubConfig for {n.NodeType}: {cachedConfig != null}");
-                    var nodeTypeData = nodeTypeService != null ? await nodeTypeService.GetNodeTypeDataAsync(n.NodeType) : null;
-                    Output.WriteLine($"  [DIAG] NodeTypeData for {n.NodeType}: {nodeTypeData != null}");
-                    Output.WriteLine($"  [DIAG] NodeTypeData.Definition: {nodeTypeData?.Definition?.Configuration}");
+                    Output.WriteLine($"  [DIAG] CachedNodeTypeConfig: {nodeTypeService?.GetCachedConfiguration(n.NodeType) != null}");
                 }
                 break;
             }
