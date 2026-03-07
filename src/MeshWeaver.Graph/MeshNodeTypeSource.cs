@@ -112,12 +112,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         _logger?.LogDebug("MeshNodeTypeSource: Flushing {Saves} saves, {Deletes} deletes for {HubPath}",
             saves.Count, deletes.Count, _hubPath);
 
-        var hub = _workspace.Hub;
+        var options = _workspace.Hub.JsonSerializerOptions;
         foreach (var node in saves)
         {
             try
             {
-                hub.Post(new UpdateNodeRequest(node));
+                // Save directly to persistence — do NOT post UpdateNodeRequest
+                // to avoid a feedback loop (handler → workspace → TypeSource → handler)
+                _ = _persistenceCore.SaveNodeAsync(node, options);
             }
             catch (Exception ex)
             {
@@ -126,7 +128,16 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         }
 
         foreach (var path in deletes)
-            hub.Post(new DeleteNodeRequest(path));
+        {
+            try
+            {
+                _ = _persistenceCore.DeleteNodeAsync(path);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "MeshNodeTypeSource: Delete failed for {Path}", path);
+            }
+        }
     }
 
     private InstanceCollection MergePartialUpdates(InstanceCollection instances)

@@ -547,13 +547,14 @@ internal class InMemoryMeshQuery(
             }
         }
 
-        // Detect added and updated items
+        // Detect added and updated items (DistinctUntilChanged: only emit if value actually differs)
         foreach (var (path, item) in newItems)
         {
             if (currentItems.TryGetValue(path, out var existingItem))
             {
-                // Item existed before - check if it changed
-                if (changesByPath.ContainsKey(path))
+                // Item existed before - only emit Updated if the serializable content changed
+                // (skip Func<> fields like HubConfiguration that break record Equals)
+                if (!ItemEquals(existingItem, item))
                 {
                     updatedItems.Add(item);
                 }
@@ -617,6 +618,22 @@ internal class InMemoryMeshQuery(
                 Timestamp = DateTimeOffset.UtcNow
             });
         }
+    }
+
+    /// <summary>
+    /// Compares two items for equality in the context of DistinctUntilChanged.
+    /// For MeshNode, strips non-serializable fields (HubConfiguration, GlobalServiceConfigurations)
+    /// before comparison to avoid false negatives from Func&lt;&gt; reference inequality.
+    /// </summary>
+    private static bool ItemEquals<T>(T a, T b)
+    {
+        if (a is MeshNode nodeA && b is MeshNode nodeB)
+        {
+            // Compare content-relevant fields only, stripping volatile/non-serializable fields
+            return nodeA with { HubConfiguration = null, GlobalServiceConfigurations = [], LastModified = default, Version = 0 }
+                == nodeB with { HubConfiguration = null, GlobalServiceConfigurations = [], LastModified = default, Version = 0 };
+        }
+        return Equals(a, b);
     }
 
     /// <summary>
