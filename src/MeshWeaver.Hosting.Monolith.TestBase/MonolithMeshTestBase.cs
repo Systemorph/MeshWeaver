@@ -35,13 +35,22 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
 
     /// <summary>
     /// Called after ServiceProvider is built. Logs in the default admin user (DevLogin)
-    /// and creates anonymous Editor access so that access control allows operations in tests.
+    /// and sets up access rights so that access control allows operations in tests.
     /// </summary>
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         MeshWeaver.Messaging.MessageService.ResetMessageCounter();
         TestUsers.DevLogin(Mesh);
+        await SetupAccessRightsAsync();
+    }
+
+    /// <summary>
+    /// Sets up default access rights for tests. Override in security tests
+    /// to skip the PublicAdminAccess and test granular permissions.
+    /// </summary>
+    protected virtual async Task SetupAccessRightsAsync()
+    {
         var accessNode = TestUsers.PublicAdminAccess();
         try
         {
