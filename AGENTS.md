@@ -266,25 +266,26 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 ### Running Tests — Log Once, Read on Failure
 
-**Never run the same test suite repeatedly** just to see results. Run once, capture output, and analyze failures from the log file.
+**ALWAYS redirect test output to a file.** Never run test projects without capturing output. Never re-run a test project just to see its output — read the log file instead.
 
 **CRITICAL: Always use `run_in_background: true`** for test runs. Tests can take minutes — never block the conversation waiting for them. Use `timeout: 180000` (3 min) max for Bash test commands. The xunit.runner.json `methodTimeout` is 60000ms (1 min) per test method.
 
 **Do NOT use `--verbosity minimal`** (or `-v m`) when tests are expected to fail. Minimal verbosity hides error details (stack traces, assertion messages), forcing you to re-run with normal verbosity — wasting time and frustrating the user. Use default verbosity or `--verbosity normal` so failures are visible on the first run. Only use `--verbosity minimal` when you are confident all tests will pass and just need a quick green/red check.
 
 ```bash
-# Run tests in background, capture output — ALWAYS use run_in_background
-cd /c/dev/MeshWeaver && dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore 2>&1 | tee /tmp/monolith-test-results.log
+# ALWAYS save output to file — use run_in_background: true
+cd /c/dev/MeshWeaver && dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore 2>&1 > /tmp/monolith-test-results.log; echo "Exit: $?"
 
-# On failure: read the log file for error details (DO NOT re-run)
-cat /tmp/monolith-test-results.log | grep -A 5 "FAIL"
+# On failure: read the log file for error details (DO NOT re-run the tests)
+# Use Read tool on /tmp/monolith-test-results.log or grep for failures:
+grep -A 10 "FAIL\|Failed" /tmp/monolith-test-results.log
 ```
 
 **Workflow:**
-1. Run tests **once** in background with output captured to a file
-2. If failures: read the log file to understand errors
+1. Run tests **once** in background with output saved to a file
+2. If failures: **read the log file** to understand errors — do NOT re-run
 3. Fix the code
-4. Run tests **once** again to verify fixes
+4. Run tests **once** again to verify fixes (output to file again)
 5. Repeat 2–4 until green
 
 ### DevLogin and Access Control in Tests
