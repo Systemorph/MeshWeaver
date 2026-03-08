@@ -35,7 +35,6 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     private JsonSerializerOptions _jsonOptions => Mesh.ServiceProvider.GetRequiredService<IMessageHub>().JsonSerializerOptions;
 
     private INodeTypeService NodeTypeService => Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
-    private IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
     private string GetOrCreateTestDirectory()
     {

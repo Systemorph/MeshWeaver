@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -73,6 +74,63 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
             => persistence.DeleteNodeAsync(path, true, ct);
+
+        public async IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            // Minimal query support for test patterns:
+            // "path:X scope:exact" → single node
+            // "path:X scope:descendants" → descendants of path (not including the node itself)
+            // "namespace:X" → descendants under namespace
+            var query = request.Query ?? "";
+            var parts = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            string? pathFilter = null;
+            string? nsFilter = null;
+            string? scope = null;
+
+            foreach (var part in parts)
+            {
+                if (part.StartsWith("path:", StringComparison.OrdinalIgnoreCase))
+                    pathFilter = part[5..];
+                else if (part.StartsWith("namespace:", StringComparison.OrdinalIgnoreCase))
+                    nsFilter = part[10..];
+                else if (part.StartsWith("scope:", StringComparison.OrdinalIgnoreCase))
+                    scope = part[6..];
+            }
+
+            if (pathFilter != null && string.Equals(scope, "exact", StringComparison.OrdinalIgnoreCase))
+            {
+                var node = await persistence.GetNodeAsync(pathFilter, jsonOptions, ct);
+                if (node != null)
+                    yield return node;
+            }
+            else if (pathFilter != null && string.Equals(scope, "descendants", StringComparison.OrdinalIgnoreCase))
+            {
+                await foreach (var node in persistence.GetDescendantsAsync(pathFilter, jsonOptions))
+                    yield return node;
+            }
+            else if (nsFilter != null)
+            {
+                await foreach (var node in persistence.GetDescendantsAsync(string.IsNullOrEmpty(nsFilter) ? null : nsFilter, jsonOptions))
+                    yield return node;
+            }
+            else
+            {
+                await foreach (var node in persistence.GetDescendantsAsync(null, jsonOptions))
+                    yield return node;
+            }
+        }
+
+        public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(string basePath, string prefix, int limit = 10, CancellationToken ct = default)
+            => AsyncEnumerable.Empty<QuerySuggestion>();
+
+        public IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(string basePath, string prefix, AutocompleteMode mode, int limit = 10, string? contextPath = null, string? context = null, CancellationToken ct = default)
+            => AsyncEnumerable.Empty<QuerySuggestion>();
+
+        public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
+            => throw new NotSupportedException();
+
+        public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
+            => Task.FromResult<T?>(default);
 
         public IMeshService ImpersonateAsNode() => this;
     }

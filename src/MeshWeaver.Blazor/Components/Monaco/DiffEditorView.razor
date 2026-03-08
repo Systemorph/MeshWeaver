@@ -4,7 +4,6 @@
 @using MeshWeaver.Blazor.Components.Monaco
 @using System.Text.Json
 @inherits BlazorView<DiffEditorControl, DiffEditorView>
-@inject IJSRuntime JSRuntime
 
 <div style="height: @(ViewModel?.Height ?? "500px"); width: 100%;">
     <StandaloneDiffEditor @ref="diffEditor"
@@ -16,9 +15,6 @@
 @code {
     private StandaloneDiffEditor? diffEditor;
     private bool isDarkMode = false;
-
-    [CascadingParameter(Name = "ThemeMode")]
-    public DesignThemeModes Mode { get; set; }
 
     private string GetMonacoTheme() => isDarkMode ? "vs-dark" : "vs";
 

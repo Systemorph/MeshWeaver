@@ -142,7 +142,8 @@ public partial class MeshNodeEditorView
                     o => o.WithTarget(Hub.Address));
                 if (!moveResponse.Message.Success)
                     throw new InvalidOperationException(moveResponse.Message.Error);
-                _node = moveResponse.Message.Node;
+                _node = moveResponse.Message.Node
+                    ?? throw new InvalidOperationException("Move succeeded but returned no node");
                 _originalPath = newPath;
             }
 

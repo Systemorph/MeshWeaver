@@ -24,8 +24,8 @@ This isolation is transparent to callers. The `IMeshStorage` and `IMeshService` 
 ```
 PersistenceService (scoped, unchanged)
   +-> RoutingPersistenceServiceCore (singleton)
-        +-> "ACME" -> per-partition IPersistenceServiceCore
-        +-> "Contoso" -> per-partition IPersistenceServiceCore
+        +-> "ACME" -> per-partition IStorageService
+        +-> "Contoso" -> per-partition IStorageService
         +-> ... (auto-provisioned on first access)
 
 MeshQuery (scoped, unchanged)
@@ -96,7 +96,7 @@ public interface IPartitionedStoreFactory
 }
 
 public record PartitionedStore(
-    IPersistenceServiceCore PersistenceCore,
+    IStorageService PersistenceCore,
     IMeshQueryProvider? QueryProvider);
 ```
 
@@ -155,7 +155,7 @@ services.AddPartitionedCosmosPersistence(cosmosClient, databaseName);
 ```
 
 Each registration method calls `AddPartitionedCoreAndWrapperServices()` which registers:
-- `RoutingPersistenceServiceCore` as `IPersistenceServiceCore`
+- `RoutingPersistenceServiceCore` as `IStorageService`
 - `RoutingMeshQueryProvider` as `IMeshQueryProvider`
 - `StaticNodeQueryProvider` for static node providers
 - Scoped `PersistenceService` and `MeshQuery` wrappers

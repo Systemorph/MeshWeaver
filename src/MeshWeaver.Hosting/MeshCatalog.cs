@@ -23,14 +23,12 @@ namespace MeshWeaver.Hosting;
 internal sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
-    IMeshStorage persistenceService,
-    IMeshService? meshService = null)
+    IMeshStorage persistenceService)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
     internal IMeshStorage Persistence { get; } = persistenceService;
     internal Address MeshAddress => hub.Address;
-    private readonly IMeshService? _meshService = meshService;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
@@ -40,6 +38,24 @@ internal sealed class MeshCatalog(
     // and may not be available during MeshCatalog construction
     private INodeTypeService? nodeTypeService;
     private bool nodeTypeServiceResolved;
+
+    // Lazy-loaded to avoid circular dependency:
+    // MeshCatalog -> IMeshService -> MeshService -> MeshCatalog
+    private IMeshService? meshServiceCached;
+    private bool meshServiceResolved;
+
+    private IMeshService? MeshService
+    {
+        get
+        {
+            if (!meshServiceResolved)
+            {
+                meshServiceCached = hub.ServiceProvider.GetService<IMeshService>();
+                meshServiceResolved = true;
+            }
+            return meshServiceCached;
+        }
+    }
 
     private INodeTypeService? NodeTypeService
     {
@@ -446,10 +462,10 @@ internal sealed class MeshCatalog(
 
         var fullQuery = string.Join(" ", queryParts);
 
-        if (_meshService != null)
+        if (MeshService != null)
         {
             var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
-            await foreach (var item in _meshService.QueryAsync(request, ct))
+            await foreach (var item in MeshService.QueryAsync(request, ct))
             {
                 if (item is MeshNode child)
                 {

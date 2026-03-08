@@ -12,40 +12,44 @@ namespace MeshWeaver.Hosting;
 /// </summary>
 internal sealed class MeshService : IMeshService
 {
-    private readonly HubNodePersistence _persistence;
+    private readonly HubNodePersistence? _persistence;
     private readonly MeshQuery _query;
     private readonly IEnumerable<IMeshQueryProvider> _providers;
     private readonly IMessageHub _hub;
-    private readonly MeshCatalog _catalog;
+    private readonly MeshCatalog? _catalog;
     private readonly bool _impersonate;
 
     public MeshService(
         IEnumerable<IMeshQueryProvider> providers,
         IMessageHub hub,
-        MeshCatalog catalog,
+        MeshCatalog? catalog = null,
         bool impersonate = false)
     {
         _providers = providers;
         _hub = hub;
         _catalog = catalog;
         _impersonate = impersonate;
-        _persistence = new HubNodePersistence(hub, catalog, impersonate);
+        _persistence = catalog != null ? new HubNodePersistence(hub, catalog, impersonate) : null;
         _query = new MeshQuery(providers, hub, impersonate);
     }
 
     // === Node CRUD (delegated to HubNodePersistence) ===
 
+    private HubNodePersistence Persistence
+        => _persistence ?? throw new InvalidOperationException(
+            "Write operations require MeshCatalog. Register it via AddMeshCatalog().");
+
     public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-        => _persistence.CreateNodeAsync(node, createdBy, ct);
+        => Persistence.CreateNodeAsync(node, createdBy, ct);
 
     public Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
-        => _persistence.UpdateNodeAsync(node, updatedBy, ct);
+        => Persistence.UpdateNodeAsync(node, updatedBy, ct);
 
     public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
-        => _persistence.DeleteNodeAsync(path, deletedBy, ct);
+        => Persistence.DeleteNodeAsync(path, deletedBy, ct);
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-        => _persistence.CreateTransientAsync(node, ct);
+        => Persistence.CreateTransientAsync(node, ct);
 
     // === Query (delegated to MeshQuery) ===
 
