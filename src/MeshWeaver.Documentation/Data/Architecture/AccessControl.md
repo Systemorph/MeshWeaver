@@ -329,6 +329,29 @@ When `HandleCreateNodeRequest` receives a message, it resolves the identity:
 
 The same pattern applies to `UpdateNodeRequest.UpdatedBy` and `DeleteNodeRequest.DeletedBy`.
 
+## ImpersonateAsNode() on IMeshNodePersistence
+
+While `PostOptions.ImpersonateAsHub()` is the low-level mechanism for hub identity, application code should use `IMeshNodePersistence.ImpersonateAsNode()` for CRUD operations:
+
+```csharp
+var factory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+
+// Returns a wrapper where all operations carry the hub's identity
+var impersonated = factory.ImpersonateAsNode();
+
+// Create/Update/Delete all use hub identity for authorization
+var created = await impersonated.CreateNodeAsync(node, ct: ct);
+await impersonated.UpdateNodeAsync(updated, ct: ct);
+await impersonated.DeleteNodeAsync(path, ct: ct);
+```
+
+The wrapper internally calls `hub.Post(request, o => o.WithTarget(hub.Address).ImpersonateAsHub())` for each operation. The hub's address must have the required roles (e.g., Admin) on the target namespace for the operation to succeed.
+
+**When to use:**
+- Background jobs or automated processes that create/update nodes without a user session
+- Hub-to-hub operations where the originating hub needs to act on behalf of itself
+- System-level node management (e.g., auto-generated content, cleanup tasks)
+
 # Per-Node-Type Access Rules (INodeTypeAccessRule)
 
 ## Overview

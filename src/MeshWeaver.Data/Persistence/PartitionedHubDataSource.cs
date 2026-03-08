@@ -1,12 +1,16 @@
 using System.Reactive.Linq;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data.Persistence
 {
     public record PartitionedHubDataSource<TPartition>(object Id, IWorkspace Workspace)
         : PartitionedDataSource<PartitionedHubDataSource<TPartition>, IPartitionedTypeSource, TPartition>(Id, Workspace)
     {
+        private ILogger Logger => Workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Data.PartitionedHubDataSource") ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         public override PartitionedHubDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null)
 => WithTypeSource(
                 typeof(T),
@@ -35,7 +39,7 @@ namespace MeshWeaver.Data.Persistence
                 // Wrapping in PartitionedWorkspaceReference would cause the remote hub's data source
                 // to create a separate partitioned stream instead of using its default (null-partition) stream.
                 var reference = GetReference();
-                return Workspace.GetRemoteStream(partition, reference);
+                return Workspace.GetRemoteStreamAsHub(partition, reference);
             }
 
             // Null partition: combine all initialized partition streams into one.

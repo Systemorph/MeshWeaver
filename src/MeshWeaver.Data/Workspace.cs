@@ -79,6 +79,18 @@ public class Workspace : IWorkspace
             ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
             : GetExternalClientSynchronizationStream<TReduced, TReference>(owner, reference);
 
+    /// <summary>
+    /// Gets a remote stream with hub impersonation. The subscribing hub's address
+    /// becomes the identity on the SubscribeRequest, ensuring hub-to-hub subscriptions
+    /// use the hub's identity instead of any ambient user context.
+    /// </summary>
+    public ISynchronizationStream<EntityStore> GetRemoteStreamAsHub(
+        Address owner,
+        WorkspaceReference<EntityStore> reference
+    ) =>
+        Hub.Address.Equals(owner)
+            ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
+            : (ISynchronizationStream<EntityStore>)this.CreateExternalClient<EntityStore, WorkspaceReference<EntityStore>>(owner, reference, impersonateAsHub: true);
 
 
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<

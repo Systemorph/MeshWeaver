@@ -50,12 +50,20 @@ public record PostOptions(Address Sender)
     /// for this message, instead of the current user's context.
     /// The hub address comes from the Sender property.
     /// </summary>
-    public PostOptions ImpersonateAsHub() => this with
+    public PostOptions ImpersonateAsHub() => ImpersonateAsHub(Sender);
+
+    /// <summary>
+    /// Instructs the post pipeline to use the specified hub address as the identity
+    /// for this message. Use this overload when posting from a hosted sub-hub
+    /// (e.g. a SynchronizationStream hub) but you want the workspace hub's address
+    /// as the identity.
+    /// </summary>
+    public PostOptions ImpersonateAsHub(Address hubAddress) => this with
     {
         ImpersonateContext = new AccessContext
         {
-            ObjectId = Sender.ToFullString(),
-            Name = Sender.ToString()
+            ObjectId = hubAddress.ToFullString(),
+            Name = hubAddress.ToString()
         }
     };
 

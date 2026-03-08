@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Domain;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;

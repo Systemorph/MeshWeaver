@@ -400,6 +400,10 @@ internal sealed class MeshCatalog(
         return tcs.Task;
     }
 
+    /// <inheritdoc />
+    IMeshNodePersistence IMeshNodePersistence.ImpersonateAsNode()
+        => new ImpersonatedNodePersistence(hub, this);
+
     private static bool ValidatePath(MeshNode node)
     {
         // Path validation rules:

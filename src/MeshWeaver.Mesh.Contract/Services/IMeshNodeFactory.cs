@@ -1,3 +1,5 @@
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
@@ -33,4 +35,11 @@ public interface IMeshNodePersistence
     /// Call DeleteNodeAsync to cancel or CreateNodeAsync to confirm.
     /// </summary>
     Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns a wrapper that sends all operations as the current hub's identity
+    /// rather than the logged-in user's identity.
+    /// Uses PostOptions.ImpersonateAsHub() with the hub's own address.
+    /// </summary>
+    IMeshNodePersistence ImpersonateAsNode();
 }
