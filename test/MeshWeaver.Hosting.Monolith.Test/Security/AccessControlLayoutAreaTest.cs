@@ -42,7 +42,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             .AddLayoutClient()
             .WithTypes([new KeyValuePair<string, Type>(nameof(AccessAssignment), typeof(AccessAssignment))]);
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task AccessControl_RendersStackControl()
     {
         // Seed data so the layout has something to render
@@ -75,7 +75,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         stack.Areas.Should().NotBeEmpty("AccessControl should have child areas");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task AccessControl_ShowsInheritedAndLocalSections()
     {
         // Seed both inherited and local assignments
@@ -119,7 +119,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         svc.Should().NotBeNull("RLS is configured in this test fixture");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
     {
         // Seed assignments at parent and at a deeper nested path
@@ -151,7 +151,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         stack.Areas.Should().NotBeEmpty("AccessControl should have child areas");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task AccessControl_DeeplyNestedPath_InheritsFromAllAncestors()
     {
         // Seed assignments at multiple ancestor levels

@@ -141,7 +141,7 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         value.Value.Should().Contain("iframe").And.Subject.Should().Contain(url);
     }
 
-    [Fact(Timeout = 60000)] // 60 seconds for this longer test
+    [Fact(Timeout = 10000)] // 60 seconds for this longer test
     public async Task CalculatorDirectlyThroughKernel()
     {
         const string Code = @"using MeshWeaver.Layout;

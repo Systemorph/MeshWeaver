@@ -77,20 +77,36 @@
 
 <div class="collab-md-container @ViewModeClass" @ref="containerRef">
     @* View mode toolbar — only shown when document has annotations *@
-    @if (HasAnnotations)
+    @if (HasAnnotations || HasCommentAnnotations)
     {
         <div class="collab-md-toolbar">
-            <FluentSelect TOption="string"
-                          Value="@CurrentViewMode"
-                          ValueChanged="@OnViewModeChanged"
-                          Label="View"
-                          Style="min-width: 140px;">
-                <FluentOption Value="Markup">Markup</FluentOption>
-                <FluentOption Value="HideMarkup">Hide Markup</FluentOption>
-                <FluentOption Value="Original">Original</FluentOption>
-            </FluentSelect>
+            @if (HasAnnotations)
+            {
+                <FluentSelect TOption="string"
+                              Value="@CurrentViewMode"
+                              ValueChanged="@OnViewModeChanged"
+                              Label="View"
+                              Style="min-width: 140px;">
+                    <FluentOption Value="Markup">Markup</FluentOption>
+                    <FluentOption Value="HideMarkup">Hide Markup</FluentOption>
+                    <FluentOption Value="Original">Original</FluentOption>
+                </FluentSelect>
+            }
 
-            @if (BoundCanEdit)
+            @if (HasCommentAnnotations)
+            {
+                <FluentSelect TOption="string"
+                              Value="@CurrentCommentFilter"
+                              ValueChanged="@OnCommentFilterChanged"
+                              Label="Comments"
+                              Style="min-width: 160px;">
+                    <FluentOption Value="Unresolved">Unresolved</FluentOption>
+                    <FluentOption Value="All">All Comments</FluentOption>
+                    <FluentOption Value="None">No Comments</FluentOption>
+                </FluentSelect>
+            }
+
+            @if (BoundCanEdit && HasAnnotations)
             {
                 <div class="collab-md-toolbar-separator"></div>
 
@@ -113,7 +129,7 @@
         @if (HasSideAnnotations)
         {
             <div class="collab-md-sidebar annotations-column" @onclick:stopPropagation="true">
-                @foreach (var ann in Annotations)
+                @foreach (var ann in FilteredAnnotations)
                 {
                     @if (ann.Type == AnnotationType.Comment)
                     {

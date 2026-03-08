@@ -10,6 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
+using System.Reactive.Linq;
 using System.Text.Json;
 using MarkdownAnnotationParser = MeshWeaver.Markdown.Collaboration.MarkdownAnnotationParser;
 
@@ -37,6 +38,7 @@ public partial class CollaborativeMarkdownView
 
     // View state (local Blazor state)
     private string CurrentViewMode = "Markup";
+    private string CurrentCommentFilter = "Unresolved";
     private string? activeAnnotationId;
     private bool jsInitialized;
     private bool commentSelectionInitialized;
@@ -45,10 +47,26 @@ public partial class CollaborativeMarkdownView
     private string RenderedHtml = "";
     private List<ParsedAnnotation> Annotations = new();
 
-    private bool HasAnnotations => Annotations.Count > 0;
+    // Comment status cache (markerId -> CommentStatus), populated by mesh query subscription
+    private Dictionary<string, CommentStatus> commentStatuses = new();
+
+    private bool HasAnnotations => Annotations.Any(a => a.Type != AnnotationType.Comment);
+
+    private bool HasCommentAnnotations => Annotations.Any(a => a.Type == AnnotationType.Comment);
+
+    private List<ParsedAnnotation> FilteredAnnotations => CurrentCommentFilter switch
+    {
+        "None" => Annotations.Where(a => a.Type != AnnotationType.Comment).ToList(),
+        "All" => Annotations,
+        // "Unresolved" (default): show non-comment annotations + active comments only
+        _ => Annotations.Where(a =>
+            a.Type != AnnotationType.Comment ||
+            !commentStatuses.TryGetValue(a.Id, out var status) ||
+            status == CommentStatus.Active).ToList()
+    };
 
     private bool HasSideAnnotations =>
-        CurrentViewMode == "Markup" && Annotations.Count > 0;
+        CurrentViewMode == "Markup" && FilteredAnnotations.Count > 0;
 
     private string ViewModeClass => CurrentViewMode switch
     {
@@ -93,7 +111,52 @@ public partial class CollaborativeMarkdownView
             DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
         }
 
+        // Subscribe to comment nodes to track resolved/active status for filtering
+        SubscribeToCommentStatuses();
+
         ProcessContent();
+    }
+
+    private void SubscribeToCommentStatuses()
+    {
+        if (string.IsNullOrEmpty(BoundNodePath))
+            return;
+
+        var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+        if (meshQuery == null)
+            return;
+
+        var query = MeshQueryRequest.FromQuery(
+            $"path:{BoundNodePath} nodeType:Comment scope:children");
+
+        AddBinding(meshQuery.ObserveQuery<MeshNode>(query)
+            .Scan(new List<MeshNode>(), (list, change) =>
+            {
+                if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
+                    return change.Items.ToList();
+                foreach (var item in change.Items)
+                {
+                    if (change.ChangeType == QueryChangeType.Added)
+                        list.Add(item);
+                    else if (change.ChangeType == QueryChangeType.Removed)
+                        list.RemoveAll(n => n.Path == item.Path);
+                    else if (change.ChangeType == QueryChangeType.Updated)
+                    {
+                        list.RemoveAll(n => n.Path == item.Path);
+                        list.Add(item);
+                    }
+                }
+                return list;
+            })
+            .Subscribe(list =>
+            {
+                commentStatuses = list
+                    .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId))
+                    .ToDictionary(
+                        n => ((Comment)n.Content!).MarkerId!,
+                        n => ((Comment)n.Content!).Status);
+                InvokeAsync(StateHasChanged);
+            }));
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -169,6 +232,14 @@ public partial class CollaborativeMarkdownView
     private void OnViewModeChanged(string mode)
     {
         CurrentViewMode = mode;
+        ProcessContent();
+        StateHasChanged();
+    }
+
+    // Comment filter
+    private void OnCommentFilterChanged(string filter)
+    {
+        CurrentCommentFilter = filter;
         ProcessContent();
         StateHasChanged();
     }

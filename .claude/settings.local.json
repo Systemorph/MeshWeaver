@@ -100,7 +100,7 @@
       "Bash(sips:*)",
       "Bash(bc:*)",
       "Bash(tasklist:*)",
-      "Bash(dotnet-dump analyze:*)",
+      "Bash(dotnet-dump analyze:*)"
     ],
     "deny": []
   },

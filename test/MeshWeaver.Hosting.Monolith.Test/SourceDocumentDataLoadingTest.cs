@@ -90,7 +90,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that a node type correctly loads data from its configured source documents.
     /// This is a parameterized test that can be used for any node type.
     /// </summary>
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 10000)]
     [MemberData(nameof(CornerstonePricingTestCases))]
     public async Task NodeType_LoadsDataFromSourceDocuments(DataLoadingTestCase testCase)
     {
@@ -138,7 +138,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that a node hub can be initialized and has the expected data types registered.
     /// </summary>
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 10000)]
     [InlineData("Cornerstone/Microsoft/2026", new[] { "PropertyRisk", "ReinsuranceAcceptance", "ReinsuranceSection" })]
     public async Task NodeHub_HasExpectedDataTypesRegistered(string nodeAddress, string[] expectedTypes)
     {
@@ -186,7 +186,7 @@ public class SourceDocumentDataLoadingTest : MonolithMeshTestBase
     /// Verifies that data loaded from source documents has valid structure.
     /// Checks that key properties are present and have valid values.
     /// </summary>
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 10000)]
     [InlineData("Cornerstone/Microsoft/2026", "PropertyRisk", "Id", "LocationName")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceAcceptance", "Id", "Name")]
     [InlineData("Cornerstone/Microsoft/2026", "ReinsuranceSection", "Id", "Limit")]

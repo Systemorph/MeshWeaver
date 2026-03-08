@@ -511,7 +511,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Content layout area for icon.svg returns content without hanging.
     /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:icon.svg is rendered.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task ContentLayoutArea_IconSvg_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
@@ -552,7 +552,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Content layout area for sample.md returns content without hanging.
     /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:sample.md is rendered.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task ContentLayoutArea_SampleMd_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
@@ -591,7 +591,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that $Content layout area for non-existent file returns error message, not eternal spinner.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task ContentLayoutArea_NonExistentFile_ReturnsErrorMessage()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
@@ -631,7 +631,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Schema layout area returns schema without hanging.
     /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema: is rendered.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task SchemaLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
@@ -671,7 +671,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Data layout area returns data without hanging.
     /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/data: is rendered.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task DataLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
@@ -712,7 +712,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This uses the same configuration pattern as MemexConfiguration.cs.
     /// When requesting the default area (empty area), it should resolve to $Content for Markdown nodes.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task MarkdownNode_DefaultArea_IsContentNotCatalog()
     {
         var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");

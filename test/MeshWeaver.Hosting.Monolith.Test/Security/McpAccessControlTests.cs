@@ -160,7 +160,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         await securityService.AddUserRoleAsync(User2, "Editor", "SharedOrg/Confidential", "system", TestTimeout);
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpGet_User1CannotReadConfidentialNode_User2Can()
     {
         await SetupTestData();
@@ -179,7 +179,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Confidential Project");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpGet_User1CannotReadPrivateOrg_User2Can()
     {
         await SetupTestData();
@@ -198,7 +198,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Secret Data");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpGet_User1CanReadPublicNode()
     {
         await SetupTestData();
@@ -211,7 +211,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result.Should().Contain("Public Project");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpSearch_User1SeesOnlyPermittedNodes()
     {
         await SetupTestData();
@@ -231,7 +231,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Confidential");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpSearch_User1CannotSearchPrivateOrg()
     {
         await SetupTestData();
@@ -249,7 +249,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Secret");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpUpdate_User1CannotUpdate_User2Can()
     {
         await SetupTestData();
@@ -281,7 +281,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         reloaded!.Name.Should().Be("Updated by User2");
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task McpUpdate_User1CannotUpdatePrivateOrg_User2Can()
     {
         await SetupTestData();

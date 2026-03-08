@@ -67,7 +67,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateNodeAsync_ShouldPersistCommentNode()
     {
         // Arrange
@@ -121,7 +121,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateNodeAsync_ReplyNode_ShouldLinkToParent()
     {
         // Arrange

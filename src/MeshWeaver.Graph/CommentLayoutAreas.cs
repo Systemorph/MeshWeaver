@@ -4,7 +4,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -159,8 +158,10 @@ public static class CommentLayoutAreas
         var canAct = !string.IsNullOrEmpty(currentUser);
 
         var hasContent = !string.IsNullOrWhiteSpace(comment.Text);
+        var isResolved = comment.Status == CommentStatus.Resolved;
 
-        var container = Controls.Stack.WithWidth("100%");
+        var container = Controls.Stack.WithWidth("100%")
+            .WithStyle(isResolved ? "opacity: 0.5;" : "");
 
         // Header: author on the left, time + action buttons right-aligned
         var author = System.Web.HttpUtility.HtmlEncode(comment.Author);
@@ -191,7 +192,7 @@ public static class CommentLayoutAreas
                     }));
         if (canAct)
             rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
-        if (canAct)
+        if (canAct && !isResolved && IsTopLevelComment(hubPath, comment))
             rightGroup = rightGroup.WithView(BuildResolveButton(host, hubPath, comment));
         if (canDelete || canComment)
             rightGroup = rightGroup.WithView(BuildDeleteButton(host, hubPath));
@@ -208,7 +209,7 @@ public static class CommentLayoutAreas
                 // Initialize edit state once
                 if (!initialized[0])
                 {
-                    h.UpdateData(editStateId, !hasContent);
+                    h.UpdateData(editStateId, false);
                     initialized[0] = true;
                 }
 
@@ -275,7 +276,7 @@ public static class CommentLayoutAreas
                         for (var i = 0; i < shown; i++)
                         {
                             section = section.WithView(Controls.Stack
-                                .WithStyle("margin-left: 4px; padding-left: 6px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
+                                .WithStyle("margin-left: 0; padding-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
                                 .WithView(replyControls[i]));
                         }
 
@@ -500,7 +501,8 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Resolve (checkmark) icon button. Marks the comment as Resolved and strips markers from document.
+    /// Builds the Resolve (checkmark) icon button. Marks the comment as Resolved.
+    /// Markers are kept in the document so resolved comments remain visible (grayed out) in the sidebar.
     /// </summary>
     private static UiControl BuildResolveButton(LayoutAreaHost host, string hubPath, Comment comment)
     {
@@ -516,20 +518,19 @@ public static class CommentLayoutAreas
                     var updatedNode = node with { Content = comment with { Status = CommentStatus.Resolved } };
                     host.Hub.Post(new UpdateNodeRequest(updatedNode));
                 }
-
-                // Remove comment markers from the document markdown
-                if (!string.IsNullOrEmpty(comment.PrimaryNodePath) && !string.IsNullOrEmpty(comment.MarkerId))
-                {
-                    var docQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-                    var docNode = await docQuery.QueryAsync<MeshNode>($"path:{comment.PrimaryNodePath} scope:exact").FirstOrDefaultAsync();
-                    if (docNode?.Content is string docContent)
-                    {
-                        var cleaned = AnnotationMarkdownExtension.ResolveComment(docContent, comment.MarkerId);
-                        var updatedDoc = docNode with { Content = cleaned };
-                        host.Hub.Post(new UpdateNodeRequest(updatedDoc));
-                    }
-                }
             });
+    }
+
+    /// <summary>
+    /// Returns true if this comment is a top-level comment (direct child of the document node),
+    /// false if it is a reply (child of another comment).
+    /// </summary>
+    private static bool IsTopLevelComment(string hubPath, Comment comment)
+    {
+        if (string.IsNullOrEmpty(comment.PrimaryNodePath))
+            return true;
+        var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
+        return string.Equals(parentPath, comment.PrimaryNodePath, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

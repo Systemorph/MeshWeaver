@@ -173,7 +173,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ACME_CreatableTypes_IncludesProjectAndGlobalTypes()
     {
         // Act - ACME is an Organization, should be able to create ACME/Project
@@ -192,7 +192,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// to build queries, then runs them like MeshNodePickerView.LoadResultsAsync does.
     /// When at "ACME" (NodeType=Organization), should return Organization, Software/Project, and global types.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateForm_TypePicker_Queries_ReturnCorrectTypes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -278,7 +278,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// Test that the default selected type in the Create form should be the parent's NodeType,
     /// not Markdown, when the parent has a specific type.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateForm_DefaultType_ShouldBeParentNodeType()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -304,7 +304,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// creatable type nodes — mirrors the exact filtering logic from CreateLayoutArea.cs.
     /// Verifies that types with ExcludeFromContext containing "create" are excluded.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public void CreateForm_TypePicker_Items_ContainCreatableTypes()
     {
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
@@ -336,7 +336,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// the Create form defaults namespace to the type's parent namespace (root for Organization)
     /// and default type to the type itself.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateForm_OnNodeTypeDefinitionPage_DefaultsToTypeParentNamespace()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -391,7 +391,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Test that creating a node at root namespace (empty) produces correct path.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateForm_RootNamespace_ProducesCorrectPath()
     {
         // When namespace is empty (root), path should just be the id
@@ -409,7 +409,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Test that ProductLaunch type picker queries include Software/Project/Todo and Software/Project (own type).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateForm_TypePicker_ForProductLaunch_IncludesTodoAndProject()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
@@ -497,7 +497,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         return deduped;
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ProductLaunch_CreatableTypes_IncludesTodo()
     {
         // Act - ProductLaunch is an instance of ACME/Project, should be able to create ACME/Project/Todo
@@ -516,7 +516,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// This is the critical test case for the bug where "Add Todo" is not shown
     /// when viewing a Project (like ProductLaunch).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
     {
         // Arrange - Verify the data setup is correct
@@ -548,7 +548,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         creatableTypes.Should().Contain(t => t.NodeTypePath == "NodeType", "Should include global NodeType type");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateNode_ViaRequest_Succeeds()
     {
         // Arrange - Create a new Todo node under ProductLaunch
@@ -568,7 +568,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         createdNode.NodeType.Should().Be("ACME/Project/Todo");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreatableTypes_WithExplicitConfig_OverridesAuto()
     {
         // Arrange - Create a type with explicit CreatableTypes configuration
@@ -604,7 +604,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         creatableTypes.Should().NotContain(t => t.NodeTypePath == "NodeType");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreatableTypes_SortedByOrder()
     {
         // Act
@@ -623,7 +623,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// 3. Redirect to /{nodePath}/Edit
     /// 4. Edit view should load without timeout
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateNode_ViaCatalog_ThenRequestEditView_Succeeds()
     {
         // Arrange - Create a unique node path to avoid conflicts
@@ -712,7 +712,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// <summary>
     /// Test that creating a Markdown node via IMeshCatalog and getting the default (Read) view works.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateNode_ViaCatalog_ThenRequestDefaultView_Succeeds()
     {
         // Arrange
@@ -773,7 +773,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// 3. Redirect to /{nodePath}/Edit
     /// 4. Edit view should load and show "Draft" badge
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateTransientNode_ThenRequestEditView_Succeeds()
     {
         // Use a short timeout CancellationToken to prevent hanging
@@ -885,7 +885,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// 2. CreateNodeAsync to create the node
     /// 3. Request Edit view (simulates redirect)
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task CompleteCreateFlow_GetTypes_Create_Edit_Succeeds()
     {
         // Step 1: Get creatable types (like the create page does)
@@ -1021,7 +1021,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             .AddSystemorph()
             .AddGraph();
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task FileSystem_VerifyDataStructure()
     {
         // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading
@@ -1040,7 +1040,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         Output.WriteLine($"ACME/ProductLaunch: NodeType={productLaunch?.NodeType}, Content={productLaunch?.Content?.GetType().Name}");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
     {
         // Get children of ACME/Project - uses lazy loading
@@ -1057,7 +1057,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             "ACME/Project/Todo should be a child of ACME/Project");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task FileSystem_QueryChildNodeTypes_ShouldFindTodo()
     {
         // This is the exact query used by GetCreatableTypesAsync
@@ -1075,7 +1075,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             "Query should find ACME/Project/Todo as a child NodeType of ACME/Project");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task FileSystem_ProductLaunch_CreatableTypes_ShouldIncludeTodo()
     {
         // Use the NodeTypeService from DI - it properly gets JsonSerializerOptions from IMessageHub

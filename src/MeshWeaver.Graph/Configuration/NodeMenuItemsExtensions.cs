@@ -78,6 +78,14 @@ public static class NodeMenuItemsExtensions
             .FirstAsync();
         var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
+        if (perms.HasFlag(Permission.Update))
+        {
+            yield return new("Edit", "Edit",
+                RequiredPermission: Permission.Update, Order: -10);
+            yield return new("Suggest", "Suggest",
+                RequiredPermission: Permission.Update, Order: -9);
+        }
+
         if (perms.HasFlag(Permission.Create))
         {
             // When on a NodeType definition page, pass the type as query parameter

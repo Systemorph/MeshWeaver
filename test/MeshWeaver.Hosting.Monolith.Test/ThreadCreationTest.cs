@@ -175,7 +175,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Must be a routing failure, NOT a timeout (OperationCanceledException)
         Assert.False(ex is OperationCanceledException or TaskCanceledException,
             $"Expected routing failure but got timeout: {ex.GetType().Name}");
-        Assert.Contains("Routing failed", ex.GetBaseException().Message);
+        Assert.Contains("No node found", ex.GetBaseException().Message);
         Output.WriteLine($"Got expected routing failure: {ex.GetBaseException().Message}");
     }
 
@@ -202,7 +202,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Must be a routing failure, NOT a timeout (OperationCanceledException)
         Assert.False(ex is OperationCanceledException or TaskCanceledException,
             $"Expected routing failure but got timeout: {ex.GetType().Name}");
-        Assert.Contains("Routing failed", ex.GetBaseException().Message);
+        Assert.Contains("No node found", ex.GetBaseException().Message);
         Output.WriteLine($"Got expected routing failure: {ex.GetBaseException().Message}");
     }
 
