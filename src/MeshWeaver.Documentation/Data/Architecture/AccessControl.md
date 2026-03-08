@@ -331,26 +331,25 @@ The same pattern applies to `UpdateNodeRequest.UpdatedBy` and `DeleteNodeRequest
 
 ## ImpersonateAsNode() on IMeshNodePersistence
 
-While `PostOptions.ImpersonateAsHub()` is the low-level mechanism for hub identity, application code should use `IMeshNodePersistence.ImpersonateAsNode()` for CRUD operations:
+`IMeshNodePersistence` automatically resolves identity from `AccessService.Context.ObjectId`. When `ImpersonateAsNode()` is called, it switches to the hub's own address:
 
 ```csharp
 var factory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
 
-// Returns a wrapper where all operations carry the hub's identity
-var impersonated = factory.ImpersonateAsNode();
+// Normal: createdBy = AccessService.Context.ObjectId (current user)
+await factory.CreateNodeAsync(node, ct: ct);
 
-// Create/Update/Delete all use hub identity for authorization
-var created = await impersonated.CreateNodeAsync(node, ct: ct);
-await impersonated.UpdateNodeAsync(updated, ct: ct);
-await impersonated.DeleteNodeAsync(path, ct: ct);
+// Impersonated: createdBy = hub.Address, AccessContext = hub identity
+var impersonated = factory.ImpersonateAsNode();
+await impersonated.CreateNodeAsync(node, ct: ct);
 ```
 
-The wrapper internally calls `hub.Post(request, o => o.WithTarget(hub.Address).ImpersonateAsHub())` for each operation. The hub's address must have the required roles (e.g., Admin) on the target namespace for the operation to succeed.
+Internally, `ImpersonateAsNode()` sets a flag on the same class — `createdBy`/`updatedBy`/`deletedBy` resolve to `hub.Address.ToFullString()` and `PostOptions.ImpersonateAsHub()` is added. The hub must have the required roles on the target namespace.
 
 **When to use:**
-- Background jobs or automated processes that create/update nodes without a user session
-- Hub-to-hub operations where the originating hub needs to act on behalf of itself
-- System-level node management (e.g., auto-generated content, cleanup tasks)
+- Background jobs or automated processes without a user session
+- Hub-to-hub operations where the hub acts on its own behalf
+- System-level node management (auto-generated content, cleanup tasks)
 
 # Per-Node-Type Access Rules (INodeTypeAccessRule)
 

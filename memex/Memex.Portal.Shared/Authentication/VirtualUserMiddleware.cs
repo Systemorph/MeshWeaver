@@ -1,6 +1,7 @@
-using MeshWeaver.Blazor.Infrastructure;
+﻿using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -80,9 +81,8 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
     }
 
     /// <summary>
-    /// Creates the VUser node by posting CreateNodeRequest through the portal hub
-    /// with ImpersonateAsHub(), so the hub's address becomes the identity.
-    /// The routing service handles the request.
+    /// Creates the VUser node via IMeshNodePersistence.ImpersonateAsNode(),
+    /// so the hub's address becomes the identity for authorization.
     /// </summary>
     private static async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
     {
@@ -99,23 +99,22 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
             }
         };
 
+        // Check if VUser node already exists (common case for returning visitors)
+        var meshQuery = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var existing = await meshQuery
+            .QueryAsync<MeshNode>($"path:{userNode.Path} scope:exact")
+            .FirstOrDefaultAsync(CancellationToken.None);
+        if (existing != null)
+            return;
+
         try
         {
-            var response = await portalApp.Hub.AwaitResponse(
-                new CreateNodeRequest(userNode),
-                o => o.ImpersonateAsHub(),
-                CancellationToken.None);
-
-            if (!response.Message.Success &&
-                response.Message.RejectionReason != NodeCreationRejectionReason.NodeAlreadyExists)
-            {
-                throw new InvalidOperationException(
-                    $"Failed to create VUser node: {response.Message.Error}");
-            }
+            var factory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+            await factory.ImpersonateAsNode().CreateNodeAsync(userNode, ct: CancellationToken.None);
         }
         catch (InvalidOperationException)
         {
-            // Node already exists (cookie reuse) — ignore
+            // Node already exists (race condition) — ignore
         }
     }
 }

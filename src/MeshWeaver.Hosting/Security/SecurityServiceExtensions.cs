@@ -1,3 +1,4 @@
+using MeshWeaver.Data.Validation;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -17,6 +18,7 @@ public static class SecurityServiceExtensions
     /// This includes:
     /// - ISecurityService for permission evaluation (uses unsecured IPersistenceServiceCore directly)
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
+    /// - ISubscriptionAccessChecker for read access checks on SubscribeRequests
     /// - PersistenceService handles secure query filtering via ISecurityService
     ///
     /// Storage structure:
@@ -34,6 +36,9 @@ public static class SecurityServiceExtensions
 
                 // Register RLS validator
                 services.AddSingleton<INodeValidator, RlsNodeValidator>();
+
+                // Register subscription access checker for hub-level read access
+                services.TryAddSingleton<ISubscriptionAccessChecker, RlsSubscriptionAccessChecker>();
 
                 return services;
             });

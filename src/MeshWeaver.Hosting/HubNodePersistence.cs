@@ -1,24 +1,38 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Wrapper around IMeshNodePersistence that sends all operations
-/// with the hub's own identity (ImpersonateAsHub) instead of the current user.
+/// Scoped IMeshNodePersistence implementation — each hub gets its own instance
+/// with the correct IMessageHub injected (same pattern as PersistenceService).
+/// Automatically resolves the current user identity from AccessService,
+/// or uses hub.Address when impersonated.
 /// </summary>
-internal sealed class ImpersonatedNodePersistence(
+internal sealed class HubNodePersistence(
     IMessageHub hub,
-    IMeshNodePersistence inner) : IMeshNodePersistence
+    MeshCatalog catalog,
+    bool impersonate = false) : IMeshNodePersistence
 {
+    private string? CurrentIdentity => impersonate
+        ? hub.Address.ToFullString()
+        : hub.ServiceProvider.GetService<AccessService>()?.Context?.ObjectId;
+
+    private PostOptions ConfigurePost(PostOptions o)
+    {
+        o = o.WithTarget(catalog.MeshAddress);
+        return impersonate ? o.ImpersonateAsHub() : o;
+    }
+
     public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
     {
         var tcs = new TaskCompletionSource<MeshNode>();
         if (ct.CanBeCanceled) ct.Register(() => tcs.TrySetCanceled(ct));
 
-        var request = new CreateNodeRequest(node) { CreatedBy = createdBy };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address).ImpersonateAsHub());
+        var request = new CreateNodeRequest(node) { CreatedBy = createdBy ?? CurrentIdentity };
+        var delivery = hub.Post(request, ConfigurePost);
 
         if (delivery == null)
         {
@@ -51,8 +65,8 @@ internal sealed class ImpersonatedNodePersistence(
         var tcs = new TaskCompletionSource<MeshNode>();
         if (ct.CanBeCanceled) ct.Register(() => tcs.TrySetCanceled(ct));
 
-        var request = new UpdateNodeRequest(node) { UpdatedBy = updatedBy };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address).ImpersonateAsHub());
+        var request = new UpdateNodeRequest(node) { UpdatedBy = updatedBy ?? CurrentIdentity };
+        var delivery = hub.Post(request, ConfigurePost);
 
         if (delivery == null)
         {
@@ -85,8 +99,8 @@ internal sealed class ImpersonatedNodePersistence(
         var tcs = new TaskCompletionSource();
         if (ct.CanBeCanceled) ct.Register(() => tcs.TrySetCanceled(ct));
 
-        var request = new DeleteNodeRequest(path) { DeletedBy = deletedBy, Recursive = true };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address).ImpersonateAsHub());
+        var request = new DeleteNodeRequest(path) { DeletedBy = deletedBy ?? CurrentIdentity, Recursive = true };
+        var delivery = hub.Post(request, ConfigurePost);
 
         if (delivery == null)
         {
@@ -115,7 +129,8 @@ internal sealed class ImpersonatedNodePersistence(
     }
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-        => inner.CreateTransientAsync(node, ct);
+        => catalog.CreateTransientNodeAsync(node, CurrentIdentity, ct);
 
-    public IMeshNodePersistence ImpersonateAsNode() => this;
+    public IMeshNodePersistence ImpersonateAsNode()
+        => impersonate ? this : new HubNodePersistence(hub, catalog, true);
 }

@@ -9,7 +9,7 @@ namespace MeshWeaver.Data.Persistence
     public record PartitionedHubDataSource<TPartition>(object Id, IWorkspace Workspace)
         : PartitionedDataSource<PartitionedHubDataSource<TPartition>, IPartitionedTypeSource, TPartition>(Id, Workspace)
     {
-        private ILogger Logger => Workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
+        private new ILogger Logger => Workspace.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PartitionedHubDataSource") ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         public override PartitionedHubDataSource<TPartition> WithType<T>(Func<T, TPartition> partitionFunction, Func<IPartitionedTypeSource, IPartitionedTypeSource>? config = null)
 => WithTypeSource(
@@ -102,6 +102,11 @@ namespace MeshWeaver.Data.Persistence
                                 processedChangeItems.Add(change);
                         }
                     }
+                },
+                ex =>
+                {
+                    Logger.LogError(ex, "PartitionedHubDataSource: partition stream error, propagating to combined stream");
+                    ret.OnError(ex);
                 }));
 
             return ret;

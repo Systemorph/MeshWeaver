@@ -471,14 +471,14 @@ public static class DataExtensions
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.SubscribeHandler");
 
         var accessContext = request.AccessContext;
-        logger?.LogInformation("HandleSubscribeRequest: Hub={Hub}, Sender={Sender}, AccessContext.ObjectId={ObjectId}, Reference={Ref}",
+        logger?.LogDebug("HandleSubscribeRequest: Hub={Hub}, Sender={Sender}, AccessContext.ObjectId={ObjectId}, Reference={Ref}",
             hub.Address, request.Sender, accessContext?.ObjectId, request.Message.Reference);
 
         // Run read validators before subscribing
         var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
         if (!validationResult.IsValid)
         {
-            logger?.LogWarning("HandleSubscribeRequest: Access denied for {Sender} at {Hub}: {Error}",
+            logger?.LogWarning("HandleSubscribeRequest: Access denied by validator for {Sender} at {Hub}: {Error}",
                 request.Sender, hub.Address, validationResult.ErrorMessage);
             hub.Post(new DeliveryFailure(request)
                 {
@@ -489,8 +489,28 @@ public static class DataExtensions
             return request.Processed();
         }
 
+        // Check hub-level read permission via ISubscriptionAccessChecker (registered by AddRowLevelSecurity)
+        var accessChecker = hub.ServiceProvider.GetService<ISubscriptionAccessChecker>();
+        if (accessChecker != null)
+        {
+            var hubPath = hub.Address.ToString();
+            var (allowed, errorMessage) = await accessChecker.CheckReadAccessAsync(hubPath, ct);
+            if (!allowed)
+            {
+                logger?.LogWarning("HandleSubscribeRequest: Read access denied at hub {Hub}: {Error}",
+                    hubPath, errorMessage);
+                hub.Post(new DeliveryFailure(request)
+                    {
+                        ErrorType = ErrorType.Failed,
+                        Message = $"Access denied: {errorMessage}"
+                    },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+        }
+
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
-        logger?.LogInformation("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
+        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
             request.Sender, hub.Address);
         return request.Processed();
     }
