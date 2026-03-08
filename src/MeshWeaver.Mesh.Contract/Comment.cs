@@ -24,7 +24,7 @@ public enum CommentStatus
 /// Represents a comment on a mesh node.
 /// Comments are nested via MeshNode path hierarchy for threading.
 /// </summary>
-public record Comment : ISatelliteContent
+public record Comment
 {
     /// <summary>
     /// Unique identifier for the comment.
@@ -34,7 +34,7 @@ public record Comment : ISatelliteContent
     public string Id { get; init; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// Path of the primary document node this comment belongs to (ISatelliteContent).
+    /// Path of the primary document node this comment belongs to.
     /// Used for permission checks (edit access on the document).
     /// For top-level comments, this is the document they annotate.
     /// For replies, this is the original document path (not the parent comment).

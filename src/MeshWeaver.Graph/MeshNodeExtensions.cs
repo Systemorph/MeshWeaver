@@ -31,14 +31,12 @@ public static class MeshNodeExtensions
 
     /// <summary>
     /// Gets the primary node path for this node.
-    /// For satellite nodes (Comment, Thread), returns the primary node's path.
+    /// For satellite nodes, returns the MainNode path.
     /// For regular nodes, returns the node's own path.
     /// </summary>
     public static string GetPrimaryPath(this MeshNode node)
     {
-        if (node.Content is ISatelliteContent satellite && !string.IsNullOrEmpty(satellite.PrimaryNodePath))
-            return satellite.PrimaryNodePath;
-        return node.Path;
+        return node.MainNode;
     }
 
     /// <summary>

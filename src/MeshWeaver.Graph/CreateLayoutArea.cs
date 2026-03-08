@@ -468,9 +468,8 @@ public static class CreateLayoutArea
         // 1. Resolve defaults from the current node
         var currentNode = nodes.FirstOrDefault(n => n.Path == parentPath);
 
-        var defaultNamespace = currentNode?.Content is ISatelliteContent sat
-            && !string.IsNullOrEmpty(sat.PrimaryNodePath)
-            ? sat.PrimaryNodePath
+        var defaultNamespace = currentNode != null && currentNode.MainNode != currentNode.Path
+            ? currentNode.MainNode
             : parentPath;
 
         var defaultType = currentNode?.NodeType == MeshNode.NodeTypePath

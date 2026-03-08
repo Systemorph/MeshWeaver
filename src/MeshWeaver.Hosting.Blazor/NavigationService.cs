@@ -283,7 +283,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Node types excluded from activity tracking.
-    /// Satellite content (ISatelliteContent) is also excluded automatically.
+    /// Satellite content (MainNode != Path) is also excluded automatically.
     /// </summary>
     private static readonly HashSet<string> ExcludedNodeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -313,7 +313,7 @@ internal class NavigationService : INavigationService
         }
 
         // Skip satellite content (Threads, AccessAssignments, etc.) and excluded node types
-        if (node.Content is ISatelliteContent)
+        if (node.MainNode != node.Path)
         {
             _logger?.LogDebug("Activity tracking skipped for {Path}: satellite content", node.Path);
             return;

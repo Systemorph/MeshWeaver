@@ -286,6 +286,10 @@ public class FileSystemStorageAdapter : IStorageAdapter
             if (SupportedExtensions.Any(ext => File.Exists(Path.Combine(nodeDir, subDirName + ext))))
                 continue;
 
+            // Skip if this subdirectory has an index file (it's a child node directory, not a partition)
+            if (SupportedExtensions.Any(ext => File.Exists(Path.Combine(subDir, $"index{ext}"))))
+                continue;
+
             // This is a partition directory
             partitionSubPaths.Add(subDirName);
         }

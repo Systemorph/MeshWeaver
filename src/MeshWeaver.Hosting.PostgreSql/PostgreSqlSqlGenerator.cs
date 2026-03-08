@@ -30,7 +30,9 @@ public class PostgreSqlSqlGenerator
         ["state"] = "n.state",
         ["id"] = "n.id",
         ["namespace"] = "n.namespace",
-        ["path"] = "n.path"
+        ["path"] = "n.path",
+        ["mainNode"] = "n.main_node",
+        ["main_node"] = "n.main_node"
     };
 
     /// <summary>
@@ -123,6 +125,11 @@ public class PostgreSqlSqlGenerator
             clauses.Add(acClause);
         }
 
+        if (query.IsMain == true)
+        {
+            clauses.Add("n.main_node = n.path");
+        }
+
         var whereClause = clauses.Count > 0
             ? "WHERE " + string.Join(" AND ", clauses)
             : "";
@@ -139,7 +146,7 @@ public class PostgreSqlSqlGenerator
 
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            "n.desired_id FROM mesh_nodes n");
+            "n.desired_id, n.main_node FROM mesh_nodes n");
 
         if (isActivityQuery)
         {
@@ -516,7 +523,7 @@ public class PostgreSqlSqlGenerator
                  FROM user_effective_permissions uep
                  WHERE uep.user_id IN ({userList})
                    AND uep.permission = 'Read'
-                   AND n.path LIKE uep.node_path_prefix || '%'
+                   AND n.main_node LIKE uep.node_path_prefix || '%'
                  ORDER BY LENGTH(uep.node_path_prefix) DESC,
                           CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
                  LIMIT 1) = true

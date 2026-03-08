@@ -116,6 +116,21 @@ source:activity nodeType:Thread namespace:ACME scope:descendants  # Recently acc
 source:activity nodeType:Document limit:10                        # Last 10 accessed documents
 ```
 
+## is
+Filters by node classification:
+```
+is:main            # Only main nodes (excludes satellite content like comments, threads)
+```
+
+Satellite nodes exist in support of a main node (e.g., comments on a document, threads started from a page). Main nodes have `MainNode == Path` (or null). Satellite nodes have `MainNode` pointing to their primary node's path.
+
+Combine with other qualifiers:
+```
+namespace:ACME is:main                    # Main nodes directly under ACME
+namespace:ACME scope:descendants is:main  # All main nodes under ACME (recursive)
+is:main context:search                    # Main nodes visible in search
+```
+
 ## context
 Filters results by visibility context. Nodes (or their NodeType definitions) can declare contexts from which they should be excluded via the `ExcludeFromContext` property. This enables different views of the same data:
 ```

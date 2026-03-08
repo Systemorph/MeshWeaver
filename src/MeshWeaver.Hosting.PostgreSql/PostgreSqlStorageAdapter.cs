@@ -78,7 +78,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await using var cmd = _dataSource.CreateCommand(
             """
             INSERT INTO mesh_nodes (namespace, id, name, node_type, category, icon, display_order,
-                                    last_modified, version, state, content, desired_id, embedding, is_satellite)
+                                    last_modified, version, state, content, desired_id, embedding, main_node)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
@@ -92,7 +92,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
                 content = EXCLUDED.content,
                 desired_id = EXCLUDED.desired_id,
                 embedding = EXCLUDED.embedding,
-                is_satellite = EXCLUDED.is_satellite
+                main_node = EXCLUDED.main_node
             """);
 
         cmd.Parameters.AddWithValue(ns);
@@ -113,7 +113,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         else
             cmd.Parameters.AddWithValue(DBNull.Value);
 
-        cmd.Parameters.AddWithValue(node.Content is ISatelliteContent);
+        cmd.Parameters.AddWithValue(node.MainNode);
 
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -432,7 +432,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             Content = content,
-            DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id"))
+            DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id")),
+            MainNode = reader.IsDBNull(reader.GetOrdinal("main_node"))
+                ? (string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}")
+                : reader.GetString(reader.GetOrdinal("main_node"))
         };
     }
 

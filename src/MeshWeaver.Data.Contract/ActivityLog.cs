@@ -1,12 +1,11 @@
 ﻿using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Logging;
-using MeshWeaver.Mesh;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.Data;
 
-public record ActivityLog(string Category) : ISatelliteContent
+public record ActivityLog(string Category)
 {
     public DateTime Start { get; init; } = DateTime.UtcNow;
     public int StartVersion { get; init; }
@@ -23,9 +22,9 @@ public record ActivityLog(string Category) : ISatelliteContent
     public ImmutableList<string> AffectedPaths { get; init; } = [];
 
     /// <summary>
-    /// ISatelliteContent — the primary node is the hub that generated this activity.
+    /// The primary node path — the hub that generated this activity.
     /// </summary>
-    string? ISatelliteContent.PrimaryNodePath => HubPath;
+    public string? PrimaryNodePath => HubPath;
 
     public ActivityLog Fail(string error) =>
         this with

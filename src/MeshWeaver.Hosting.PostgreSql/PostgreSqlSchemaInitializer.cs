@@ -96,6 +96,7 @@ public static class PostgreSqlSchemaInitializer
                 content         JSONB,
                 desired_id      TEXT,
                 changed_by      TEXT,
+                main_node       TEXT,
                 PRIMARY KEY (namespace, id, version)
             );
 
@@ -132,7 +133,7 @@ public static class PostgreSqlSchemaInitializer
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
-                is_satellite    BOOLEAN     NOT NULL DEFAULT FALSE,
+                main_node       TEXT,
                 embedding       vector({{dim}}),
                 PRIMARY KEY (namespace, id)
             );
@@ -441,23 +442,20 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$;
 
-            -- Trigger to copy non-satellite rows to history in the versions schema
+            -- Trigger to copy all rows to history in the versions schema
             CREATE OR REPLACE FUNCTION trg_mesh_node_to_history() RETURNS TRIGGER AS $$
             BEGIN
-                IF NEW.is_satellite THEN
-                    RETURN NEW;
-                END IF;
                 BEGIN
                     EXECUTE format(
                         'INSERT INTO %I.mesh_node_history (
                             namespace, id, name, node_type, description, category, icon,
-                            display_order, last_modified, version, state, content, desired_id
-                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
+                            display_order, last_modified, version, state, content, desired_id, main_node
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
                         '{{versionsSchema}}'
                     ) USING
                         NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.description,
                         NEW.category, NEW.icon, NEW.display_order, NEW.last_modified,
-                        NEW.version, NEW.state, NEW.content, NEW.desired_id;
+                        NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node;
                 EXCEPTION WHEN unique_violation THEN
                     -- Already exists, skip
                 END;
@@ -501,7 +499,7 @@ public static class PostgreSqlSchemaInitializer
                 state           SMALLINT    NOT NULL DEFAULT 0,
                 content         JSONB,
                 desired_id      TEXT,
-                is_satellite    BOOLEAN     NOT NULL DEFAULT FALSE,
+                main_node       TEXT,
                 embedding       vector({{dim}}),
                 PRIMARY KEY (namespace, id)
             );
@@ -835,26 +833,24 @@ public static class PostgreSqlSchemaInitializer
                 content         JSONB,
                 desired_id      TEXT,
                 changed_by      TEXT,
+                main_node       TEXT,
                 PRIMARY KEY (namespace, id, version)
             );
 
             CREATE INDEX IF NOT EXISTS idx_mnh_path ON mesh_node_history (path);
             CREATE INDEX IF NOT EXISTS idx_mnh_path_version ON mesh_node_history (path, version DESC);
 
-            -- Trigger to copy non-satellite rows to history on every insert/update
+            -- Trigger to copy all rows to history on every insert/update
             CREATE OR REPLACE FUNCTION trg_mesh_node_to_history() RETURNS TRIGGER AS $$
             BEGIN
-                IF NEW.is_satellite THEN
-                    RETURN NEW;
-                END IF;
                 INSERT INTO mesh_node_history (
                     namespace, id, name, node_type, description, category, icon,
-                    display_order, last_modified, version, state, content, desired_id
+                    display_order, last_modified, version, state, content, desired_id, main_node
                 )
                 VALUES (
                     NEW.namespace, NEW.id, NEW.name, NEW.node_type, NEW.description,
                     NEW.category, NEW.icon, NEW.display_order, NEW.last_modified,
-                    NEW.version, NEW.state, NEW.content, NEW.desired_id
+                    NEW.version, NEW.state, NEW.content, NEW.desired_id, NEW.main_node
                 )
                 ON CONFLICT (namespace, id, version) DO NOTHING;
                 RETURN NEW;

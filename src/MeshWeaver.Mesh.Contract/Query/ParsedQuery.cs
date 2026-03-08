@@ -14,6 +14,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="Source">Data source from source: qualifier</param>
 /// <param name="Select">Property names to project results onto (from select: qualifier)</param>
 /// <param name="Context">Context for visibility filtering (from context: qualifier)</param>
+/// <param name="IsMain">When true, filters to main nodes only (MainNode is null or equals Path)</param>
 public record ParsedQuery(
     QueryNode? Filter,
     string? TextSearch,
@@ -23,7 +24,8 @@ public record ParsedQuery(
     int? Limit = null,
     QuerySource Source = QuerySource.Default,
     IReadOnlyList<string>? Select = null,
-    string? Context = null
+    string? Context = null,
+    bool? IsMain = null
 )
 {
     /// <summary>

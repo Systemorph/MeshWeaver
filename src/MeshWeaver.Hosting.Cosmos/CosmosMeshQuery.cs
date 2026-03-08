@@ -81,6 +81,8 @@ public class CosmosMeshQuery : IMeshQueryProvider
             {
                 if (context != null && IsExcludedByContext(node, context))
                     continue;
+                if (parsedQuery.IsMain == true && node.MainNode != node.Path)
+                    continue;
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
             }
@@ -106,6 +108,8 @@ public class CosmosMeshQuery : IMeshQueryProvider
         await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, ct: ct))
         {
             if (context != null && IsExcludedByContext(node, context))
+                continue;
+            if (parsedQuery.IsMain == true && node.MainNode != node.Path)
                 continue;
 
             // Apply skip for paging

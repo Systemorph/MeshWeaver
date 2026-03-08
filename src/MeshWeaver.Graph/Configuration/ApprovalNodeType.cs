@@ -31,6 +31,7 @@ public static class ApprovalNodeType
     {
         Name = "Approval",
         Icon = "/static/NodeTypeIcons/checkmark.svg",
+        IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(ApprovalNodeType).Assembly.Location,
         HubConfiguration = config => config

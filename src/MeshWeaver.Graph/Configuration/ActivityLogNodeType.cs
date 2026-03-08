@@ -30,6 +30,7 @@ public static class ActivityLogNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Activity Log",
+        IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(ActivityLogNodeType).Assembly.Location,
         HubConfiguration = config => config
