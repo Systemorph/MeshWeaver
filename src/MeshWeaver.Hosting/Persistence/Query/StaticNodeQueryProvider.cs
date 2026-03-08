@@ -79,6 +79,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                     continue;
                 if (IsExcludedByContext(node, context))
                     continue;
+                if (parsed.IsMain == true && node.MainNode != node.Path)
+                    continue;
                 yield return node;
             }
         }
@@ -93,6 +95,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                 if (!_evaluator.Matches(node, parsed))
                     continue;
                 if (IsExcludedByContext(node, context))
+                    continue;
+                if (parsed.IsMain == true && node.MainNode != node.Path)
                     continue;
                 yield return node;
             }

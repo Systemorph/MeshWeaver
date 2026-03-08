@@ -73,6 +73,8 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
 
         public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
             => persistence.DeleteNodeAsync(path, true, ct);
+
+        public IMeshNodePersistence ImpersonateAsNode() => this;
     }
 
     [HubFact]

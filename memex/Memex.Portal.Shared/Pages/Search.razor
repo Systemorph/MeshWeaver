@@ -226,7 +226,7 @@
 
         try
         {
-            var fullQuery = $"{query} -nodeType:Comment -nodeType:Thread";
+            var fullQuery = $"{query} is:main context:search";
             var request = new MeshQueryRequest
             {
                 Query = fullQuery,

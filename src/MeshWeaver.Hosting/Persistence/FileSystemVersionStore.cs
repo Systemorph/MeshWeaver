@@ -10,7 +10,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// File system implementation of IVersionQuery.
 /// Writes versioned snapshots to a Versions folder alongside the data directory.
 /// File naming: {namespace}/{id}_{version}.json
-/// Skips ISatelliteContent nodes.
+/// Deduplicates to avoid storing identical versions.
 /// </summary>
 public class FileSystemVersionStore : IVersionQuery
 {
@@ -28,13 +28,11 @@ public class FileSystemVersionStore : IVersionQuery
 
     /// <summary>
     /// Writes a versioned copy of a node. Called after save.
-    /// Skips satellite content nodes.
     /// Deduplicates: skips write if serialized content is identical to last write for this path.
     /// </summary>
     public async Task WriteVersionAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         if (node.Version <= 0) return;
-        if (node.Content is ISatelliteContent) return;
 
         var writeOptions = _writeOptionsModifier != null
             ? _writeOptionsModifier(options)

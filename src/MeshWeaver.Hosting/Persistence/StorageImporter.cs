@@ -222,9 +222,9 @@ public class StorageImporter
                     HashSet<string>? childDirNames = null;
                     if (subPaths.Any())
                     {
-                        var (_, childDirPaths) = await _source.ListChildPathsAsync(nodePath, ct);
+                        var (childNodePaths, childDirPaths) = await _source.ListChildPathsAsync(nodePath, ct);
                         childDirNames = new HashSet<string>(
-                            childDirPaths.Select(cd => cd[(cd.LastIndexOf('/') + 1)..]),
+                            childNodePaths.Concat(childDirPaths).Select(cd => cd[(cd.LastIndexOf('/') + 1)..]),
                             StringComparer.OrdinalIgnoreCase);
                     }
 

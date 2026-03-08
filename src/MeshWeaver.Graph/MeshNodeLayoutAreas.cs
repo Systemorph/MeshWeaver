@@ -492,8 +492,8 @@ public static class MeshNodeLayoutAreas
                     .WithCreateHref(createHref);
             }
 
-            // Instance node catalog - excludes NodeType nodes
-            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} -nodeType:NodeType";
+            // Instance node catalog - excludes satellite and search-excluded types
+            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} is:main context:search";
 
             return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
@@ -517,7 +517,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{hubPath} -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
+            .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)

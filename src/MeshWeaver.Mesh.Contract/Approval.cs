@@ -18,7 +18,7 @@ public enum ApprovalStatus
 /// Represents an approval request on a mesh node.
 /// Approvals are satellite content — permissions delegate to the primary document node.
 /// </summary>
-public record Approval : ISatelliteContent
+public record Approval
 {
     /// <summary>Unique identifier for the approval.</summary>
     [Browsable(false)]
@@ -26,7 +26,7 @@ public record Approval : ISatelliteContent
     public string Id { get; init; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// Path of the primary document node this approval belongs to (ISatelliteContent).
+    /// Path of the primary document node this approval belongs to.
     /// </summary>
     [Browsable(false)]
     public string? PrimaryNodePath { get; init; }

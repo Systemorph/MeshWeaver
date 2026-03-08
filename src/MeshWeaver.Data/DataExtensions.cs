@@ -9,7 +9,6 @@ using MeshWeaver.Data.Persistence;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Data.Validation;
 using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
@@ -516,13 +515,15 @@ public static class DataExtensions
     }
 
     /// <summary>
-    /// Checks if a DataChangeRequest only contains ISatelliteContent changes.
+    /// Checks if a DataChangeRequest only contains satellite content changes.
     /// Satellite content (ActivityLog, Comment, Thread) should not trigger activity tracking.
+    /// A type is considered satellite if it has a PrimaryNodePath property (convention-based).
     /// </summary>
     private static bool IsSatelliteContentChange(DataChangeRequest request)
     {
         var allEntities = request.Creations.Concat(request.Updates).Concat(request.Deletions);
-        return allEntities.Any() && allEntities.All(e => e is MeshWeaver.Mesh.ISatelliteContent);
+        return allEntities.Any() && allEntities.All(e =>
+            e.GetType().GetProperty("PrimaryNodePath") != null);
     }
 
     private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
@@ -542,7 +543,7 @@ public static class DataExtensions
 
         // Record change in the bundler for debounced persistent logging.
         // The Activity is still used for validation error reporting in the response.
-        // Skip activity tracking for activity hubs and for ISatelliteContent changes.
+        // Skip activity tracking for activity hubs and for satellite content changes.
         var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
         if (!isActivityHub && !IsSatelliteContentChange(changeRequest))
         {

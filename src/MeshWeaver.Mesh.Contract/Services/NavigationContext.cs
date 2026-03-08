@@ -45,19 +45,15 @@ public record NavigationContext
     public string Namespace => Address.ToString();
 
     /// <summary>
-    /// The primary node's path. For satellite nodes (Comment, Thread),
+    /// The primary node's path. For satellite nodes,
     /// this is the main node's path. For regular nodes, same as Namespace.
     /// Used for permission resolution and menu context.
     /// </summary>
-    public string PrimaryPath =>
-        Node?.Content is ISatelliteContent satellite && !string.IsNullOrEmpty(satellite.PrimaryNodePath)
-            ? satellite.PrimaryNodePath
-            : Namespace;
+    public string PrimaryPath => Node?.MainNode ?? Namespace;
 
     /// <summary>
     /// Whether the current node is a satellite (exists in conjunction with a primary node).
+    /// True when MainNode is set and differs from Path.
     /// </summary>
-    public bool IsSatellite =>
-        Node?.Content is ISatelliteContent satellite
-        && !string.IsNullOrEmpty(satellite.PrimaryNodePath);
+    public bool IsSatellite => Node != null && Node.MainNode != Node.Path;
 }

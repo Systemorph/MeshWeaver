@@ -83,4 +83,20 @@ public class MeshConfiguration(
         return _contextExcludedTypes.Value.TryGetValue(context, out var excluded)
                && excluded.Contains(nodeType);
     }
+
+    /// <summary>
+    /// Set of node types that are satellite types (IsSatelliteType = true on their type definition).
+    /// Used to determine whether to set MainNode on new instances.
+    /// </summary>
+    private readonly Lazy<HashSet<string>> _satelliteNodeTypes = new(() =>
+        meshNodes.Values
+            .Where(n => n.IsSatelliteType)
+            .Select(n => n.Path)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Checks whether a given node type is a satellite type.
+    /// </summary>
+    public bool IsSatelliteNodeType(string? nodeType) =>
+        !string.IsNullOrEmpty(nodeType) && _satelliteNodeTypes.Value.Contains(nodeType);
 }

@@ -86,6 +86,13 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string Path => string.IsNullOrEmpty(Namespace) ? (Id) : $"{Namespace}/{Id}";
 
     /// <summary>
+    /// Path of the main/primary node. For main nodes, MainNode == Path.
+    /// For satellite nodes (comments, threads, approvals), this points to the primary node they belong to.
+    /// </summary>
+    [Editable(false)]
+    public string MainNode { get; init; } = string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
+
+    /// <summary>
     /// Single segments as used for matching and addressing.
     /// </summary>
     [JsonIgnore, NotMapped]
@@ -218,6 +225,13 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// when transient node path uses GUID but user wants specific Id.
     /// </summary>
     public string? DesiredId { get; init; }
+
+    /// <summary>
+    /// When set on a NodeType definition node, marks all instances of this type as satellite nodes.
+    /// Satellite nodes' MainNode is set to their primary node path at creation time.
+    /// </summary>
+    [Editable(false)]
+    public bool IsSatelliteType { get; init; }
 
     /// <summary>
     /// Contexts from which this node (or nodes of this type) should be excluded.

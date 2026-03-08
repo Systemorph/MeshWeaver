@@ -9,7 +9,7 @@ public partial class QueryParser
     // Reserved qualifier names (case-insensitive)
     private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "path", "namespace", "scope", "sort", "limit", "source", "select", "context"
+        "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is"
     };
 
     /// <summary>
@@ -23,7 +23,7 @@ public partial class QueryParser
             return ParsedQuery.Empty;
 
         var tokens = Tokenize(query);
-        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context) = ExtractReservedQualifiers(tokens);
+        var (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain) = ExtractReservedQualifiers(tokens);
 
         // Parse the filter expression from remaining tokens
         QueryNode? filter = null;
@@ -33,7 +33,7 @@ public partial class QueryParser
             filter = ParseOr(filterTokens, ref position);
         }
 
-        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context);
+        return new ParsedQuery(filter, textSearch, path, scope, orderBy, limit, source, select, context, isMain);
     }
 
     /// <summary>
@@ -338,7 +338,7 @@ public partial class QueryParser
     /// Extracts reserved qualifiers (path, namespace, scope, sort, limit, source) from tokens.
     /// Returns remaining filter tokens and extracted values.
     /// </summary>
-    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context)
+    private (List<Token> FilterTokens, string? TextSearch, string? Path, QueryScope Scope, OrderByClause? OrderBy, int? Limit, QuerySource Source, IReadOnlyList<string>? Select, string? Context, bool? IsMain)
         ExtractReservedQualifiers(List<Token> tokens)
     {
         var filterTokens = new List<Token>();
@@ -352,6 +352,7 @@ public partial class QueryParser
         var source = QuerySource.Default;
         IReadOnlyList<string>? select = null;
         string? context = null;
+        bool? isMain = null;
 
         foreach (var token in tokens)
         {
@@ -442,6 +443,13 @@ public partial class QueryParser
                     context = value;
                     continue;
                 }
+
+                if (field.Equals("is", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (value.Equals("main", StringComparison.OrdinalIgnoreCase))
+                        isMain = true;
+                    continue;
+                }
             }
 
             filterTokens.Add(token);
@@ -456,7 +464,7 @@ public partial class QueryParser
         }
 
         var textSearch = textSearchParts.Count > 0 ? string.Join(" ", textSearchParts) : null;
-        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context);
+        return (filterTokens, textSearch, path, scope, orderBy, limit, source, select, context, isMain);
     }
 
     /// <summary>

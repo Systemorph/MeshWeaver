@@ -158,7 +158,8 @@ internal class InMemoryMeshQuery(
         {
             var node = await persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
             if (node != null && _evaluator.Matches(node, parsedQuery)
-                && !IsExcludedByContext(node, context))
+                && !IsExcludedByContext(node, context)
+                && !IsExcludedByIsMain(node, parsedQuery))
             {
                 yield return node;
             }
@@ -170,7 +171,8 @@ internal class InMemoryMeshQuery(
             await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options)
                 .WithCancellation(ct))
             {
-                if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context))
+                if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context)
+                    && !IsExcludedByIsMain(child, parsedQuery))
                     yield return child;
             }
         }
@@ -190,7 +192,8 @@ internal class InMemoryMeshQuery(
                     ancestorPath, userId, options).WithCancellation(ct))
                 {
                     if (_evaluator.Matches(child, parsedQuery)
-                        && !IsExcludedByContext(child, context))
+                        && !IsExcludedByContext(child, context)
+                        && !IsExcludedByIsMain(child, parsedQuery))
                         yield return child;
                 }
             }
@@ -205,7 +208,8 @@ internal class InMemoryMeshQuery(
                 basePath, userId, options).WithCancellation(ct))
             {
                 if (_evaluator.Matches(descendant, parsedQuery)
-                    && !IsExcludedByContext(descendant, context))
+                    && !IsExcludedByContext(descendant, context)
+                    && !IsExcludedByIsMain(descendant, parsedQuery))
                     yield return descendant;
             }
         }
@@ -696,5 +700,15 @@ internal class InMemoryMeshQuery(
         if (node.ExcludeFromContext?.Contains(context) == true)
             return true;
         return false;
+    }
+
+    /// <summary>
+    /// Checks whether a node should be excluded by the is:main filter.
+    /// Excludes satellite nodes (MainNode != null and MainNode != Path).
+    /// </summary>
+    private static bool IsExcludedByIsMain(MeshNode node, ParsedQuery query)
+    {
+        if (query.IsMain != true) return false;
+        return node.MainNode != node.Path;
     }
 }

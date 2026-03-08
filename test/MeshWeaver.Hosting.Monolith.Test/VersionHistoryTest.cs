@@ -148,15 +148,16 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task SatelliteContent_ExcludedFromVersionHistory()
+    public async Task SatelliteContent_IncludedInVersionHistory()
     {
-        // Arrange - create a node with ISatelliteContent (ActivityLog)
+        // Arrange - create a satellite node (MainNode != Path)
         var activityLog = new ActivityLog("TestActivity") { HubPath = "test/primary" };
         var node = MeshNode.FromPath("test/satellite") with
         {
             Name = "Satellite Node",
             State = MeshNodeState.Active,
-            Content = activityLog
+            Content = activityLog,
+            MainNode = "test/primary"
         };
         var created = await CreateNodeAsync(node);
 
@@ -170,8 +171,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         await foreach (var v in versionQuery.GetVersionsAsync("test/satellite"))
             versions.Add(v);
 
-        // Assert - satellite content should be excluded from version history
-        versions.Should().BeEmpty("satellite content nodes should not have version history");
+        // Assert - satellite content should now be included in version history
+        versions.Should().NotBeEmpty("satellite content nodes should now have version history");
     }
 
     [Fact(Timeout = 10000)]
