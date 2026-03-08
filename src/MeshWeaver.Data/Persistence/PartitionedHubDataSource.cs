@@ -39,11 +39,24 @@ namespace MeshWeaver.Data.Persistence
                 // Wrapping in PartitionedWorkspaceReference would cause the remote hub's data source
                 // to create a separate partitioned stream instead of using its default (null-partition) stream.
                 var reference = GetReference();
-                return Workspace.GetRemoteStreamAsHub(partition, reference);
+                Logger.LogDebug("PartitionedHubDataSource: Creating remote stream for partition {Partition}, reference={Reference}", partition, reference);
+                var stream = Workspace.GetRemoteStreamAsHub(partition, reference);
+                stream.RegisterForDisposal(
+                    ((IObservable<ChangeItem<EntityStore>>)stream)
+                        .Subscribe(
+                            ci => Logger.LogDebug("PartitionedHubDataSource: Partition {Partition} received data, collections={Collections}",
+                                partition, ci.Value?.Collections?.Count ?? 0),
+                            ex => Logger.LogWarning(ex, "PartitionedHubDataSource: Partition {Partition} ERRORED", partition),
+                            () => Logger.LogDebug("PartitionedHubDataSource: Partition {Partition} COMPLETED", partition)
+                        )
+                );
+                return stream;
             }
 
             // Null partition: combine all initialized partition streams into one.
             // This is called when views request GetStream<T>() without specifying a partition.
+            Logger.LogDebug("PartitionedHubDataSource: Creating combined stream for {Count} partitions: {Partitions}",
+                InitializePartitions.Length, string.Join(", ", InitializePartitions));
             var partitionStreams = InitializePartitions
                 .Select(p => GetStreamForPartition(p))
                 .ToArray();
@@ -70,11 +83,20 @@ namespace MeshWeaver.Data.Persistence
                 .Synchronize()
                 .Subscribe(changes =>
                 {
+                    Logger.LogDebug("PartitionedHubDataSource: CombineLatest fired, {Count} changes, isInitialized={IsInit}",
+                        changes.Count, isInitialized);
                     if (!isInitialized)
                     {
                         var initialStore = changes
                             .Where(c => c.Value != null)
                             .Aggregate(new EntityStore(), (acc, change) => acc.Merge(change.Value!));
+
+                        Logger.LogDebug("PartitionedHubDataSource: Initial merge result: {Collections} collections, {TotalEntities} total entities",
+                            initialStore.Collections.Count,
+                            initialStore.Collections.Values.Sum(c => c.Instances.Count));
+                        foreach (var col in initialStore.Collections)
+                            Logger.LogDebug("PartitionedHubDataSource:   Collection '{Key}': {Count} instances",
+                                col.Key, col.Value.Instances.Count);
 
                         ret.OnNext(new ChangeItem<EntityStore>(initialStore, ret.StreamId, ret.Hub.Version));
 

@@ -161,4 +161,117 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
         ex.Should().NotBeOfType<TimeoutException>(
             "client subscription should propagate data source error, not timeout");
     }
+
+    /// <summary>
+    /// Link 5: DataContext failure state — when initialization fails, DataContext stores the error.
+    /// Subsequent SubscribeRequests get immediate DeliveryFailure with a meaningful message.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task FailedHub_SubsequentSubscribe_ShouldGetImmediateError()
+    {
+        await EnsureHubStarted(new Address("SourceHub"));
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = "NobodyUser", Name = "Nobody" });
+
+        // Create a group hub whose data source will fail (access denied)
+        var groupAddress = new Address("group-hub-failstate", "1");
+        var groupHub = Mesh.ServiceProvider.CreateMessageHub(
+            groupAddress,
+            c => c.AddData(d =>
+                d.AddHubSource(new Address("SourceHub"), ds => ds.WithType<TestItem>())));
+
+        // Wait for the internal stream to error (proves initialization failed)
+        var internalStream = groupHub.GetWorkspace().GetStream<TestItem>();
+        internalStream.Should().NotBeNull();
+        var internalAct = async () => await internalStream!.Timeout(5.Seconds()).FirstAsync();
+        var internalEx = await Assert.ThrowsAnyAsync<Exception>(internalAct);
+        Output.WriteLine($"Internal stream errored: {internalEx.GetType().Name}: {internalEx.Message}");
+        internalEx.Should().NotBeOfType<TimeoutException>();
+
+        // Now a second client subscribes — should get immediate error, not timeout.
+        // This also gives time for DataContext.OpenInitializationGate's ContinueWith to run.
+        var client2 = GetClient(c => c.AddData(d => d));
+        var remoteStream2 = client2.GetWorkspace().GetRemoteStream<EntityStore>(
+            groupAddress, new CollectionsReference(typeof(TestItem).FullName!));
+
+        var remoteAct2 = async () => await remoteStream2.Timeout(3.Seconds()).FirstAsync();
+        var remoteEx2 = await Assert.ThrowsAnyAsync<Exception>(remoteAct2);
+        Output.WriteLine($"Second subscriber result: {remoteEx2.GetType().Name}: {remoteEx2.Message}");
+
+        remoteEx2.Should().NotBeOfType<TimeoutException>(
+            "second subscriber should get immediate DeliveryFailure from failed hub, not timeout");
+
+        // Verify DataContext is in failed state (by now ContinueWith has completed)
+        var dataContext = groupHub.GetWorkspace().DataContext;
+        dataContext.InitializationError.Should().NotBeNull(
+            "DataContext should be in failed state after initialization failure");
+        Output.WriteLine($"DataContext.InitializationError: {dataContext.InitializationError!.Message}");
+    }
+
+    /// <summary>
+    /// Link 6: Failed hub rejects GetDataRequest with DeliveryFailure.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task FailedHub_GetDataRequest_ShouldReturnError()
+    {
+        await EnsureHubStarted(new Address("SourceHub"));
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = "NobodyUser", Name = "Nobody" });
+
+        var groupAddress = new Address("group-hub-getdata", "1");
+        var groupHub = Mesh.ServiceProvider.CreateMessageHub(
+            groupAddress,
+            c => c.AddData(d =>
+                d.AddHubSource(new Address("SourceHub"), ds => ds.WithType<TestItem>())));
+
+        // Wait for internal stream error (proves init failed)
+        var stream = groupHub.GetWorkspace().GetStream<TestItem>();
+        stream.Should().NotBeNull();
+        await Assert.ThrowsAnyAsync<Exception>(
+            async () => await stream!.Timeout(5.Seconds()).FirstAsync());
+
+        // GetDataRequest should throw, not timeout
+        var client = GetClient();
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await client.AwaitResponse(
+                new GetDataRequest(new CollectionsReference(typeof(TestItem).FullName!)),
+                o => o.WithTarget(groupAddress),
+                TestContext.Current.CancellationToken));
+
+        Output.WriteLine($"GetDataRequest error: {ex.GetType().Name}: {ex.Message}");
+        ex.Should().NotBeOfType<TimeoutException>("should get error, not timeout");
+        ex.ToString().Should().Contain("initialization failed");
+    }
+
+    /// <summary>
+    /// Link 7: Failed hub rejects DataChangeRequest with DeliveryFailure.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task FailedHub_DataChangeRequest_ShouldReturnError()
+    {
+        await EnsureHubStarted(new Address("SourceHub"));
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = "NobodyUser", Name = "Nobody" });
+
+        var groupAddress = new Address("group-hub-change", "1");
+        var groupHub = Mesh.ServiceProvider.CreateMessageHub(
+            groupAddress,
+            c => c.AddData(d =>
+                d.AddHubSource(new Address("SourceHub"), ds => ds.WithType<TestItem>())));
+
+        // Wait for internal stream error
+        var stream = groupHub.GetWorkspace().GetStream<TestItem>();
+        stream.Should().NotBeNull();
+        await Assert.ThrowsAnyAsync<Exception>(
+            async () => await stream!.Timeout(5.Seconds()).FirstAsync());
+
+        // DataChangeRequest should throw, not timeout
+        var client = GetClient();
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await client.AwaitResponse(
+                new DataChangeRequest { Updates = [new TestItem("1", "Test")] },
+                o => o.WithTarget(groupAddress),
+                TestContext.Current.CancellationToken));
+
+        Output.WriteLine($"DataChangeRequest error: {ex.GetType().Name}: {ex.Message}");
+        ex.Should().NotBeOfType<TimeoutException>("should get error, not timeout");
+        ex.ToString().Should().Contain("initialization failed");
+    }
 }
