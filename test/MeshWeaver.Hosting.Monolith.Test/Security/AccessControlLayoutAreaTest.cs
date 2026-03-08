@@ -30,12 +30,17 @@ namespace MeshWeaver.Hosting.Monolith.Test.Security;
 public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
-    private const string NodePath = "TestOrg/TestProject";
+    private const string NodePath = "ACME/Project";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
             .AddRowLevelSecurity()
-            .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
+            .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas())
+            .AddMeshNodes(
+                MeshNode.FromPath("ACME") with { Name = "ACME", NodeType = "Organization" },
+                MeshNode.FromPath("ACME/Project") with { Name = "Project", NodeType = "Project" },
+                MeshNode.FromPath("ACME/Documentation") with { Name = "Documentation", NodeType = "Markdown" }
+            );
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration)
@@ -47,7 +52,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     {
         // Seed data so the layout has something to render
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("TestUser", "Viewer", "TestOrg", "system", TestTimeout);
+        await svc.AddUserRoleAsync("TestUser", "Viewer", "ACME", "system", TestTimeout);
 
         var client = GetClient();
         var nodeAddress = new Address(NodePath);
@@ -80,7 +85,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     {
         // Seed both inherited and local assignments
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("InheritedUser", "Viewer", "TestOrg", "system", TestTimeout);
+        await svc.AddUserRoleAsync("InheritedUser", "Viewer", "ACME", "system", TestTimeout);
         await svc.AddUserRoleAsync("LocalUser", "Editor", NodePath, "system", TestTimeout);
 
         var client = GetClient();
@@ -124,11 +129,11 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     {
         // Seed assignments at parent and at a deeper nested path
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("ParentUser", "Viewer", "TestOrg", "system", TestTimeout);
-        await svc.AddUserRoleAsync("NestedUser", "Editor", "TestOrg/TestProject/Docs", "system", TestTimeout);
+        await svc.AddUserRoleAsync("ParentUser", "Viewer", "ACME", "system", TestTimeout);
+        await svc.AddUserRoleAsync("NestedUser", "Editor", "ACME/Documentation", "system", TestTimeout);
 
         var client = GetClient();
-        var nestedPath = "TestOrg/TestProject/Docs";
+        var nestedPath = "ACME/Documentation";
         var nodeAddress = new Address(nestedPath);
 
         await client.AwaitResponse(

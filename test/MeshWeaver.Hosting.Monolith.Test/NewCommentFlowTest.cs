@@ -185,8 +185,8 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         var updatedComment = comment with { Text = "This is my comment text" };
         var updatedNode = createdNode with { Content = updatedComment };
 
-        Output.WriteLine("Saving updated comment via NodeFactory.CreateNodeAsync...");
-        await NodeFactory.CreateNodeAsync(updatedNode, ct: TestTimeout);
+        Output.WriteLine("Saving updated comment via NodeFactory.UpdateNodeAsync...");
+        await NodeFactory.UpdateNodeAsync(updatedNode, ct: TestTimeout);
 
         // Step 3: Verify the text persisted
         var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
@@ -380,8 +380,8 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
         var editedNode = created with { Content = editedComment };
 
-        Output.WriteLine("3. Updating comment text via NodeFactory.CreateNodeAsync...");
-        await NodeFactory.CreateNodeAsync(editedNode, ct: TestTimeout);
+        Output.WriteLine("3. Updating comment text via NodeFactory.UpdateNodeAsync...");
+        await NodeFactory.UpdateNodeAsync(editedNode, ct: TestTimeout);
 
         // 4. "Reload" — query fresh from persistence
         Output.WriteLine("4. Simulating reload — querying from persistence...");

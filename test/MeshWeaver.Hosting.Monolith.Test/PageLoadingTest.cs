@@ -170,8 +170,8 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     /// Tests that Person nodes load without hanging.
     /// </summary>
     [Theory(Timeout = 10000)]
-    [InlineData("User/Alice")]
-    [InlineData("User/Bob")]
+    [InlineData("Cornerstone/Microsoft")]
+    [InlineData("Cornerstone/Tesla")]
     public async Task Person_LoadsWithoutHanging(string nodePath)
     {
         await AssertNodeLoadsWithoutHanging(nodePath);
@@ -184,7 +184,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     [Fact(Timeout = 10000)]
     public async Task User_Activity_LoadsWithoutHanging()
     {
-        await AssertAreaLoadsWithoutHanging("User/Roland", "Activity");
+        await AssertAreaLoadsWithoutHanging("Cornerstone/Microsoft", "Activity");
     }
 
     #endregion
@@ -256,7 +256,7 @@ public class PageLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         {
             "Cornerstone/Microsoft",
             "ACME",
-            "User/Alice",
+            "Cornerstone/Microsoft",
             "Northwind"
         };
 

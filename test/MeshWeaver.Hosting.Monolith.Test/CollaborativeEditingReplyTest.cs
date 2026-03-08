@@ -120,13 +120,12 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         comments.Should().HaveCountGreaterThanOrEqualTo(6,
             "CollaborativeEditing document should have at least 6 comment children (c1-c6)");
 
-        // Verify the comments have proper content
-        foreach (var comment in comments.Take(3))
+        // Verify comments have proper content (all sample comments have Author set)
+        foreach (var comment in comments)
         {
             var content = comment.Content.Should().BeOfType<Comment>().Subject;
-            content.Author.Should().NotBeNullOrEmpty();
-            content.Text.Should().NotBeNullOrEmpty();
-            Output.WriteLine($"  Comment {comment.Path}: by {content.Author}");
+            content.Author.Should().NotBeNullOrEmpty($"Comment {comment.Id} (path: {comment.Path}) should have an author");
+            Output.WriteLine($"  Comment {comment.Id}: by {content.Author}, text='{content.Text?.Substring(0, Math.Min(30, content.Text?.Length ?? 0))}'");
         }
     }
 

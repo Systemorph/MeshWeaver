@@ -45,7 +45,7 @@ public class RlsNodeValidator : INodeValidator
         if (requiredPermission == Permission.None)
             return NodeValidationResult.Valid();
 
-        // Get the user ID from AccessContext or from the request
+        // Get the user ID from the request or AccessContext
         var userId = GetUserId(context);
 
         // For Create operations, check permission on parent path
@@ -77,7 +77,7 @@ public class RlsNodeValidator : INodeValidator
         }
         else
         {
-            // Fallback to context-based check (uses AccessService internally)
+            // Fallback to context-based check for Read operations
             hasPermission = await _securityService.HasPermissionAsync(
                 pathToCheck,
                 requiredPermission,
@@ -121,12 +121,12 @@ public class RlsNodeValidator : INodeValidator
 
     /// <summary>
     /// Extracts the user ID from the validation context.
-    /// Prioritizes the request-specific user (explicit identity for the operation),
-    /// then falls back to AccessContext (authenticated session user).
+    /// First checks explicit request identity (CreatedBy/UpdatedBy/DeletedBy),
+    /// then falls back to AccessContext (the logged-in user).
     /// </summary>
     private static string? GetUserId(NodeValidationContext context)
     {
-        // First try request-specific user properties (explicit identity for the operation)
+        // Check explicit request identity first
         var requestUserId = context.Request switch
         {
             CreateNodeRequest createReq => createReq.CreatedBy,

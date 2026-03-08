@@ -96,7 +96,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 10000)]
     public async Task GetDataRequest_WithContentCollectionReference_ReturnsConfig()
     {
-        var aliceAddress = new Address("User/Alice");
+        var aliceAddress = new Address("Cornerstone/Microsoft");
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize Alice hub
@@ -122,7 +122,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var attachmentsConfig = configs!.First();
         attachmentsConfig.Name.Should().Be("attachments");
         attachmentsConfig.SourceType.Should().Be("FileSystem");
-        attachmentsConfig.BasePath.Should().Contain("attachments").And.EndWith("Alice");
+        attachmentsConfig.BasePath.Should().Contain("attachments").And.EndWith("Cornerstone/Microsoft");
     }
 
     /// <summary>
@@ -131,7 +131,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 10000)]
     public async Task GetDataRequest_WithEmptyContentCollectionReference_ReturnsAllCollections()
     {
-        var aliceAddress = new Address("User/Alice");
+        var aliceAddress = new Address("Cornerstone/Microsoft");
         var client = GetClient(c => c.AddContentCollections());
 
         await client.AwaitResponse(
