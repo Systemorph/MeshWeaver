@@ -63,7 +63,8 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         hub.Post(e, o => o.WithTarget(reduced.Owner));
-                    })
+                    },
+                    ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
 
         else
@@ -78,7 +79,8 @@ public static class JsonSynchronizationStream
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
                         hub.Post(e, o => o.WithTarget(reduced.Owner));
-                    })
+                    },
+                    ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
 
 

@@ -237,7 +237,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 {
                     var failure = delivery.Message;
                     logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
-                    Store.OnError(new DeliveryFailureException(failure));
+                    try
+                    {
+                        Store.OnError(new DeliveryFailureException(failure));
+                    }
+                    catch (Exception ex)
+                    {
+                        // Subscribers without error handlers will throw here — that's expected
+                        logger.LogDebug(ex, "Exception from Store.OnError propagation for stream {StreamId}", StreamId);
+                    }
                     return delivery.Processed();
                 }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
@@ -279,7 +287,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest or DeliveryFailure || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
