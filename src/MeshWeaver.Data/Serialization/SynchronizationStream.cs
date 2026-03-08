@@ -233,6 +233,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     hub.GetWorkspace().RequestChange(delivery.Message, null, delivery);
                     return delivery.Processed();
                 }
+            ).WithHandler<GetDataResponse>((_, delivery) =>
+                {
+                    var response = delivery.Message;
+                    if (response.Error is { } error)
+                    {
+                        logger.LogWarning("Stream {StreamId} subscription rejected: {Error}", StreamId, error);
+                        try
+                        {
+                            Store.OnError(new UnauthorizedAccessException(
+                                $"Subscription to {StreamIdentity.Owner} for {Reference} failed: {error}"));
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug(ex, "Exception from Store.OnError propagation for stream {StreamId}", StreamId);
+                        }
+                    }
+                    return delivery.Processed();
+                }
             ).WithHandler<DeliveryFailure>((_, delivery) =>
                 {
                     var failure = delivery.Message;
@@ -287,7 +305,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest or DeliveryFailure || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)

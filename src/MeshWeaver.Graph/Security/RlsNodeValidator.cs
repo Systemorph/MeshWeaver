@@ -14,11 +14,17 @@ public class RlsNodeValidator : INodeValidator
 {
     private readonly ISecurityService _securityService;
     private readonly ILogger<RlsNodeValidator> _logger;
+    private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
 
-    public RlsNodeValidator(ISecurityService securityService, ILogger<RlsNodeValidator> logger)
+    public RlsNodeValidator(
+        ISecurityService securityService,
+        ILogger<RlsNodeValidator> logger,
+        IEnumerable<INodeTypeAccessRule> accessRules)
     {
         _securityService = securityService;
         _logger = logger;
+        _accessRules = accessRules
+            .ToDictionary(r => r.NodeType, r => r, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -47,6 +53,28 @@ public class RlsNodeValidator : INodeValidator
 
         // Get the user ID from the request or AccessContext
         var userId = GetUserId(context);
+
+        // Check for a custom access rule for this node type
+        if (!string.IsNullOrEmpty(context.Node.NodeType) &&
+            _accessRules.TryGetValue(context.Node.NodeType, out var accessRule) &&
+            (accessRule.SupportedOperations.Count == 0 ||
+             accessRule.SupportedOperations.Contains(context.Operation)))
+        {
+            var hasCustomAccess = await accessRule.HasAccessAsync(context, userId, ct);
+            if (hasCustomAccess)
+            {
+                _logger.LogTrace(
+                    "RLS: Custom access rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
+                    userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
+                return NodeValidationResult.Valid();
+            }
+
+            _logger.LogDebug(
+                "RLS: Custom access rule denied {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
+                userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
+            return NodeValidationResult.Unauthorized(
+                $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'");
+        }
 
         // For Create operations, check permission on parent path
         // (user needs Create permission on the parent to create a child)
