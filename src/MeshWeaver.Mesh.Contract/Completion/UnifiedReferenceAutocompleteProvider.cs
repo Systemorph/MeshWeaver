@@ -15,7 +15,7 @@ namespace MeshWeaver.Mesh.Completion;
 /// </summary>
 internal class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
-    IMeshQuery? meshQuery,
+    IMeshService? meshQuery,
     INavigationService? navigationContext,
     IMessageHub hub) : IAutocompleteProvider
 {

@@ -278,7 +278,7 @@
             var nodePath = $"{nodeNamespace}/{finalId}";
 
             // Check if a node already exists at this path
-            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
             if (existingNode != null && existingNode.State != MeshNodeState.Transient)
             {
@@ -294,7 +294,7 @@
                 State = MeshNodeState.Transient
             };
 
-            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             await nodeFactory.CreateTransientAsync(transientNode);
 
             // Store result data for navigation

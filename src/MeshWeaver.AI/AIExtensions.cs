@@ -31,7 +31,7 @@ public static class AIExtensions
     /// Stores chats in the parent object's namespace:
     /// - Chat metadata: {scope}/chats/{userId}/{threadId}
     /// - Messages: {scope}/chats/{userId}/{threadId}/messages/
-    /// Requires IPersistenceService to be registered.
+    /// Requires IMeshStorage to be registered.
     /// </summary>
     public static IServiceCollection AddAgentChatServicesWithPersistence(this IServiceCollection services)
     {

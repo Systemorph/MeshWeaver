@@ -16,21 +16,21 @@ using System.Runtime.CompilerServices;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Mesh catalog implementation that uses IPersistenceService for storage.
+/// Mesh catalog implementation that uses IMeshStorage for storage.
 /// Configure with AddFileSystemPersistence() for file-backed storage
 /// or AddInMemoryPersistence() for transient storage.
 /// </summary>
 internal sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
-    IPersistenceService persistenceService,
-    IMeshQuery? meshQuery = null)
-    : IMeshCatalog, IMeshNodePersistence
+    IMeshStorage persistenceService,
+    IMeshService? meshService = null)
+    : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
-    internal IPersistenceService Persistence { get; } = persistenceService;
+    internal IMeshStorage Persistence { get; } = persistenceService;
     internal Address MeshAddress => hub.Address;
-    private readonly IMeshQuery? _meshQuery = meshQuery;
+    private readonly IMeshService? _meshService = meshService;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
@@ -148,14 +148,11 @@ internal sealed class MeshCatalog(
     public Task UpdateAsync(MeshNode node) =>
         Persistence.SaveNodeAsync(node);
 
-    // IMeshNodePersistence + IMeshCatalog — delegate to HubNodePersistence
+    // IMeshCatalog — delegate to HubNodePersistence
     private HubNodePersistence NodePersistence => new(hub, this);
 
     public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
         => NodePersistence.CreateNodeAsync(node, createdBy, ct);
-
-    public Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
-        => NodePersistence.UpdateNodeAsync(node, updatedBy, ct);
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
         => NodePersistence.CreateTransientAsync(node, ct);
@@ -269,12 +266,6 @@ internal sealed class MeshCatalog(
         logger.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
     }
 
-    public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
-        => NodePersistence.DeleteNodeAsync(path, deletedBy, ct);
-
-    public IMeshNodePersistence ImpersonateAsNode()
-        => NodePersistence.ImpersonateAsNode();
-
     private static bool ValidatePath(MeshNode node)
     {
         // Path validation rules:
@@ -325,7 +316,7 @@ internal sealed class MeshCatalog(
             return await ResolveFromConfigNodeAsync(configMatch.Node, segments, path);
         }
 
-        // 2. Try IPersistenceService - walk UP the path hierarchy to find best match
+        // 2. Try IMeshStorage - walk UP the path hierarchy to find best match
         var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
         if (persistenceMatch != null)
         {
@@ -455,10 +446,10 @@ internal sealed class MeshCatalog(
 
         var fullQuery = string.Join(" ", queryParts);
 
-        if (_meshQuery != null)
+        if (_meshService != null)
         {
             var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
-            await foreach (var item in _meshQuery.QueryAsync(request, ct))
+            await foreach (var item in _meshService.QueryAsync(request, ct))
             {
                 if (item is MeshNode child)
                 {

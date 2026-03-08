@@ -552,7 +552,7 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> NodeTypes(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
         {

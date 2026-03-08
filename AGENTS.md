@@ -135,11 +135,11 @@ Layout areas are typically kept on the same address as the underlying data.
 
 ## Data Access Patterns
 
-**IMPORTANT:** Application code must never use `IPersistenceService` or `IMeshCatalog` directly — these are internal infrastructure interfaces.
+**IMPORTANT:** Application code must never use `IMeshStorage` or `IMeshCatalog` directly — these are internal infrastructure interfaces.
 
-### Reads — Use IMeshQuery
+### Reads — Use IMeshService
 ```csharp
-var query = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+var query = hub.ServiceProvider.GetRequiredService<IMeshService>();
 var node = await query.QueryAsync("path:org/Acme", maxResults: 1).FirstOrDefaultAsync(ct);
 ```
 
@@ -158,7 +158,7 @@ hub.Post(new DataChangeRequest { Updates = [entity] });
 ```
 
 ### Service Resolution
-Always use `GetRequiredService<T>()` for core services (`IMeshNodeFactory`, `IMeshQuery`). Never use `GetService<T>()` + null check for services that must be registered.
+Always use `GetRequiredService<T>()` for core services (`IMeshNodeFactory`, `IMeshService`). Never use `GetService<T>()` + null check for services that must be registered.
 
 For full documentation see `src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md`.
 
@@ -262,7 +262,7 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 - `maxParallelThreads: 1`
 - `methodTimeout: 60000ms` (1 minute per test method)
 
-**No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshQuery`, or other core interfaces.
+**No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
 
 ### Running Tests — Log Once, Read on Failure
 
@@ -337,7 +337,7 @@ public class MyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
     [Fact]
     public async Task MyTestMethod()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
 
         // Create test data

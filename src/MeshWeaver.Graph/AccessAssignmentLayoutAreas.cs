@@ -27,7 +27,7 @@ public static class AccessAssignmentLayoutAreas
 
     /// <summary>   
     /// Custom thumbnail — rich card showing user icon + name, role names + icons, × buttons.
-    /// Async: queries IMeshQuery for user and role node details.
+    /// Async: queries IMeshService for user and role node details.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
@@ -45,7 +45,7 @@ public static class AccessAssignmentLayoutAreas
             if (assignment == null)
                 return (UiControl?)MeshNodeThumbnailControl.FromNode(node, hubPath);
 
-            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
             var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
             var canDelete = permissions.HasFlag(Permission.Delete);
 
@@ -56,7 +56,7 @@ public static class AccessAssignmentLayoutAreas
     private static async Task<UiControl> BuildThumbnailCardAsync(
         LayoutAreaHost host, string hubPath,
         AccessAssignment assignment, MeshNode node,
-        IMeshQuery? meshQuery, bool canDelete)
+        IMeshService? meshQuery, bool canDelete)
     {
         // Load user node for name + icon
         MeshNode? userNode = null;
@@ -204,7 +204,7 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Custom overview — user thumbnail + roles in LayoutGrid loaded from IMeshQuery.
+    /// Custom overview — user thumbnail + roles in LayoutGrid loaded from IMeshService.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -242,9 +242,9 @@ public static class AccessAssignmentLayoutAreas
         if (assignment == null)
             return stack;
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
-        // User card — load from IMeshQuery
+        // User card — load from IMeshService
         if (meshQuery != null && !string.IsNullOrEmpty(assignment.AccessObject))
         {
             try
@@ -382,7 +382,7 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Reads the current node from the workspace stream (no IMeshCatalog/IMeshQuery dependency).
+    /// Reads the current node from the workspace stream (no IMeshCatalog/IMeshService dependency).
     /// </summary>
     private static async Task<MeshNode?> GetCurrentNodeAsync(LayoutAreaHost host, string path)
     {

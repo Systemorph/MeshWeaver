@@ -64,7 +64,7 @@ public static class InsuranceLayoutAreas
             .StartWith(PricingStatus.All.ToList())
             .Select(s => s.OrderBy(x => x.Order).ToList());
 
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var nodes = meshQuery
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))

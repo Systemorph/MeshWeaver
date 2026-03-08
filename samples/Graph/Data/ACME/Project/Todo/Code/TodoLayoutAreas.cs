@@ -330,7 +330,7 @@ public static class TodoLayoutAreas
     private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host)
     {
         var meshCatalog = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshCatalog>();
-        var persistence = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IPersistenceService>();
+        var persistence = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshStorage>();
         if (meshCatalog == null || persistence == null) return;
 
         var todoPath = host.Hub.Address.ToString();

@@ -59,7 +59,7 @@ public class MeshHubBuilder
 
     /// <summary>
     /// Sets a custom initialization function.
-    /// By default, loads data from IPersistenceService for the hub's address.
+    /// By default, loads data from IMeshStorage for the hub's address.
     /// </summary>
     public MeshHubBuilder WithInitialization(Func<IMessageHub, CancellationToken, Task>? initializationFunc)
     {

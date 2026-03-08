@@ -249,7 +249,7 @@ public static class PersistenceExtensions
     /// <param name="services">The service collection</param>
     /// <param name="persistenceServiceCore">The custom persistence core service</param>
     /// <returns>The service collection for chaining</returns>
-    internal static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceServiceCore persistenceServiceCore)
+    internal static IServiceCollection AddPersistence(this IServiceCollection services, IStorageService persistenceServiceCore)
     {
         // Register the data change notifier as singleton
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
@@ -265,8 +265,12 @@ public static class PersistenceExtensions
                 sp.GetService<MeshConfiguration>()));
 
         // Wrapper services are scoped (per hub)
-        services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQuery>();
+        services.AddScoped<IMeshStorage, PersistenceService>();
+        services.AddScoped<IMeshService>(sp =>
+            new MeshService(
+                sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
@@ -356,7 +360,7 @@ public static class PersistenceExtensions
             new RoutingPersistenceServiceCore(
                 sp.GetRequiredService<IPartitionedStoreFactory>(),
                 sp.GetService<IDataChangeNotifier>()));
-        services.AddSingleton<IPersistenceServiceCore>(sp =>
+        services.AddSingleton<IStorageService>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
         // Register the routing query provider
@@ -380,8 +384,12 @@ public static class PersistenceExtensions
                 sp.GetService<MeshConfiguration>()));
 
         // Wrapper services are scoped (per hub)
-        services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQuery>();
+        services.AddScoped<IMeshStorage, PersistenceService>();
+        services.AddScoped<IMeshService>(sp =>
+            new MeshService(
+                sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
@@ -390,13 +398,13 @@ public static class PersistenceExtensions
     /// Helper method to register common services and wrapper services.
     /// </summary>
     private static IServiceCollection AddCoreAndWrapperServices<TPersistenceCore>(this IServiceCollection services)
-        where TPersistenceCore : class, IPersistenceServiceCore
+        where TPersistenceCore : class, IStorageService
     {
         // Register the data change notifier as singleton (use TryAdd to avoid duplicates)
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
         // Core services remain singletons (for shared caches)
-        services.AddSingleton<IPersistenceServiceCore, TPersistenceCore>();
+        services.AddSingleton<IStorageService, TPersistenceCore>();
         services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
@@ -415,25 +423,23 @@ public static class PersistenceExtensions
         });
 
         // Wrapper services are scoped (per hub)
-        services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQuery>();
+        services.AddScoped<IMeshStorage, PersistenceService>();
+        services.AddScoped<IMeshService>(sp =>
+            new MeshService(
+                sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
 
     /// <summary>
-    /// Registers the MeshCatalog and its public interfaces (IMeshNodePersistence, IPathResolver).
-    /// IMeshNodePersistence is scoped (per hub) so each hub gets its own instance
-    /// with the correct IMessageHub injected — same pattern as IPersistenceService.
+    /// Registers the MeshCatalog and IPathResolver.
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
         services.TryAddSingleton<MeshCatalog>();
         services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
-        services.AddScoped<IMeshNodePersistence>(sp =>
-            new HubNodePersistence(
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<MeshCatalog>());
         return services;
     }

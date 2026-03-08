@@ -520,10 +520,10 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<(NodeTypeRelease? Release, MeshNode? Node)> GatherInputsAsync(string nodeTypePath, CancellationToken ct)
     {
-        var meshQuery = meshHub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = meshHub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
         {
-            logger.LogWarning("IMeshQuery not available for {NodeTypePath}", nodeTypePath);
+            logger.LogWarning("IMeshService not available for {NodeTypePath}", nodeTypePath);
             return (null, null);
         }
 
@@ -715,11 +715,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         string nodePath,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var meshQuery = meshHub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = meshHub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
         {
-            logger.LogWarning("IMeshQuery not available for GetCreatableTypesAsync");
+            logger.LogWarning("IMeshService not available for GetCreatableTypesAsync");
             yield break;
         }
 
@@ -859,7 +859,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<CreatableTypeInfo?> GetTypeInfoAsync(
         string typePath,
-        IMeshQuery meshQuery,
+        IMeshService meshQuery,
         CancellationToken ct)
     {
         // Check for global types first

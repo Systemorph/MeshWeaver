@@ -167,7 +167,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ProductLaunch_HasTaskChildren()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var children = await meshQuery.QueryAsync<MeshNode>("namespace:ACME/ProductLaunch/Todo", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);

@@ -78,7 +78,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         var hubAddress = new Address("portal", "test1");
         var portalIdentity = hubAddress.ToFullString();
 
-        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var vUserNode = new MeshNode("testVUser", "VUser")
         {
@@ -107,7 +107,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var ct = TestContext.Current.CancellationToken;
 
-        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var vUserNode = new MeshNode("anonUser", "VUser")
         {
@@ -129,7 +129,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
 
     /// <summary>
     /// A portal hub posts CreateNodeRequest directly with ImpersonateAsHub().
-    /// The hub's address becomes the identity via the post pipeline — no IMeshNodePersistence needed.
+    /// The hub's address becomes the identity via the post pipeline — no IMeshService needed.
     /// This mirrors how VirtualUserMiddleware creates VUser nodes.
     /// </summary>
     [Fact(Timeout = 10000)]
@@ -155,7 +155,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             }
         };
 
-        // Post CreateNodeRequest directly with ImpersonateAsHub() — bypasses IMeshNodePersistence.
+        // Post CreateNodeRequest directly with ImpersonateAsHub() — bypasses IMeshService.
         // Target the mesh hub where CreateNodeRequest handler is registered.
         var response = await portalHub.AwaitResponse(
             new CreateNodeRequest(vUserNode),

@@ -15,8 +15,8 @@ public static class NodeCopyHelper
     /// The source node's Id is preserved; paths are rewritten under the target namespace.
     /// </summary>
     internal static async Task<int> CopyNodeTreeAsync(
-        IMeshQuery meshQuery,
-        IMeshNodePersistence nodeFactory,
+        IMeshService meshQuery,
+        IMeshService nodeFactory,
         IMessageHub hub,
         string sourcePath,
         string targetNamespace,

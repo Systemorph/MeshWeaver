@@ -23,7 +23,7 @@ internal class NavigationService : INavigationService
 {
     private readonly NavigationManager _navigationManager;
     private readonly IPathResolver _pathResolver;
-    private readonly IMeshQuery _meshQuery;
+    private readonly IMeshService _meshQuery;
     private readonly IMessageHub _hub;
     private readonly ILogger<NavigationService>? _logger;
 
@@ -37,7 +37,7 @@ internal class NavigationService : INavigationService
     public NavigationService(
         NavigationManager navigationManager,
         IPathResolver pathResolver,
-        IMeshQuery meshQuery,
+        IMeshService meshQuery,
         IMessageHub hub)
     {
         _navigationManager = navigationManager;
@@ -329,7 +329,7 @@ internal class NavigationService : INavigationService
         {
             try
             {
-                var nodeFactory = _hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                var nodeFactory = _hub.ServiceProvider.GetRequiredService<IMeshService>();
                 var encodedPath = node.Path.Replace("/", "_");
                 var activityPath = $"_useractivity/{userId}/{encodedPath}";
 

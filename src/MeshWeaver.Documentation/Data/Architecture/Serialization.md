@@ -81,7 +81,7 @@ sequenceDiagram
 
 # Key Interfaces
 
-## IPersistenceService
+## IMeshStorage
 
 All persistence methods accept `JsonSerializerOptions`:
 
@@ -91,7 +91,7 @@ Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, Cance
 IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
 ```
 
-## IMeshQuery
+## IMeshService
 
 Query methods also require options for proper type resolution:
 

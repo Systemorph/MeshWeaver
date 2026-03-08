@@ -23,7 +23,7 @@ public class NavigationServiceTest
 {
     private readonly MockNavigationManager _navigationManager;
     private readonly IPathResolver _pathResolver;
-    private readonly IMeshQuery _meshQuery;
+    private readonly IMeshService _meshQuery;
     private readonly IMessageHub _hub;
     private readonly IServiceProvider _hubServiceProvider;
     private readonly INodeTypeService _nodeTypeService;
@@ -32,7 +32,7 @@ public class NavigationServiceTest
     {
         _navigationManager = new MockNavigationManager();
         _pathResolver = Substitute.For<IPathResolver>();
-        _meshQuery = Substitute.For<IMeshQuery>();
+        _meshQuery = Substitute.For<IMeshService>();
         _hub = Substitute.For<IMessageHub>();
         _hubServiceProvider = Substitute.For<IServiceProvider>();
         _nodeTypeService = Substitute.For<INodeTypeService>();

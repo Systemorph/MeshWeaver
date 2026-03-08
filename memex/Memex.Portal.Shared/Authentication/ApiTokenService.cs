@@ -15,7 +15,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// Tokens are stored as MeshNodes with nodeType "ApiToken".
 /// Raw tokens are never persisted — only their SHA-256 hash.
 /// </summary>
-internal class ApiTokenService(IMeshNodePersistence nodeFactory, IMeshQuery meshQuery, IMessageHub hub, ILogger<ApiTokenService> logger)
+internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery, IMessageHub hub, ILogger<ApiTokenService> logger)
 {
     private const string TokenPrefix = "mw_";
     private const int TokenByteLength = 32;

@@ -10,7 +10,7 @@ namespace MeshWeaver.Graph;
 /// Generic autocomplete provider that queries child nodes from the mesh query service.
 /// Uses the hub's address as the parent path to find children.
 /// </summary>
-internal class MeshNodeAutocompleteProvider(IMeshQuery meshQuery, IMessageHub hub) : IAutocompleteProvider
+internal class MeshNodeAutocompleteProvider(IMeshService meshQuery, IMessageHub hub) : IAutocompleteProvider
 {
     private const int DefaultMaxResults = 20;
 

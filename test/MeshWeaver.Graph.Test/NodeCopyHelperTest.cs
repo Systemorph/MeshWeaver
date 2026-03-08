@@ -27,7 +27,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
             .WithServices(services =>
             {
                 services.AddInMemoryPersistence(_persistence);
-                services.AddSingleton<IMeshNodePersistence>(
+                services.AddSingleton<IMeshService>(
                     new TestNodeFactory(_persistence, JsonOptions));
                 return services;
             })
@@ -36,11 +36,11 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
                 .RouteAddressToHostedHub(ClientType, ConfigureClient));
     }
 
-    private IMeshQuery GetMeshQuery()
-        => GetHost().ServiceProvider.GetRequiredService<IMeshQuery>();
+    private IMeshService GetMeshQuery()
+        => GetHost().ServiceProvider.GetRequiredService<IMeshService>();
 
-    private IMeshNodePersistence GetNodeFactory()
-        => GetHost().ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+    private IMeshService GetNodeFactory()
+        => GetHost().ServiceProvider.GetRequiredService<IMeshService>();
 
     private async Task<MeshNode?> GetNodeAsync(string path)
         => await GetMeshQuery().QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
@@ -58,9 +58,9 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Simple test implementation of IMeshNodePersistence that saves nodes directly via persistence.
+    /// Simple test implementation of IMeshService that saves nodes directly via persistence.
     /// </summary>
-    private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshNodePersistence
+    private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshService
     {
         public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
             => await persistence.SaveNodeAsync(node, jsonOptions, ct);
@@ -74,7 +74,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
             => persistence.DeleteNodeAsync(path, true, ct);
 
-        public IMeshNodePersistence ImpersonateAsNode() => this;
+        public IMeshService ImpersonateAsNode() => this;
     }
 
     [HubFact]

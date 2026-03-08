@@ -16,7 +16,7 @@ public static class MeshNodeDataLoader
 {
     public static IObservable<IEnumerable<Product>> LoadProductsFromNodes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
@@ -26,7 +26,7 @@ public static class MeshNodeDataLoader
 
     public static IObservable<IEnumerable<Customer>> LoadCustomersFromNodes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
@@ -36,7 +36,7 @@ public static class MeshNodeDataLoader
 
     public static IObservable<IEnumerable<Employee>> LoadEmployeesFromNodes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
@@ -46,7 +46,7 @@ public static class MeshNodeDataLoader
 
     public static IObservable<IEnumerable<Supplier>> LoadSuppliersFromNodes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery

@@ -15,7 +15,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 {
 
     private ModulesAssemblyLoadContext? loadContext;
-    private readonly IMeshQuery meshQuery = meshHub.ServiceProvider.GetRequiredService<IMeshQuery>();
+    private readonly IMeshService meshQuery = meshHub.ServiceProvider.GetRequiredService<IMeshService>();
     private IMessageHub? Hub { get; set; }
 
 

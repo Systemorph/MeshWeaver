@@ -58,7 +58,7 @@ public static class CommentLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
@@ -380,7 +380,7 @@ public static class CommentLayoutAreas
                         .Subscribe(data => newText = data?.GetValueOrDefault("text")?.ToString() ?? "");
 
                     // Save via message — update only the Text property of the Comment
-                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                     var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:exact").FirstOrDefaultAsync();
                     if (node != null)
                     {
@@ -402,8 +402,8 @@ public static class CommentLayoutAreas
     /// </summary>
     private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId)
     {
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
 
         host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
@@ -464,7 +464,7 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Reply icon button. Creates a transient reply node via IMeshNodePersistence and shows inline Create area.
+    /// Builds the Reply icon button. Creates a transient reply node via IMeshService and shows inline Create area.
     /// </summary>
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
@@ -489,7 +489,7 @@ public static class CommentLayoutAreas
                     }
                 };
 
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                 await nodeFactory.CreateTransientAsync(replyNode);
 
                 // Expand the replies section so the new reply is visible
@@ -509,7 +509,7 @@ public static class CommentLayoutAreas
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
             .WithClickAction(async _ =>
             {
-                var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+                var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
                 // Update comment status to Resolved
                 var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:exact").FirstOrDefaultAsync();
@@ -541,7 +541,7 @@ public static class CommentLayoutAreas
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #f87171;\" title=\"Delete\">✕</span>")
             .WithClickAction(async _ =>
             {
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                 await nodeFactory.DeleteNodeAsync(hubPath);
             });
     }
@@ -569,7 +569,7 @@ public static class CommentLayoutAreas
                 Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
                     .WithClickAction(async _ =>
                     {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                         await nodeFactory.DeleteNodeAsync(hubPath);
                     }));
         }

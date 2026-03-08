@@ -7,7 +7,7 @@ namespace MeshWeaver.Blazor.Services;
 /// Centralized autocomplete service for Blazor components.
 /// Provides @ autocomplete for unified content references across all editors.
 /// </summary>
-public class BlazorAutocompleteService(IMeshQuery meshQuery)
+public class BlazorAutocompleteService(IMeshService meshQuery)
 {
     /// <summary>
     /// Gets completions for a query starting with @.

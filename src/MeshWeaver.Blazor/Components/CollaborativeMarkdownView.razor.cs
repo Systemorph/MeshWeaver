@@ -122,7 +122,7 @@ public partial class CollaborativeMarkdownView
         if (string.IsNullOrEmpty(BoundNodePath))
             return;
 
-        var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
             return;
 

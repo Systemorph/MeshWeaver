@@ -6,12 +6,12 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Extension methods for querying children using IMeshQuery.
+/// Extension methods for querying children using IMeshService.
 /// </summary>
 public static class ChildrenQueryExtensions
 {
     /// <summary>
-    /// Queries for child nodes using the specified query pattern via IMeshQuery.
+    /// Queries for child nodes using the specified query pattern via IMeshService.
     /// Supports query patterns like "nodeType:ACME/Project/Todo".
     /// </summary>
     /// <param name="host">The layout area host</param>
@@ -23,7 +23,7 @@ public static class ChildrenQueryExtensions
         string childrenQuery,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
             yield break;
 
@@ -46,7 +46,7 @@ public static class ChildrenQueryExtensions
     }
 
     /// <summary>
-    /// Queries for child nodes of a specific nodeType via IMeshQuery.
+    /// Queries for child nodes of a specific nodeType via IMeshService.
     /// This is a convenience method for the common pattern "nodeType:{nodeType}".
     /// </summary>
     /// <param name="host">The layout area host</param>

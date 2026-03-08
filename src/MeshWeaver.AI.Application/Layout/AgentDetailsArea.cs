@@ -17,7 +17,7 @@ public static class AgentDetailsArea
     {
         // Extract agent name from LayoutAreaReference.Id
         var agentName = ExtractAgentNameFromLayoutAreaId(host.Reference.Id);
-        var meshQuery = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshService>();
         if (meshQuery == null)
         {
             return Controls.Stack

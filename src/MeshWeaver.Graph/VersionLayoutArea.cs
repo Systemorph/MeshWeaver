@@ -232,7 +232,7 @@ public static class VersionLayoutArea
         var options = hub.JsonSerializerOptions;
 
         // Find the activity log node by known path pattern
-        var persistence = hub.ServiceProvider.GetRequiredService<IPersistenceService>();
+        var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
         var activityNodePath = $"{hubPath}/_activity/{msg.ActivityLogId}";
         var activityNode = await persistence.GetNodeAsync(activityNodePath, ct);
 

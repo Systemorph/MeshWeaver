@@ -93,14 +93,14 @@ internal class MeshNodeCompilationService(
     /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshQuery meshQuery, CancellationToken ct)
+        string code, IMeshService meshQuery, CancellationToken ct)
     {
         var resolved = new HashSet<string>();
         return await ResolveCodeIncludesAsync(code, meshQuery, resolved, ct);
     }
 
     private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshQuery meshQuery, HashSet<string> resolved, CancellationToken ct)
+        string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return code;
@@ -172,7 +172,7 @@ internal class MeshNodeCompilationService(
         // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
         // For instance nodes, use the NodeType's path (e.g., "Person/Code" for Alice with NodeType="Person")
         // Collect ALL CodeConfiguration files and combine them
-        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
         var codeFiles = new List<CodeConfiguration>();
         var codeParentPath = node.Content is NodeTypeDefinition
             ? $"{node.Path}/Code"    // NodeType node - use its own Code path

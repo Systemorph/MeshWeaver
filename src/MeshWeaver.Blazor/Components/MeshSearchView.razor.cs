@@ -16,7 +16,7 @@ namespace MeshWeaver.Blazor.Components;
 /// <summary>
 /// Renders MeshSearchControl. Supports two modes:
 /// 1. PrecomputedGroups (new) - server-side grouping, just renders results
-/// 2. HiddenQuery/VisibleQuery (legacy) - client-side query via IMeshQuery
+/// 2. HiddenQuery/VisibleQuery (legacy) - client-side query via IMeshService
 /// </summary>
 public partial class MeshSearchView : IDisposable
 {
@@ -34,7 +34,7 @@ public partial class MeshSearchView : IDisposable
     private string? _overriddenHiddenQuery;
 
     [Inject]
-    private IMeshQuery MeshQuery { get; set; } = default!;
+    private IMeshService MeshQuery { get; set; } = default!;
 
     [Inject]
     private NavigationManager Navigation { get; set; } = default!;

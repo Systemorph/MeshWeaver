@@ -68,7 +68,7 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
 
         if (catalog == null)
         {
@@ -544,7 +544,7 @@ public static class MeshExtensions
             };
 
             // 5. Persist the validated node
-            var persistence = hub.ServiceProvider.GetRequiredService<IPersistenceService>();
+            var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
             var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
 
             // 5b. Write version history snapshot (non-critical)
@@ -642,12 +642,12 @@ public static class MeshExtensions
         CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
-        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
 
         if (persistence == null)
         {
             hub.Post(
-                MoveNodeResponse.Fail("IPersistenceService not available", NodeMoveRejectionReason.Unknown),
+                MoveNodeResponse.Fail("IMeshStorage not available", NodeMoveRejectionReason.Unknown),
                 o => o.ResponseFor(request));
             return request.Processed();
         }

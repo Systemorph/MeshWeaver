@@ -19,7 +19,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for thread creation via IMeshNodePersistence.CreateNodeAsync.
+/// Tests for thread creation via IMeshService.CreateNodeAsync.
 /// Threads store messages as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
 public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)

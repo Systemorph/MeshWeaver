@@ -38,7 +38,7 @@ public static class ApiTokenNodeType
 
     /// <summary>
     /// Validates an API token. The handler runs on the token's hosted hub (ApiToken/{hashPrefix}).
-    /// Uses IPersistenceServiceCore to bypass RLS — token validation happens before any user is logged in.
+    /// Uses IStorageService to bypass RLS — token validation happens before any user is logged in.
     /// </summary>
     private static async Task<IMessageDelivery> HandleValidateToken(
         IMessageHub hub,
@@ -55,7 +55,7 @@ public static class ApiTokenNodeType
 
         // Load the token node directly from persistence (bypasses RLS)
         var hubPath = hub.Address.ToString();
-        var persistenceCore = hub.ServiceProvider.GetService<IPersistenceServiceCore>();
+        var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
         if (persistenceCore == null)
         {
             hub.Post(ValidateTokenResponse.Fail("Persistence not available"), o => o.ResponseFor(request));

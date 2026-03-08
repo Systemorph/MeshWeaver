@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for managing group memberships on a mesh node.
-/// Inherited memberships are loaded via IMeshQuery from ancestor nodes (merged per member).
+/// Inherited memberships are loaded via IMeshService from ancestor nodes (merged per member).
 /// Local memberships are rendered via GroupMembershipControlBuilder (reactive).
 /// </summary>
 public static class GroupsLayoutArea
@@ -40,7 +40,7 @@ public static class GroupsLayoutArea
             );
         }
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
@@ -50,7 +50,7 @@ public static class GroupsLayoutArea
                 var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
                 var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
-                // Load inherited memberships from ancestor nodes via IMeshQuery (one-shot)
+                // Load inherited memberships from ancestor nodes via IMeshService (one-shot)
                 var inherited = new List<(GroupMembership Membership, string SourcePath)>();
                 if (meshQuery != null)
                 {
@@ -176,7 +176,7 @@ public static class GroupsLayoutArea
     private static IObservable<UiControl?> BuildLocalMemberships(
         LayoutAreaHost host, string nodePath, bool isAdmin)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local memberships.</p>"));
 
@@ -264,7 +264,7 @@ public static class GroupsLayoutArea
 
                     // Check if a membership already exists for this member
                     MeshNode? existing = null;
-                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshService>();
                     if (query != null)
                     {
                         try
@@ -286,7 +286,7 @@ public static class GroupsLayoutArea
                     else
                     {
                         // Create transient node and navigate to Create view
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                         // Look up the member node to copy their icon
                         string? memberIcon = null;
                         if (query != null)

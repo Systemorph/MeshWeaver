@@ -8,18 +8,18 @@ using System.Runtime.CompilerServices;
 namespace MeshWeaver.Hosting.Security;
 
 /// <summary>
-/// Decorator that adds security filtering to IPersistenceService operations.
+/// Decorator that adds security filtering to IMeshStorage operations.
 /// Implements the secure query methods by delegating to the inner service
 /// and filtering results based on user permissions.
 /// </summary>
-internal class SecurePersistenceServiceDecorator : IPersistenceServiceCore
+internal class SecurePersistenceServiceDecorator : IStorageService
 {
-    private readonly IPersistenceServiceCore _inner;
+    private readonly IStorageService _inner;
     private readonly Lazy<ISecurityService> _securityService;
     private readonly ILogger<SecurePersistenceServiceDecorator> _logger;
 
     public SecurePersistenceServiceDecorator(
-        IPersistenceServiceCore inner,
+        IStorageService inner,
         Lazy<ISecurityService> securityService,
         ILogger<SecurePersistenceServiceDecorator> logger)
     {

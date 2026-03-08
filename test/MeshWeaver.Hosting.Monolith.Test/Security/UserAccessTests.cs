@@ -346,7 +346,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     #endregion
 
-    #region IMeshQuery Access Control Filtering
+    #region IMeshService Access Control Filtering
 
     [Fact]
     public async Task MeshQuery_AnonymousUser_CanQueryPublicOrganizations()

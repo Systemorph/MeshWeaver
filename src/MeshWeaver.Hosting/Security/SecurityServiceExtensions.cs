@@ -16,10 +16,10 @@ public static class SecurityServiceExtensions
     /// <summary>
     /// Adds Row-Level Security services to the mesh.
     /// This includes:
-    /// - ISecurityService for permission evaluation (uses unsecured IPersistenceServiceCore directly)
+    /// - ISecurityService for permission evaluation (uses unsecured IStorageService directly)
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
     /// - ISubscriptionAccessChecker for read access checks on SubscribeRequests
-    /// - PersistenceService handles secure query filtering via ISecurityService
+    /// - PersistenceService handles secure query filtering via ISecurityService (implements IMeshStorage)
     ///
     /// Storage structure:
     /// - Access/ - Global roles (Admin with null namespace) and custom role definitions
@@ -30,7 +30,7 @@ public static class SecurityServiceExtensions
         return builder
             .ConfigureServices(services =>
             {
-                // Register security service (uses IPersistenceServiceCore directly for all storage,
+                // Register security service (uses IStorageService directly for all storage,
                 // bypassing any security filtering to avoid circular dependency)
                 services.TryAddSingleton<ISecurityService, SecurityService>();
 

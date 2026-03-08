@@ -14,11 +14,11 @@ public static class WorkspaceNodeExtensions
 {
     /// <summary>
     /// Gets the MeshNode for the current hub as a stream.
-    /// The node is retrieved via IMeshQuery based on the hub's address.
+    /// The node is retrieved via IMeshService based on the hub's address.
     /// </summary>
     public static IObservable<MeshNode?> GetNodeStream(this IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var nodePath = workspace.Hub.Address.ToString();
 
         return Observable.FromAsync(async ct =>
@@ -39,7 +39,7 @@ public static class WorkspaceNodeExtensions
     /// </summary>
     public static IObservable<MeshNode?> GetNodeStream(this IWorkspace workspace, string path)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         return Observable.FromAsync(async ct =>
             await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync(ct));

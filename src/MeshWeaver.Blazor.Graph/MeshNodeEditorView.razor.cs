@@ -44,10 +44,10 @@ public partial class MeshNodeEditorView
 
         try
         {
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
             if (meshQuery == null)
             {
-                Logger.LogError("IMeshQuery not available");
+                Logger.LogError("IMeshService not available");
                 return;
             }
 

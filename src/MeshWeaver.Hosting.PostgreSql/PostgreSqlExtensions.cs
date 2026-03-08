@@ -146,7 +146,7 @@ public static class PostgreSqlExtensions
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<AccessService>()));
 
-        // Register core persistence services (IStorageAdapter, IPersistenceServiceCore, etc.)
+        // Register core persistence services (IStorageAdapter, IStorageService, etc.)
         services.AddPersistence(storageAdapter);
 
         // Register the Change Listener

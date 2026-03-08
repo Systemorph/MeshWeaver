@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource<T>> where T : class
 {
-    private readonly IPersistenceServiceCore _persistenceCore;
+    private readonly IStorageService _persistenceCore;
     private readonly string _partitionPath;
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -31,7 +31,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     /// <param name="hubPath">The hub's path (e.g., "Type/Organizations").</param>
     /// <param name="subPartition">The relative sub-partition name (e.g., "Code"). If null, uses hubPath directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
-    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IPersistenceServiceCore persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
+    internal PartitionTypeSource(IWorkspace workspace, object dataSource, IStorageService persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
         : base(workspace, dataSource)
     {
         _workspace = workspace;
@@ -89,7 +89,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
         }
 
         // Note: Delete of partition objects is not yet supported
-        // If needed, we could add DeletePartitionObjectAsync to IPersistenceService
+        // If needed, we could add DeletePartitionObjectAsync to IMeshStorage
 
         _lastSaved = instances;
         return instances;

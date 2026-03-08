@@ -11,7 +11,7 @@ namespace MeshWeaver.Hosting.Persistence;
 /// File system persistence service with in-memory caching.
 /// Reads from file system on cache miss, with 10-minute sliding expiration.
 /// </summary>
-public class FileSystemPersistenceService : IPersistenceServiceCore, IDisposable
+public class FileSystemPersistenceService : IStorageService, IDisposable
 {
     private readonly IStorageAdapter _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;

@@ -66,7 +66,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var expectedTodoAgentPath = "ACME/Project/TodoAgent";
 
         // Load the actual node from the file system
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         MeshNode? productLaunchNode = null;
         await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", null, TestContext.Current.CancellationToken))
         {
@@ -119,7 +119,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         var contextPath = "ACME";
 
         // Load the actual node from the file system
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         MeshNode? acmeNode = null;
         await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", null, TestContext.Current.CancellationToken))
         {

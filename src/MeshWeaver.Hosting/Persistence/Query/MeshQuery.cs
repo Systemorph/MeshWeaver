@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 public class MeshQuery(
     IEnumerable<IMeshQueryProvider> providers,
     IMessageHub hub,
-    bool impersonate = false) : IMeshQuery
+    bool impersonate = false)
 {
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
@@ -201,6 +201,6 @@ public class MeshQuery(
         return results.FirstOrDefault(r => r != null);
     }
 
-    public IMeshQuery ImpersonateAsNode()
+    public MeshQuery ImpersonateAsNode()
         => impersonate ? this : new MeshQuery(providers, hub, true);
 }

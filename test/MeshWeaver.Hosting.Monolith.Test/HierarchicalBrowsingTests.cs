@@ -128,7 +128,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
     {
         await SetupMarketingHierarchy();
 
-        // Use IMeshQuery with path: in query string (replaces old Namespace property)
+        // Use IMeshService with path: in query string (replaces old Namespace property)
         // scope:subtree includes the base path itself plus all descendants
         var query = "path:Systemorph/Marketing/ClaimsProcessing nodeType:Markdown scope:subtree";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();

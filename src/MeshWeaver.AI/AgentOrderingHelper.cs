@@ -14,7 +14,7 @@ public static class AgentOrderingHelper
     /// Searches NodeType namespace (children) and context path namespace (ancestors).
     /// </summary>
     public static async Task<IReadOnlyList<AgentDisplayInfo>> QueryAgentsAsync(
-        IMeshQuery? meshQuery,
+        IMeshService? meshQuery,
         string? contextPath,
         string? nodeTypePath)
     {
@@ -84,7 +84,7 @@ public static class AgentOrderingHelper
     /// <summary>
     /// Gets the NodeType for a given context path.
     /// </summary>
-    public static async Task<string?> GetNodeTypeAsync(IMeshQuery? meshQuery, string? contextPath)
+    public static async Task<string?> GetNodeTypeAsync(IMeshService? meshQuery, string? contextPath)
     {
         if (meshQuery == null || string.IsNullOrEmpty(contextPath))
             return null;

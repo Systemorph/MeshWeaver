@@ -94,9 +94,9 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     {
         // Note: Systemorph is in persistence (JSON files), not MeshCatalog.Configuration.Nodes
         // MeshCatalog.Configuration.Nodes only contains type definitions (NodeType, Agent)
-        // The actual data nodes are in persistence and accessed via IMeshQuery
+        // The actual data nodes are in persistence and accessed via IMeshService
 
-        Output.WriteLine("Querying for Systemorph via IMeshQuery...");
+        Output.WriteLine("Querying for Systemorph via IMeshService...");
 
         // Query from root to find Systemorph
         var suggestions = await MeshQuery.AutocompleteAsync("", "Sys", 10, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
@@ -246,10 +246,10 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     public void DI_AutocompleteProvider_IsRegistered()
     {
         // Verify the MeshNodeAutocompleteProvider is registered (it doesn't require INavigationService)
-        var meshQuery = Mesh.ServiceProvider.GetService<IMeshQuery>();
-        meshQuery.Should().NotBeNull("IMeshQuery should be registered for autocomplete");
+        var meshQuery = Mesh.ServiceProvider.GetService<IMeshService>();
+        meshQuery.Should().NotBeNull("IMeshService should be registered for autocomplete");
 
-        Output.WriteLine($"IMeshQuery is registered: {meshQuery?.GetType().Name}");
+        Output.WriteLine($"IMeshService is registered: {meshQuery?.GetType().Name}");
 
         // Test that the unified reference provider is available from DI
         var providers = Hub.ServiceProvider.GetServices<IAutocompleteProvider>().ToList();

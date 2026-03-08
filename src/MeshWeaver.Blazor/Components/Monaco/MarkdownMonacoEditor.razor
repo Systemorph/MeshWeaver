@@ -1,6 +1,6 @@
 @using MeshWeaver.Mesh.Services
 @using MeshWeaver.Messaging
-@inject IMeshQuery? MeshQuery
+@inject IMeshService? MeshQuery
 @inject IMessageHub Hub
 
 <MonacoEditorView @ref="editorRef"
@@ -71,7 +71,7 @@
             return await CustomCompletionCallback(query);
         }
 
-        // Default UCR autocomplete using IMeshQuery
+        // Default UCR autocomplete using IMeshService
         if (MeshQuery == null || string.IsNullOrWhiteSpace(query))
             return [];
 

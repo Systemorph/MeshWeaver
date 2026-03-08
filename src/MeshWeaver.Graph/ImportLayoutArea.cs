@@ -160,8 +160,8 @@ public static class ImportLayoutArea
 
                 try
                 {
-                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                     logger?.LogInformation(
                         "Copying node tree from {Source} to namespace {Target}, force={Force}",
                         sourceNode, targetNs, force);

@@ -18,7 +18,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// </summary>
 public class ProjectViewsReactiveTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private IMeshQuery Query => MeshQuery;
+    private IMeshService Query => MeshQuery;
 
     [Fact]
     public async Task ObserveQuery_EmitsAddedOnNewTodo()

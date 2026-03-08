@@ -54,7 +54,7 @@ public static class GroupLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
@@ -117,7 +117,7 @@ public static class GroupLayoutAreas
     public static IObservable<UiControl?> Edit(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
@@ -154,7 +154,7 @@ public static class GroupLayoutAreas
                             .WithAppearance(Appearance.Stealth)
                             .WithClickAction(async ctx =>
                             {
-                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                                var nodeFactory = ctx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                                 await nodeFactory.DeleteNodeAsync(member.Path);
                             })));
                 }
@@ -190,7 +190,7 @@ public static class GroupLayoutAreas
         // Load user/group options for autocomplete
         var optionsId = $"member_options_{Guid.NewGuid().AsString()}";
         var options = new List<Option>();
-        var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = ctx.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery != null)
         {
             await foreach (var suggestion in meshQuery.AutocompleteAsync(groupPath, "", limit: 50))
@@ -233,7 +233,7 @@ public static class GroupLayoutAreas
                             return;
                         }
 
-                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                        var nodeFactory = saveCtx.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                         {
                             var memberName = memberId.Split('/').Last();
                             var memberNode = new MeshNode($"{memberName}_Membership", groupPath)

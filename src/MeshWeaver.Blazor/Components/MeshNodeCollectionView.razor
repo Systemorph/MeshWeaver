@@ -2,7 +2,7 @@
 @using MeshWeaver.Graph
 @inherits BlazorView<MeshWeaver.Layout.MeshNodeCollectionControl, MeshNodeCollectionView>
 @inject NavigationManager NavigationManager
-@inject MeshWeaver.Mesh.Services.IMeshQuery MeshQuery
+@inject MeshWeaver.Mesh.Services.IMeshService MeshQuery
 
 <div class="mesh-node-collection" style="@Style">
     @if (_isLoading)

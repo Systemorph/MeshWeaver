@@ -12,7 +12,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for activity tracking via IMeshNodePersistence (UserActivity nodes).
+/// Tests for activity tracking via IMeshService (UserActivity nodes).
 /// Activity is tracked at the navigation level (ApplicationPage), not at the persistence layer.
 /// </summary>
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -295,7 +295,7 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 }
 
 /// <summary>
-/// Tests that source:activity queries work via IMeshQuery.
+/// Tests that source:activity queries work via IMeshService.
 /// InMemory doesn't support SQL JOIN, so source:activity is treated like a normal query
 /// (returns all matching nodes without activity ordering). Activity ordering is only
 /// available with PostgreSQL provider.

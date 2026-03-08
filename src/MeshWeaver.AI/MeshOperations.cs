@@ -16,15 +16,13 @@ public class MeshOperations
 {
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
-    private readonly IMeshQuery meshQuery;
-    private readonly IMeshNodePersistence nodeFactory;
+    private readonly IMeshService mesh;
 
     public MeshOperations(IMessageHub hub)
     {
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
-        this.meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-        this.nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
     }
 
     /// <summary>
@@ -51,7 +49,7 @@ public class MeshOperations
                 var parentPath = resolvedPath[..^2];
                 var result = new List<object>();
                 var query = $"namespace:{parentPath}";
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
+                await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
                 {
                     result.Add(new
                     {
@@ -70,7 +68,7 @@ public class MeshOperations
                 return unifiedResult;
 
             // Get single node via query (reads from persistence, not cached)
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(
+            await foreach (var node in mesh.QueryAsync<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
             {
                 return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
@@ -130,7 +128,7 @@ public class MeshOperations
         try
         {
             var results = new List<object>();
-            await foreach (var item in meshQuery.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
+            await foreach (var item in mesh.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
             {
                 if (item is MeshNode node)
                 {
@@ -166,7 +164,7 @@ public class MeshOperations
             if (meshNode == null)
                 return "Invalid node: deserialized to null.";
 
-            var created = await nodeFactory.CreateNodeAsync(meshNode);
+            var created = await mesh.CreateNodeAsync(meshNode);
             return $"Created: {created.Path}";
         }
         catch (JsonException ex)
@@ -193,7 +191,7 @@ public class MeshOperations
             var results = new List<string>();
             foreach (var meshNode in nodeList)
             {
-                var updated = await nodeFactory.UpdateNodeAsync(meshNode);
+                var updated = await mesh.UpdateNodeAsync(meshNode);
                 results.Add($"Updated: {updated.Path}");
             }
 
@@ -224,7 +222,7 @@ public class MeshOperations
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                await nodeFactory.DeleteNodeAsync(resolvedPath);
+                await mesh.DeleteNodeAsync(resolvedPath);
                 results.Add($"Deleted: {resolvedPath}");
             }
 

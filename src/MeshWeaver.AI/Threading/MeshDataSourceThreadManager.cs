@@ -21,8 +21,8 @@ public class MeshDataSourceThreadManager : IThreadManager
     private readonly AccessService _accessService;
     private readonly IMessageHub _hub;
     private readonly ILogger<MeshDataSourceThreadManager>? _logger;
-    private readonly IMeshNodePersistence _nodeFactory;
-    private readonly IMeshQuery _meshQuery;
+    private readonly IMeshService _nodeFactory;
+    private readonly IMeshService _meshQuery;
 
     internal MeshDataSourceThreadManager(
         AccessService accessService,
@@ -32,8 +32,8 @@ public class MeshDataSourceThreadManager : IThreadManager
         _accessService = accessService;
         _hub = hub;
         _logger = logger;
-        _nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
-        _meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        _nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        _meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
     }
 
     private string GetUserId() => _accessService.Context?.ObjectId ?? "anonymous";

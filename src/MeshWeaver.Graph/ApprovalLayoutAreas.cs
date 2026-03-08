@@ -149,7 +149,7 @@ public static class ApprovalLayoutAreas
         host.Hub.Post(new UpdateNodeRequest(updated));
 
         // Record approval activity as a MeshNode
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         if (!string.IsNullOrEmpty(approval.PrimaryNodePath))
         {
             var verb = newStatus == ApprovalStatus.Approved ? "Approved" : "Rejected";

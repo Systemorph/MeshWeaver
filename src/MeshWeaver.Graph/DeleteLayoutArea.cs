@@ -25,7 +25,7 @@ public static class DeleteLayoutArea
     {
         var nodePath = host.Hub.Address.ToString();
         var backHref = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         // Count descendants and check permissions asynchronously
         return Observable.FromAsync(async () =>
@@ -113,7 +113,7 @@ public static class DeleteLayoutArea
                 DataContext = LayoutAreaReference.GetDataPointer(dataId)
             }.WithStyle("width: 300px;")));
 
-        // Button row — uses IMeshNodePersistence.DeleteNodeAsync
+        // Button row — uses IMeshService.DeleteNodeAsync
         // and runs validators (including RlsNodeValidator)
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -143,7 +143,7 @@ public static class DeleteLayoutArea
 
                     try
                     {
-                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                         await nodeFactory.DeleteNodeAsync(nodePath);
 
                         // Navigate to parent on success

@@ -27,7 +27,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 {
     private readonly string _cacheDirectory;
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
-    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+    private IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     public MeshNodeAutocompleteTest(ITestOutputHelper output) : base(output)
     {

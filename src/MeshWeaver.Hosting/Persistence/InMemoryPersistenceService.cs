@@ -6,11 +6,11 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// In-memory implementation of IPersistenceService.
+/// In-memory implementation of IMeshStorage.
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
+public class InMemoryPersistenceService : IStorageService, IDisposable
 {
     private readonly IStorageAdapter? _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
