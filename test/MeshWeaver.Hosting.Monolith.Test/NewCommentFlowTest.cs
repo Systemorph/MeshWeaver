@@ -89,7 +89,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     ///   - Has correct Path, Namespace, and Id
     /// This is the constructor: new MeshNode(commentId, nodePath)
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task NewComment_TwoArgConstructor_ShouldPersistAndBeQueryable()
     {
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
@@ -155,7 +155,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// DataChangeRequest to a comment hub doesn't work because the comment hub isn't running
     /// when editing inline from the markdown view. We use persistence directly instead.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task NewComment_DoneButton_ShouldPersistTextViaPersistenceService()
     {
         var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
@@ -207,7 +207,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// (the markdown document instead of the comment node) does NOT update the comment.
     /// This was the original bug with BuildPropertyOverview auto-save.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task NewComment_DataChangeToWrongAddress_ShouldNotUpdateComment()
     {
         var client = GetClient();
@@ -266,7 +266,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// After creating a comment and setting EditingReplyPath, the view should
     /// contain the comment's edit area (not just the read-only card).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReadView_WithNewComment_ShouldShowCommentInSidebar()
     {
         var client = GetClient();
@@ -333,7 +333,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Full end-to-end test: Create comment → Edit text → Reload (re-query) → Verify persistence.
     /// This simulates the complete user flow.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task FullFlow_CreateComment_EditText_Reload_ShouldPersist()
     {
         var client = GetClient();

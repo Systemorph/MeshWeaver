@@ -53,7 +53,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
 
     #region Icon Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_ReturnsIconForNodesWithIcon()
     {
         // Arrange - Systemorph has icon: "/static/storage/content/Systemorph/logo_t.png"
@@ -73,7 +73,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         systemorph!.Icon.Should().NotBeNullOrEmpty("Systemorph has an icon defined in its JSON");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_ReturnsIconForACME()
     {
         // Arrange - ACME has icon: "/static/storage/content/Software/logo.svg"
@@ -93,7 +93,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         acme!.Icon.Should().NotBeNullOrEmpty("ACME has an icon defined in its JSON");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_EmptyPrefix_ReturnsIconsWhereAvailable()
     {
         // Arrange - empty prefix returns top-level nodes, many of which have icons
@@ -114,7 +114,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         withIcons.Should().NotBeEmpty("At least some top-level nodes should have icons");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_WithBasePath_ReturnsIconsForChildren()
     {
         // Arrange - search within Systemorph which has children with icons (Marketing, Projects, etc.)
@@ -137,7 +137,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
 
     #region Text Matching Tests (no wildcards)
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_PrefixMatch_FindsByNameStart()
     {
         // "Mar" should match "Marketing" by prefix
@@ -155,7 +155,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
             "Should find nodes whose name starts with 'Mar'");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_ContainsMatch_FindsBySubstring()
     {
         // "arke" should match "Marketing" by contains
@@ -170,7 +170,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         suggestions.Should().NotBeEmpty("'arke' should match 'Marketing' by substring");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_CaseInsensitive_MatchesLowerInput()
     {
         // "acme" (lowercase) should match "ACME"
@@ -186,7 +186,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         suggestions.Should().Contain(s => s.Path == "ACME");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_PathMatch_FindsByPathSubstring()
     {
         // Search for a path segment that exists under a different name
@@ -201,7 +201,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         suggestions.Should().NotBeEmpty("'Organization' should match nodes with that in name or path");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_NoMatch_ReturnsEmpty()
     {
         // A completely non-existent term should return nothing
@@ -214,7 +214,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         suggestions.Should().BeEmpty("A non-existent term should return no suggestions");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_RelevanceFirst_PrefixMatchScoresHigher()
     {
         // "Sys" prefix-matches "Systemorph" — should score higher than a contains-match
@@ -236,7 +236,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_LimitIsRespected()
     {
         var suggestions = await MeshQuery
@@ -252,7 +252,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
 
     #region BasePath + Prefix Combination Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_BasePathWithPrefix_SearchesWithinPath()
     {
         // Search within Systemorph for "Mar" — should find Marketing
@@ -269,7 +269,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
             "All results should be under the basePath");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_BasePathWithPrefix_ReturnsIcons()
     {
         // Verify icons come through even with basePath + prefix

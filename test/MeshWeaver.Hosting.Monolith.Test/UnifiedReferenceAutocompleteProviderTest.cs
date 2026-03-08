@@ -64,7 +64,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
     #region Configuration Validation Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public void MeshConfig_HasTopLevelNodes()
     {
         // Verify the mesh configuration is populated with top-level nodes
@@ -89,7 +89,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         topLevelNodes.Should().NotBeEmpty("Should have top-level nodes for autocomplete");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task MeshQuery_ReturnsSystemorph()
     {
         // Note: Systemorph is in persistence (JSON files), not MeshCatalog.Configuration.Nodes
@@ -127,7 +127,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         return provider!;
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Provider_AtSymbol_ReturnsTopLevelSuggestions()
     {
         // Arrange - get provider from DI
@@ -146,7 +146,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         items.Should().NotBeEmpty("@ should return top-level node suggestions");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Provider_AtSys_ReturnsSystemorphSuggestion()
     {
         // Arrange - get provider from DI
@@ -172,7 +172,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         Output.WriteLine($"\nMatched Systemorph: Label={systemorphItem?.Label}, InsertText={systemorphItem?.InsertText}");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Provider_AtOrg_ReturnsOrganizationSuggestion()
     {
         // Arrange - get provider from DI
@@ -194,7 +194,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         orgItem.Should().NotBeNull("@Org should match Organization");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Provider_AtUse_ReturnsUserSuggestion()
     {
         // Arrange - get provider from DI
@@ -216,7 +216,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         userItem.Should().NotBeNull("@Use should match User");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Provider_CaseInsensitive_MatchesLowercase()
     {
         // Arrange - get provider from DI
@@ -242,7 +242,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
     #region DI Integration Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public void DI_AutocompleteProvider_IsRegistered()
     {
         // Verify the MeshNodeAutocompleteProvider is registered (it doesn't require INavigationService)
@@ -263,7 +263,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         unifiedProvider.Should().NotBeNull("UnifiedReferenceAutocompleteProvider should be registered via AddMeshNavigation()");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task DI_Provider_ReturnsSystemorphForAtSys()
     {
         // Get provider from DI

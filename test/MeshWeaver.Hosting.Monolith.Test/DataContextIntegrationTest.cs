@@ -175,7 +175,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
     #region DataContext Tests - Configuration and Persistence
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task GraphHub_InitializesWithConfiguration()
     {
         var client = GetClient();
@@ -194,7 +194,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         graphNode!.NodeType.Should().Be("type/graph");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task Persistence_StoryContentIsPreserved()
     {
         // This test verifies that MeshNode.Content is correctly persisted
@@ -215,7 +215,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         story.Points.Should().Be(5);
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task MeshNode_ChildrenAvailable_ViaPersistence()
     {
         var client = GetClient();
@@ -244,7 +244,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         story1.Content.Should().BeOfType<TestStory>();
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task Persistence_CanCreateNodeWithContent()
     {
         // This test verifies that nodes with Content can be created via IPersistenceService
@@ -278,7 +278,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         content.Points.Should().Be(21);
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task Persistence_CanUpdateNodeWithContent()
     {
         // This test verifies that nodes with Content can be updated directly via persistence.

@@ -166,7 +166,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         /// <summary>
         /// Test that the Organization NodeType node is accessible and returns default layout area.
         /// </summary>
-        [Fact(Timeout = 15000)]
+        [Fact(Timeout = 10000)]
         public async Task Organization_NodeType_GetDefaultLayoutArea()
         {
             // Address is "Organization" at root level
@@ -278,7 +278,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         /// This validates that the ChildrenQuery mechanism works correctly.
         /// Note: Activity-based queries require activity records, so we test with a simpler query.
         /// </summary>
-        [Fact(Timeout = 15000)]
+        [Fact(Timeout = 10000)]
         public async Task SimpleQuery_FindsAllOrganizationInstances()
         {
             // Arrange

@@ -121,9 +121,9 @@ public static class CommentsView
                 })
                 .Subscribe(list =>
                 {
-                    // Filter to non-range comments (no MarkerId) that are active
+                    // Show all comments (both range and page-level)
                     var commentControls = list
-                        .Where(n => n.Content is Comment c && string.IsNullOrEmpty(c.MarkerId))
+                        .Where(n => n.Content is Comment)
                         .OrderByDescending(n => ((Comment)n.Content!).CreatedAt)
                         .Select(n => Controls.LayoutArea(n.Path, CommentLayoutAreas.OverviewArea))
                         .ToArray();

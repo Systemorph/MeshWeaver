@@ -84,7 +84,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// This triggers the full rendering pipeline including comments sidebar
     /// where comment c1 has a reply — the scenario that caused OperationCanceledException.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CollaborativeEditingDocument_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -116,7 +116,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the document-level Comments area which lists all comments.
     /// Comments with replies are rendered with nested LayoutArea controls.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task DocumentComments_ShouldRenderAllComments()
     {
         var client = GetClient();
@@ -147,7 +147,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Renders the Overview area for comment c1 which has a reply.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CommentWithReply_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -179,7 +179,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the Overview area for the reply node directly.
     /// Tests whether the reply node's hub can be started independently.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReplyNode_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -210,7 +210,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the Overview area for a comment (c2) that has NO replies.
     /// Baseline test — should always work.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CommentWithoutReplies_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -241,7 +241,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Verifies that the persistence service can load the comment with reply
     /// and that the reply node exists on disk with correct Id and Path.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
         // Load parent comment

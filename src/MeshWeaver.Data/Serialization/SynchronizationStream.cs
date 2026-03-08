@@ -233,6 +233,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     hub.GetWorkspace().RequestChange(delivery.Message, null, delivery);
                     return delivery.Processed();
                 }
+            ).WithHandler<DeliveryFailure>((_, delivery) =>
+                {
+                    var failure = delivery.Message;
+                    logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
+                    Store.OnError(new DeliveryFailureException(failure));
+                    return delivery.Processed();
+                }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
             {
                 hub.Dispose();

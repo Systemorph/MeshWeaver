@@ -154,7 +154,7 @@ public record Graph
         }
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task MeshNode_InitialVersion_IsZero()
     {
         // Arrange - check initial version via query before hub starts
@@ -165,7 +165,7 @@ public record Graph
         initialNode!.Version.Should().Be(0, "initial version should be 0");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task MeshNode_VersionProperty_CanBeSetAndPersisted()
     {
         // Arrange - create a node with a specific version
@@ -185,7 +185,7 @@ public record Graph
         savedNode!.Version.Should().Be(42, "version should be preserved in persistence");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public void MessageHub_HasSetInitialVersionMethod()
     {
         // Verify that IMessageHub interface has the SetInitialVersion method

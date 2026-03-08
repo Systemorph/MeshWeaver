@@ -54,7 +54,6 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
-        MeshWeaver.Messaging.MessageService.ResetMessageCounter();
         TestUsers.DevLogin(Mesh);
         await SetupAccessRightsAsync();
     }

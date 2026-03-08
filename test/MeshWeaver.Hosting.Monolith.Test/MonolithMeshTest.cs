@@ -13,7 +13,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task PingPong()
     {
         var client = GetClient();
@@ -26,7 +26,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
 
-    [Theory(Timeout = 30000)]
+    [Theory(Timeout = 10000)]
     [InlineData("HubFactory")]
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)
@@ -49,6 +49,26 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         response.Should().NotBeNull();
     }
 
+
+    [Fact(Timeout = 5000)]
+    public async Task PingToNonExistentHub_ThrowsDeliveryFailure()
+    {
+        var client = GetClient();
+        var nonExistentAddress = new Address("NonExistent", "Hub");
+
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            await client.AwaitResponse(
+                new PingRequest(),
+                o => o.WithTarget(nonExistentAddress),
+                new CancellationTokenSource(3.Seconds()).Token);
+        });
+
+        // Should be a routing failure, NOT a timeout
+        ex.Should().NotBeOfType<OperationCanceledException>();
+        ex.Should().NotBeOfType<TaskCanceledException>();
+        ex.GetBaseException().Message.Should().Contain("No node found");
+    }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
         base.ConfigureMesh(builder)

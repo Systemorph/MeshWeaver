@@ -59,7 +59,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Text Search Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task TextSearch_CaseInsensitive_MatchesRegardlessOfCase()
     {
         // Arrange - search for "alice" (lowercase) should match "Alice" (proper case)
@@ -85,7 +85,7 @@ public class SearchQueryTests : MonolithMeshTestBase
             "Case-insensitive search should find 'Alice' when searching for 'alice'");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task TextSearch_SubstringMatch_FindsPartialMatches()
     {
         // Arrange - search for partial string "org" should find "Organization"
@@ -134,7 +134,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Wildcard Search Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task WildcardSearch_BothWildcards_MatchesSubstring()
     {
         // Arrange - "*erson*" should match "Person"
@@ -156,7 +156,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task WildcardSearch_TrailingWildcard_MatchesPrefix()
     {
         // Arrange - "name:Per*" should match "Person"
@@ -177,7 +177,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task WildcardSearch_LeadingWildcard_MatchesSuffix()
     {
         // Arrange - "name:*tion" should match names ending in "tion" like "Organization"
@@ -202,7 +202,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Graph Sample Data Integration Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_GraphSampleData_FindsUserNodes()
     {
         // Arrange - search for User nodes (User is a NodeType that uses Person as content type)
@@ -220,7 +220,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         results.Should().NotBeEmpty("Sample data should contain User nodes");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_GraphSampleData_FindsOrganization()
     {
         // Arrange - search for Organization with scope
@@ -238,7 +238,7 @@ public class SearchQueryTests : MonolithMeshTestBase
             "Should find Organization in sample data");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_GraphSampleData_ResultsLimitedCorrectly()
     {
         // Arrange - request with limit of 5
@@ -252,7 +252,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         results.Length.Should().BeLessThanOrEqualTo(5, "Results should respect the limit");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_GraphSampleData_FindsProjects()
     {
         // Arrange - search for Project nodes
@@ -273,7 +273,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Autocomplete Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_WithBasePath_ReturnsSuggestions()
     {
         // Arrange - autocomplete from root
@@ -291,7 +291,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         suggestions.Should().NotBeEmpty("Autocomplete from root should return suggestions");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_WithPrefix_FiltersByPrefix()
     {
         // Arrange - autocomplete with prefix "Per"
@@ -309,7 +309,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         // Suggestions should prefer items starting with or containing the prefix
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_WithNestedPath_ReturnsChildren()
     {
         // Arrange - autocomplete from a nested path
@@ -337,7 +337,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Namespace Query Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task NamespaceQuery_WithoutScope_FindsAllDescendants()
     {
         // Arrange - query with namespace: (defaults to scope:descendants)
@@ -356,7 +356,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         // Results should include all descendants under Systemorph
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task NamespaceQuery_WithDescendants_FindsAllNested()
     {
         // Arrange - query with namespace: and scope:descendants
@@ -375,7 +375,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         // Recursive search should find more items than immediate children
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task NamespaceQuery_WithFilter_CombinesBoth()
     {
         // Arrange - namespace with nodeType filter
@@ -394,7 +394,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region @ Reference Autocomplete Pattern Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReferenceAutocomplete_AtSymbol_QueriesMeshNodes()
     {
         // This simulates what happens when user types "@" in the search bar
@@ -414,7 +414,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         results.Should().NotBeEmpty("'@' mode should return available nodes");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReferenceAutocomplete_WithPartialPath_UsesWildcard()
     {
         // This simulates "@Org" - searching for nodes matching "Org"
@@ -433,7 +433,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         // May or may not find results depending on sample data
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReferenceAutocomplete_WithTrailingSlash_DelegatesToAutocomplete()
     {
         // This simulates "@Organization/" - getting children/sub-completions
@@ -462,7 +462,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         // Note: May be empty if no children exist
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReferenceAutocomplete_ScopePattern_SearchesNodeType()
     {
         // This simulates "@data:Person" - scope-based search for Person type
@@ -479,7 +479,7 @@ public class SearchQueryTests : MonolithMeshTestBase
             Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ReferenceAutocomplete_ScopeWithRemainder_CombinesFilters()
     {
         // This simulates "@data:alice" - scope + text search
@@ -500,7 +500,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region QueryParser Tests
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public void QueryParser_ParsesTextSearchFromCatalogQuery()
     {
         // Arrange - this is the exact query pattern from Catalog
@@ -521,7 +521,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         parsed.Scope.Should().Be(MeshWeaver.Mesh.QueryScope.Descendants);
     }
 
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public void QueryParser_MultipleTextTerms_JoinedWithSpace()
     {
         var parser = new MeshWeaver.Mesh.QueryParser();
@@ -542,7 +542,7 @@ public class SearchQueryTests : MonolithMeshTestBase
     /// The Catalog builds queries like: "namespace:X scope:descendants searchTerm" for hierarchical mode
     /// or "namespace:X searchTerm" which adds scope:descendants when search term is present.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CatalogQuery_WithSearchTerm_FiltersResults()
     {
         // This simulates what the Catalog does:
@@ -577,7 +577,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         });
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CatalogQuery_NodeTypeMode_WithSearchTerm_FiltersResults()
     {
         // This simulates NodeType catalog mode:
@@ -610,7 +610,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CatalogQuery_HierarchicalMode_WithSearchTerm_FiltersResults()
     {
         // This simulates hierarchical catalog mode:
@@ -646,7 +646,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Select Projection Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task SelectQuery_SingleProperty_ReturnsDictionaryWithOnlyThatProperty()
     {
         // Arrange - query with select:name to project results to only name
@@ -670,7 +670,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task SelectQuery_MultipleProperties_ReturnsDictionaryWithThoseProperties()
     {
         // Arrange - query with select:name,nodeType,path
@@ -695,7 +695,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task SelectQuery_WithFilter_ProjectsFilteredResults()
     {
         // Arrange - combine nodeType filter with select projection
@@ -718,7 +718,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task SelectQuery_WithoutSelect_ReturnsFullMeshNodes()
     {
         // Arrange - normal query without select should return MeshNode objects
@@ -737,7 +737,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task SelectQuery_NonExistentProperty_ReturnsNullValue()
     {
         // Arrange - select a property that doesn't exist on MeshNode
@@ -762,7 +762,7 @@ public class SearchQueryTests : MonolithMeshTestBase
 
     #region Search Term Filtering Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_NonExistentTerm_ReturnsNoResults()
     {
         // Arrange - search for a completely non-existent word within a namespace
@@ -780,7 +780,7 @@ public class SearchQueryTests : MonolithMeshTestBase
         results.Should().BeEmpty("A non-existent search term should return no results");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_WithSearchTerm_FiltersResults()
     {
         // Arrange - first get all results without filter
@@ -802,7 +802,7 @@ public class SearchQueryTests : MonolithMeshTestBase
             "Adding a search term should filter down the results");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Search_NamespaceWithDescendantsAndTerm_TermIsApplied()
     {
         // This is the exact query pattern used by the catalog search bar

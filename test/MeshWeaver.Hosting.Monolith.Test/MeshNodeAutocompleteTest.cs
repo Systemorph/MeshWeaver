@@ -61,7 +61,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region Basic Autocomplete Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_EmptyPrefix_ReturnsTopLevelNodes()
     {
         // Act
@@ -82,7 +82,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         suggestions.Should().NotBeEmpty("Empty prefix should return top-level suggestions");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_PartialMatch_ReturnsSuggestions()
     {
         // Act - search for "Sys" which should match "Systemorph"
@@ -105,7 +105,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             "'Sys' should match Systemorph");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_CaseInsensitive_MatchesLowercase()
     {
         // Act - search with lowercase
@@ -127,7 +127,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             "Lowercase 'sys' should match Systemorph (case-insensitive)");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_WithBasePath_SearchesWithinPath()
     {
         // Act - search within a specific base path
@@ -152,7 +152,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             "All suggestions should be within or equal to the base path");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Autocomplete_RelevanceFirst_OrdersByRelevance()
     {
         // Act - search for a term that should match by name
@@ -183,7 +183,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region CreatableTypes Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task GetCreatableTypes_ReturnsTypesForNode()
     {
         // Arrange
@@ -204,7 +204,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         creatableTypes.Should().NotBeEmpty("Systemorph should have creatable types");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task GetCreatableTypes_DifferentNodesDifferentTypes()
     {
         // Arrange
@@ -236,7 +236,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region Filter By Creatable Type Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task FilterByCreatableType_ReturnsOnlyMatchingNodes()
     {
         // Arrange
@@ -300,7 +300,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
             "The original node should be in the filtered results");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CanCreateTypeAtPath_ReturnsTrueForValidType()
     {
         // Arrange
@@ -340,7 +340,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         canCreate.Should().BeTrue($"Node '{nodeWithTypes.Path}' should be able to create type '{targetType}'");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CanCreateTypeAtPath_ReturnsFalseForInvalidType()
     {
         // Arrange
@@ -386,7 +386,7 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
 
     #region Integration Tests
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task Integration_AutocompleteWithTypeFilter_WorksEndToEnd()
     {
         // This test simulates the full flow of:
