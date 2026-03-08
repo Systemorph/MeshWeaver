@@ -468,16 +468,30 @@ public static class DataExtensions
 
     private static async Task<IMessageDelivery> HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request, CancellationToken ct)
     {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.SubscribeHandler");
+
+        var accessContext = request.AccessContext;
+        logger?.LogInformation("HandleSubscribeRequest: Hub={Hub}, Sender={Sender}, AccessContext.ObjectId={ObjectId}, Reference={Ref}",
+            hub.Address, request.Sender, accessContext?.ObjectId, request.Message.Reference);
+
         // Run read validators before subscribing
         var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
         if (!validationResult.IsValid)
         {
-            hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
+            logger?.LogWarning("HandleSubscribeRequest: Access denied for {Sender} at {Hub}: {Error}",
+                request.Sender, hub.Address, validationResult.ErrorMessage);
+            hub.Post(new DeliveryFailure(request)
+                {
+                    ErrorType = ErrorType.Failed,
+                    Message = $"Access denied: {validationResult.ErrorMessage}"
+                },
                 o => o.ResponseFor(request));
             return request.Processed();
         }
 
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
+        logger?.LogInformation("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
+            request.Sender, hub.Address);
         return request.Processed();
     }
 

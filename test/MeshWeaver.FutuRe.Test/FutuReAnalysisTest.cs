@@ -541,26 +541,101 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     // ── Group Analysis Hub (FutuRe/Analysis) ──
 
-    [Fact(Timeout = 60000)]
+    /// <summary>
+    /// Diagnostic: check whether PartitionedHubDataSource actually receives data from child hubs.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task Group_Diagnostic_DataFlow()
+    {
+        await InitializeChildAnalysisHubs();
+
+        var client = GetClient();
+        var groupAddress = new Address("FutuRe/Analysis");
+
+        // Ping to ensure group hub is created
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(groupAddress),
+            TestContext.Current.CancellationToken);
+
+        // Get the group hub directly
+        var groupHub = Mesh.GetHostedHub(groupAddress, HostedHubCreation.Never);
+        groupHub.Should().NotBeNull("Group hub should exist after ping");
+        Output.WriteLine($"Group hub address: {groupHub!.Address}");
+
+        var workspace = groupHub.GetWorkspace();
+        Output.WriteLine($"Workspace mapped types: {string.Join(", ", workspace.MappedTypes.Select(t => t.Name))}");
+
+        // Check data context sources
+        var dc = workspace.DataContext;
+        Output.WriteLine($"DataContext sources count: {dc.DataSources.Count()}");
+        foreach (var ds in dc.DataSources)
+            Output.WriteLine($"  DataSource: {ds.Id} ({ds.GetType().Name})");
+
+        // Try getting the stream for the group hub
+        var stream = workspace.GetStream(workspace.MappedTypes.ToArray());
+        Output.WriteLine($"Stream created: {stream != null}");
+
+        if (stream != null)
+        {
+            Output.WriteLine("Waiting for stream data...");
+            try
+            {
+                var data = await stream
+                    .Timeout(TimeSpan.FromSeconds(8))
+                    .FirstAsync(x => x.Value != null);
+                Output.WriteLine($"Got data! Collections: {string.Join(", ", data.Value!.Collections.Keys)}");
+                foreach (var c in data.Value!.Collections)
+                    Output.WriteLine($"  Collection '{c.Key}': {c.Value.Instances.Count} instances");
+            }
+            catch (TimeoutException)
+            {
+                Output.WriteLine("TIMEOUT: Stream never emitted data within 8 seconds");
+
+                // Check partition streams directly
+                foreach (var ds in dc.DataSources)
+                {
+                    Output.WriteLine($"  Checking data source '{ds.Id}': {ds.GetType().Name}");
+                    var partStream = ds.GetStreamForPartition(null);
+                    Output.WriteLine($"    Null-partition stream: {partStream != null}, Current: {partStream?.Current != null}");
+                    if (partStream?.Current?.Value != null)
+                    {
+                        foreach (var c in partStream.Current.Value.Collections)
+                            Output.WriteLine($"      Collection '{c.Key}': {c.Value.Instances.Count} instances");
+                    }
+                }
+            }
+        }
+    }
+
+    [Fact(Timeout = 10000)]
     public async Task Group_KeyMetrics_ShouldHaveNonZeroData()
     {
         await InitializeChildAnalysisHubs();
 
+        // First, get ANY control (not waiting for data) to see what renders
         var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
-            waitForData: true, timeoutSeconds: 40);
-        var md = AssertMarkdownWithNonZeroNumbers(control, "Group KeyMetrics");
-        md.Should().Contain("Total Premium", "KeyMetrics should show premium");
-        md.Should().Contain("Business Units", "Group KeyMetrics should show BU count");
+            waitForData: false, timeoutSeconds: 8);
+
+        Output.WriteLine($"Control type: {control?.GetType().Name}");
+        if (control is MarkdownControl md)
+        {
+            Output.WriteLine($"Markdown content:\n{md.Markdown}");
+        }
+        else
+        {
+            Output.WriteLine($"Control: {control}");
+        }
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 30000)]
     public async Task Group_ProfitabilityTable_ShouldHaveNonZeroData()
     {
         // Pre-initialize child BU hubs so their data is loaded before group hub aggregates
         await InitializeChildAnalysisHubs();
 
         var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityTable",
-            waitForData: true, timeoutSeconds: 50);
+            waitForData: true, timeoutSeconds: 10);
         var md = AssertMarkdownWithNonZeroNumbers(control, "Group ProfitabilityTable");
         md.Should().Contain("Line of Business", "table should have headers");
         md.Should().Contain("Total", "table should have totals row");

@@ -30,7 +30,8 @@ public static class JsonSynchronizationStream
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
         Address owner,
-        TReference reference
+        TReference reference,
+        bool impersonateAsHub = false
     )
     where TReference : WorkspaceReference
     {
@@ -84,7 +85,8 @@ public static class JsonSynchronizationStream
             );
 
 
-        reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
+        reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference),
+            o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner));
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
