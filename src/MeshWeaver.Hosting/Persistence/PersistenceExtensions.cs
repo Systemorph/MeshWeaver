@@ -423,14 +423,17 @@ public static class PersistenceExtensions
 
     /// <summary>
     /// Registers the MeshCatalog and its public interfaces (IMeshNodePersistence, IPathResolver).
-    /// All three interfaces resolve to the same singleton instance.
-    /// Use this from application code instead of registering IMeshCatalog directly (which is internal).
+    /// IMeshNodePersistence is scoped (per hub) so each hub gets its own instance
+    /// with the correct IMessageHub injected — same pattern as IPersistenceService.
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {
         services.TryAddSingleton<MeshCatalog>();
         services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
-        services.TryAddSingleton<IMeshNodePersistence>(sp => sp.GetRequiredService<MeshCatalog>());
+        services.AddScoped<IMeshNodePersistence>(sp =>
+            new HubNodePersistence(
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
         services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<MeshCatalog>());
         return services;
     }

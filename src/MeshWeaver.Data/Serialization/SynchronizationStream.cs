@@ -162,7 +162,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void OnError(Exception error)
     {
         if (!Store.IsDisposed)
+        {
             Store.OnError(error);
+            // Open the gate so Hub.Started completes even on error.
+            // Without this, DataSource.Initialized hangs forever because
+            // it waits on Hub.Started which waits on the gate.
+            Hub.OpenGate(SynchronizationGate);
+        }
     }
 
     public void RegisterForDisposal(IDisposable disposable) => Hub

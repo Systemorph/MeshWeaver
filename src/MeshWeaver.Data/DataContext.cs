@@ -186,6 +186,21 @@ public sealed record DataContext : IDisposable
                 if (task.IsFaulted)
                 {
                     logger.LogError(task.Exception, "DataContext initialization failed for {Address}", Hub.Address);
+                    // Propagate initialization failure to all data source streams
+                    var initException = new InvalidOperationException(
+                        $"Hub '{Hub.Address}' initialization failed", task.Exception);
+                    foreach (var ds in DataSources)
+                    {
+                        try
+                        {
+                            var stream = ds.GetStreamForPartition(null);
+                            stream?.OnError(initException);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
+                        }
+                    }
                 }
                 else if (task.IsCanceled)
                 {

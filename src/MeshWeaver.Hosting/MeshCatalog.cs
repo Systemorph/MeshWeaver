@@ -29,6 +29,7 @@ internal sealed class MeshCatalog(
 {
     public MeshConfiguration Configuration { get; } = configuration;
     internal IPersistenceService Persistence { get; } = persistenceService;
+    internal Address MeshAddress => hub.Address;
     private readonly IMeshQuery? _meshQuery = meshQuery;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
@@ -147,102 +148,18 @@ internal sealed class MeshCatalog(
     public Task UpdateAsync(MeshNode node) =>
         Persistence.SaveNodeAsync(node);
 
-    /// <inheritdoc />
+    // IMeshNodePersistence + IMeshCatalog — delegate to HubNodePersistence
+    private HubNodePersistence NodePersistence => new(hub, this);
+
     public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-    {
-        var tcs = new TaskCompletionSource<MeshNode>();
+        => NodePersistence.CreateNodeAsync(node, createdBy, ct);
 
-        // Cancel the TCS if the token fires before the callback arrives
-        if (ct.CanBeCanceled)
-            ct.Register(() => tcs.TrySetCanceled(ct));
-
-        // Post CreateNodeRequest to the mesh hub where handlers are registered
-        var request = new CreateNodeRequest(node) { CreatedBy = createdBy };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
-
-        if (delivery == null)
-        {
-            tcs.SetException(new InvalidOperationException("Failed to post CreateNodeRequest"));
-            return tcs.Task;
-        }
-
-        // Use typed callback for proper response handling
-        hub.RegisterCallback<CreateNodeResponse>(delivery, response =>
-        {
-            var createResponse = response.Message;
-            if (createResponse.Success && createResponse.Node != null)
-            {
-                cache.Set(createResponse.Node.Path, createResponse.Node, cacheOptions);
-                tcs.TrySetResult(createResponse.Node);
-            }
-            else
-            {
-                Exception exception = createResponse.RejectionReason switch
-                {
-                    NodeCreationRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(createResponse.Error ?? "Access denied"),
-                    NodeCreationRejectionReason.NodeAlreadyExists =>
-                        new InvalidOperationException($"Node already exists: {node.Path}"),
-                    _ => new InvalidOperationException(createResponse.Error ?? "Node creation failed")
-                };
-                tcs.TrySetException(exception);
-            }
-            return response;
-        });
-
-        return tcs.Task;
-    }
-
-    /// <inheritdoc />
     public Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
-    {
-        var tcs = new TaskCompletionSource<MeshNode>();
+        => NodePersistence.UpdateNodeAsync(node, updatedBy, ct);
 
-        if (ct.CanBeCanceled)
-            ct.Register(() => tcs.TrySetCanceled(ct));
+    public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
+        => NodePersistence.CreateTransientAsync(node, ct);
 
-        var request = new UpdateNodeRequest(node) { UpdatedBy = updatedBy };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
-
-        if (delivery == null)
-        {
-            tcs.SetException(new InvalidOperationException("Failed to post UpdateNodeRequest"));
-            return tcs.Task;
-        }
-
-        hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
-        {
-            var updateResponse = response.Message;
-            if (updateResponse.Success && updateResponse.Node != null)
-            {
-                cache.Set(updateResponse.Node.Path, updateResponse.Node, cacheOptions);
-                tcs.TrySetResult(updateResponse.Node);
-            }
-            else
-            {
-                Exception exception = updateResponse.RejectionReason switch
-                {
-                    NodeUpdateRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(updateResponse.Error ?? "Access denied"),
-                    NodeUpdateRejectionReason.NodeNotFound =>
-                        new InvalidOperationException($"Node not found: {node.Path}"),
-                    _ => new InvalidOperationException(updateResponse.Error ?? "Node update failed")
-                };
-                tcs.TrySetException(exception);
-            }
-            return response;
-        });
-
-        return tcs.Task;
-    }
-
-    /// <inheritdoc />
-    public async Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var currentUser = accessService?.Context?.Name;
-        return await CreateTransientNodeAsync(node, currentUser, ct);
-    }
 
     /// <summary>
     /// Creates a new node in Transient state without confirming it.
@@ -352,57 +269,11 @@ internal sealed class MeshCatalog(
         logger.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
     }
 
-    /// <summary>
-    /// IMeshNodePersistence.DeleteNodeAsync — public, routes through the message bus.
-    /// The handler recursively deletes children first (bottom-to-top).
-    /// If a child cannot be deleted, the parent is not deleted either.
-    /// </summary>
-    Task IMeshNodePersistence.DeleteNodeAsync(string path, string? deletedBy, CancellationToken ct)
-    {
-        var tcs = new TaskCompletionSource();
+    public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
+        => NodePersistence.DeleteNodeAsync(path, deletedBy, ct);
 
-        if (ct.CanBeCanceled)
-            ct.Register(() => tcs.TrySetCanceled(ct));
-
-        var request = new DeleteNodeRequest(path) { DeletedBy = deletedBy, Recursive = true };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
-
-        if (delivery == null)
-        {
-            tcs.SetException(new InvalidOperationException("Failed to post DeleteNodeRequest"));
-            return tcs.Task;
-        }
-
-        hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
-        {
-            var deleteResponse = response.Message;
-            if (deleteResponse.Success)
-            {
-                tcs.TrySetResult();
-            }
-            else
-            {
-                Exception exception = deleteResponse.RejectionReason switch
-                {
-                    NodeDeletionRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(deleteResponse.Error ?? "Access denied"),
-                    NodeDeletionRejectionReason.NodeNotFound =>
-                        new InvalidOperationException($"Node not found: {path}"),
-                    NodeDeletionRejectionReason.ChildDeletionFailed =>
-                        new InvalidOperationException(deleteResponse.Error ?? "Child deletion failed"),
-                    _ => new InvalidOperationException(deleteResponse.Error ?? "Node deletion failed")
-                };
-                tcs.TrySetException(exception);
-            }
-            return response;
-        });
-
-        return tcs.Task;
-    }
-
-    /// <inheritdoc />
-    IMeshNodePersistence IMeshNodePersistence.ImpersonateAsNode()
-        => new ImpersonatedNodePersistence(hub, this);
+    public IMeshNodePersistence ImpersonateAsNode()
+        => NodePersistence.ImpersonateAsNode();
 
     private static bool ValidatePath(MeshNode node)
     {
