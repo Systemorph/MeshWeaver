@@ -155,7 +155,7 @@ public static class DataExtensions
             .WithType(typeof(Address), nameof(Address))
             .WithType(typeof(ActivityLog), nameof(ActivityLog))
             .RegisterDataEvents()
-            .WithInitializationGate(DataContext.InitializationGateName);
+            .WithInitializationGate(DataContext.InitializationGateName, d => d.Message is PingRequest);
     }
 
     private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
@@ -482,7 +482,7 @@ public static class DataExtensions
                 request.Sender, hub.Address, validationResult.ErrorMessage);
             hub.Post(new DeliveryFailure(request)
                 {
-                    ErrorType = ErrorType.Failed,
+                    ErrorType = ErrorType.Unauthorized,
                     Message = $"Access denied: {validationResult.ErrorMessage}"
                 },
                 o => o.ResponseFor(request));
@@ -501,7 +501,7 @@ public static class DataExtensions
                     hubPath, errorMessage);
                 hub.Post(new DeliveryFailure(request)
                     {
-                        ErrorType = ErrorType.Failed,
+                        ErrorType = ErrorType.Unauthorized,
                         Message = $"Access denied: {errorMessage}"
                     },
                     o => o.ResponseFor(request));

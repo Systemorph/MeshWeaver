@@ -1,6 +1,6 @@
 {
   "id": "FutuRe_Analysis_Access",
-  "namespace": "FutuRe/EuropeRe/Analysis",
+  "namespace": "FutuRe/AmericasIns/Analysis",
   "name": "FutuRe/Analysis Node Access",
   "nodeType": "AccessAssignment",
   "content": {

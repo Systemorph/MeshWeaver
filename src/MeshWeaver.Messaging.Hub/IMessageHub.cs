@@ -127,4 +127,10 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 
 
     internal void Start();
+
+    /// <summary>
+    /// Faults the hub's Started task so that DataSource.Initialized will also fault.
+    /// Called when a stream errors during initialization (e.g., access denied).
+    /// </summary>
+    void FailStartup(Exception error);
 }

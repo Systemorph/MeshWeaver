@@ -50,8 +50,13 @@ public sealed class MessageHub : IMessageHub
         if (RunLevel < MessageHubRunLevel.Started)
         {
             RunLevel = MessageHubRunLevel.Started;
-            hasStarted.SetResult();
+            hasStarted.TrySetResult();
         }
+    }
+
+    public void FailStartup(Exception error)
+    {
+        hasStarted.TrySetException(error);
     }
 
     /// <summary>
