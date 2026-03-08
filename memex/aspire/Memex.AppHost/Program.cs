@@ -2,11 +2,12 @@
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Mode: "monolith" (default) or "distributed"
+// Mode: "monolith" (default), "distributed", or "test"
 // Pass as command line argument: dotnet run -- --mode distributed
 var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "monolith";
 var useDistributed = mode == "distributed";
 var useMonolith = mode == "monolith";
+var useTest = mode == "test";
 
 if (useDistributed)
 {
@@ -87,6 +88,78 @@ if (useDistributed)
         // .WithEnvironment("Authentication__LinkedIn__ClientSecret", linkedinClientSecret)
         // .WithEnvironment("Authentication__Apple__ClientId", appleClientId)
         // .WithEnvironment("Authentication__Apple__ClientSecret", appleClientSecret)
+        .WaitFor(storageBlobs)
+        .WaitFor(orleansTables)
+        .WaitFor(grainStateBlobs)
+        .WaitFor(postgresDb)
+        .WaitForCompletion(dbMigration);
+}
+
+if (useTest)
+{
+    // Azure Blob Storage (hosted in Sweden Central, NOT emulated)
+    var contentStorage = builder.AddAzureStorage("memexblobs")
+        .ConfigureInfrastructure(infra =>
+        {
+            var storageAccount = infra.GetProvisionableResources()
+                .OfType<Azure.Provisioning.Storage.StorageAccount>()
+                .Single();
+            storageAccount.Location = new Azure.Core.AzureLocation("swedencentral");
+        });
+    var storageBlobs = contentStorage.AddBlobs("storage");
+
+    // Ephemeral storage for Orleans (local emulator — Orleans is infrastructure, not user data)
+    var orleansStorage = builder.AddAzureStorage("orleansstorage");
+    if (builder.Environment.IsDevelopment())
+    {
+        orleansStorage = orleansStorage.RunAsEmulator();
+    }
+    var orleansTables = orleansStorage.AddTables("orleans-clustering");
+    var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");
+
+    var orleans = builder.AddOrleans("memex-mesh")
+        .WithClustering(orleansTables)
+        .WithGrainStorage("Default", grainStateBlobs);
+
+    // Azure PostgreSQL Flexible Server (hosted in Sweden Central)
+    var postgres = builder.AddAzurePostgresFlexibleServer("memex-postgres-test")
+        .ConfigureInfrastructure(infra =>
+        {
+            var server = infra.GetProvisionableResources()
+                .OfType<Azure.Provisioning.PostgreSql.PostgreSqlFlexibleServer>()
+                .Single();
+            server.Location = new Azure.Core.AzureLocation("swedencentral");
+        });
+    var postgresDb = postgres.AddDatabase("meshweaver");
+
+    // Database migration: creates vector extension + schema before portal starts
+    var dbMigration = builder
+        .AddProject<Projects.Memex_Database_Migration>("db-migration")
+        .WithReference(postgresDb)
+        .WaitFor(postgresDb);
+
+    // Embedding configuration (Cohere embed-v4 via Azure Foundry)
+    var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
+    var embeddingKey = builder.AddParameter("embedding-key", secret: true);
+    var embeddingModel = builder.AddParameter("embedding-model", secret: false);
+
+    // Authentication provider parameters
+    var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
+    var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
+
+    // Memex Test (co-hosted silo + web, hosted Azure resources)
+    builder
+        .AddProject<Projects.Memex_Portal_Distributed>("memex-test")
+        .WithExternalHttpEndpoints()
+        .WithReference(orleans)
+        .WithReference(postgresDb)
+        .WithReference(storageBlobs)
+        .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
+        .WithEnvironment("Embedding__ApiKey", embeddingKey)
+        .WithEnvironment("Embedding__Model", embeddingModel)
+        .WithEnvironment("Authentication__EnableDevLogin", "true")
+        .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
+        .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
         .WaitFor(storageBlobs)
         .WaitFor(orleansTables)
         .WaitFor(grainStateBlobs)

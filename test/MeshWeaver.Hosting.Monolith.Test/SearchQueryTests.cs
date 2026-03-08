@@ -223,19 +223,20 @@ public class SearchQueryTests : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Search_GraphSampleData_FindsOrganization()
     {
-        // Arrange - search for Organization with scope
-        var request = new MeshQueryRequest { Query = "Organization scope:descendants", Limit = 10 };
+        // Arrange - search for ACME which is a known Organization node
+        var request = new MeshQueryRequest { Query = "nodeType:Organization scope:descendants", Limit = 10 };
 
         // Act
         var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        Output.WriteLine($"Found {results.Length} results for 'Organization scope:descendants'");
+        Output.WriteLine($"Found {results.Length} results for 'nodeType:Organization scope:descendants'");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
 
-        results.Should().Contain(n => n.Path != null && n.Path.Contains("Organization", StringComparison.OrdinalIgnoreCase),
-            "Should find Organization in sample data");
+        results.Should().NotBeEmpty("Should find Organization nodes in sample data");
+        results.Should().Contain(n => n.NodeType == "Organization",
+            "Should find nodes with Organization nodeType");
     }
 
     [Fact(Timeout = 10000)]

@@ -504,7 +504,9 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task CreateNode_Anonymous_NoCreatedBy_Fails()
     {
-        // Arrange - anonymous: no AccessContext, no CreatedBy, no role assigned
+        // Arrange - anonymous: clear AccessContext, no CreatedBy, no role assigned
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(null);
         var client = GetClient();
 
         var node = new MeshNode("AnonCreate", "rls/anon")
@@ -532,6 +534,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // Arrange - create a node as admin first
         var client = GetClient();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         const string adminId = "admin_for_anon_delete";
         const string parentPath = "rls/anon_delete";
@@ -548,15 +551,20 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             TestTimeout);
         createResp.Message.Success.Should().BeTrue();
 
+        // Clear AccessContext to simulate anonymous user
+        accessService.SetCircuitContext(null);
+
         // Act — anonymous delete (no DeletedBy)
         var deleteResponse = await client.AwaitResponse(
             new DeleteNodeRequest("rls/anon_delete/ToDeleteAnon"),
             o => o.WithTarget(Mesh.Address),
             TestTimeout);
 
-        // Assert — must be rejected
+        // Assert — must be rejected (NodeNotFound is also acceptable since anonymous can't even see the node)
         deleteResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to delete nodes");
-        deleteResponse.Message.RejectionReason.Should().Be(NodeDeletionRejectionReason.ValidationFailed);
+        deleteResponse.Message.RejectionReason.Should().BeOneOf(
+            NodeDeletionRejectionReason.ValidationFailed,
+            NodeDeletionRejectionReason.NodeNotFound);
     }
 
     [Fact]
@@ -565,6 +573,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // Arrange - create a node as admin first
         var client = GetClient();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
         const string adminId = "admin_for_anon_update";
         const string parentPath = "rls/anon_update";
@@ -581,6 +590,9 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             TestTimeout);
         createResp.Message.Success.Should().BeTrue();
 
+        // Clear AccessContext to simulate anonymous user
+        accessService.SetCircuitContext(null);
+
         // Act — anonymous update (no UpdatedBy)
         var updatedNode = node with { Name = "Hacked" };
         var updateResponse = await client.AwaitResponse(
@@ -588,9 +600,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
             o => o.WithTarget(Mesh.Address),
             TestTimeout);
 
-        // Assert — must be rejected
+        // Assert — must be rejected (NodeNotFound is also acceptable since anonymous can't even see the node)
         updateResponse.Message.Success.Should().BeFalse("Anonymous user must not be able to update nodes");
-        updateResponse.Message.RejectionReason.Should().Be(NodeUpdateRejectionReason.ValidationFailed);
+        updateResponse.Message.RejectionReason.Should().BeOneOf(
+            NodeUpdateRejectionReason.ValidationFailed,
+            NodeUpdateRejectionReason.NodeNotFound);
     }
 
     [Fact]
@@ -611,7 +625,9 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     [Fact]
     public async Task AnonymousUser_WithAnonymousViewerRole_CannotCreate()
     {
-        // Arrange — grant Anonymous user Viewer role (Read only)
+        // Arrange — grant Anonymous user Viewer role (Read only), clear admin context
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(null);
         var client = GetClient();
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 

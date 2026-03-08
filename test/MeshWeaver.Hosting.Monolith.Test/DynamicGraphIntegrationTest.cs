@@ -767,9 +767,9 @@ public record Graph
         var hasSearchStructure = json.Contains("Search") && json.Contains("MeshSearchControl");
         hasSearchStructure.Should().BeTrue($"Search should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
 
-        // The MeshSearchControl should have the correct query for nodeType filtering
-        var hasCorrectQuery = json.Contains("nodeType:type/org") && json.Contains("scope:subtree");
-        hasCorrectQuery.Should().BeTrue($"Search should have nodeType filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The MeshSearchControl should have the correct namespace and scope
+        var hasCorrectQuery = json.Contains("namespace:type/org") && json.Contains("scope:children");
+        hasCorrectQuery.Should().BeTrue($"Search should have namespace filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
     }
 
     /// <summary>
@@ -1145,7 +1145,12 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
-        node!.HubConfiguration.Should().NotBeNull(
+
+        // Enrich via NodeTypeService to trigger compilation and populate HubConfiguration
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        node = await nodeTypeService.EnrichWithNodeTypeAsync(node!, TestContext.Current.CancellationToken);
+
+        node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
             "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
             "were not properly deserialized from JSON (returned as JsonElement instead).");
@@ -1301,12 +1306,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("NodeType");
 
-        // NodeType nodes compile their OWN code (at their path) to get HubConfiguration
+        // Query results don't include HubConfiguration — enrichment (compilation) happens via NodeTypeService
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        node = await nodeTypeService.EnrichWithNodeTypeAsync(node, TestContext.Current.CancellationToken);
+
         Output.WriteLine($"Node.HubConfiguration is null: {node.HubConfiguration == null}");
         node.HubConfiguration.Should().NotBeNull(
             "NodeType nodes should have HubConfiguration from their own code");
 
-        // Verify we can get the actual HubConfiguration function
         var hubConfig = node.HubConfiguration;
         hubConfig.Should().NotBeNull("Should be able to get HubConfiguration");
         Output.WriteLine("Successfully obtained HubConfiguration");
@@ -1566,11 +1573,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact]
     public void Organization_ViewsCs_Exists()
     {
-        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "Organization", "Code", "OrganizationViews.cs");
-        Output.WriteLine($"Checking for OrganizationViews.cs at: {viewsCsPath}");
+        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "Organization", "Code", "OrganizationLayoutAreas.cs");
+        Output.WriteLine($"Checking for OrganizationLayoutAreas.cs at: {viewsCsPath}");
 
         File.Exists(viewsCsPath).Should().BeTrue(
-            $"Organization/Code/OrganizationViews.cs should exist at {viewsCsPath} for custom view configuration");
+            $"Organization/Code/OrganizationLayoutAreas.cs should exist at {viewsCsPath} for custom view configuration");
     }
 
     /// <summary>
@@ -1585,10 +1592,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         node.Should().NotBeNull("Organization node should exist");
         node!.NodeType.Should().Be("NodeType");
+
+        // Enrich via NodeTypeService to trigger compilation and populate HubConfiguration
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        node = await nodeTypeService.EnrichWithNodeTypeAsync(node, TestContext.Current.CancellationToken);
+
         node.HubConfiguration.Should().NotBeNull(
             "Organization node should have HubConfiguration from compiled assembly with custom view");
 
-        // Get the hub configuration function
         var hubConfig = node.HubConfiguration;
         hubConfig.Should().NotBeNull("HubConfiguration should be available");
 
@@ -1647,8 +1658,8 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
     /// <summary>
     /// Verifies that QueryAsync with scope:descendants finds Code nodes under Organization.
-    /// Organization has 2 code files: Organization.cs and OrganizationViews.cs
-    /// stored at Organization/Code/Organization and Organization/Code/OrganizationViews.
+    /// Organization has 2 code files: Organization.cs and OrganizationLayoutAreas.cs
+    /// stored at Organization/Code/Organization and Organization/Code/OrganizationLayoutAreas.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task Organization_QueryAsync_ScopeDescendants_FindsCodeNodes()
@@ -1667,7 +1678,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             Output.WriteLine($"Found Code node: Path={node.Path}, Name={node.Name}, NodeType={node.NodeType}");
 
         // Assert: Organization has 2 code files
-        nodes.Should().HaveCount(2, "Organization should have 2 Code descendants (Organization.cs and OrganizationViews.cs)");
+        nodes.Should().HaveCount(2, "Organization should have 2 Code descendants (Organization.cs and OrganizationLayoutAreas.cs)");
         nodes.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType, "All results should be Code nodes");
         nodes.Should().OnlyContain(n => n.Content is CodeConfiguration, "All Code nodes should have CodeConfiguration content");
     }

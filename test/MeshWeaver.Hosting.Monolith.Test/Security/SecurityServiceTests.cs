@@ -300,10 +300,12 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
 
         await securityService.AddUserRoleAsync(userId, "Admin", "allowed/area", "system", TestTimeout);
 
+        var node = new MeshNode("test", "allowed/area") { Name = "Test Node" };
         var context = new NodeValidationContext
         {
             Operation = NodeOperation.Create,
-            Node = new MeshNode("test", "allowed/area") { Name = "Test Node" },
+            Node = node,
+            Request = new CreateNodeRequest(node) { CreatedBy = userId },
             AccessContext = new AccessContext { ObjectId = userId }
         };
 
@@ -322,7 +324,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
 
         var operations = validator!.SupportedOperations;
 
-        operations.Should().NotContain(NodeOperation.Read);
+        operations.Should().Contain(NodeOperation.Read);
         operations.Should().Contain(NodeOperation.Create);
         operations.Should().Contain(NodeOperation.Update);
         operations.Should().Contain(NodeOperation.Delete);

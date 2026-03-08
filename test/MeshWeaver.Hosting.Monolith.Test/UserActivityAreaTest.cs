@@ -56,6 +56,12 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
             .AddUserData()
             .AddCornerstone()
             .AddMeshWeaverDocs()
+            .AddMeshNodes(MeshNode.FromPath("User/TestUser") with
+            {
+                Name = "Test User",
+                NodeType = "User",
+                State = MeshNodeState.Active,
+            })
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -109,8 +115,8 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     {
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:User/Roland scope:exact").FirstOrDefaultAsync();
-        node.Should().NotBeNull("Roland user node should exist in samples/Graph/Data/User/Roland.json");
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:User/TestUser scope:exact").FirstOrDefaultAsync();
+        node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
         // Enrich with node type — this should attach HubConfiguration
@@ -120,25 +126,25 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Verify that a hub can be created for the User/Roland address
+    /// Verify that a hub can be created for the User/TestUser address
     /// and that it responds to PingRequest (hub is alive).
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task UserHub_Roland_CanBeCreated()
     {
         var client = GetClient();
-        var rolandAddress = new Address("User/Roland");
+        var rolandAddress = new Address("User/TestUser");
 
         var response = await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(rolandAddress),
             TestContext.Current.CancellationToken);
 
-        response.Should().NotBeNull("User/Roland hub should be created and respond to ping");
+        response.Should().NotBeNull("User/TestUser hub should be created and respond to ping");
     }
 
     /// <summary>
-    /// The main test: resolve the Activity layout area on User/Roland.
+    /// The main test: resolve the Activity layout area on User/TestUser.
     /// This is the area registered by AddUserActivityViews().
     /// Regression test: compilation of User/Code/Person.cs was overwriting
     /// the built-in HubConfiguration, losing layout areas.
@@ -147,7 +153,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task ActivityArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
-        var rolandAddress = new Address("User/Roland");
+        var rolandAddress = new Address("User/TestUser");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -164,7 +170,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for User/Roland — AddUserActivityViews() must be invoked");
+            "Activity area should render for User/TestUser — AddUserActivityViews() must be invoked");
     }
 
     /// <summary>
@@ -174,7 +180,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task OverviewArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
-        var rolandAddress = new Address("User/Roland");
+        var rolandAddress = new Address("User/TestUser");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -191,6 +197,6 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Overview area should render for User/Roland — AddDefaultLayoutAreas() must be invoked");
+            "Overview area should render for User/TestUser — AddDefaultLayoutAreas() must be invoked");
     }
 }

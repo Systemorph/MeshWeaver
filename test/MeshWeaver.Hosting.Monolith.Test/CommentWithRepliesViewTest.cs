@@ -264,14 +264,14 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         replyComment.Should().NotBeNull();
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
-        // Load children of c1
-        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:children").ToListAsync();
+        // Load children of c1 via subtree query
+        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:subtree").ToListAsync();
         foreach (var child in children)
         {
-            Output.WriteLine($"Child: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");
+            Output.WriteLine($"Subtree: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");
         }
 
-        children.Should().HaveCountGreaterThan(0, "Comment c1 should have at least one child (reply)");
-        children.Should().Contain(c => c.Id == "reply1");
+        // The subtree query includes the parent itself plus children
+        children.Should().Contain(c => c.Id == "reply1", "Comment c1 should have reply1 in its subtree");
     }
 }

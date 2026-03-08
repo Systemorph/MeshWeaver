@@ -537,20 +537,22 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
 
         await LoginAdminForSetup();
-        await NodeFactory.CreateNodeAsync(new MeshNode("User") { Name = "User", NodeType = "Group" });
-        await NodeFactory.CreateNodeAsync(new MeshNode("AliceProfile", "User") { Name = "Alice Profile", NodeType = "Markdown" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("Profiles") { Name = "Profiles", NodeType = "Group" });
+        await NodeFactory.CreateNodeAsync(new MeshNode("AliceProfile", "Profiles") { Name = "Alice Profile", NodeType = "Markdown" });
         ClearAdminContext();
 
-        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "User", "system", TestTimeout);
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Profiles", "system", TestTimeout);
 
-        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:User scope:children", UserId = "" }).ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:Profiles scope:children", UserId = "" }).ToListAsync();
 
         children.Should().Contain(n => n.Id == "AliceProfile");
     }
 
     [Fact]
-    public async Task SecurePersistence_NodeTypeDefinition_AlwaysVisibleToAnonymous()
+    public async Task SecurePersistence_NodeTypeDefinition_VisibleWithExplicitGrant()
     {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
         await LoginAdminForSetup();
         await NodeFactory.CreateNodeAsync(new MeshNode("CustomType")
         {
@@ -565,12 +567,15 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         });
         ClearAdminContext();
 
+        // Grant Anonymous Viewer access to CustomType specifically
+        await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "CustomType", "system", TestTimeout);
+
         var typeDef = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomType scope:exact", UserId = "" }).FirstOrDefaultAsync();
         var instance = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomInstance scope:exact", UserId = "" }).FirstOrDefaultAsync();
 
-        typeDef.Should().NotBeNull("NodeType definitions are always publicly readable");
+        typeDef.Should().NotBeNull("NodeType definitions are readable with explicit Anonymous Viewer grant");
         typeDef!.Name.Should().Be("CustomType");
-        instance.Should().BeNull("Non-NodeType instances require explicit access grants");
+        instance.Should().BeNull("Non-granted instances require explicit access grants");
     }
 
     [Fact]

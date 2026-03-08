@@ -70,7 +70,7 @@ public class ApplicationPageResolutionTest(ITestOutputHelper output) : MonolithM
     /// </summary>
     [Theory(Timeout = 10000)]
     [InlineData("FutuRe/EuropeRe", "FutuRe/EuropeRe", null)]
-    [InlineData("FutuRe/Profitability", "FutuRe/Profitability", null)]
+    [InlineData("FutuRe/Analysis", "FutuRe/Analysis", null)]
     [InlineData("FutuRe/EuropeRe/LineOfBusiness", "FutuRe/EuropeRe/LineOfBusiness", null)]
     [InlineData("FutuRe/EuropeRe/Overview", "FutuRe/EuropeRe", "Overview")]
     public async Task ResolvePathAsync_FutuReSubPaths_ShouldResolve(

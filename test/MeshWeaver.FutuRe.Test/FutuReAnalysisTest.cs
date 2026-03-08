@@ -21,6 +21,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
+using MeshWeaver.Hosting.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -58,6 +59,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddFutuRe()
             .AddActivityTracking()
+            .AddRowLevelSecurity()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -69,6 +71,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 return services;
             })
             .AddGraph()
+            .AddMeshNodes(TestUsers.PublicAdminAccess())
             .ConfigureHub(hub => hub.AddContentCollection(_ => new ContentCollectionConfig
             {
                 SourceType = "FileSystem",
@@ -541,18 +544,23 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 60000)]
     public async Task Group_KeyMetrics_ShouldHaveNonZeroData()
     {
+        await InitializeChildAnalysisHubs();
+
         var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
-            waitForData: true, timeoutSeconds: 50);
+            waitForData: true, timeoutSeconds: 40);
         var md = AssertMarkdownWithNonZeroNumbers(control, "Group KeyMetrics");
         md.Should().Contain("Total Premium", "KeyMetrics should show premium");
         md.Should().Contain("Business Units", "Group KeyMetrics should show BU count");
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 60000)]
     public async Task Group_ProfitabilityTable_ShouldHaveNonZeroData()
     {
+        // Pre-initialize child BU hubs so their data is loaded before group hub aggregates
+        await InitializeChildAnalysisHubs();
+
         var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityTable",
-            waitForData: true, timeoutSeconds: 25);
+            waitForData: true, timeoutSeconds: 50);
         var md = AssertMarkdownWithNonZeroNumbers(control, "Group ProfitabilityTable");
         md.Should().Contain("Line of Business", "table should have headers");
         md.Should().Contain("Total", "table should have totals row");
@@ -733,6 +741,27 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     // ── Helpers ──
 
+    /// <summary>
+    /// Pre-initializes child BU analysis hubs (EuropeRe, AmericasIns) so their data
+    /// is loaded before the group hub's PartitionedHubDataSource tries to aggregate.
+    /// Without this, the remote streams may receive empty data if child hubs haven't
+    /// finished loading their CSV data when the group hub subscribes.
+    /// </summary>
+    private async Task InitializeChildAnalysisHubs()
+    {
+        var client = GetClient();
+        var ct = TestContext.Current.CancellationToken;
+
+        foreach (var bu in new[] { "EuropeRe", "AmericasIns" })
+        {
+            var buAddress = new Address($"FutuRe/{bu}/Analysis");
+            await client.AwaitResponse(
+                new PingRequest(),
+                o => o.WithTarget(buAddress),
+                ct);
+        }
+    }
+
     private async Task<UiControl?> GetControlAsync(
         string addressPath, string areaName,
         bool waitForData = false, int timeoutSeconds = 15)
@@ -740,7 +769,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var client = GetClient();
         var address = new Address(addressPath);
 
-        Output.WriteLine($"Initializing hub for {addressPath}...");
         await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(address),
@@ -752,44 +780,11 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             address, reference);
 
-        Output.WriteLine($"Waiting for {areaName} at {addressPath}{(waitForData ? " (with data)" : "")}...");
-
-        // Check for compilation errors
-        var hostedHub = Mesh.GetHostedHub(address, HostedHubCreation.Never);
-        if (hostedHub != null)
-        {
-            var meshQuery2 = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-            await foreach (var n in meshQuery2.QueryAsync<MeshNode>($"path:{addressPath} scope:exact"))
-            {
-                Output.WriteLine($"  [DIAG] Node found: {n.Path}, NodeType={n.NodeType}, HubConfig={n.HubConfiguration != null}");
-                if (!string.IsNullOrEmpty(n.NodeType))
-                {
-                    // Check if NodeType compilation produced a config
-                    var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-                    var cachedConfig = nodeTypeService?.GetCachedHubConfiguration(n.NodeType);
-                    Output.WriteLine($"  [DIAG] CachedHubConfig for {n.NodeType}: {cachedConfig != null}");
-                    Output.WriteLine($"  [DIAG] CachedNodeTypeConfig: {nodeTypeService?.GetCachedConfiguration(n.NodeType) != null}");
-                }
-                break;
-            }
-            // Check workspace and data context
-            var ws = hostedHub.GetWorkspace();
-            Output.WriteLine($"  [DIAG] Workspace={ws != null}");
-            var uiSvc = hostedHub.ServiceProvider.GetService<IUiControlService>();
-            Output.WriteLine($"  [DIAG] IUiControlService={uiSvc != null}, renderers={uiSvc?.LayoutDefinition.Count ?? 0}");
-        }
-        else
-        {
-            Output.WriteLine($"  [DIAG] No hosted hub found for {addressPath} after PingRequest");
-        }
-
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Do(c => Output.WriteLine($"  [CTRL] {areaName} control={c?.GetType().Name ?? "null"}, hasData={c != null && HasNonTrivialData(c)}"))
             .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
             .FirstAsync(x => x is not null && (!waitForData || HasNonTrivialData(x)));
 
-        Output.WriteLine($"Received {areaName}: {control?.GetType().Name}");
         control.Should().NotBeNull($"{areaName} should render at {addressPath}");
         return control;
     }
