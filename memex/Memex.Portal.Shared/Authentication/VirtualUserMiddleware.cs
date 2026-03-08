@@ -1,7 +1,6 @@
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,7 +13,7 @@ namespace Memex.Portal.Shared.Authentication;
 /// Runs after authentication. If the user is NOT authenticated:
 /// 1. Checks for a "meshweaver_virtual_user" cookie.
 /// 2. If no cookie, generates a new GUID and sets a long-lived cookie.
-/// 3. Creates a virtual User node if it doesn't exist.
+/// 3. Creates a virtual User node if it doesn't exist (via CreateNodeRequest with ImpersonateAsHub).
 /// 4. Sets AccessContext with IsVirtual = true.
 /// </summary>
 public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMiddleware> logger)
@@ -38,20 +37,22 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
             var portalApp = context.RequestServices.GetService<PortalApplication>();
             if (portalApp != null)
             {
+                await EnsureVirtualUserNodeAsync(portalApp, virtualUserId);
+
+                // Set virtual user context for the rest of the request
                 var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
+                var portalIdentity = portalApp.Hub.Address.ToFullString();
                 var virtualContext = new AccessContext
                 {
                     ObjectId = virtualUserId,
                     Name = "Guest",
-                    IsVirtual = true
+                    IsVirtual = true,
+                    ImpersonatedBy = portalIdentity
                 };
                 accessService.SetContext(virtualContext);
                 accessService.SetCircuitContext(virtualContext);
 
                 logger.LogDebug("VirtualUser: assigned virtual user {VirtualUserId}", virtualUserId);
-
-                // Ensure the virtual user node exists
-                await EnsureVirtualUserNodeAsync(portalApp, virtualUserId);
             }
         }
 
@@ -78,29 +79,43 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
         return newId;
     }
 
+    /// <summary>
+    /// Creates the VUser node by posting CreateNodeRequest through the portal hub
+    /// with ImpersonateAsHub(), so the hub's address becomes the identity.
+    /// The routing service handles the request.
+    /// </summary>
     private static async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
     {
-        var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var userNode = new MeshNode(virtualUserId, "VUser")
+        {
+            Name = "Guest",
+            NodeType = "VUser",
+            State = MeshNodeState.Active,
+            Content = new AccessObject
+            {
+                Id = virtualUserId,
+                Name = "Guest",
+                IsVirtual = true
+            }
+        };
 
         try
         {
-            var userNode = new MeshNode(virtualUserId, "VUser")
+            var response = await portalApp.Hub.AwaitResponse(
+                new CreateNodeRequest(userNode),
+                o => o.ImpersonateAsHub(),
+                CancellationToken.None);
+
+            if (!response.Message.Success &&
+                response.Message.RejectionReason != NodeCreationRejectionReason.NodeAlreadyExists)
             {
-                Name = "Guest",
-                NodeType = "VUser",
-                State = MeshNodeState.Active,
-                Content = new AccessObject
-                {
-                    Id = virtualUserId,
-                    Name = "Guest",
-                    IsVirtual = true
-                }
-            };
-            await nodeFactory.CreateNodeAsync(userNode, "VirtualUserMiddleware");
+                throw new InvalidOperationException(
+                    $"Failed to create VUser node: {response.Message.Error}");
+            }
         }
         catch (InvalidOperationException)
         {
-            // Node already exists — ignore
+            // Node already exists (cookie reuse) — ignore
         }
     }
 }

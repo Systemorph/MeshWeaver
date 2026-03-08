@@ -178,6 +178,58 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Adds cached file system persistence that pre-loads all files into memory at startup.
+    /// All reads are served from the in-memory cache with zero disk I/O.
+    /// Designed for test scenarios where repeated disk I/O is a bottleneck.
+    /// </summary>
+    public static TBuilder AddCachedFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
+            return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+        });
+        return builder;
+    }
+
+    /// <summary>
+    /// Adds cached partitioned file system persistence that pre-loads all files into memory.
+    /// </summary>
+    public static TBuilder AddCachedPartitionedFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+            services.TryAddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
+
+            services.AddSingleton<IPartitionedStoreFactory>(sp =>
+            {
+                var inclusions = sp.GetServices<PartitionInclusion>().ToList();
+                var filter = inclusions.Count > 0
+                    ? new PartitionFilter(inclusions.Select(i => i.Name))
+                    : null;
+
+                return new CachingPartitionedStoreFactory(
+                    baseDirectory,
+                    writeOptionsModifier,
+                    sp.GetService<IDataChangeNotifier>(),
+                    filter);
+            });
+
+            return services.AddPartitionedCoreAndWrapperServices();
+        });
+        return builder;
+    }
+
+    /// <summary>
     /// Adds a custom storage adapter with in-memory persistence service.
     /// </summary>
     /// <param name="services">The service collection</param>

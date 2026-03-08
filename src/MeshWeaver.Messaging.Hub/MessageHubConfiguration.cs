@@ -203,11 +203,24 @@ public record MessageHubConfiguration
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
         return syncPipeline.AddPipeline((d, next) =>
         {
+            // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
+            if (d.AccessContext is not null)
+                return next(d);
+
             var context = userService?.Context;
             if (context is not null)
                 d = d.SetAccessContext(context);
+            else
+            {
+                // Hub-to-hub: identify as the hub itself using its full address path
+                var hubAddress = syncPipeline.Hub.Address;
+                d = d.SetAccessContext(new AccessContext
+                {
+                    ObjectId = hubAddress.ToFullString(),
+                    Name = hubAddress.ToString()
+                });
+            }
             return next(d);
-
         });
     }
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }

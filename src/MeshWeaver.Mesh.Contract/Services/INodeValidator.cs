@@ -92,6 +92,31 @@ public record NodeValidationResult(bool IsValid, string? ErrorMessage = null, No
 }
 
 /// <summary>
+/// Per-node-type access rule that replaces the standard RLS permission check.
+/// Register via DI to provide custom access logic for specific node types.
+/// When RlsNodeValidator encounters a node whose type has a registered access rule,
+/// it delegates to the rule instead of checking AccessAssignment permissions.
+/// </summary>
+public interface INodeTypeAccessRule
+{
+    /// <summary>
+    /// The node type this rule applies to (e.g. "VUser").
+    /// </summary>
+    string NodeType { get; }
+
+    /// <summary>
+    /// Operations this rule handles. Must be a subset of the RLS validator's operations.
+    /// </summary>
+    IReadOnlyCollection<NodeOperation> SupportedOperations { get; }
+
+    /// <summary>
+    /// Checks whether the given user/context has access for the operation.
+    /// Returns true to allow, false to deny.
+    /// </summary>
+    Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default);
+}
+
+/// <summary>
 /// Unified rejection reasons for all node operations.
 /// </summary>
 public enum NodeRejectionReason

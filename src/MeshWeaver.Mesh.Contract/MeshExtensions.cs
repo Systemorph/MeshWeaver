@@ -81,6 +81,13 @@ public static class MeshExtensions
         try
         {
             var createRequest = request.Message;
+
+            // Identity resolution: if no explicit CreatedBy, use the sender's
+            // AccessContext identity from the authenticated pipeline.
+            if (string.IsNullOrEmpty(createRequest.CreatedBy)
+                && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
+                createRequest = createRequest with { CreatedBy = senderId };
+
             var node = createRequest.Node;
 
             // 0. Validate path is not empty or whitespace
@@ -236,6 +243,12 @@ public static class MeshExtensions
         try
         {
             var deleteRequest = request.Message;
+
+            // Identity resolution: if no explicit DeletedBy, use AccessContext identity
+            if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
+                && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
+                deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
+
             var path = deleteRequest.Path;
 
             // 1. Check if node exists
@@ -475,6 +488,12 @@ public static class MeshExtensions
         try
         {
             var updateRequest = request.Message;
+
+            // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
+            if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
+                && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
+                updateRequest = updateRequest with { UpdatedBy = updateSenderId };
+
             var updatedNode = updateRequest.Node;
 
             // 1. Check if node exists
