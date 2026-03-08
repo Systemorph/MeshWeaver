@@ -21,7 +21,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
 
-    private IMeshQuery Query => MeshQuery;
+    private IMeshService Query => MeshQuery;
 
     [Fact]
     public async Task MultipleConcurrentSubscriptions_EachReceivesCorrectChanges()

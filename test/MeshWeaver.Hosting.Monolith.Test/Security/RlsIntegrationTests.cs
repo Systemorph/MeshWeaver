@@ -30,7 +30,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         // First configure base (adds persistence), then add Row-Level Security
-        // RLS must be added after persistence so it can decorate IPersistenceService
+        // RLS must be added after persistence so it can decorate IMeshStorage
         var configured = ConfigureMeshBase(builder).AddRowLevelSecurity();
 
         // Register additional node types as MeshNodes (Comment and Thread are already registered by AddGraph())
@@ -764,7 +764,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         // First configure base (adds persistence), then add Row-Level Security
-        // RLS must be added after persistence so it can decorate IPersistenceService
+        // RLS must be added after persistence so it can decorate IMeshStorage
         return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
@@ -827,7 +827,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
 
         // Assert - node exists in persistence (no user-scoped filtering via MeshQuery without UserId)
-        // The secure filtering happens at the IPersistenceService decorator level when a user context is set
+        // The secure filtering happens at the IMeshStorage decorator level when a user context is set
         // Here we verify the node was created successfully
         result.Should().NotBeNull();
     }

@@ -9,10 +9,10 @@ namespace MeshWeaver.Blazor.AI;
 /// </summary>
 public class McpCompletionProvider
 {
-    private readonly IMeshQuery meshQuery;
+    private readonly IMeshService meshQuery;
     private readonly ILogger<McpCompletionProvider> logger;
 
-    public McpCompletionProvider(IMeshQuery meshQuery, ILogger<McpCompletionProvider> logger)
+    public McpCompletionProvider(IMeshService meshQuery, ILogger<McpCompletionProvider> logger)
     {
         this.meshQuery = meshQuery;
         this.logger = logger;

@@ -177,13 +177,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
 
     /// <summary>
-    /// Verifies that TransactionMapping MeshNodes are loaded via IMeshQuery
+    /// Verifies that TransactionMapping MeshNodes are loaded via IMeshService
     /// from both business unit namespaces.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task TransactionMappings_ShouldLoadFromBothBusinessUnits()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants state:Active";
         Output.WriteLine($"Querying: {query}");
@@ -202,12 +202,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that AmountType MeshNodes are loaded via IMeshQuery.
+    /// Verifies that AmountType MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task AmountTypes_ShouldLoadFromMeshNodes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active";
         Output.WriteLine($"Querying: {query}");
@@ -224,12 +224,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that Currency MeshNodes are loaded via IMeshQuery.
+    /// Verifies that Currency MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task Currencies_ShouldLoadFromMeshNodes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active";
         Output.WriteLine($"Querying: {query}");
@@ -246,12 +246,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that Country MeshNodes are loaded via IMeshQuery.
+    /// Verifies that Country MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task Countries_ShouldLoadFromMeshNodes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/Country namespace:FutuRe/Country state:Active";
         Output.WriteLine($"Querying: {query}");
@@ -268,12 +268,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that LineOfBusiness MeshNodes are loaded via IMeshQuery.
+    /// Verifies that LineOfBusiness MeshNodes are loaded via IMeshService.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task LinesOfBusiness_ShouldLoadFromMeshNodes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active";
         Output.WriteLine($"Querying: {query}");
@@ -356,7 +356,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "Search query should scope to group LineOfBusiness namespace");
 
         // Execute the query and verify we get the 10 group-level LoBs
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
         Output.WriteLine($"Group query returned {results.Count} results");
         results.Count.Should().Be(10, "Should find all 10 group lines of business");
@@ -402,7 +402,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "Search should use NodeType mode (namespace:), not instance fallback (path:)");
 
         // Execute the query and verify we get the 8 EuropeRe LoBs
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
         var names = results.Cast<MeshNode>().Select(n => n.Name).ToList();
         Output.WriteLine($"EuropeRe query returned {results.Count} results: {string.Join(", ", names)}");
@@ -730,7 +730,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var hiddenQuery = searchControl.HiddenQuery!.ToString()!;
         Output.WriteLine($"EuropeRe Search query: {hiddenQuery}");
 
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(hiddenQuery)).ToListAsync();
         Output.WriteLine($"EuropeRe Search returned {results.Count} results");
         results.Count.Should().BeGreaterThanOrEqualTo(2,
@@ -745,7 +745,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task AllNodeTypes_ShouldExist()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "namespace:FutuRe nodeType:NodeType state:Active";
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
@@ -770,7 +770,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task BusinessUnits_ShouldExistWithProperties()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active";
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
@@ -819,12 +819,12 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     // ── Activity Logs ──
 
     /// <summary>
-    /// Verifies that activity log nodes can be queried via IMeshQuery.
+    /// Verifies that activity log nodes can be queried via IMeshService.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ActivityLogs_ShouldBeQueryableViaMeshQuery()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var nodes = new List<MeshNode>();
         await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))

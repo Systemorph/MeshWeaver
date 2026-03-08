@@ -70,7 +70,7 @@ public static class ProjectLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var statuses = host.Workspace.GetObservable<Status>()
             .Select(s => s.OrderBy(x => x.Order).ToList());
-        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
@@ -105,7 +105,7 @@ public static class ProjectLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var categories = host.Workspace.GetObservable<Category>()
             .Select(c => c.ToDictionary(cat => cat.Id, cat => cat));
-        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
@@ -141,7 +141,7 @@ public static class ProjectLayoutAreas
             .Select(s => s.ToDictionary(x => x.Id, x => x));
         var priorities = host.Workspace.GetObservable<Priority>()
             .Select(p => p.ToDictionary(x => x.Id, x => x));
-        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
@@ -217,7 +217,7 @@ public static class ProjectLayoutAreas
             .Select(s => s.ToDictionary(x => x.Id, x => x));
         var priorities = host.Workspace.GetObservable<Priority>()
             .Select(p => p.ToDictionary(x => x.Id, x => x));
-        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
@@ -262,7 +262,7 @@ public static class ProjectLayoutAreas
             .Select(s => s.ToDictionary(x => x.Id, x => x));
         var priorities = host.Workspace.GetObservable<Priority>()
             .Select(p => p.ToDictionary(x => x.Id, x => x));
-        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
+        var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshService>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
                 $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);

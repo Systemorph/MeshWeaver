@@ -249,7 +249,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task StaticRoles_AppearInNodeTypeRoleQuery()
     {
         // Static built-in roles should appear when querying with nodeType:Role
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var roles = await meshQuery
             .QueryAsync<MeshNode>($"nodeType:Role namespace:")
@@ -269,7 +269,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task StaticRoles_NotIncludedInGenericChildrenQuery()
     {
         // Static roles should NOT appear in unfiltered children queries
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var children = await meshQuery
             .QueryAsync<MeshNode>($"namespace:{NodePath}")

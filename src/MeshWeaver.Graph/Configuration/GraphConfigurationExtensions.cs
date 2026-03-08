@@ -108,7 +108,7 @@ public static class GraphConfigurationExtensions
 
         try
         {
-            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();

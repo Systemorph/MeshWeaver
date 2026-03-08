@@ -10,13 +10,13 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// TypeSource for MeshNode that syncs via IMeshQuery (reads) and UpdateNodeRequest/DeleteNodeRequest (writes).
+/// TypeSource for MeshNode that syncs via IMeshService (reads) and UpdateNodeRequest/DeleteNodeRequest (writes).
 /// Loads own node on init, syncs adds/updates/deletes via messages.
 /// Saves are debounced: changes are buffered and flushed after 200ms of inactivity.
 /// </summary>
 public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSource>
 {
-    private readonly IPersistenceServiceCore _persistenceCore;
+    private readonly IStorageService _persistenceCore;
     private readonly string _hubPath;  // e.g., "graph/org1"
     private readonly IWorkspace _workspace;
     private readonly ILogger? _logger;
@@ -29,7 +29,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     private Timer? _debounceTimer;
     private readonly object _timerLock = new();
 
-    internal MeshNodeTypeSource(IWorkspace workspace, object dataSource, IPersistenceServiceCore persistenceCore, string hubPath)
+    internal MeshNodeTypeSource(IWorkspace workspace, object dataSource, IStorageService persistenceCore, string hubPath)
         : base(workspace, dataSource)
     {
         _workspace = workspace;

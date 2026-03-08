@@ -72,7 +72,7 @@ public static class MeshDataSourceExtensions
             return request; // Let default handler process it
 
         var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-        var persistenceCore = hub.ServiceProvider.GetService<IPersistenceServiceCore>();
+        var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
         var hubPath = hub.Address.ToString();
 
         if (nodeTypeService == null || persistenceCore == null)
@@ -137,7 +137,7 @@ public static class MeshDataSourceExtensions
 /// </summary>
 public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 {
-    private readonly IPersistenceServiceCore? _persistenceCore;
+    private readonly IStorageService? _persistenceCore;
     private readonly string _hubPath;
     private readonly ILogger? _logger;
 
@@ -149,7 +149,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
-        _persistenceCore = workspace.Hub.ServiceProvider.GetService<IPersistenceServiceCore>();
+        _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageService>();
         _hubPath = workspace.Hub.Address.ToString();
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
     }

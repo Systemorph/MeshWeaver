@@ -81,13 +81,13 @@ public static class CommentsView
 
     /// <summary>
     /// Renders the Comments area for the node.
-    /// Uses IMeshQuery to find child Comment nodes that have no MarkerId (non-range comments).
+    /// Uses IMeshService to find child Comment nodes that have no MarkerId (non-range comments).
     /// Each comment is rendered via its LayoutArea Overview.
     /// </summary>
     public static IObservable<UiControl?> Comments(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
@@ -238,8 +238,8 @@ public static class CommentsView
     /// </summary>
     private static UiControl BuildCommentCreateForm(LayoutAreaHost host, string commentPath, string stateId)
     {
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var textDataId = $"commentText_{commentPath.Replace("/", "_")}";
 
         host.UpdateData(textDataId, new Dictionary<string, object?> { ["text"] = "" });
@@ -324,7 +324,7 @@ public static class CommentsView
                     }
                 };
 
-                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                 await nodeFactory.CreateTransientAsync(commentNode);
 
                 host.UpdateData(newCommentPathStateId, commentPath);

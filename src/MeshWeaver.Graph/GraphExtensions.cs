@@ -30,7 +30,7 @@ public static class GraphExtensions
                 services.AddScoped<IAutocompleteProvider>(sp =>
                     new UnifiedReferenceAutocompleteProvider(
                         sp.GetService<IMeshCatalog>(),
-                        sp.GetService<IMeshQuery>(),
+                        sp.GetService<IMeshService>(),
                         sp.GetService<INavigationService>(),
                         sp.GetRequiredService<IMessageHub>())));
 

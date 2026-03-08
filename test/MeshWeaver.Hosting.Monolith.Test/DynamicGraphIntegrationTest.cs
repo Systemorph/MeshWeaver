@@ -64,7 +64,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await SeedHierarchyAsync(NodeFactory);
     }
 
-    private static async Task SaveCodeAsChildNodeAsync(IMeshNodePersistence nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
+    private static async Task SaveCodeAsChildNodeAsync(IMeshService nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
     {
         var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/Code")
         {
@@ -75,7 +75,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await nodeFactory.CreateNodeAsync(codeNode);
     }
 
-    private static async Task SetupTestConfigurationAsync(IMeshNodePersistence nodeFactory)
+    private static async Task SetupTestConfigurationAsync(IMeshService nodeFactory)
     {
         // Create Story type using "type/" Namespace for global types
         var storyCodeConfig = new CodeConfiguration
@@ -200,7 +200,7 @@ public record Graph
         await SaveCodeAsChildNodeAsync(nodeFactory, "type/graph", graphCodeConfig);
     }
 
-    private static async Task SeedHierarchyAsync(IMeshNodePersistence nodeFactory)
+    private static async Task SeedHierarchyAsync(IMeshService nodeFactory)
     {
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
@@ -240,7 +240,7 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify IMeshQuery finds the pre-seeded data
+        // Verify IMeshService finds the pre-seeded data
         var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
@@ -267,7 +267,7 @@ public record Graph
             o => o.WithTarget(orgAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify IMeshQuery finds the pre-seeded projects
+        // Verify IMeshService finds the pre-seeded projects
         var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph/org1", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
@@ -294,7 +294,7 @@ public record Graph
             o => o.WithTarget(projAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify IMeshQuery finds the pre-seeded stories
+        // Verify IMeshService finds the pre-seeded stories
         var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph/org1/proj1", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
@@ -816,7 +816,7 @@ public record Graph
     }
 
     /// <summary>
-    /// Verifies that IMeshQuery with scope:descendants finds Code nodes that are 2 levels deep.
+    /// Verifies that IMeshService with scope:descendants finds Code nodes that are 2 levels deep.
     /// Code nodes at "type/story/Code/code" are NOT immediate children of "type/story" (they're
     /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
@@ -1665,7 +1665,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Organization_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
         // Arrange
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Act: Query for Code nodes under Organization using scope:descendants
         var query = $"path:Organization nodeType:{CodeNodeType.NodeType} scope:descendants";
@@ -1747,7 +1747,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Organization_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
     {
         // Arrange
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var hubPath = "Organization";
 
         // Act: Use ObserveQuery with the same query pattern as NodeTypeLayoutAreas.Overview

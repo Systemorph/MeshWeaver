@@ -49,7 +49,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 // Skip virtual users — they don't need onboarding
                 if (userContext is { IsVirtual: false } && !string.IsNullOrEmpty(userContext.ObjectId))
                 {
-                    var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshService>();
                     if (meshQuery != null)
                     {
                         try
@@ -67,7 +67,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                                     "OnboardingMiddleware: Creating transient user node for {Email}",
                                     email);
 
-                                var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+                                var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshService>();
                                 var transientNode = new MeshNode(email, "User")
                                 {
                                     Name = userContext.Name ?? email,

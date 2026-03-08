@@ -6,15 +6,15 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Scoped IMeshNodePersistence implementation — each hub gets its own instance
-/// with the correct IMessageHub injected (same pattern as PersistenceService).
+/// Internal helper for routing node CRUD operations through the message bus.
+/// Used by MeshService and MeshCatalog.
 /// Automatically resolves the current user identity from AccessService,
 /// or uses hub.Address when impersonated.
 /// </summary>
 internal sealed class HubNodePersistence(
     IMessageHub hub,
     MeshCatalog catalog,
-    bool impersonate = false) : IMeshNodePersistence
+    bool impersonate = false)
 {
     private string? CurrentIdentity => impersonate
         ? hub.Address.ToFullString()
@@ -131,6 +131,6 @@ internal sealed class HubNodePersistence(
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
         => catalog.CreateTransientNodeAsync(node, CurrentIdentity, ct);
 
-    public IMeshNodePersistence ImpersonateAsNode()
+    public HubNodePersistence ImpersonateAsNode()
         => impersonate ? this : new HubNodePersistence(hub, catalog, true);
 }

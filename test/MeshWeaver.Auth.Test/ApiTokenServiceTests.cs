@@ -23,8 +23,8 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
     private ApiTokenService GetService() =>
         new(
-            Mesh.ServiceProvider.GetRequiredService<IMeshNodePersistence>(),
-            Mesh.ServiceProvider.GetRequiredService<IMeshQuery>(),
+            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
+            Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh,
             Mesh.ServiceProvider.GetRequiredService<ILogger<ApiTokenService>>()
         );
@@ -67,7 +67,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         var (rawToken, node) = await service.CreateTokenAsync(
             "user1", "Test User", "test@example.com", "Test");
 
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var stored = await meshQuery.QueryAsync<MeshNode>($"path:{node.Path} scope:exact").FirstOrDefaultAsync();
         stored.Should().NotBeNull();
         stored!.NodeType.Should().Be("ApiToken");

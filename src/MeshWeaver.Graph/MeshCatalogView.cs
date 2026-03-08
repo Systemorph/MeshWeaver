@@ -38,7 +38,7 @@ public static class MeshCatalogView
     /// </summary>
     public static IObservable<UiControl> Nodes(LayoutAreaHost host, RenderingContext ctx)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var parentPath = host.Hub.Address.ToString();
 
         if (meshQuery == null)
@@ -119,7 +119,7 @@ public static class MeshCatalogView
     public static IObservable<UiControl> Editor(LayoutAreaHost host, RenderingContext ctx)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         return Observable.FromAsync(async ct =>
         {

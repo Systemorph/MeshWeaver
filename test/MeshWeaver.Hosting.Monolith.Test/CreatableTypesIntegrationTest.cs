@@ -195,7 +195,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CreateForm_TypePicker_Queries_ReturnCorrectTypes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
@@ -281,7 +281,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CreateForm_DefaultType_ShouldBeParentNodeType()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var ct = TestContext.Current.CancellationToken;
 
         // At "ACME" (an Organization), the default type should be "Organization"
@@ -339,7 +339,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CreateForm_OnNodeTypeDefinitionPage_DefaultsToTypeParentNamespace()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
@@ -412,7 +412,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CreateForm_TypePicker_ForProductLaunch_IncludesTodoAndProject()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var meshConfiguration = Mesh.ServiceProvider.GetRequiredService<MeshConfiguration>();
         var ct = TestContext.Current.CancellationToken;
 
@@ -475,7 +475,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     /// Executes type picker queries the same way MeshNodePickerView.LoadResultsAsync does.
     /// </summary>
     private async Task<List<MeshNode>> ExecuteTypePickerQueries(
-        List<string> typeQueries, IMeshQuery meshQuery, CancellationToken ct)
+        List<string> typeQueries, IMeshService meshQuery, CancellationToken ct)
     {
         var allResults = new List<MeshNode>();
         foreach (var query in typeQueries)
@@ -1004,7 +1004,7 @@ public class CreatableTypesIntegrationTestsCollection
 [Collection("SamplesGraphData")]
 public class CreatableTypesFileSystemTest : MonolithMeshTestBase
 {
-    private new IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+    private new IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
     private INodeTypeService NodeTypeService => Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
     public CreatableTypesFileSystemTest(ITestOutputHelper output) : base(output)

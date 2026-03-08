@@ -5,11 +5,11 @@ using MeshWeaver.Domain;
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
-/// Extension methods for IMeshQuery providing typed query support.
+/// Extension methods for IMeshService providing typed query support.
 /// </summary>
 public static class MeshQueryExtensions
 {
-    #region IMeshQuery (wrapper) extensions - no JsonSerializerOptions
+    #region IMeshService (wrapper) extensions - no JsonSerializerOptions
 
     /// <summary>
     /// Query for objects of a specific type with type-safe results.
@@ -22,7 +22,7 @@ public static class MeshQueryExtensions
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static async IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQuery meshQuery,
+        this IMeshService meshQuery,
         MeshQueryRequest request,
         ITypeRegistry? typeRegistry = null,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -50,7 +50,7 @@ public static class MeshQueryExtensions
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQuery meshQuery,
+        this IMeshService meshQuery,
         string query,
         ITypeRegistry? typeRegistry = null,
         CancellationToken ct = default)
@@ -71,7 +71,7 @@ public static class MeshQueryExtensions
     /// <param name="ct">Cancellation token</param>
     /// <returns>Typed results matching the query</returns>
     public static IAsyncEnumerable<T> QueryAsync<T>(
-        this IMeshQuery meshQuery,
+        this IMeshService meshQuery,
         string query,
         int skip,
         int limit,

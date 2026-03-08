@@ -86,8 +86,8 @@ public static class ThreadLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
-            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
-            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
             MeshNode? existingNode = null;
             if (meshQuery != null)
             {
@@ -164,7 +164,7 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         // Node stream — drives the observable title and chat control context
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
@@ -216,7 +216,7 @@ public static class ThreadLayoutAreas
     /// Builds a reactive stream of message cells by observing child ThreadMessage nodes.
     /// Uses Scan to accumulate changes into a running list, then maps to LayoutAreaControls.
     /// </summary>
-    private static IObservable<ImmutableList<LayoutAreaControl>> BuildCellsStream(IMeshQuery? meshQuery, string threadPath)
+    private static IObservable<ImmutableList<LayoutAreaControl>> BuildCellsStream(IMeshService? meshQuery, string threadPath)
     {
         if (meshQuery == null)
             return Observable.Return(ImmutableList<LayoutAreaControl>.Empty);
@@ -253,7 +253,7 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> HistoryView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
         {
@@ -357,7 +357,7 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
@@ -442,7 +442,7 @@ public static class ThreadLayoutAreas
     /// </summary>
     private static async Task<int> ComputeNextMessageNumberAsync(IMessageHub hub, string threadPath)
     {
-        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
             return 1;
 
@@ -467,7 +467,7 @@ public static class ThreadLayoutAreas
     private static async Task<string> CreateMessageNodeAsync(
         IMessageHub hub, string threadPath, int messageNumber, ThreadMessage message)
     {
-        var nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var messagePath = $"{threadPath}/{messageNumber}";
 
         var messageNode = new MeshNode(messagePath)
@@ -535,7 +535,7 @@ public static class ThreadLayoutAreas
                 chatClient.SetAttachments(request.Attachments);
 
             // 5. Load persistent thread ID from thread content if present
-            var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+            var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
             if (meshQuery != null)
             {
                 MeshNode? threadNode = null;
@@ -615,7 +615,7 @@ public static class ThreadLayoutAreas
     {
         try
         {
-            var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+            var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
             MeshNode? existingNode = null;
             if (meshQuery != null)
             {

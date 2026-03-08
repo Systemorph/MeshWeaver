@@ -274,7 +274,7 @@ public static class SettingsLayoutArea
         var hubPath = host.Hub.Address.ToString();
         stack = stack.WithView(Controls.H2("Groups").WithStyle("margin: 0 0 16px 0;"));
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
         {
             stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Query service not available.</p>"));

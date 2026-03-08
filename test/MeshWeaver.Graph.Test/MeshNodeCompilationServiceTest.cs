@@ -78,12 +78,12 @@ public class MeshNodeCompilationServiceTest : IDisposable
         services.AddScoped<IMessageHub>(_ => _mockHub);
         var sp = services.BuildServiceProvider();
 
-        // Resolve IMeshQuery from a scope (IMeshQuery is registered as scoped)
+        // Resolve IMeshService from a scope (IMeshService is registered as scoped)
         var scope = sp.CreateScope();
-        var meshQuery = scope.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = scope.ServiceProvider.GetRequiredService<IMeshService>();
 
         var serviceProvider = Substitute.For<IServiceProvider>();
-        serviceProvider.GetService(typeof(IMeshQuery)).Returns(meshQuery);
+        serviceProvider.GetService(typeof(IMeshService)).Returns(meshQuery);
         _mockHub.ServiceProvider.Returns(serviceProvider);
         return new(_cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
     }

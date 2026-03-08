@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for managing access control on a mesh node.
-/// Inherited assignments are loaded via IMeshQuery from ancestor nodes (merged per person).
+/// Inherited assignments are loaded via IMeshService from ancestor nodes (merged per person).
 /// Local assignments are rendered via MeshSearchControl with Thumbnail areas.
 /// </summary>
 public static class AccessControlLayoutArea
@@ -40,7 +40,7 @@ public static class AccessControlLayoutArea
             );
         }
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
@@ -50,7 +50,7 @@ public static class AccessControlLayoutArea
                 var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
                 var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
-                // Load inherited assignments from ancestor nodes via IMeshQuery (one-shot, rarely changes)
+                // Load inherited assignments from ancestor nodes via IMeshService (one-shot, rarely changes)
                 var inherited = new List<(AccessAssignment Assignment, string SourcePath, MeshNode Node)>();
                 if (meshQuery != null)
                 {
@@ -247,7 +247,7 @@ public static class AccessControlLayoutArea
     /// </summary>
     internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         try
         {
             await nodeFactory.DeleteNodeAsync(nodePath);
@@ -339,7 +339,7 @@ public static class AccessControlLayoutArea
 
                     // Check if an assignment already exists for this subject
                     MeshNode? existing = null;
-                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshService>();
                     if (query != null)
                     {
                         try

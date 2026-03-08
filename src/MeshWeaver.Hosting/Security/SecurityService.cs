@@ -24,7 +24,7 @@ internal class SecurityService : ISecurityService
 {
     private const string AccessPartitionName = "Access";
 
-    private readonly IPersistenceServiceCore _persistenceCore;
+    private readonly IStorageService _persistenceCore;
     private readonly AccessService _accessService;
     private readonly ILogger<SecurityService> _logger;
     private readonly IMessageHub _hub;
@@ -54,7 +54,7 @@ internal class SecurityService : ISecurityService
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
 
     public SecurityService(
-        IPersistenceServiceCore persistenceCore,
+        IStorageService persistenceCore,
         AccessService accessService,
         IMessageHub hub,
         ILogger<SecurityService> logger,

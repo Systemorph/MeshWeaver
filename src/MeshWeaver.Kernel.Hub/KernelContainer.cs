@@ -27,7 +27,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 {
 
     private readonly HashSet<Address> subscriptions = new();
-    private readonly IMeshQuery meshQuery = serviceProvider.GetRequiredService<IMeshQuery>();
+    private readonly IMeshService meshQuery = serviceProvider.GetRequiredService<IMeshService>();
     private readonly ILogger<KernelContainer> logger = serviceProvider.GetRequiredService<ILogger<KernelContainer>>();
 
     /// <summary>

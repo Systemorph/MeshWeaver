@@ -25,7 +25,7 @@ namespace MeshWeaver.Hosting.Monolith.Test.Security;
 
 /// <summary>
 /// Tests that AccessControlLayoutArea renders correctly with inherited (markdown table)
-/// and local (editable rows) sections, driven by IMeshQuery on AccessAssignment MeshNodes.
+/// and local (editable rows) sections, driven by IMeshService on AccessAssignment MeshNodes.
 /// </summary>
 public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

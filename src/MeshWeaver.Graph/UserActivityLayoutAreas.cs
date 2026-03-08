@@ -110,7 +110,7 @@ public static class UserActivityLayoutAreas
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Activity Feed</div>"));
 
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var activityLogNodes = new List<MeshNode>();
         await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
             activityLogNodes.Add(n);
@@ -226,7 +226,7 @@ public static class UserActivityLayoutAreas
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recently Viewed</div>"));
 
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var recentNodes = new List<MeshNode>();
         await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity sort:lastAccessedAt-desc limit:10 scope:descendants"))
             recentNodes.Add(n);

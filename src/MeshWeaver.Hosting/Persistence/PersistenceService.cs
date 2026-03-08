@@ -9,15 +9,15 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Scoped wrapper around IPersistenceServiceCore that automatically injects
+/// Scoped wrapper around IStorageService that automatically injects
 /// JsonSerializerOptions from the current IMessageHub.
 /// When ISecurityService is available, secure methods filter results by user permissions.
 /// </summary>
 internal class PersistenceService(
-    IPersistenceServiceCore core,
+    IStorageService core,
     IMessageHub hub,
     ISecurityService? securityService = null,
-    ILogger<PersistenceService>? logger = null) : IPersistenceService
+    ILogger<PersistenceService>? logger = null) : IMeshStorage
 {
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 

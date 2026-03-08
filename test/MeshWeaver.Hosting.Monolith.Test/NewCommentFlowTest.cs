@@ -148,7 +148,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Tests the "Done" button flow using IPersistenceService.SaveNodeAsync:
+    /// Tests the "Done" button flow using IMeshStorage.SaveNodeAsync:
     ///   1. Create empty comment node (same as "Comment" button)
     ///   2. Update comment text via persistence.SaveNodeAsync (same as BuildReplyEditArea Done button)
     ///   3. Verify the text persists via persistence (bypassing catalog cache)

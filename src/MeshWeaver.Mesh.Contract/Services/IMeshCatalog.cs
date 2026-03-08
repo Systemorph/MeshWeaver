@@ -1,6 +1,6 @@
 ﻿using MeshWeaver.Messaging;
 
-// Infrastructure assemblies that need internal access to IPersistenceService, IPersistenceServiceCore, IMeshCatalog
+// Infrastructure assemblies that need internal access to IMeshStorage, IStorageService, IMeshCatalog
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Hosting")]
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Graph")]
 

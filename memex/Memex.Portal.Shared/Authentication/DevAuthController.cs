@@ -12,10 +12,10 @@ namespace Memex.Portal.Shared.Authentication;
 [Route("dev")]
 public class DevAuthController : ControllerBase
 {
-    private readonly IMeshQuery _meshQuery;
+    private readonly IMeshService _meshQuery;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public DevAuthController(IMeshQuery meshQuery)
+    public DevAuthController(IMeshService meshQuery)
     {
         _meshQuery = meshQuery;
     }
@@ -26,7 +26,7 @@ public class DevAuthController : ControllerBase
     [HttpPost("signin")]
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
-        // Fetch the person node via IMeshQuery (bypasses security)
+        // Fetch the person node via IMeshService (bypasses security)
         var node = await _meshQuery.QueryAsync<MeshNode>($"path:User/{personId} scope:self").FirstOrDefaultAsync();
         if (node?.NodeType != "User" || node.Content == null)
         {

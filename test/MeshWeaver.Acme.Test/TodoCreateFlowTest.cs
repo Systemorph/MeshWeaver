@@ -389,8 +389,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 new CreateNodeRequest(nodeWithContent),
                 o => o.WithTarget(nodeAddress));
 
-            // Use IMeshQuery.ObserveQuery to wait for the state change to be persisted
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            // Use IMeshService.ObserveQuery to wait for the state change to be persisted
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
 
             var confirmedNode = await meshQuery
@@ -475,8 +475,8 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public void Services_AreRegisteredForCreateFlow()
     {
         // Verify all required services are registered
-        var nodeFactory = Mesh.ServiceProvider.GetService<IMeshNodePersistence>();
-        nodeFactory.Should().NotBeNull("IMeshNodePersistence should be registered");
+        var nodeFactory = Mesh.ServiceProvider.GetService<IMeshService>();
+        nodeFactory.Should().NotBeNull("IMeshService should be registered");
 
         var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
         nodeTypeService.Should().NotBeNull("INodeTypeService should be registered");
@@ -559,7 +559,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Output.WriteLine("Node hub initialized.");
 
             // Step 3: Get the node from workspace to see what content was created
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
 
             var workspaceNode = await meshQuery
@@ -697,7 +697,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 o => o.WithTarget(nodeAddress));
 
             // Step 4: Wait for node to become Active using reactive query
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
             var query = MeshQueryRequest.FromQuery($"path:{nodePath}");
 
             await meshQuery
@@ -775,7 +775,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 15000)]
     public async Task ExistingTodo_HasExpectedContentStructure()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var query = "path:ACME/ProductLaunch/Todo/DefinePersona";
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)

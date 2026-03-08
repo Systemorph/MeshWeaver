@@ -59,7 +59,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         /// The ChildrenQuery makes the Organization catalog display all nodes
         /// with nodeType=="Organization".
         /// </summary>
-        private static async Task SetupOrganizationsStructureAsync(IMeshNodePersistence nodeFactory)
+        private static async Task SetupOrganizationsStructureAsync(IMeshService nodeFactory)
         {
             // 1. Create Organization - the NodeType definition at root level
             // This type uses ChildrenQuery to show all Organization instances
@@ -282,7 +282,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
         public async Task SimpleQuery_FindsAllOrganizationInstances()
         {
             // Arrange
-            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+            var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
             // Use a simple query that doesn't require activity records
             var query = "nodeType:Organization scope:descendants";

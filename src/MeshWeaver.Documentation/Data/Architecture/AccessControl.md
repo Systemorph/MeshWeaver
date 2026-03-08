@@ -232,7 +232,7 @@ The Access Control layout area (`AccessControlArea`) provides:
 
 2. **Local Assignments** (editable): Shows AccessAssignment nodes that are direct children of the current node. Admins can toggle Allow/Deny and delete assignments.
 
-3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshQuery) and Role selection.
+3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshService) and Role selection.
 
 # PostgreSQL Integration
 
@@ -329,12 +329,12 @@ When `HandleCreateNodeRequest` receives a message, it resolves the identity:
 
 The same pattern applies to `UpdateNodeRequest.UpdatedBy` and `DeleteNodeRequest.DeletedBy`.
 
-## ImpersonateAsNode() on IMeshNodePersistence
+## ImpersonateAsNode() on IMeshService
 
-`IMeshNodePersistence` automatically resolves identity from `AccessService.Context.ObjectId`. When `ImpersonateAsNode()` is called, it switches to the hub's own address:
+`IMeshService` automatically resolves identity from `AccessService.Context.ObjectId`. When `ImpersonateAsNode()` is called, it switches to the hub's own address:
 
 ```csharp
-var factory = hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+var factory = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
 // Normal: createdBy = AccessService.Context.ObjectId (current user)
 await factory.CreateNodeAsync(node, ct: ct);

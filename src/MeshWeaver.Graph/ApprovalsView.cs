@@ -147,7 +147,7 @@ public static class ApprovalsView
             Status = ApprovalStatus.Pending
         };
 
-        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshNodePersistence>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var approvalNode = new MeshNode(approvalId, nodePath)
         {
@@ -180,7 +180,7 @@ public static class ApprovalsView
     public static IObservable<UiControl?> InlineApprovals(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
             return Observable.Return<UiControl?>(null);

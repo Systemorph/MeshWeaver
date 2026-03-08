@@ -227,12 +227,12 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Act - get children via IMeshQuery
+        // Act - get children via IMeshService
         var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - children should be available
-        children.Should().NotBeNull("Children should be available via IMeshQuery");
+        children.Should().NotBeNull("Children should be available via IMeshService");
         children.Should().HaveCountGreaterThanOrEqualTo(2, "Should have story1 and story2 as children");
         children.Should().Contain(n => n.Path == "graph/story1");
         children.Should().Contain(n => n.Path == "graph/story2");
@@ -247,7 +247,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Persistence_CanCreateNodeWithContent()
     {
-        // This test verifies that nodes with Content can be created via IPersistenceService
+        // This test verifies that nodes with Content can be created via IMeshStorage
 
         // Act - create new node directly via persistence
         var newStory = MeshNode.FromPath("graph/story3") with

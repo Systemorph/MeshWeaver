@@ -17,7 +17,7 @@ using Xunit;
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for creating nodes by sending CreateNodeRequest via IMeshNodePersistence.
+/// Tests for creating nodes by sending CreateNodeRequest via IMeshService.
 /// Covers: successful creation, access denial, and invalid content rejection.
 /// </summary>
 public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTestBase(output)

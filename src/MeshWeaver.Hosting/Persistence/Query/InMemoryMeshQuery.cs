@@ -12,11 +12,11 @@ using Microsoft.Extensions.Logging;
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
-/// In-memory implementation of IMeshQuery.
+/// In-memory implementation of IMeshService.
 /// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
 /// </summary>
 internal class InMemoryMeshQuery(
-    IPersistenceServiceCore persistence,
+    IStorageService persistence,
     ISecurityService? securityService = null,
     AccessService? accessService = null,
     IDataChangeNotifier? changeNotifier = null,

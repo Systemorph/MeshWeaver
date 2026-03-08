@@ -112,7 +112,7 @@ public static class NodeTypeLayoutAreas
     {
         var hubAddress = host.Hub.Address;
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var definitionStream = GetNodeStream(host);
 

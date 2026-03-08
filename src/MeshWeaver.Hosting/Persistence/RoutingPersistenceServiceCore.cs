@@ -7,15 +7,15 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Routing persistence core that maintains per-partition IPersistenceServiceCore instances.
+/// Routing persistence core that maintains per-partition IStorageService instances.
 /// Routes operations based on the first segment of the path.
 /// Auto-provisions new partitions on first access via IPartitionedStoreFactory.
 /// </summary>
-internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
+internal class RoutingPersistenceServiceCore : IStorageService
 {
     private readonly IPartitionedStoreFactory _factory;
     private readonly IDataChangeNotifier? _changeNotifier;
-    private readonly ConcurrentDictionary<string, IPersistenceServiceCore> _stores = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IStorageService> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
@@ -86,7 +86,7 @@ internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
         }
     }
 
-    private async Task<IPersistenceServiceCore> GetOrCreateStoreAsync(string firstSegment, CancellationToken ct)
+    private async Task<IStorageService> GetOrCreateStoreAsync(string firstSegment, CancellationToken ct)
     {
         if (_stores.TryGetValue(firstSegment, out var existing))
             return existing;
@@ -113,7 +113,7 @@ internal class RoutingPersistenceServiceCore : IPersistenceServiceCore
         }
     }
 
-    private IPersistenceServiceCore? TryGetStore(string? path)
+    private IStorageService? TryGetStore(string? path)
     {
         var segment = PathPartition.GetFirstSegment(path);
         if (segment == null) return null;
