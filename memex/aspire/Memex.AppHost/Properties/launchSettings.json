@@ -1,8 +1,8 @@
 {
   "profiles": {
-    "Monolith": {
+    "Local": {
       "commandName": "Project",
-      "commandLineArgs": "--mode monolith",
+      "commandLineArgs": "--mode local",
       "dotnetRunMessages": true,
       "launchBrowser": true,
       "applicationUrl": "https://localhost:17200",
@@ -13,9 +13,22 @@
         "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
       }
     },
-    "Distributed": {
+    "Local-Test": {
       "commandName": "Project",
-      "commandLineArgs": "--mode distributed",
+      "commandLineArgs": "--mode local-test",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:17200",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21200",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
+      }
+    },
+    "Local-Prod": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode local-prod",
       "dotnetRunMessages": true,
       "launchBrowser": true,
       "applicationUrl": "https://localhost:17200",
@@ -29,6 +42,32 @@
     "Test": {
       "commandName": "Project",
       "commandLineArgs": "--mode test",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:17200",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21200",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
+      }
+    },
+    "Prod": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode prod",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://localhost:17200",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21200",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22200"
+      }
+    },
+    "Monolith": {
+      "commandName": "Project",
+      "commandLineArgs": "--mode monolith",
       "dotnetRunMessages": true,
       "launchBrowser": true,
       "applicationUrl": "https://localhost:17200",
