@@ -321,7 +321,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:children"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -333,7 +333,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
 
         receivedChanges.Should().HaveCount(2);
 
-        // Act - Create a grandchild (should NOT trigger for scope:children)
+        // Act - Create a grandchild (should NOT trigger for namespace: query)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1/Task1") with { Name = "Task 1", NodeType = "Code" });
         await Task.Delay(300);
 

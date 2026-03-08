@@ -602,7 +602,7 @@ public class QueryParserTests
     [Fact]
     public void Parse_NamespaceWithChildrenScope_UsesChildren()
     {
-        var result = _parser.Parse("namespace:MeshWeaver scope:children");
+        var result = _parser.Parse("namespace:MeshWeaver");
 
         result.Path.Should().Be("MeshWeaver");
         result.Scope.Should().Be(QueryScope.Children);
@@ -615,7 +615,7 @@ public class QueryParserTests
     [Fact]
     public void Parse_ScopeChildren_SetsScope()
     {
-        var result = _parser.Parse("scope:children");
+        var result = _parser.Parse("namespace:");
 
         result.Scope.Should().Be(QueryScope.Children);
         result.Filter.Should().BeNull();
@@ -624,7 +624,7 @@ public class QueryParserTests
     [Fact]
     public void Parse_PathWithChildrenScope_ParsesBoth()
     {
-        var result = _parser.Parse("path:products scope:children");
+        var result = _parser.Parse("namespace:products");
 
         result.Path.Should().Be("products");
         result.Scope.Should().Be(QueryScope.Children);

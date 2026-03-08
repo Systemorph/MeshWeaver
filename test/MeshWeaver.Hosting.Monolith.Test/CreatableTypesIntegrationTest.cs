@@ -237,18 +237,18 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Build type queries — EXACT copy of production code
         var typeQueries = new List<string>();
         if (!string.IsNullOrEmpty(effectiveNamespace))
-            typeQueries.Add($"nodeType:NodeType path:{effectiveNamespace} scope:children context:create");
+            typeQueries.Add($"nodeType:NodeType namespace:{effectiveNamespace} context:create");
         else
-            typeQueries.Add("nodeType:NodeType scope:children context:create");
+            typeQueries.Add("nodeType:NodeType namespace: context:create");
         if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
         {
             typeQueries.Add($"path:{currentNodeType} nodeType:NodeType context:create");
-            typeQueries.Add($"nodeType:NodeType path:{currentNodeType} scope:children context:create");
+            typeQueries.Add($"nodeType:NodeType namespace:{currentNodeType} context:create");
         }
         if (currentNodeType == MeshNode.NodeTypePath && !string.IsNullOrEmpty(parentPath))
         {
             typeQueries.Add($"path:{parentPath} nodeType:NodeType context:create");
-            typeQueries.Add($"nodeType:NodeType path:{parentPath} scope:children context:create");
+            typeQueries.Add($"nodeType:NodeType namespace:{parentPath} context:create");
         }
         foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
             typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
@@ -369,10 +369,10 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         // Build type queries for the type definition page
         var typeQueries = new List<string>();
         // Children of root namespace (since effectiveNamespace is empty)
-        typeQueries.Add("nodeType:NodeType scope:children context:create");
+        typeQueries.Add("nodeType:NodeType namespace: context:create");
         // The type itself and its children
         typeQueries.Add($"path:{parentPath} nodeType:NodeType context:create");
-        typeQueries.Add($"nodeType:NodeType path:{parentPath} scope:children context:create");
+        typeQueries.Add($"nodeType:NodeType namespace:{parentPath} context:create");
         // Global types
         foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
             typeQueries.Add($"path:{globalType} nodeType:NodeType context:create");
@@ -456,14 +456,14 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         var typeQueries = new List<string>();
         // Child types under the effective namespace path
         if (!string.IsNullOrEmpty(effectiveNamespace))
-            typeQueries.Add($"nodeType:NodeType path:{effectiveNamespace} scope:children context:create");
+            typeQueries.Add($"nodeType:NodeType namespace:{effectiveNamespace} context:create");
         else
-            typeQueries.Add("nodeType:NodeType scope:children context:create");
+            typeQueries.Add("nodeType:NodeType namespace: context:create");
         // The parent's own type + child types of the parent's type
         if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
         {
             typeQueries.Add($"path:{currentNodeType} nodeType:NodeType context:create");
-            typeQueries.Add($"nodeType:NodeType path:{currentNodeType} scope:children context:create");
+            typeQueries.Add($"nodeType:NodeType namespace:{currentNodeType} context:create");
         }
         // Global creatable types — individual path queries
         foreach (var globalType in meshConfiguration.GlobalCreatableTypes)
@@ -1044,7 +1044,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     public async Task FileSystem_GetChildrenOfACMEProject_ShouldIncludeTodo()
     {
         // Get children of ACME/Project - uses lazy loading
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project scope:children", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:ACME/Project", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Children of ACME/Project ({children.Count} total):");
         foreach (var child in children)
@@ -1061,7 +1061,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
     public async Task FileSystem_QueryChildNodeTypes_ShouldFindTodo()
     {
         // This is the exact query used by GetCreatableTypesAsync
-        var query = "path:ACME/Project nodeType:NodeType scope:children";
+        var query = "namespace:ACME/Project nodeType:NodeType";
         var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).OfType<MeshNode>().ToListAsync();
 
         Output.WriteLine($"Query '{query}' returned {results.Count} results:");

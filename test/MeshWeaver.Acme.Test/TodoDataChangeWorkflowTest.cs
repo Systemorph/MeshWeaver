@@ -154,7 +154,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
-        var todos = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
+        var todos = await meshQuery.QueryAsync<MeshNode>("namespace:ACME/ProductLaunch/Todo", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         todos.Should().NotBeEmpty("Should have child Todo nodes");

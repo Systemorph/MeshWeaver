@@ -31,7 +31,7 @@ public record NodeTypeDefinition
     /// Uses IMeshQuery with the specified query pattern.
     /// Example: "nodeType:Type/Organization scope:descendants" finds all nodes
     /// of type "Type/Organization" anywhere in the hierarchy.
-    /// If null, defaults to "scope:children" (direct children only).
+    /// If null, defaults to namespace-based children query (direct children only).
     /// </summary>
     public string? ChildrenQuery { get; init; }
 

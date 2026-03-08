@@ -1,0 +1,14 @@
+{
+  "id": "FutuRe_Analysis_Access",
+  "namespace": "FutuRe/EuropeRe/Analysis",
+  "name": "FutuRe/Analysis Node Access",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "FutuRe/Analysis",
+    "displayName": "Group Analysis Hub",
+    "roles": [
+      { "role": "Reader" }
+    ]
+  }
+}

@@ -150,7 +150,7 @@ public static class ThreadLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:{ThreadNodeType.NodeType}")
+                .WithHiddenQuery($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}")
                 .WithPlaceholder("Search threads...")
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithMaxColumns(3));
@@ -269,7 +269,7 @@ public static class ThreadLayoutAreas
         {
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{ThreadNodeType.NodeType} scope:children").ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {
@@ -371,7 +371,7 @@ public static class ThreadLayoutAreas
             try
             {
                 return await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children sort:Timestamp-asc"
+                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Timestamp-asc"
                 ).ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
@@ -447,7 +447,7 @@ public static class ThreadLayoutAreas
             return 1;
 
         var messageNodes = await meshQuery.QueryAsync<MeshNode>(
-            $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
         ).ToListAsync();
 
         if (messageNodes.Count == 0)

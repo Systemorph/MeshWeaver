@@ -283,7 +283,7 @@ public static class SettingsLayoutArea
 
         stack = stack.WithView((h, _) =>
             meshQuery
-                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{hubPath} nodeType:Group scope:children"))
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{hubPath} nodeType:Group"))
                 .Select(change =>
                 {
                     var groupNodes = change.Items?.ToList() ?? [];

@@ -216,7 +216,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         var mockChat = new MockAgentChat();
         var plugin = new MeshPlugin(Mesh, mockChat);
 
-        var result = await plugin.Search("scope:children", "@Agent");
+        var result = await plugin.Search("namespace:", "@Agent");
 
         result.Should().NotBeNullOrEmpty();
         var doc = JsonDocument.Parse(result);

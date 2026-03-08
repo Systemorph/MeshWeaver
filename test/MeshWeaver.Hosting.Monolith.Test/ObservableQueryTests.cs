@@ -288,7 +288,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ACME scope:children"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:ACME"))
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
@@ -301,7 +301,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         receivedChanges.Should().HaveCount(2);
 
-        // Act - Add a grandchild (should NOT trigger notification for scope:children)
+        // Act - Add a grandchild (should NOT trigger notification for namespace: query)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1/Task") with { Name = "Task", NodeType = "Code" });
         await Task.Delay(300);
 

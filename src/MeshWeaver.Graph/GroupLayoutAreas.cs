@@ -82,7 +82,7 @@ public static class GroupLayoutAreas
             if (meshQuery != null)
             {
                 var members = await meshQuery
-                    .QueryAsync<MeshNode>($"path:{hubPath} nodeType:GroupMembership scope:children")
+                    .QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:GroupMembership")
                     .ToListAsync();
 
                 if (members.Count == 0)
@@ -136,7 +136,7 @@ public static class GroupLayoutAreas
             if (meshQuery != null)
             {
                 var members = await meshQuery
-                    .QueryAsync<MeshNode>($"path:{hubPath} nodeType:GroupMembership scope:children")
+                    .QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:GroupMembership")
                     .ToListAsync();
 
                 foreach (var member in members)

@@ -474,7 +474,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task MeshWeaver_HasChildren()
     {
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:children", ct: TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:MeshWeaver", ct: TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("MeshWeaver should have children");

@@ -86,6 +86,14 @@ public interface IMeshQuery
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The property value, or default if node not found or property is null.</returns>
     Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns an IMeshQuery that runs all queries with the node's own identity
+    /// as the AccessContext (same as IMeshNodePersistence.ImpersonateAsNode()).
+    /// Use this when infrastructure code needs read access without a user context
+    /// (e.g., VirtualUserMiddleware checking node existence before authentication).
+    /// </summary>
+    IMeshQuery ImpersonateAsNode();
 }
 
 /// <summary>

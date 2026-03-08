@@ -116,7 +116,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         try
         {
             var messageNodes = await _meshQuery.QueryAsync<MeshNode>(
-                $"path:{threadId} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+                $"namespace:{threadId} nodeType:{ThreadMessageNodeType.NodeType}"
             ).ToListAsync(ct);
 
             return messageNodes

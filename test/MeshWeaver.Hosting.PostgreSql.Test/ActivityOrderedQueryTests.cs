@@ -114,7 +114,7 @@ public class ActivityOrderedQueryTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
-            Query = "source:activity nodeType:Thread path:org/ACME/Discussions scope:children",
+            Query = "source:activity nodeType:Thread namespace:org/ACME/Discussions",
             UserId = "alice"
         };
 
@@ -193,7 +193,7 @@ public class ActivityOrderedQueryTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
-            Query = "source:activity path:org/ACME/Docs scope:children",
+            Query = "source:activity namespace:org/ACME/Docs",
             UserId = "alice"
         };
 
@@ -243,7 +243,7 @@ public class ActivityOrderedQueryTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
-            Query = "source:activity nodeType:Thread path:org/ACME/Discussions scope:children",
+            Query = "source:activity nodeType:Thread namespace:org/ACME/Discussions",
             UserId = "bob"
         };
 
@@ -267,7 +267,7 @@ public class ActivityOrderedQueryTests
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:Thread path:org/ACME/Discussions scope:children sort:name",
+            Query = "nodeType:Thread namespace:org/ACME/Discussions sort:name",
             UserId = "alice"
         };
 

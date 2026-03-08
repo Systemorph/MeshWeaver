@@ -135,7 +135,7 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
         });
 
         // Act - query using source:activity (returns all matching nodes in InMemory mode)
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown path:org scope:children")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown namespace:org")
             .ToListAsync();
 
         // Assert - all matching nodes are returned
@@ -326,7 +326,7 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
         });
 
         // Act - source:activity query via InMemory (filters still apply, ordering is default)
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown path:org scope:children")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown namespace:org")
             .ToListAsync();
 
         // Assert - all matching nodes are returned (source:activity is stripped by parser)
@@ -350,7 +350,7 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
         });
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Code path:data scope:children")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Code namespace:data")
             .ToListAsync();
 
         // Assert - only Code nodes returned
@@ -372,7 +372,7 @@ public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : Monol
         }
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown path:items scope:children limit:3")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown namespace:items limit:3")
             .ToListAsync();
 
         // Assert

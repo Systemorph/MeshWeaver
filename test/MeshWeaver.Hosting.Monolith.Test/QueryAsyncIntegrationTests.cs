@@ -217,7 +217,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/phone") with { Name = "Phone", NodeType = "Markdown" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/laptop/accessories") with { Name = "Accessories", NodeType = "Markdown" });
 
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p} scope:children")).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p}")).ToListAsync();
 
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Laptop", "Phone"]);
@@ -231,7 +231,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/beta") with { Name = "Beta Inc", NodeType = "Markdown" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
 
-        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p} scope:children")).ToListAsync();
+        var results = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"namespace:{p}")).ToListAsync();
 
         results.Should().HaveCount(2);
         results.Cast<MeshNode>().Select(n => n.Name).Should().Contain(["Acme Corp", "Beta Inc"]);

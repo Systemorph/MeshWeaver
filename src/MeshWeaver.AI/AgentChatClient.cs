@@ -710,7 +710,7 @@ public class AgentChatClient : IAgentChat
         try
         {
             var pathQuery = string.IsNullOrEmpty(contextPath)
-                ? "nodeType:Agent scope:children"  // Root level: get direct children agents
+                ? "namespace: nodeType:Agent"  // Root level: get direct children agents
                 : $"path:{contextPath} nodeType:Agent scope:AncestorsAndSelf";
 
             await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))

@@ -127,7 +127,7 @@ public partial class CollaborativeMarkdownView
             return;
 
         var query = MeshQueryRequest.FromQuery(
-            $"path:{BoundNodePath} nodeType:Comment scope:children");
+            $"namespace:{BoundNodePath} nodeType:Comment");
 
         AddBinding(meshQuery.ObserveQuery<MeshNode>(query)
             .Scan(new List<MeshNode>(), (list, change) =>

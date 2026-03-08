@@ -443,7 +443,7 @@ public static class MeshNodeLayoutAreas
     /// Renders the Search view showing nodes as thumbnails with search.
     /// Uses MeshSearchControl for unified search and display.
     /// For NodeType nodes, shows instances of that type (nodeType:name scope:subtree).
-    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to scope:children.
+    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to namespace query.
     /// Excludes NodeType nodes from results (use NodeTypes area to view those).
     /// Render mode is determined by CatalogMode property (hierarchical or grouped).
     /// Reads search term from ?q= query parameter.
@@ -472,7 +472,7 @@ public static class MeshNodeLayoutAreas
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var hiddenQuery = $"namespace:{nodeTypePath} scope:children";
+                var hiddenQuery = $"namespace:{nodeTypePath}";
 
                 // Build create href with type restriction and optional namespace restrictions
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
@@ -493,7 +493,7 @@ public static class MeshNodeLayoutAreas
             }
 
             // Instance node catalog - excludes NodeType nodes
-            var instanceHiddenQuery = $"path:{node?.Namespace ?? hubPath} scope:children -nodeType:NodeType";
+            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} -nodeType:NodeType";
 
             return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
@@ -517,7 +517,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
+            .WithHiddenQuery($"namespace:{hubPath} -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)
@@ -570,7 +570,7 @@ public static class MeshNodeLayoutAreas
             IReadOnlyList<MeshNode> nodeTypeChildren;
             try
             {
-                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children").ToListAsync();
+                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:NodeType").ToListAsync();
             }
             catch
             {

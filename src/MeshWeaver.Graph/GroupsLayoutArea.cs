@@ -181,7 +181,7 @@ public static class GroupsLayoutArea
             return Observable.Return<UiControl?>(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No local memberships.</p>"));
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath} nodeType:GroupMembership scope:children"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{nodePath} nodeType:GroupMembership"))
             .Select(change =>
             {
                 var nodes = change.Items;

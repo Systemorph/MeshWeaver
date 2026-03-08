@@ -208,9 +208,13 @@ public sealed record DataContext : IDisposable
                 }
                 else
                 {
-                    Hub.OpenGate(InitializationGateName);
                     logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
                 }
+
+                // Always open the gate so the hub can process messages.
+                // On failure/cancellation, streams already have errors propagated;
+                // keeping the gate closed would hang the hub forever.
+                Hub.OpenGate(InitializationGateName);
             }, TaskScheduler.Default);
     }
 

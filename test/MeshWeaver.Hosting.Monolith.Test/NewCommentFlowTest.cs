@@ -85,7 +85,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     /// Tests that creating a comment using the EXACT same MeshNode constructor pattern
     /// as BuildNewCommentForm (two-arg: commentId, nodePath) produces a node that:
     ///   - Can be retrieved by GetNodeAsync
-    ///   - Appears in scope:children query
+    ///   - Appears in namespace: query
     ///   - Has correct Path, Namespace, and Id
     /// This is the constructor: new MeshNode(commentId, nodePath)
     /// </summary>
@@ -134,13 +134,13 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         retrievedComment.Text.Should().BeEmpty("Comment was created with empty text");
         Output.WriteLine($"Retrieved comment: Author={retrievedComment.Author}, Text='{retrievedComment.Text}'");
 
-        // Assert — node should appear in scope:children query (this is how ReadView finds comments)
+        // Assert — node should appear in namespace: query (this is how ReadView finds comments)
         var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
+            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
 
         children.Should().Contain(n => n.Path == createdNode.Path,
-            "New comment should appear in scope:children query (this is how the sidebar finds comments)");
+            "New comment should appear in namespace: query (this is how the sidebar finds comments)");
         Output.WriteLine($"Comment found in children query ({children.Count} total children)");
 
         // Cleanup
@@ -394,14 +394,14 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         reloadedComment.MarkerId.Should().Be(markerId);
         Output.WriteLine($"   Reloaded comment: Text='{reloadedComment.Text}', Author={reloadedComment.Author}");
 
-        // 5. Also verify via scope:children query (how ReadView finds comments)
-        Output.WriteLine("5. Verifying via scope:children query...");
+        // 5. Also verify via namespace: query (how ReadView finds comments)
+        Output.WriteLine("5. Verifying via namespace: query...");
         var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
+            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
 
         var found = children.FirstOrDefault(n => n.Path == created.Path);
-        found.Should().NotBeNull("Comment must appear in scope:children query after reload");
+        found.Should().NotBeNull("Comment must appear in namespace: query after reload");
         var foundComment = found!.Content.Should().BeOfType<Comment>().Subject;
         foundComment.Text.Should().Be("This is my important feedback about the document.");
         Output.WriteLine($"   Found in children query: {found.Path}");

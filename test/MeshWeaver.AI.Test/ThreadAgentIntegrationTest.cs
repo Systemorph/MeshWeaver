@@ -226,7 +226,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         // 7. Verify thread contains both messages
         var children = new List<MeshNode>();
         await foreach (var child in query.QueryAsync<MeshNode>(
-            $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children", null, ct))
+            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}", null, ct))
         {
             children.Add(child);
         }

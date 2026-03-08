@@ -82,7 +82,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 
     /// <summary>
     /// Creates the VUser node via IMeshNodePersistence.ImpersonateAsNode(),
-    /// so the hub's address becomes the identity for authorization.
+    /// so the node's address becomes the identity for authorization.
     /// </summary>
     private static async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
     {
@@ -100,9 +100,10 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
         };
 
         // Check if VUser node already exists (common case for returning visitors)
+        // Use ImpersonateAsNode() because this runs before authentication — no user context yet
         var meshQuery = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var existing = await meshQuery
-            .QueryAsync<MeshNode>($"path:{userNode.Path} scope:exact")
+        var existing = await meshQuery.ImpersonateAsNode()
+            .QueryAsync<MeshNode>($"path:{userNode.Path}")
             .FirstOrDefaultAsync(CancellationToken.None);
         if (existing != null)
             return;

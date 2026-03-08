@@ -189,7 +189,7 @@ public static class ApprovalsView
         host.UpdateData(approvalsDataId, Array.Empty<LayoutAreaControl>());
 
         meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{nodePath} nodeType:{ApprovalNodeType.NodeType} scope:children"))
+                $"namespace:{nodePath} nodeType:{ApprovalNodeType.NodeType}"))
             .Scan(new List<MeshNode>(), (list, change) =>
             {
                 if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

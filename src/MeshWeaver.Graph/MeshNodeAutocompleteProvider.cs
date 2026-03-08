@@ -23,7 +23,7 @@ internal class MeshNodeAutocompleteProvider(IMeshQuery meshQuery, IMessageHub hu
         // Use the hub's address as the parent path
         var parentPath = hub.Address.ToString();
 
-        var queryString = $"parent:{parentPath} scope:children";
+        var queryString = $"namespace:{parentPath}";
         if (!string.IsNullOrWhiteSpace(query))
             queryString += $" name:{query}";
 

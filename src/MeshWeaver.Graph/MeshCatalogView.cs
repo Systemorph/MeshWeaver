@@ -57,8 +57,8 @@ public static class MeshCatalogView
         {
             // Build query with optional nodeType filter
             var query = string.IsNullOrEmpty(nodeTypeFilter)
-                ? $"path:{parentPath} scope:children"
-                : $"path:{parentPath} nodeType:{nodeTypeFilter} scope:children";
+                ? $"namespace:{parentPath}"
+                : $"namespace:{parentPath} nodeType:{nodeTypeFilter}";
 
             IReadOnlyList<MeshNode> children;
             try

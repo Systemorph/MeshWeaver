@@ -77,7 +77,7 @@ public class QueryTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))

@@ -180,7 +180,7 @@ public static class FutuReDataLoader
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery(
-                    $"nodeType:FutuRe/LineOfBusiness namespace:{buNamespace}/LineOfBusiness scope:children state:Active"))
+                    $"nodeType:FutuRe/LineOfBusiness namespace:{buNamespace}/LineOfBusiness state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToLineOfBusiness)
                 .Where(lob => lob != null)
@@ -265,7 +265,7 @@ public static class FutuReDataLoader
 
         return meshQuery
             .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness scope:children state:Active"))
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active"))
             .Select(change => change.Items
                 .Select(ConvertToLineOfBusiness)
                 .Where(lob => lob != null)

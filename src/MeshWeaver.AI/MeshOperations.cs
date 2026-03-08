@@ -50,7 +50,7 @@ public class MeshOperations
             {
                 var parentPath = resolvedPath[..^2];
                 var result = new List<object>();
-                var query = $"path:{parentPath} scope:children";
+                var query = $"namespace:{parentPath}";
                 await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
                 {
                     result.Add(new

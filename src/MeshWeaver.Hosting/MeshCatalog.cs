@@ -449,9 +449,7 @@ internal sealed class MeshCatalog(
 
         // Build query string for IMeshQuery
         var queryParts = new List<string>();
-        if (!string.IsNullOrEmpty(parentPath))
-            queryParts.Add($"path:{parentPath}");
-        queryParts.Add("scope:children");
+        queryParts.Add(string.IsNullOrEmpty(parentPath) ? "namespace:" : $"namespace:{parentPath}");
         if (!string.IsNullOrWhiteSpace(query))
             queryParts.Add(query);
 

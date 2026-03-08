@@ -128,7 +128,7 @@ internal class ApiTokenService(IMeshNodePersistence nodeFactory, IMeshQuery mesh
     {
         var tokens = new List<ApiTokenInfo>();
 
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"parent:{ApiTokenNamespace} scope:children"))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{ApiTokenNamespace}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
             if (apiToken == null || apiToken.UserId != userId)
