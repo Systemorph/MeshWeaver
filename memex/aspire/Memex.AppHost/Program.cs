@@ -8,11 +8,11 @@ var builder = DistributedApplication.CreateBuilder(args);
 // Mode matrix:
 //   Mode        | PostgreSQL              | Blob Storage | Orleans    | Portal Name
 //   ----------- | ----------------------- | ------------ | ---------- | -----------
-//   local       | Docker pgvector         | Emulated     | Emulated   | memex-local
-//   local-test  | Azure (meshweaver_test) | Emulated     | Emulated   | memex-local
-//   local-prod  | Azure (meshweaver_prod) | Emulated     | Emulated   | memex-local
-//   test        | Azure (meshweaver_test) | Azure         | Azure      | memex-test
-//   prod        | Azure (meshweaver_prod) | Azure         | Azure      | memex-prod
+//   local       | Docker pgvector (memex)      | Emulated     | Emulated   | memex-local
+//   local-test  | Azure (memex-test)           | Emulated     | Emulated   | memex-local
+//   local-prod  | Azure (memex)                | Emulated     | Emulated   | memex-local
+//   test        | Azure (memex-test)           | Azure         | Azure      | memex-test
+//   prod        | Azure (memex)                | Azure         | Azure      | memex-prod
 //   monolith    | FileSystem (standalone) | —            | —          | memex-monolith
 //
 // Secrets: set locally via `dotnet user-secrets`, in CI/CD via GitHub secrets.
@@ -155,7 +155,7 @@ else
                 .Single();
             server.Location = new Azure.Core.AzureLocation("swedencentral");
         });
-    var dbName = mode is "local-test" or "test" ? "meshweaver_test" : "meshweaver_prod";
+    var dbName = mode is "local-test" or "test" ? "memex-test" : "memex";
     var db = postgres.AddDatabase("meshweaver", databaseName: dbName);
 
     dbMigration.WithReference(db).WaitFor(db);

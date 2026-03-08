@@ -36,8 +36,6 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDynamicGraphTests");
     private string? _testDirectory;
 
-    private IPathResolver PathResolver => Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
-
     /// <summary>
     /// Gets the unique test directory for this test instance, creating it lazily.
     /// </summary>

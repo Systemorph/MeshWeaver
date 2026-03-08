@@ -270,7 +270,7 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetService<MeshCatalog>()));
 
         return services;
     }
@@ -389,7 +389,7 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetService<MeshCatalog>()));
 
         return services;
     }
@@ -428,7 +428,7 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetService<MeshCatalog>()));
 
         return services;
     }

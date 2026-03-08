@@ -20,7 +20,6 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 public class AutocompleteIconTests : MonolithMeshTestBase
 {
     private readonly string _cacheDirectory;
-    private IMeshService MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
     public AutocompleteIconTests(ITestOutputHelper output) : base(output)
     {
