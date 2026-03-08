@@ -153,6 +153,14 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
                     }
                     hub.Post(e, o => o.WithTarget(request.Subscriber));
+                },
+                ex =>
+                {
+                    logger.LogWarning(ex, "Workspace stream error for subscriber {Subscriber}, propagating DeliveryFailure", request.Subscriber);
+                    hub.Post(new DeliveryFailure(null!, ex.Message)
+                    {
+                        ErrorType = ErrorType.Failed,
+                    }, o => o.WithTarget(request.Subscriber));
                 })
         );
 

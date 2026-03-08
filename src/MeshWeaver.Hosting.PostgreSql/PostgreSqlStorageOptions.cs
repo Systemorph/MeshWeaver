@@ -11,7 +11,7 @@ public class PostgreSqlStorageOptions
     public string? ConnectionString { get; set; }
 
     /// <summary>
-    /// Vector embedding dimensions (default: 1024 for Cohere embed-v4).
+    /// Vector embedding dimensions. Synced from <see cref="EmbeddingOptions.Dimensions"/> at startup.
     /// </summary>
     public int VectorDimensions { get; set; } = 1024;
 

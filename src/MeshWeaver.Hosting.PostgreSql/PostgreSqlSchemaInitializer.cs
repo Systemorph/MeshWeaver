@@ -147,6 +147,19 @@ public static class PostgreSqlSchemaInitializer
             );
             CREATE INDEX IF NOT EXISTS idx_mn_embedding ON mesh_nodes USING hnsw (embedding vector_cosine_ops);
 
+            -- Migrate embedding column if dimensions changed
+            DO $migrate$
+            DECLARE cur_dim INT;
+            BEGIN
+                SELECT atttypmod INTO cur_dim FROM pg_attribute
+                WHERE attrelid = 'mesh_nodes'::regclass AND attname = 'embedding' AND atttypmod > 0;
+                IF cur_dim IS NOT NULL AND cur_dim != {{dim}} THEN
+                    DROP INDEX IF EXISTS idx_mn_embedding;
+                    ALTER TABLE mesh_nodes ALTER COLUMN embedding TYPE vector({{dim}}) USING NULL;
+                    CREATE INDEX idx_mn_embedding ON mesh_nodes USING hnsw (embedding vector_cosine_ops);
+                END IF;
+            END $migrate$;
+
             -- partition_objects
             CREATE TABLE IF NOT EXISTS partition_objects (
                 id              TEXT        NOT NULL,
@@ -502,6 +515,19 @@ public static class PostgreSqlSchemaInitializer
                 to_tsvector('english', COALESCE(name,'') || ' ' || COALESCE(description,'') || ' ' || COALESCE(node_type,''))
             );
             CREATE INDEX IF NOT EXISTS idx_mn_embedding ON mesh_nodes USING hnsw (embedding vector_cosine_ops);
+
+            -- Migrate embedding column if dimensions changed
+            DO $migrate$
+            DECLARE cur_dim INT;
+            BEGIN
+                SELECT atttypmod INTO cur_dim FROM pg_attribute
+                WHERE attrelid = 'mesh_nodes'::regclass AND attname = 'embedding' AND atttypmod > 0;
+                IF cur_dim IS NOT NULL AND cur_dim != {{dim}} THEN
+                    DROP INDEX IF EXISTS idx_mn_embedding;
+                    ALTER TABLE mesh_nodes ALTER COLUMN embedding TYPE vector({{dim}}) USING NULL;
+                    CREATE INDEX idx_mn_embedding ON mesh_nodes USING hnsw (embedding vector_cosine_ops);
+                END IF;
+            END $migrate$;
 
             -- partition_objects
             CREATE TABLE IF NOT EXISTS partition_objects (

@@ -163,11 +163,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (!Store.IsDisposed)
         {
-            Store.OnError(error);
-            // Open the gate so Hub.Started completes even on error.
-            // Without this, DataSource.Initialized hangs forever because
-            // it waits on Hub.Started which waits on the gate.
+            logger.LogWarning(error, "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner})", StreamId, Reference, Owner);
+            try
+            {
+                Store.OnError(error);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "[SYNC_STREAM] Exception from Store.OnError propagation for {StreamId}", StreamId);
+            }
+            // Always fault startup and open gate, even if Store.OnError throws
+            Hub.FailStartup(error);
             Hub.OpenGate(SynchronizationGate);
+        }
+        else
+        {
+            logger.LogWarning("[SYNC_STREAM] OnError skipped for {StreamId} - Store is disposed", StreamId);
         }
     }
 
@@ -245,15 +256,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     if (response.Error is { } error)
                     {
                         logger.LogWarning("Stream {StreamId} subscription rejected: {Error}", StreamId, error);
-                        try
-                        {
-                            Store.OnError(new UnauthorizedAccessException(
-                                $"Subscription to {StreamIdentity.Owner} for {Reference} failed: {error}"));
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogDebug(ex, "Exception from Store.OnError propagation for stream {StreamId}", StreamId);
-                        }
+                        OnError(new UnauthorizedAccessException(
+                            $"Subscription to {StreamIdentity.Owner} for {Reference} failed: {error}"));
                     }
                     return delivery.Processed();
                 }
@@ -261,15 +265,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 {
                     var failure = delivery.Message;
                     logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
-                    try
-                    {
-                        Store.OnError(new DeliveryFailureException(failure));
-                    }
-                    catch (Exception ex)
-                    {
-                        // Subscribers without error handlers will throw here — that's expected
-                        logger.LogDebug(ex, "Exception from Store.OnError propagation for stream {StreamId}", StreamId);
-                    }
+                    OnError(new DeliveryFailureException(failure));
                     return delivery.Processed();
                 }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>

@@ -46,7 +46,9 @@ public enum ErrorType
     Failed,
     CompilationFailed,
     StartupScriptFailed,
-    RoutingLoop
+    RoutingLoop,
+    Unauthorized,
+    Forbidden
 }
 
 

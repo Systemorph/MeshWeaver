@@ -214,6 +214,8 @@ public sealed record DataContext : IDisposable
                 // Always open the gate so the hub can process messages.
                 // On failure/cancellation, streams already have errors propagated;
                 // keeping the gate closed would hang the hub forever.
+                logger.LogWarning("DataContext: Opening {GateName} gate for {Address} (IsFaulted={IsFaulted}, IsCanceled={IsCanceled})",
+                    InitializationGateName, Hub.Address, task.IsFaulted, task.IsCanceled);
                 Hub.OpenGate(InitializationGateName);
             }, TaskScheduler.Default);
     }
