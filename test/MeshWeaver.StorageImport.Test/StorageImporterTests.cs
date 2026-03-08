@@ -480,6 +480,28 @@ public class StorageImporterTests : IDisposable
         var importer2 = new StorageImporter(source, target);
         var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true }, ct);
 
+        // Debug: list files in target to see what was created
+        var targetFiles = Directory.GetFiles(_targetDir, "*.*", SearchOption.AllDirectories)
+            .Select(f => f.Replace(_targetDir, "").TrimStart(Path.DirectorySeparatorChar))
+            .OrderBy(f => f)
+            .ToList();
+        var sourceFiles = Directory.GetFiles(_sourceDir, "*.*", SearchOption.AllDirectories)
+            .Where(f => new[] { ".md", ".json", ".cs" }.Contains(Path.GetExtension(f)))
+            .Select(f => f.Replace(_sourceDir, "").TrimStart(Path.DirectorySeparatorChar))
+            .OrderBy(f => f)
+            .ToList();
+
+        // Find differences
+        var targetSet = new HashSet<string>(targetFiles, StringComparer.OrdinalIgnoreCase);
+        var sourceSet = new HashSet<string>(sourceFiles, StringComparer.OrdinalIgnoreCase);
+        var onlyInTarget = targetFiles.Where(f => !sourceSet.Contains(f)).ToList();
+        var onlyInSource = sourceFiles.Where(f => !targetSet.Contains(f)).ToList();
+
+        System.Console.Error.WriteLine($"DEBUG: firstImport={firstResult.NodesImported}, secondImport={result.NodesImported}, removed={result.NodesRemoved}");
+        System.Console.Error.WriteLine($"DEBUG: target files count={targetFiles.Count}, source files count={sourceFiles.Count}");
+        foreach (var f in onlyInTarget) System.Console.Error.WriteLine($"DEBUG: ONLY IN TARGET: {f}");
+        foreach (var f in onlyInSource) System.Console.Error.WriteLine($"DEBUG: ONLY IN SOURCE: {f}");
+
         // Assert - all nodes re-imported, zero removals
         result.NodesImported.Should().Be(firstResult.NodesImported,
             "same source should produce the same node count");

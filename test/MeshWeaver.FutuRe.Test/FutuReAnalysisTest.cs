@@ -628,40 +628,40 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 15000)]
     public async Task Group_ProfitabilityTable_ShouldHaveNonZeroData()
     {
         // Pre-initialize child BU hubs so their data is loaded before group hub aggregates
         await InitializeChildAnalysisHubs();
 
-        // First get the layout WITHOUT waiting for data, then observe all emissions
         var client = GetClient();
-        var address = new Address("FutuRe/Analysis");
-        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address), TestContext.Current.CancellationToken);
+        var groupAddress = new Address("FutuRe/Analysis");
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(groupAddress), TestContext.Current.CancellationToken);
 
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference("ProfitabilityTable");
-        var stream = workspace.GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(address, reference);
-
-        Output.WriteLine("Observing ProfitabilityTable control emissions...");
-        var controls = await stream.GetControlStream(reference.Area!)
-            .Timeout(TimeSpan.FromSeconds(10))
-            .TakeUntil(DateTimeOffset.Now.AddSeconds(8))
-            .Do(c =>
+        // Check TransactionMapping data on the group hub
+        var groupHub = Mesh.GetHostedHub(groupAddress, HostedHubCreation.Never);
+        groupHub.Should().NotBeNull();
+        var ws = groupHub!.GetWorkspace();
+        var dc = ws.DataContext;
+        foreach (var ds in dc.DataSources)
+        {
+            var partStream = ds.GetStreamForPartition(null);
+            if (partStream?.Current?.Value != null)
             {
-                if (c is MarkdownControl md)
-                    Output.WriteLine($"  [{DateTime.Now:ss.fff}] MarkdownControl (HasData={HasNonTrivialData(c)}):\n{md.Markdown}");
-                else
-                    Output.WriteLine($"  [{DateTime.Now:ss.fff}] {c?.GetType().Name ?? "null"}");
-            })
-            .ToList();
+                foreach (var c in partStream.Current.Value.Collections)
+                    Output.WriteLine($"DataSource '{ds.Id}' Collection '{c.Key}': {c.Value.Instances.Count} instances");
+            }
+            else
+            {
+                Output.WriteLine($"DataSource '{ds.Id}': No data (Current is null)");
+            }
+        }
 
-        Output.WriteLine($"Total emissions: {controls.Count}");
-        var lastNonNull = controls.LastOrDefault(c => c is not null);
-        lastNonNull.Should().NotBeNull("ProfitabilityTable should render");
-        var mdText = AssertMarkdownWithNonZeroNumbers(lastNonNull, "Group ProfitabilityTable");
-        mdText.Should().Contain("Line of Business", "table should have headers");
-        mdText.Should().Contain("Total", "table should have totals row");
+        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityTable",
+            waitForData: true, timeoutSeconds: 10);
+        var md = AssertMarkdownWithNonZeroNumbers(control, "Group ProfitabilityTable");
+        md.Should().Contain("Line of Business", "table should have headers");
+        md.Should().Contain("Total", "table should have totals row");
     }
 
     [Fact(Timeout = 10000)]
