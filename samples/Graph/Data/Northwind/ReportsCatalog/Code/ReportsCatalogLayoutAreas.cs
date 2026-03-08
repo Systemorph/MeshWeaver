@@ -38,7 +38,7 @@ public static class ReportsCatalogLayoutAreas
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
             // Query child report nodes
-            var children = await host.QueryChildrenAsync("scope:children").ToListAsync();
+            var children = await host.QueryChildrenAsync("").ToListAsync();
 
             return (UiControl?)BuildCatalogOverview(host, node, children);
         });

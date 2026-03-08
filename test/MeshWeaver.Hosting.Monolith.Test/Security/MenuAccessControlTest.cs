@@ -252,7 +252,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         var roles = await meshQuery
-            .QueryAsync<MeshNode>($"nodeType:Role scope:children")
+            .QueryAsync<MeshNode>($"nodeType:Role namespace:")
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Roles returned: {roles.Count}");
@@ -272,7 +272,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         var children = await meshQuery
-            .QueryAsync<MeshNode>($"path:{NodePath} scope:children")
+            .QueryAsync<MeshNode>($"namespace:{NodePath}")
             .ToListAsync(TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Children returned: {children.Count}");

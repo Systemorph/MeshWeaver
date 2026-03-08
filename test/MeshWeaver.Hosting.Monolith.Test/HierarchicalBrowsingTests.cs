@@ -149,7 +149,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         claimsNode.Should().NotBeNull();
 
         // Get direct children
-        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{claimsNode!.Path} scope:children").ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{claimsNode!.Path}").ToListAsync();
 
         children.Should().HaveCount(3);
         children.Select(n => n.Name).Should().Contain([

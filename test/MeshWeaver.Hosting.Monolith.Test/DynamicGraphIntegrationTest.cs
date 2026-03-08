@@ -241,7 +241,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded data
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", null, TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1");
@@ -268,7 +268,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded projects
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", null, TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph/org1", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1");
@@ -295,7 +295,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Verify IMeshQuery finds the pre-seeded stories
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", null, TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph/org1/proj1", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1/story1");
@@ -768,7 +768,7 @@ public record Graph
         hasSearchStructure.Should().BeTrue($"Search should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
 
         // The MeshSearchControl should have the correct namespace and scope
-        var hasCorrectQuery = json.Contains("namespace:type/org") && json.Contains("scope:children");
+        var hasCorrectQuery = json.Contains("namespace:type/org");
         hasCorrectQuery.Should().BeTrue($"Search should have namespace filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
     }
 
@@ -818,7 +818,7 @@ public record Graph
     /// <summary>
     /// Verifies that IMeshQuery with scope:descendants finds Code nodes that are 2 levels deep.
     /// Code nodes at "type/story/Code/code" are NOT immediate children of "type/story" (they're
-    /// grandchildren), so scope:children would miss them. scope:descendants is required.
+    /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task QueryAsync_ScopeDescendants_FindsCodeNodesUnderNodeType()
@@ -847,7 +847,7 @@ public record Graph
     }
 
     /// <summary>
-    /// Verifies that scope:children does NOT find Code nodes (they are 2 levels deep).
+    /// Verifies that namespace: does NOT find Code nodes (they are 2 levels deep).
     /// This confirms the bug that was fixed by switching to scope:descendants.
     /// </summary>
     [Fact(Timeout = 10000)]
@@ -862,16 +862,16 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Act: Query for Code nodes under type/story using scope:children (1 level deep only)
-        var query = "path:type/story nodeType:Code scope:children";
+        // Act: Query for Code nodes under type/story using namespace: (1 level deep only)
+        var query = "namespace:type/story nodeType:Code";
         var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         foreach (var node in nodes)
-            Output.WriteLine($"Found with scope:children: {node.Path}");
+            Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: scope:children only checks 1 level deep — Code nodes are at depth 2 (type/story/Code/id)
-        nodes.Should().BeEmpty("scope:children only finds immediate children; Code nodes are 2 levels deep");
+        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (type/story/Code/id)
+        nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 
     /// <summary>
@@ -1120,7 +1120,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         // Act - get children of the Code path
-        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations/Code scope:children", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/Code", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
@@ -1380,7 +1380,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Organization_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         Output.WriteLine("Getting Code children for Organization...");
-        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("path:Organization/Code scope:children", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Organization/Code", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         foreach (var child in codeChildren)
         {
             Output.WriteLine($"Found code child: {child.Path}, NodeType={child.NodeType}");

@@ -126,8 +126,8 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
-    /// ImpersonateAsNode sends operations with the hub's own identity.
-    /// The mesh hub's address is used as the AccessContext for authorization.
+    /// ImpersonateAsNode sends operations with the node's own identity.
+    /// The mesh node's address is used as the AccessContext for authorization.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task CreateNode_ImpersonateAsNode_UsesHubIdentity()
@@ -146,7 +146,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = "Markdown",
         };
 
-        // Act — create via ImpersonateAsNode (uses hub identity, not user identity)
+        // Act — create via ImpersonateAsNode (uses node identity, not user identity)
         var impersonated = NodeFactory.ImpersonateAsNode();
         var created = await impersonated.CreateNodeAsync(node, ct: TestTimeout);
 
@@ -157,5 +157,99 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Cleanup — use impersonated delete since regular user has no permission on "Impersonate" namespace
         await impersonated.DeleteNodeAsync(nodePath, ct: TestTimeout);
+    }
+
+    /// <summary>
+    /// Query without ImpersonateAsNode on a namespace where the current user
+    /// has no read access should return no results (security filtering).
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Query_WithoutImpersonation_ReturnsNoResults()
+    {
+        // Arrange — grant Admin to mesh hub on "Impersonate" namespace, but NOT to "no-access-user"
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshAddress = Mesh.Address.ToFullString();
+        await securityService.AddUserRoleAsync(meshAddress, "Admin", "Impersonate", "system", TestTimeout);
+
+        var nodeId = $"Md_{Guid.NewGuid().AsString()}";
+        var nodePath = $"Impersonate/{nodeId}";
+
+        var node = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Query Test Node",
+            NodeType = "Markdown",
+        };
+
+        // Create via impersonation (hub has access)
+        var impersonated = NodeFactory.ImpersonateAsNode();
+        await impersonated.CreateNodeAsync(node, ct: TestTimeout);
+
+        try
+        {
+            // Switch to a user with no roles (the default admin has claim-based "Admin" role)
+            var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+            accessService.SetCircuitContext(new AccessContext
+            {
+                ObjectId = "no-access-user",
+                Name = "No Access"
+            });
+
+            // Act — query WITHOUT impersonation ("no-access-user" has no read access)
+            var result = await MeshQuery
+                .QueryAsync<MeshNode>($"path:{nodePath}")
+                .FirstOrDefaultAsync(TestTimeout);
+
+            // Assert — should return null (filtered by RLS)
+            result.Should().BeNull("user has no read access to the Impersonate namespace");
+        }
+        finally
+        {
+            // Restore admin context for cleanup
+            TestUsers.DevLogin(Mesh);
+            await impersonated.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        }
+    }
+
+    /// <summary>
+    /// Query with ImpersonateAsNode should succeed when the node has read access.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Query_WithImpersonation_ReturnsNode()
+    {
+        // Arrange — grant Admin to mesh hub on "Impersonate" namespace
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var meshAddress = Mesh.Address.ToFullString();
+        await securityService.AddUserRoleAsync(meshAddress, "Admin", "Impersonate", "system", TestTimeout);
+
+        var nodeId = $"Md_{Guid.NewGuid().AsString()}";
+        var nodePath = $"Impersonate/{nodeId}";
+
+        var node = MeshNode.FromPath(nodePath) with
+        {
+            Name = "Impersonated Query Node",
+            NodeType = "Markdown",
+        };
+
+        // Create via impersonation (hub has access)
+        var impersonated = NodeFactory.ImpersonateAsNode();
+        await impersonated.CreateNodeAsync(node, ct: TestTimeout);
+
+        try
+        {
+            // Act — query WITH impersonation (hub has read access)
+            var result = await MeshQuery.ImpersonateAsNode()
+                .QueryAsync<MeshNode>($"path:{nodePath}")
+                .FirstOrDefaultAsync(TestTimeout);
+
+            // Assert
+            result.Should().NotBeNull("hub has Admin role on Impersonate namespace");
+            result!.Path.Should().Be(nodePath);
+            result.Name.Should().Be("Impersonated Query Node");
+        }
+        finally
+        {
+            // Cleanup
+            await impersonated.DeleteNodeAsync(nodePath, ct: TestTimeout);
+        }
     }
 }

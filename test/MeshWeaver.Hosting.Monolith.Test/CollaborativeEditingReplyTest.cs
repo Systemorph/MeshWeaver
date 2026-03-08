@@ -113,7 +113,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Verify comment children are queryable
         var comments = await MeshQuery.QueryAsync<MeshNode>(
-            $"path:MeshWeaver/Documentation/DataMesh/CollaborativeEditing nodeType:{CommentNodeType.NodeType} scope:children"
+            $"namespace:MeshWeaver/Documentation/DataMesh/CollaborativeEditing nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
 
         Output.WriteLine($"Found {comments.Count} comment children");
@@ -223,7 +223,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         // Step 7: Verify the reply appears in comment children query
         Output.WriteLine("Step 7: Verifying reply in children query...");
         var allComments = await MeshQuery.QueryAsync<MeshNode>(
-            $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
+            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
 
         allComments.Should().Contain(n => n.Path == createdReply.Path,
@@ -276,7 +276,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Verify all replies are queryable and linked to parent
         var allComments = await MeshQuery.QueryAsync<MeshNode>(
-            $"path:{docPath} nodeType:{CommentNodeType.NodeType} scope:children"
+            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
 
         foreach (var replyPath in replyPaths)

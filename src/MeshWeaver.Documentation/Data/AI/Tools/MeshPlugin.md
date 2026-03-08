@@ -51,7 +51,7 @@ Searches the mesh using a GitHub-style query syntax. Returns a JSON array of mat
 ### Common Patterns
 
 - `Search('nodeType:Agent')` — Find all agents
-- `Search('path:ACME scope:children')` — List direct children of ACME
+- `Search('namespace:ACME')` — List direct children of ACME
 - `Search('path:ACME scope:descendants')` — All descendants under ACME recursively
 - `Search('namespace:Doc scope:descendants')` — Browse all documentation
 - `Search('name:*sales* nodeType:Organization sort:name')` — Complex filtered query

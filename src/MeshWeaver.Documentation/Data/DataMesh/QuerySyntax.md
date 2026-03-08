@@ -71,8 +71,6 @@ namespace:Systemorph scope:descendants  # All items under Systemorph (recursive)
 ## scope
 Controls the search scope relative to namespace or path:
 ```
-scope:exact           # Only the exact path (default for path:)
-scope:children        # Immediate children only (excludes self)
 scope:descendants     # All descendants recursively (excludes self)
 scope:ancestors       # Parent hierarchy upward (excludes self)
 scope:hierarchy       # Ancestors + self + descendants
@@ -84,7 +82,7 @@ scope:ancestorsandself # Self + all ancestors
 Sets the base path for search (default scope is `exact`):
 ```
 path:Systemorph                # The exact Systemorph node
-path:Systemorph scope:children # Immediate children of Systemorph
+namespace:Systemorph           # Immediate children of Systemorph
 ```
 
 ## sort

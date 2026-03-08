@@ -344,7 +344,7 @@ public class MyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
         await nodeFactory.CreateNodeAsync(new MeshNode("test", "Namespace") { Name = "Test" }, "testuser");
 
         // Query
-        var result = await meshQuery.QueryAsync<MeshNode>("path:Namespace/test scope:exact").FirstOrDefaultAsync();
+        var result = await meshQuery.QueryAsync<MeshNode>("path:Namespace/test").FirstOrDefaultAsync();
         result.Should().NotBeNull();
     }
 }

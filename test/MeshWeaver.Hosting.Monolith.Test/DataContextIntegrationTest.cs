@@ -228,7 +228,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
             TestContext.Current.CancellationToken);
 
         // Act - get children via IMeshQuery
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", null, TestContext.Current.CancellationToken)
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - children should be available

@@ -72,7 +72,7 @@ public static class ProjectLayoutAreas
             .Select(s => s.OrderBy(x => x.Order).ToList());
         var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath}/Todo state:Active scope:children"))
+                $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodes.CombineLatest(statuses, (dict, statusList) =>
@@ -107,7 +107,7 @@ public static class ProjectLayoutAreas
             .Select(c => c.ToDictionary(cat => cat.Id, cat => cat));
         var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath}/Todo state:Active scope:children"))
+                $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodes.CombineLatest(categories, (dict, cats) =>
@@ -143,7 +143,7 @@ public static class ProjectLayoutAreas
             .Select(p => p.ToDictionary(x => x.Id, x => x));
         var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath}/Todo state:Active scope:children"))
+                $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodes.CombineLatest(statuses, priorities, (dict, sts, pris) =>
@@ -219,7 +219,7 @@ public static class ProjectLayoutAreas
             .Select(p => p.ToDictionary(x => x.Id, x => x));
         var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath}/Todo state:Active scope:children"))
+                $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodes.CombineLatest(statuses, priorities, (dict, sts, pris) =>
@@ -264,7 +264,7 @@ public static class ProjectLayoutAreas
             .Select(p => p.ToDictionary(x => x.Id, x => x));
         var nodes = host.Hub.ServiceProvider.GetRequiredService<IMeshQuery>()
             .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{hubPath}/Todo state:Active scope:children"))
+                $"namespace:{hubPath}/Todo state:Active"))
             .Scan(new Dictionary<string, MeshNode>(StringComparer.OrdinalIgnoreCase), ApplyChanges);
 
         return nodes.CombineLatest(statuses, priorities, (dict, sts, pris) =>

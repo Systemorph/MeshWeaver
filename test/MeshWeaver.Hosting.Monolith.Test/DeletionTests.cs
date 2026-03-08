@@ -63,7 +63,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
             .FirstOrDefaultAsync(TestTimeout);
         parent.Should().BeNull("parent should be deleted");
 
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:del2/parent scope:children")
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:del2/parent")
             .ToListAsync(TestTimeout);
         children.Should().BeEmpty("all children should be deleted");
     }

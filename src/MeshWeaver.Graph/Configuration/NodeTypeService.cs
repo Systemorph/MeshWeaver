@@ -748,7 +748,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         if (!string.IsNullOrEmpty(nodePath))
         {
             // Child NodeTypes under this node's path
-            var childQuery = $"path:{nodePath} nodeType:NodeType scope:children";
+            var childQuery = $"namespace:{nodePath} nodeType:NodeType";
             await foreach (var childType in meshQuery.QueryAsync<MeshNode>(childQuery, ct: ct).WithCancellation(ct))
             {
                 creatableTypes.Add(childType.Path);
@@ -758,7 +758,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // e.g., ProductLaunch (nodeType: ACME/Project) can create ACME/Project/Todo
             if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
             {
-                var nodeTypeChildQuery = $"path:{currentNodeType} nodeType:NodeType scope:children";
+                var nodeTypeChildQuery = $"namespace:{currentNodeType} nodeType:NodeType";
                 await foreach (var childType in meshQuery.QueryAsync<MeshNode>(nodeTypeChildQuery, ct: ct).WithCancellation(ct))
                 {
                     creatableTypes.Add(childType.Path);

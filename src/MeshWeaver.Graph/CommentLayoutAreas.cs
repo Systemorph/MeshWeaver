@@ -75,7 +75,7 @@ public static class CommentLayoutAreas
         if (meshQuery != null)
         {
             meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
+                    $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

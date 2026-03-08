@@ -219,14 +219,14 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // User1 search under SharedOrg should only return Public, not Confidential
         await LoginWithToken(_tokenUser1!);
-        var result1 = await plugin.Search("nodeType:Markdown scope:children", "SharedOrg");
+        var result1 = await plugin.Search("nodeType:Markdown namespace:", "SharedOrg");
         result1.Should().Contain("Public");
         result1.Should().NotContain("Confidential",
             "User1 (Viewer) should not see Confidential project in search results");
 
         // User2 search under SharedOrg should return both
         await LoginWithToken(_tokenUser2!);
-        var result2 = await plugin.Search("nodeType:Markdown scope:children", "SharedOrg");
+        var result2 = await plugin.Search("nodeType:Markdown namespace:", "SharedOrg");
         result2.Should().Contain("Public");
         result2.Should().Contain("Confidential");
     }
@@ -239,13 +239,13 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // User1 search under PrivateOrg should return nothing
         await LoginWithToken(_tokenUser1!);
-        var result1 = await plugin.Search("scope:children", "PrivateOrg");
+        var result1 = await plugin.Search("namespace:", "PrivateOrg");
         result1.Should().NotContain("Secret",
             "User1 should not see any nodes from PrivateOrg");
 
         // User2 search under PrivateOrg should find the Secret node
         await LoginWithToken(_tokenUser2!);
-        var result2 = await plugin.Search("scope:children", "PrivateOrg");
+        var result2 = await plugin.Search("namespace:", "PrivateOrg");
         result2.Should().Contain("Secret");
     }
 

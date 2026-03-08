@@ -248,7 +248,7 @@ public static class UserActivityLayoutAreas
 
             {
                 var fillerNodes = new List<MeshNode>();
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "scope:children", Limit = 20 }))
+                await foreach (var node in meshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = $"namespace:{host.Hub.Address}", Limit = 20 }))
                 {
                     if (node.NodeType != null && SystemNodeTypes.Contains(node.NodeType))
                         continue;

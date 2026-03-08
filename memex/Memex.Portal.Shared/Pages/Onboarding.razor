@@ -125,7 +125,7 @@
 
             // Check if this is the first user (no existing User nodes = platform admin)
             var isFirstUser = true;
-            await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "parent:User scope:children", Limit = 1 }))
+            await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 }))
             {
                 isFirstUser = false;
                 break;

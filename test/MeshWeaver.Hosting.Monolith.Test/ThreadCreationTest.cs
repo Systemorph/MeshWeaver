@@ -113,7 +113,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Query child messages
         var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
         ).ToListAsync();
 
         children.Should().HaveCount(1);

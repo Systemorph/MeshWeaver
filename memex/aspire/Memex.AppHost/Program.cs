@@ -44,16 +44,18 @@ if (useDistributed)
         .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
     var postgresDb = postgres.AddDatabase("meshweaver");
 
-    // Database migration: creates vector extension + schema before portal starts
-    var dbMigration = builder
-        .AddProject<Projects.Memex_Database_Migration>("db-migration")
-        .WithReference(postgresDb)
-        .WaitFor(postgresDb);
-
     // Embedding configuration (Cohere embed-v4 via Azure Foundry)
     var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
     var embeddingKey = builder.AddParameter("embedding-key", secret: true);
     var embeddingModel = builder.AddParameter("embedding-model", secret: false);
+    var embeddingDimensions = builder.AddParameter("embedding-dimensions", secret: false);
+
+    // Database migration: creates vector extension + schema before portal starts
+    var dbMigration = builder
+        .AddProject<Projects.Memex_Database_Migration>("db-migration")
+        .WithReference(postgresDb)
+        .WaitFor(postgresDb)
+        .WithEnvironment("Embedding__Dimensions", embeddingDimensions);
 
     // Authentication provider parameters (Aspire prompts for values via dashboard/config)
     // Empty values = provider not enabled
@@ -77,6 +79,7 @@ if (useDistributed)
         .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
         .WithEnvironment("Embedding__ApiKey", embeddingKey)
         .WithEnvironment("Embedding__Model", embeddingModel)
+        .WithEnvironment("Embedding__Dimensions", embeddingDimensions)
         // Authentication providers (read by AuthenticationBuilderExtensions)
         .WithEnvironment("Authentication__EnableDevLogin", "true")
         .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
@@ -132,16 +135,18 @@ if (useTest)
         });
     var postgresDb = postgres.AddDatabase("meshweaver");
 
-    // Database migration: creates vector extension + schema before portal starts
-    var dbMigration = builder
-        .AddProject<Projects.Memex_Database_Migration>("db-migration")
-        .WithReference(postgresDb)
-        .WaitFor(postgresDb);
-
     // Embedding configuration (Cohere embed-v4 via Azure Foundry)
     var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
     var embeddingKey = builder.AddParameter("embedding-key", secret: true);
     var embeddingModel = builder.AddParameter("embedding-model", secret: false);
+    var embeddingDimensions = builder.AddParameter("embedding-dimensions", secret: false);
+
+    // Database migration: creates vector extension + schema before portal starts
+    var dbMigration = builder
+        .AddProject<Projects.Memex_Database_Migration>("db-migration")
+        .WithReference(postgresDb)
+        .WaitFor(postgresDb)
+        .WithEnvironment("Embedding__Dimensions", embeddingDimensions);
 
     // Authentication provider parameters
     var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
@@ -157,6 +162,7 @@ if (useTest)
         .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
         .WithEnvironment("Embedding__ApiKey", embeddingKey)
         .WithEnvironment("Embedding__Model", embeddingModel)
+        .WithEnvironment("Embedding__Dimensions", embeddingDimensions)
         .WithEnvironment("Authentication__EnableDevLogin", "true")
         .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
         .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)

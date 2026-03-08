@@ -116,7 +116,7 @@ public static class GraphConfigurationExtensions
             // Get CodeConfiguration from child MeshNodes under the Code path
             CodeConfiguration? codeFile = null;
             var codeParentPath = $"{nodeTypePath}/Code";
-            await foreach (var child in meshQuery.QueryAsync<MeshNode>($"parent:{codeParentPath} scope:children").WithCancellation(ct))
+            await foreach (var child in meshQuery.QueryAsync<MeshNode>($"namespace:{codeParentPath}").WithCancellation(ct))
             {
                 if (child.Content is CodeConfiguration cf)
                 {

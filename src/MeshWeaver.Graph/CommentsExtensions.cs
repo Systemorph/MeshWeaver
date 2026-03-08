@@ -100,7 +100,7 @@ public static class CommentsView
         if (meshQuery != null)
         {
             meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{nodePath} nodeType:{CommentNodeType.NodeType} scope:children"))
+                    $"namespace:{nodePath} nodeType:{CommentNodeType.NodeType}"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

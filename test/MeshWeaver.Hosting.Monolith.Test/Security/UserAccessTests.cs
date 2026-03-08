@@ -228,7 +228,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "PublicArea", "system", TestTimeout);
 
-        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:PublicArea scope:children", UserId = "" }).ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:PublicArea", UserId = "" }).ToListAsync();
 
         // Filter out AccessAssignment nodes (infrastructure nodes for RLS)
         var contentChildren = children.Where(n => n.NodeType != "AccessAssignment").ToList();
@@ -247,7 +247,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await NodeFactory.CreateNodeAsync(new MeshNode("Secret1", "PrivateArea") { Name = "Secret 1", NodeType = "Group" });
         ClearAdminContext();
 
-        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:PrivateArea scope:children", UserId = "" }).ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:PrivateArea", UserId = "" }).ToListAsync();
 
         children.Should().BeEmpty();
     }
@@ -264,7 +264,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "OpenProject", "system", TestTimeout);
 
-        var rootChildren = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "scope:children", UserId = "" }).ToListAsync();
+        var rootChildren = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:", UserId = "" }).ToListAsync();
 
         rootChildren.Should().Contain(n => n.Id == "OpenProject");
         rootChildren.Should().NotContain(n => n.Id == "ClosedProject");
@@ -371,7 +371,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:Group scope:children",
+            Query = "nodeType:Group namespace:",
             UserId = ""
         };
         var results = await MeshQuery.QueryAsync(request, TestTimeout).ToListAsync();
@@ -407,7 +407,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:Group scope:children"
+            Query = "nodeType:Group namespace:"
         };
         var results = await MeshQuery.QueryAsync(request, TestTimeout).ToListAsync();
 
@@ -497,7 +497,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var request = new MeshQueryRequest
         {
-            Query = "nodeType:Code scope:children",
+            Query = "nodeType:Code namespace:",
             UserId = WellKnownUsers.Public
         };
         var results = await MeshQuery.QueryAsync(request, TestTimeout).ToListAsync();
@@ -543,7 +543,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "Profiles", "system", TestTimeout);
 
-        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:Profiles scope:children", UserId = "" }).ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:Profiles", UserId = "" }).ToListAsync();
 
         children.Should().Contain(n => n.Id == "AliceProfile");
     }
@@ -586,7 +586,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await NodeFactory.CreateNodeAsync(new MeshNode("Doc1", "SecretArea") { Name = "Secret Doc", NodeType = "Group" });
         ClearAdminContext();
 
-        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:SecretArea scope:children", UserId = "" }).ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:SecretArea", UserId = "" }).ToListAsync();
 
         children.Should().BeEmpty();
     }

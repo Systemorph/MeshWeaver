@@ -384,7 +384,6 @@ public partial class QueryParser
                     explicitScope = true;
                     scope = value.ToLowerInvariant() switch
                     {
-                        "children" => QueryScope.Children,
                         "descendants" => QueryScope.Descendants,
                         "ancestors" => QueryScope.Ancestors,
                         "hierarchy" => QueryScope.Hierarchy,

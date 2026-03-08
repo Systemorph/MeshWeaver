@@ -23,10 +23,10 @@ public class MeshNodeCollectionControlTest
     public void WithQueries_SetsMultipleQueries()
     {
         var control = new MeshNodeCollectionControl()
-            .WithQueries("path:X nodeType:AccessAssignment scope:children", "path:Y nodeType:Group");
+            .WithQueries("namespace:X nodeType:AccessAssignment", "path:Y nodeType:Group");
 
         control.Queries.Should().HaveCount(2);
-        control.Queries[0].Should().Be("path:X nodeType:AccessAssignment scope:children");
+        control.Queries[0].Should().Be("namespace:X nodeType:AccessAssignment");
         control.Queries[1].Should().Be("path:Y nodeType:Group");
     }
 
@@ -81,7 +81,7 @@ public class MeshNodeCollectionControlTest
     public void FluentBuilders_Chain()
     {
         var control = new MeshNodeCollectionControl()
-            .WithQueries("path:X nodeType:AccessAssignment scope:children")
+            .WithQueries("namespace:X nodeType:AccessAssignment")
             .WithDeletable(true)
             .WithShowAdd(true)
             .WithAddDialogTitle("Add Item")

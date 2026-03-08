@@ -859,7 +859,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         await securityService.AddUserRoleAsync(userId, "Viewer", "filter/test/accessible", "system", TestTimeout);
 
         // Act - query children (MeshQuery returns all children; security filtering depends on context)
-        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{parentPath} scope:children").ToListAsync();
+        var children = await MeshQuery.QueryAsync<MeshNode>($"namespace:{parentPath}").ToListAsync();
 
         // Assert - Both nodes should be returned since MeshQuery doesn't filter by user by default
         children.Should().Contain(n => n.Name == "Accessible Node");

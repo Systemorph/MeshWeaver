@@ -20,7 +20,7 @@ public static class MeshNodeDataLoader
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Product path:{namespacePath}/Product scope:children state:Active"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Product namespace:{namespacePath}/Product state:Active"))
             .Select(change => change.Items.Select(node => ConvertToProduct(node)).Where(p => p != null).Cast<Product>());
     }
 
@@ -30,7 +30,7 @@ public static class MeshNodeDataLoader
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Customer path:{namespacePath}/Customer scope:children state:Active"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Customer namespace:{namespacePath}/Customer state:Active"))
             .Select(change => change.Items.Select(node => ConvertToCustomer(node)).Where(c => c != null).Cast<Customer>());
     }
 
@@ -40,7 +40,7 @@ public static class MeshNodeDataLoader
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Employee path:{namespacePath}/Employee scope:children state:Active"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Employee namespace:{namespacePath}/Employee state:Active"))
             .Select(change => change.Items.Select(node => ConvertToEmployee(node)).Where(e => e != null).Cast<Employee>());
     }
 
@@ -50,7 +50,7 @@ public static class MeshNodeDataLoader
         var namespacePath = GetNamespacePath(workspace);
 
         return meshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Supplier path:{namespacePath}/Supplier scope:children state:Active"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"nodeType:Northwind/Supplier namespace:{namespacePath}/Supplier state:Active"))
             .Select(change => change.Items.Select(node => ConvertToSupplier(node)).Where(s => s != null).Cast<Supplier>());
     }
 
