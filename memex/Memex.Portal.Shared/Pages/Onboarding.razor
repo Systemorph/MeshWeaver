@@ -83,10 +83,16 @@
         if (context != null)
         {
             model.Email = context.Email ?? "";
-            // Suggest the part before '@' as default username
-            model.Username = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@')
-                ? context.Email.Split('@')[0]
-                : context.Name ?? "";
+            // Suggest the first name from OAuth claims, fallback to email prefix
+            if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
+            {
+                var firstName = context.Name.Split(' ')[0];
+                model.Username = firstName;
+            }
+            else if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
+            {
+                model.Username = context.Email.Split('@')[0];
+            }
         }
     }
 
@@ -140,6 +146,16 @@
                 return;
             }
 
+            // Check that the email is not already assigned to another user
+            var emailValue = model.Email.Trim();
+            var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
+                $"nodeType:User content.email:\"{emailValue}\"").FirstOrDefaultAsync();
+            if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
+            {
+                errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";
+                return;
+            }
+
             var node = new MeshNode(username, "User")
             {
                 Name = username,
@@ -149,14 +165,6 @@
             };
 
             await NodeFactory.CreateNodeAsync(node, username);
-
-            // Remove the transient email-based node created during onboarding redirect
-            var email = model.Email.Trim();
-            if (email != username)
-            {
-                try { await NodeFactory.DeleteNodeAsync($"User/{email}", username); }
-                catch { /* transient node may not exist */ }
-            }
 
             // First user becomes PlatformAdmin
             if (isFirstUser)

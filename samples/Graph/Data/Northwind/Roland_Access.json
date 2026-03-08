@@ -1,13 +1,13 @@
 {
-  "id": "Samuel_Access",
-  "namespace": "",
-  "name": "Samuel Access",
+  "id": "Roland_Access",
+  "namespace": "Northwind",
+  "name": "Roland Access",
   "icon": "/static/NodeTypeIcons/shield.svg",
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "accessObject": "Samuel",
-    "displayName": "Samuel Glauser",
+    "accessObject": "Roland",
+    "displayName": "Roland Buergi",
     "roles": [
       {
         "role": "Admin"

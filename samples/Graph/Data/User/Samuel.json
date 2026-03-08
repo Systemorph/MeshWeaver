@@ -1,0 +1,14 @@
+{
+  "id": "Samuel",
+  "namespace": "User",
+  "name": "Samuel Glauser",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "id": "Samuel",
+    "name": "Samuel Glauser",
+    "email": "samuel.glauser@gmail.com",
+    "role": "Admin"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "Roland",
+  "namespace": "User",
+  "name": "Roland Buergi",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "id": "Roland",
+    "name": "Roland Buergi",
+    "email": "roland.buergi@gmail.com",
+    "role": "Admin"
+  }
+}

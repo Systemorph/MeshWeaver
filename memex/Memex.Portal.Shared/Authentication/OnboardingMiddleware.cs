@@ -13,9 +13,8 @@ namespace Memex.Portal.Shared.Authentication;
 /// to the onboarding page. Runs after UserContextMiddleware.
 ///
 /// Flow:
-/// - No user node → create Transient node with claims data → redirect /onboarding
-/// - Transient node → redirect /onboarding (resume)
-/// - Active node → pass through
+/// - No user node (or Transient) → redirect /onboarding
+/// - Active node → update AccessContext with username, pass through
 /// </summary>
 public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddleware> logger)
 {
@@ -56,39 +55,15 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                         {
                             var email = userContext.Email ?? userContext.ObjectId;
 
-                            // Look up User node by email stored in content
+                            // Look up User node by email stored in content (search all namespaces)
                             var node = await meshQuery.QueryAsync<MeshNode>(
-                                $"namespace:User nodeType:User content.email:{email}").FirstOrDefaultAsync();
+                                $"nodeType:User content.email:\"{email}\"").FirstOrDefaultAsync();
 
-                            if (node == null)
+                            if (node == null || node.State == MeshNodeState.Transient)
                             {
-                                // No user node yet — create a Transient node to hold claims data
+                                // No user node or incomplete onboarding — redirect
                                 logger.LogInformation(
-                                    "OnboardingMiddleware: Creating transient user node for {Email}",
-                                    email);
-
-                                var nodeFactory = portalApp.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                                var transientNode = new MeshNode(email, "User")
-                                {
-                                    Name = userContext.Name ?? email,
-                                    NodeType = "User",
-                                    State = MeshNodeState.Transient,
-                                    Content = new Dictionary<string, object?>
-                                    {
-                                        ["email"] = email,
-                                    }
-                                };
-
-                                await nodeFactory.CreateTransientAsync(transientNode);
-                                context.Response.Redirect("/onboarding");
-                                return;
-                            }
-
-                            if (node.State == MeshNodeState.Transient)
-                            {
-                                // Incomplete onboarding — redirect back
-                                logger.LogDebug(
-                                    "OnboardingMiddleware: Resuming onboarding for {Email}",
+                                    "OnboardingMiddleware: Redirecting to onboarding for {Email}",
                                     email);
                                 context.Response.Redirect("/onboarding");
                                 return;
@@ -99,7 +74,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                             var updatedContext = userContext with
                             {
                                 ObjectId = username,
-                                Name = username
+                                Name = node.Name ?? username
                             };
                             accessService.SetContext(updatedContext);
                             accessService.SetCircuitContext(updatedContext);
