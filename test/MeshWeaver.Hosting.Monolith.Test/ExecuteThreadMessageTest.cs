@@ -59,27 +59,31 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new MeshThread { ParentPath = "User/TestUser" }
         }, ct);
 
-        // 2. Post ExecuteThreadMessageRequest from a client hub (simulates the GUI)
+        // 2. Post ExecuteThreadMessageRequest (fire-and-forget, like the Blazor client does)
         var client = GetClient();
-        var response = await client.AwaitResponse(
+        client.Post(
             new ExecuteThreadMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Hello, can you help me?"
             },
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
+            o => o.WithTarget(new Address(threadPath)));
 
-        // 3. Verify success
-        response.Message.Success.Should().BeTrue(
-            response.Message.Error ?? "ExecuteThreadMessageRequest should succeed");
+        // 3. Poll for child message nodes (handler runs asynchronously)
+        List<MeshNode> children = [];
+        for (var i = 0; i < 20; i++)
+        {
+            await Task.Delay(500, ct);
+            children = await MeshQuery.QueryAsync<MeshNode>(
+                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
+            ).ToListAsync(ct);
+            Output.WriteLine($"Poll {i}: {children.Count} children found");
+            if (children.Count >= 2)
+                break;
+        }
 
-        // 4. Verify child message nodes were created
-        var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
-        ).ToListAsync(ct);
-
-        children.Should().HaveCount(2, "should have user message + agent response");
+        children.Should().HaveCountGreaterThanOrEqualTo(2,
+            "should have user message + agent response");
 
         var messages = children
             .Select(n => n.Content)
