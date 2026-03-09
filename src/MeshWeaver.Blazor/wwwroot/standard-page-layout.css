@@ -202,11 +202,11 @@ code {
 }
 
 /* SVG icons loaded via <img> don't inherit currentColor — invert in dark mode */
-:root[data-theme='dark'] .svg-icon {
+:root[data-theme='dark'] img[src$=".svg"] {
     filter: invert(1);
 }
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme='light']) .svg-icon {
+    :root:not([data-theme='light']) img[src$=".svg"] {
         filter: invert(1);
     }
 }
