@@ -90,8 +90,8 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Use this for dynamic test data. For static test data known at setup time,
     /// override <see cref="ConfigureMesh"/> and use <c>builder.AddMeshNodes(...)</c> instead.
     /// </summary>
-    protected Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-        => NodeFactory.CreateNodeAsync(node, createdBy, ct);
+    protected Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
+        => NodeFactory.CreateNodeAsync(node, ct);
 
     protected IMessageHub GetClient(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {

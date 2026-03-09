@@ -51,7 +51,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -79,7 +79,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Create the thread
-        var createdThread = await NodeFactory.CreateNodeAsync(threadNode, userId, TestTimeout);
+        var createdThread = await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
 
         // Create a message as child node
         var messageId = Guid.NewGuid().AsString();
@@ -99,7 +99,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act - Create the message child node
-        var createdMessage = await NodeFactory.CreateNodeAsync(messageNode, userId, TestTimeout);
+        var createdMessage = await NodeFactory.CreateNodeAsync(messageNode, TestTimeout);
 
         // Assert
         createdThread.Should().NotBeNull();
@@ -139,7 +139,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act - Create
-        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
 
         // Act - Retrieve
         var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
@@ -225,7 +225,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -254,7 +254,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Test Project",
             NodeType = "Markdown"
         };
-        await NodeFactory.CreateNodeAsync(parentNode, userId, TestTimeout);
+        await NodeFactory.CreateNodeAsync(parentNode, TestTimeout);
 
         // Create thread as direct child
         var threadPath = $"{parentPath}/{threadId}";
@@ -270,7 +270,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(threadNode, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -301,7 +301,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             Name = "Test Parent",
             NodeType = "Markdown"
         };
-        await NodeFactory.CreateNodeAsync(parentNode, userId, TestTimeout);
+        await NodeFactory.CreateNodeAsync(parentNode, TestTimeout);
 
         // Create thread as direct child: {parentPath}/{threadId}
         var threadPath = $"{parentPath}/{threadId}";
@@ -317,7 +317,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(threadNode, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -481,7 +481,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             NodeType = ThreadNodeType.NodeType,
             Content = new MeshThread { ParentPath = $"User/{userId}" }
         };
-        await NodeFactory.CreateNodeAsync(threadNode, userId, longTimeout);
+        await NodeFactory.CreateNodeAsync(threadNode, longTimeout);
 
         // Create a single message to test type preservation (simplify test)
         var responseMessage = new ThreadMessage
@@ -499,7 +499,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = responseMessage
         };
 
-        var createdResponse = await NodeFactory.CreateNodeAsync(responseNode, userId, longTimeout);
+        var createdResponse = await NodeFactory.CreateNodeAsync(responseNode, longTimeout);
 
         // Assert - Type should be preserved
         var responseContent = createdResponse.Content.Should().BeOfType<ThreadMessage>().Subject;

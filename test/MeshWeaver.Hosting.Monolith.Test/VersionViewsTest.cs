@@ -71,7 +71,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             Name = "Test Node v0",
             NodeType = "Markdown"
         };
-        await NodeFactory.CreateNodeAsync(node, "test-user", TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
 
         for (var i = 1; i <= updateCount; i++)
         {
@@ -80,7 +80,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 Name = $"Test Node v{i}",
                 NodeType = "Markdown"
             };
-            await NodeFactory.UpdateNodeAsync(updated, "test-user", TestContext.Current.CancellationToken);
+            await NodeFactory.UpdateNodeAsync(updated, TestContext.Current.CancellationToken);
         }
 
         return path;

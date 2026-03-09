@@ -66,6 +66,7 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(Notification), nameof(Notification));
         typeRegistry.WithType(typeof(NotificationType), nameof(NotificationType));
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
+        typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         return typeRegistry;
     }
 }

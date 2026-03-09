@@ -93,7 +93,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             }
         };
 
-        var created = await nodeFactory.CreateNodeAsync(vUserNode, portalIdentity, ct);
+        var created = await nodeFactory.CreateNodeAsync(vUserNode, ct);
         created.Should().NotBeNull();
         created.Path.Should().Be("VUser/testVUser");
     }
@@ -123,7 +123,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
         };
 
         // "some-user" is not in the portal namespace — VUserAccessRule denies
-        var act = async () => await nodeFactory.CreateNodeAsync(vUserNode, "some-user", ct);
+        var act = async () => await nodeFactory.CreateNodeAsync(vUserNode, ct);
         await act.Should().ThrowAsync<Exception>();
     }
 

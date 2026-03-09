@@ -56,7 +56,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
-        var act = async () => await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
+        var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
         var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
         exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
         Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
@@ -87,7 +87,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Act - Use public CreateNodeAsync which goes through message-based validation
-        var createdNode = await NodeFactory.CreateNodeAsync(node, userId, TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull("Node should be created");
@@ -147,7 +147,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         };
 
         // Create the final node
-        var createdFinal = await NodeFactory.CreateNodeAsync(finalNode, userId, TestTimeout);
+        var createdFinal = await NodeFactory.CreateNodeAsync(finalNode, TestTimeout);
         createdFinal.Should().NotBeNull("Final node should be created");
         createdFinal.State.Should().Be(MeshNodeState.Active, "Final node should be Active");
         createdFinal.Path.Should().Be(finalPath, "Final node should be at desired path");
@@ -248,7 +248,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             State = MeshNodeState.Active
         };
 
-        var confirmedNode = await NodeFactory.CreateNodeAsync(activeNode, userId, TestTimeout);
+        var confirmedNode = await NodeFactory.CreateNodeAsync(activeNode, TestTimeout);
 
         // Assert
         confirmedNode.Should().NotBeNull("Confirmed node should be returned");

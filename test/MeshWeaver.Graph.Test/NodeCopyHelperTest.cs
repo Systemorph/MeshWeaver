@@ -63,16 +63,16 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     /// </summary>
     private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshService
     {
-        public async Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+        public async Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
             => await persistence.SaveNodeAsync(node, jsonOptions, ct);
 
-        public async Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
+        public async Task<MeshNode> UpdateNodeAsync(MeshNode node, CancellationToken ct = default)
             => await persistence.SaveNodeAsync(node, jsonOptions, ct);
 
         public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
             => persistence.SaveNodeAsync(node, jsonOptions, ct);
 
-        public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
+        public Task DeleteNodeAsync(string path, CancellationToken ct = default)
             => persistence.DeleteNodeAsync(path, true, ct);
 
         public async IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, [EnumeratorCancellation] CancellationToken ct = default)
@@ -132,7 +132,6 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
             => Task.FromResult<T?>(default);
 
-        public IMeshService ImpersonateAsNode() => this;
     }
 
     [HubFact]

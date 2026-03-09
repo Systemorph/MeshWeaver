@@ -95,7 +95,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdNode = await NodeFactory.CreateNodeAsync(node, "TestUser", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
 
         // Assert
         createdNode.Should().NotBeNull();
@@ -145,7 +145,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             NodeType = CommentNodeType.NodeType,
             Content = parentComment
         };
-        await NodeFactory.CreateNodeAsync(parentNode, "Alice", TestTimeout);
+        await NodeFactory.CreateNodeAsync(parentNode, TestTimeout);
 
         // Create reply as child of parent comment node (nested path)
         var replyId = Guid.NewGuid().AsString();
@@ -167,7 +167,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         };
 
         // Act
-        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, "Bob", TestTimeout);
+        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, TestTimeout);
 
         // Assert
         createdReply.Should().NotBeNull();

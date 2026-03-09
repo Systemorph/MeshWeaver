@@ -157,7 +157,7 @@ public static class ApprovalsView
             Content = approval
         };
 
-        await nodeFactory.CreateNodeAsync(approvalNode, currentUser);
+        await nodeFactory.CreateNodeAsync(approvalNode);
 
         // Create notification for the approver
         await NotificationService.CreateNotificationAsync(

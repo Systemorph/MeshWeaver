@@ -645,7 +645,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         try
         {
-            var createdNode = await NodeFactory.CreateNodeAsync(node, "test-user", TestContext.Current.CancellationToken);
+            var createdNode = await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
             Output.WriteLine($"CreateNodeAsync completed: Path={createdNode.Path}, Name={createdNode.Name}");
         }
         catch (Exception ex)
@@ -730,7 +730,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         };
 
         Output.WriteLine($"Step 1: Calling Catalog.CreateNodeAsync");
-        var createdNode = await NodeFactory.CreateNodeAsync(node, "test-user", TestContext.Current.CancellationToken);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
         Output.WriteLine($"Node created: Path={createdNode.Path}");
 
         // Step 2: Request the default (Read) view
@@ -919,7 +919,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Content = MarkdownContent.Parse($"# {nodeName}\n\nCreated via test.", nodePath)
         };
 
-        var createdNode = await NodeFactory.CreateNodeAsync(node, "test-user", TestContext.Current.CancellationToken);
+        var createdNode = await NodeFactory.CreateNodeAsync(node, TestContext.Current.CancellationToken);
         Output.WriteLine($"Node created: {createdNode.Path}");
 
         // Step 3: Request Edit view (simulates redirect to /{nodePath}/Edit)

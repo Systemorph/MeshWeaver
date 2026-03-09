@@ -14,23 +14,19 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// and aggregates results from all registered IMeshQueryProvider instances.
 /// For source:activity queries, providers that support it (e.g. PostgreSQL) handle activity
 /// ordering via SQL JOIN; other providers return normal results.
-/// When impersonated, all queries use the hub's address as UserId for access control.
+/// Identity is resolved from AccessService.Context. Use accessService.ImpersonateAsHub(hub)
+/// to temporarily switch identity for hub-level operations.
 /// </summary>
 public class MeshQuery(
     IEnumerable<IMeshQueryProvider> providers,
-    IMessageHub hub,
-    bool impersonate = false)
+    IMessageHub hub)
 {
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
-
-    private MeshQueryRequest ApplyImpersonation(MeshQueryRequest request)
-        => impersonate ? request with { UserId = hub.Address.ToFullString() } : request;
 
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        request = ApplyImpersonation(request);
 
         // Always delegate to providers. For source:activity queries, providers that
         // support it (e.g. PostgreSQL) will handle activity ordering via SQL JOIN.
@@ -137,7 +133,6 @@ public class MeshQuery(
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)
     {
-        request = ApplyImpersonation(request);
         // Collect Initial from all providers, merge into a single Initial emission,
         // then forward subsequent (non-Initial) changes from ongoing providers.
         var observables = providers
@@ -201,6 +196,4 @@ public class MeshQuery(
         return results.FirstOrDefault(r => r != null);
     }
 
-    public MeshQuery ImpersonateAsNode()
-        => impersonate ? this : new MeshQuery(providers, hub, true);
 }

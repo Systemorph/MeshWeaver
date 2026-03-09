@@ -164,7 +164,7 @@
                 Content = content
             };
 
-            await NodeFactory.CreateNodeAsync(node, username);
+            await NodeFactory.CreateNodeAsync(node);
 
             // First user becomes PlatformAdmin
             if (isFirstUser)

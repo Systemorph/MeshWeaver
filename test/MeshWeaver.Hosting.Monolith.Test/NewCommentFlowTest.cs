@@ -119,7 +119,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             "MeshNode(commentId, docPath) should produce Path = docPath/commentId");
 
         // Act — create the node (same as meshCatalog.CreateNodeAsync in BuildNewCommentForm)
-        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
 
         // Assert — node should be retrievable
         createdNode.Should().NotBeNull("CreateNodeAsync should return the created node");
@@ -178,7 +178,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
         Output.WriteLine($"Created empty comment at: {createdNode.Path}");
 
         // Step 2: Update text via NodeFactory.CreateNodeAsync (same as BuildReplyEditArea Done button)
@@ -236,7 +236,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             Content = comment
         };
 
-        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var createdNode = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
         Output.WriteLine($"Created comment at: {createdNode.Path}");
 
         // Send DataChangeRequest to WRONG address (the markdown document, not the comment)
@@ -309,7 +309,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine("Creating comment...");
-        await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
 
         // Wait for the view to re-render with the new comment
         Output.WriteLine("Waiting for view to update with new comment...");
@@ -367,7 +367,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         };
 
         Output.WriteLine($"2. Creating empty comment: Path={commentNode.Path}");
-        var created = await NodeFactory.CreateNodeAsync(commentNode, "TestAuthor", TestTimeout);
+        var created = await NodeFactory.CreateNodeAsync(commentNode, TestTimeout);
         created.Should().NotBeNull();
         Output.WriteLine($"   Created at: {created.Path}");
 

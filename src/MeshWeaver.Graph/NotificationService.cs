@@ -46,6 +46,6 @@ public static class NotificationService
             Content = notification
         };
 
-        await nodeFactory.CreateNodeAsync(node, createdBy);
+        await nodeFactory.CreateNodeAsync(node);
     }
 }
