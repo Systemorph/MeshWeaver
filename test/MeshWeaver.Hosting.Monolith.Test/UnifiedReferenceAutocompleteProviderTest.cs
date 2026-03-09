@@ -44,7 +44,6 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddSystemorph()
             .AddAcme()
-            .AddOrganization()
             .AddUserData()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph()

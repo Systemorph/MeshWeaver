@@ -1016,7 +1016,6 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddAcme()
-            .AddOrganization()
             .AddSystemorph()
             .AddGraph();
 

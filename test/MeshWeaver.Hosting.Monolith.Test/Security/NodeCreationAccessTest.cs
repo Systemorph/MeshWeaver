@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.AI;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -272,5 +273,78 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Cleanup
         await NodeFactory.DeleteNodeAsync(nodePath, ct: TestTimeout);
+    }
+
+    /// <summary>
+    /// Tests that a user can create a Thread node under their own User node
+    /// via the self-access check (User/{ObjectId} scope).
+    /// This is the permission path used by the dashboard chat to create threads.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task CreateThread_UnderOwnUserNode_Succeeds()
+    {
+        // Arrange — log in as a user whose ObjectId matches a User node path
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var userId = "self-access-user";
+        var userContext = new AccessContext { ObjectId = userId, Name = "Self Access User" };
+        accessService.SetContext(userContext);
+        accessService.SetCircuitContext(userContext);
+
+        try
+        {
+            // Act — create a Thread under User/{userId} (self-access should grant permission)
+            var threadPath = $"User/{userId}/TestThread_{Guid.NewGuid().AsString()}";
+            var threadNode = MeshNode.FromPath(threadPath) with
+            {
+                Name = "Test Chat Thread",
+                NodeType = ThreadNodeType.NodeType
+            };
+
+            var created = await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
+
+            // Assert
+            created.Should().NotBeNull("User should be able to create threads under their own User node");
+            created.State.Should().Be(MeshNodeState.Active);
+            created.Path.Should().Be(threadPath);
+            Output.WriteLine($"Thread created successfully at: {created.Path}");
+        }
+        finally
+        {
+            TestUsers.DevLogin(Mesh);
+        }
+    }
+
+    /// <summary>
+    /// Tests that a user CANNOT create a Thread under another user's node.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task CreateThread_UnderOtherUserNode_ThrowsUnauthorized()
+    {
+        // Arrange — switch to a user who should NOT have access to another user's scope
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var attackerContext = new AccessContext { ObjectId = "attacker-user", Name = "Attacker" };
+        accessService.SetContext(attackerContext);
+        accessService.SetCircuitContext(attackerContext);
+
+        try
+        {
+            // Act — try to create a thread under another user's node
+            var threadPath = "User/other-user/MaliciousThread";
+            var threadNode = MeshNode.FromPath(threadPath) with
+            {
+                Name = "Malicious Thread",
+                NodeType = ThreadNodeType.NodeType
+            };
+
+            var act = async () => await NodeFactory.CreateNodeAsync(threadNode, TestTimeout);
+
+            // Assert
+            await act.Should().ThrowAsync<UnauthorizedAccessException>(
+                "User should NOT be able to create threads under another user's node");
+        }
+        finally
+        {
+            TestUsers.DevLogin(Mesh);
+        }
     }
 }

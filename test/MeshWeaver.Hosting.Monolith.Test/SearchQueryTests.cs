@@ -39,7 +39,6 @@ public class SearchQueryTests : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddUserData()
-            .AddOrganization()
             .AddNorthwind()
             .AddSystemorph()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
