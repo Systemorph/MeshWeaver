@@ -87,6 +87,7 @@ public class MeshDataSourceThreadManager : IThreadManager
         var messageNode = new MeshNode(messagePath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = threadId,
             Content = threadMessage
         };
 

@@ -200,6 +200,16 @@ code {
     --code-block-border-color: #444c56 !important; /* GitHub dark theme border color */
     --code-block-background-color: #2d333b !important; /* GitHub dark theme background color */
 }
+
+/* SVG icons loaded via <img> don't inherit currentColor — invert in dark mode */
+:root[data-theme='dark'] .svg-icon {
+    filter: invert(1);
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) .svg-icon {
+        filter: invert(1);
+    }
+}
 /* Monaco editor autocomplete widget - ensure it can overflow containers */
 .monaco-editor .suggest-widget,
 .monaco-editor .monaco-hover,
