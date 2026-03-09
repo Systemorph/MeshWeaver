@@ -9,10 +9,10 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Mode        | PostgreSQL              | Blob Storage | Orleans    | Portal Name
 //   ----------- | ----------------------- | ------------ | ---------- | -----------
 //   local       | Docker pgvector (memex)      | Emulated     | Emulated   | memex-local
-//   local-test  | Azure (memex-test)           | Azure (test) | Emulated   | memex-local
-//   local-prod  | Azure (memex)                | Azure (prod) | Emulated   | memex-local
-//   test        | Azure (memex-test)           | Azure         | Azure      | memex-test
-//   prod        | Azure (memex)                | Azure         | Azure      | memex-prod
+//   local-test  | Azure (memex-test)           | Azure (meshweavermemextest) | Emulated   | memex-local
+//   local-prod  | Azure (memex)                | Azure (meshweavermemex)     | Emulated   | memex-local
+//   test        | Azure (memex-test)           | Azure (meshweavermemextest) | Azure      | memex-test
+//   prod        | Azure (memex)                | Azure (meshweavermemex)     | Azure      | memex-prod
 //   monolith    | FileSystem (standalone) | —            | —          | memex-monolith
 //
 // Secrets: set locally via `dotnet user-secrets`, in CI/CD via GitHub secrets.
@@ -26,9 +26,9 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
 //
-// For local-test/local-prod, also set connection strings to existing Azure resources:
+// For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
 //   ConnectionStrings:meshweaver  (Azure PostgreSQL, bypassing provisioning)
-//   ConnectionStrings:storage     (Azure Blob Storage, bypassing provisioning)
+// Blob Storage uses RunAsExisting with Azure Identity (az login) — no secrets needed.
 
 var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "local";
 
@@ -122,10 +122,12 @@ if (useLocalDb)
 }
 else if (mode is "local-test" or "local-prod")
 {
-    // Use pre-configured connection string (set via dotnet user-secrets)
-    // to connect to existing Azure Blob Storage without Aspire provisioning.
-    var storage = builder.AddConnectionString("storage");
-    portal.WithReference(storage);
+    // Connect to existing Azure Blob Storage via Azure Identity (az login, no secrets needed)
+    var storageName = mode is "local-test" ? "meshweavermemextest" : "meshweavermemex";
+    var contentStorage = builder.AddAzureStorage("memexblobs")
+        .RunAsExisting(storageName, null);
+    var storageBlobs = contentStorage.AddBlobs("storage");
+    portal.WithReference(storageBlobs);
 }
 else
 {

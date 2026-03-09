@@ -306,7 +306,8 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             created.Should().NotBeNull("User should be able to create threads under their own User node");
             created.State.Should().Be(MeshNodeState.Active);
             created.Path.Should().Be(threadPath);
-            Output.WriteLine($"Thread created successfully at: {created.Path}");
+            created.MainNode.Should().Be($"User/{userId}", "Satellite thread MainNode should point to parent node");
+            Output.WriteLine($"Thread created successfully at: {created.Path}, MainNode: {created.MainNode}");
         }
         finally
         {
