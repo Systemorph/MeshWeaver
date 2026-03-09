@@ -3,7 +3,11 @@ using MeshWeaver.Hosting.PostgreSql;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.AddNpgsqlDataSource("meshweaver");
+var connectionString = builder.Configuration.GetConnectionString("meshweaver") ?? "";
+if (connectionString.Contains("database.azure.com"))
+    builder.AddAzureNpgsqlDataSource("meshweaver");
+else
+    builder.AddNpgsqlDataSource("meshweaver");
 
 // Derive vector dimensions from embedding model (passed by AppHost via Embedding__Model)
 var embeddingOptions = builder.Configuration.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();

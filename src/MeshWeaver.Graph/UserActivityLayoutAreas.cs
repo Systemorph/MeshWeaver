@@ -19,7 +19,6 @@ public static class UserActivityLayoutAreas
     public const string ActivityArea = "Activity";
 
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
-    private const string ColumnHeight = "calc(100vh - 280px)";
 
     /// <summary>
     /// Adds the Activity view to the User node's layout.
@@ -40,10 +39,10 @@ public static class UserActivityLayoutAreas
         {
             var userName = accessService?.Context?.Name ?? "User";
 
-            // Outer shell: flex column, full viewport height minus portal header
+            // Outer shell: flex column, fills the available main area (height managed by CSS grid)
             var dashboard = Controls.Stack
                 .WithWidth("100%")
-                .WithStyle("display: flex; flex-direction: column; height: calc(100vh - 64px); min-height: 0; overflow: hidden;");
+                .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
 
             // Welcome banner
             dashboard = dashboard.WithView(Controls.Html(
@@ -53,9 +52,9 @@ public static class UserActivityLayoutAreas
                 $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
                 "</div>"));
 
-            // Content area: two-column grid
+            // Content area: two-column grid — Activity Feed left, Recently Viewed far right
             var topPanel = Controls.LayoutGrid
-                .WithStyle("padding: 0 24px; gap: 24px;");
+                .WithStyle("padding: 0 24px; gap: 24px; width: 100%; flex: 1; min-height: 0;");
 
             topPanel = topPanel.WithView(
                 await BuildActivityFeed(host),
@@ -76,6 +75,7 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Chat input pinned to the very bottom — no header, full width, aligned with content above.
+    /// Hides the empty-state placeholder; shows only the input bar with agent/model selectors.
     /// </summary>
     private static UiControl BuildChatSection(LayoutAreaHost host, string nodePath)
     {
@@ -84,7 +84,8 @@ public static class UserActivityLayoutAreas
 
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
-            .WithInitialContextDisplayName("Home");
+            .WithInitialContextDisplayName("Home")
+            .WithHideEmptyState();
 
         section = section.WithView(chatControl);
         return section;
@@ -96,10 +97,9 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host)
     {
-        // Fixed-height scrollable section
+        // Scrollable section — grows to fill available space via flex
         var section = Controls.Stack
-            .WithHeight(ColumnHeight)
-            .WithStyle($"overflow-y: auto; {ThinScrollbar}");
+            .WithStyle($"flex: 1; min-height: 0; overflow-y: auto; {ThinScrollbar}");
 
         // Section header
         section = section.WithView(Controls.Html(
@@ -131,7 +131,7 @@ public static class UserActivityLayoutAreas
     private static UiControl BuildDocumentationCard()
     {
         return Controls.Html(
-            "<a href=\"/MeshWeaver/Documentation\" style=\"text-decoration: none; color: inherit; display: block;\">" +
+            "<a href=\"/Doc\" style=\"text-decoration: none; color: inherit; display: block;\">" +
             "<div style=\"display: flex; gap: 14px; padding: 14px 16px; border-radius: 12px; " +
             "background: var(--neutral-layer-2); border-left: 3px solid var(--accent-fill-rest); " +
             "transition: transform 0.15s ease, box-shadow 0.15s ease;\" " +
@@ -240,10 +240,9 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        // Fixed-height scrollable section
+        // Scrollable section — grows to fill available space via flex
         var section = Controls.Stack
-            .WithHeight(ColumnHeight)
-            .WithStyle($"overflow-y: auto; {ThinScrollbar}");
+            .WithStyle($"flex: 1; min-height: 0; overflow-y: auto; {ThinScrollbar}");
 
         // Section header
         section = section.WithView(Controls.Html(
@@ -263,7 +262,7 @@ public static class UserActivityLayoutAreas
             return section;
         }
 
-        var grid = Controls.LayoutGrid.WithStyle("gap: 8px;");
+        var grid = Controls.LayoutGrid.WithStyle("gap: 8px; width: 100%;");
 
         foreach (var node in recentNodes)
         {

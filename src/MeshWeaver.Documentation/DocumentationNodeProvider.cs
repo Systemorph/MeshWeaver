@@ -144,11 +144,28 @@ public class DocumentationNodeProvider : IStaticNodeProvider
         pathWithoutExt = pathWithoutExt.Trim('/').Replace('\\', '/');
 
         var lastSlash = pathWithoutExt.LastIndexOf('/');
+
+        // index.md files represent their parent namespace root
         if (lastSlash < 0)
+        {
+            if (pathWithoutExt.Equals("index", StringComparison.OrdinalIgnoreCase))
+                return (RootNamespace, null); // Data/index.md → path "Doc"
+
             return (pathWithoutExt, RootNamespace);
+        }
+
+        var id = pathWithoutExt[(lastSlash + 1)..];
+        if (id.Equals("index", StringComparison.OrdinalIgnoreCase))
+        {
+            // e.g. AI/index.md → path "Doc/AI" (collapse index into parent)
+            var parentDir = pathWithoutExt[..lastSlash];
+            var parentSlash = parentDir.LastIndexOf('/');
+            if (parentSlash < 0)
+                return (parentDir, RootNamespace);
+            return (parentDir[(parentSlash + 1)..], $"{RootNamespace}/{parentDir[..parentSlash]}");
+        }
 
         var ns = $"{RootNamespace}/{pathWithoutExt[..lastSlash]}";
-        var id = pathWithoutExt[(lastSlash + 1)..];
         return (id, ns);
     }
 

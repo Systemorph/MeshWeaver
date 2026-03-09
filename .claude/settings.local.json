@@ -105,7 +105,8 @@
       "mcp__aspire__list_resources",
       "mcp__aspire__list_console_logs",
       "mcp__aspire__list_structured_logs",
-      "mcp__aspire__list_traces"
+      "mcp__aspire__list_traces",
+      "Bash(az postgres:*)"
     ],
     "deny": []
   },

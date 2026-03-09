@@ -15,8 +15,13 @@ builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
 
 // Register Aspire-injected PostgreSQL data source (with pgvector support)
-builder.AddNpgsqlDataSource("meshweaver",
-    configureDataSourceBuilder: dsb => dsb.UseVector());
+var connectionString = builder.Configuration.GetConnectionString("meshweaver") ?? "";
+if (connectionString.Contains("database.azure.com"))
+    builder.AddAzureNpgsqlDataSource("meshweaver",
+        configureDataSourceBuilder: dsb => dsb.UseVector());
+else
+    builder.AddNpgsqlDataSource("meshweaver",
+        configureDataSourceBuilder: dsb => dsb.UseVector());
 
 // Add web portal services
 builder.ConfigureMemexServices();
