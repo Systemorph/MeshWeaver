@@ -314,6 +314,58 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         result.IsValid.Should().BeTrue();
     }
 
+    /// <summary>
+    /// Self-access rule: when MainNode matches userId, all operations are allowed
+    /// even without explicit permission grants.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task ValidateAsync_SelfAccess_MainNodeMatchesUserId_ReturnsValid()
+    {
+        var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
+            .OfType<RlsNodeValidator>()
+            .FirstOrDefault();
+        validator.Should().NotBeNull();
+
+        const string hubIdentity = "MyHub";
+        var node = new MeshNode("MyHub") { Name = "My Hub Node", MainNode = "MyHub" };
+
+        foreach (var op in new[] { NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete })
+        {
+            var context = new NodeValidationContext
+            {
+                Operation = op,
+                Node = node,
+                AccessContext = new AccessContext { ObjectId = hubIdentity }
+            };
+
+            var result = await validator!.ValidateAsync(context, TestTimeout);
+            result.IsValid.Should().BeTrue($"hub should have {op} access to its own node (MainNode == userId)");
+        }
+    }
+
+    /// <summary>
+    /// Self-access rule should NOT apply when MainNode does not match userId.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task ValidateAsync_SelfAccess_MainNodeMismatch_ChecksPermissions()
+    {
+        var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
+            .OfType<RlsNodeValidator>()
+            .FirstOrDefault();
+        validator.Should().NotBeNull();
+
+        var node = new MeshNode("child", "SomeParent") { Name = "Child Node", MainNode = "SomeParent/child" };
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Update,
+            Node = node,
+            AccessContext = new AccessContext { ObjectId = "different-user" }
+        };
+
+        var result = await validator!.ValidateAsync(context, TestTimeout);
+        result.IsValid.Should().BeFalse("user should NOT have self-access when MainNode != userId");
+    }
+
     [Fact(Timeout = 10000)]
     public void SupportedOperations_ReturnsCreateUpdateDeleteOperations()
     {
@@ -328,6 +380,94 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         operations.Should().Contain(NodeOperation.Create);
         operations.Should().Contain(NodeOperation.Update);
         operations.Should().Contain(NodeOperation.Delete);
+    }
+}
+
+/// <summary>
+/// Integration tests for hub self-access: a hub can always read/write its own nodes.
+/// Nodes are created via persistence (not AddMeshNodes) so they go through
+/// the security-aware InMemoryMeshQuery, not the unfiltered StaticNodeQueryProvider.
+/// </summary>
+public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        return ConfigureMeshBase(builder)
+            .AddRowLevelSecurity();
+    }
+
+    /// <summary>
+    /// Skip PublicAdminAccess — we want strict RLS with no global grants.
+    /// </summary>
+    protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// Seed the TestHub node via IMeshService so it's stored in persistence
+    /// (served by InMemoryMeshQuery with security filtering, not StaticNodeQueryProvider).
+    /// </summary>
+    public override async ValueTask InitializeAsync()
+    {
+        await base.InitializeAsync();
+
+        // Admin context is set by base.InitializeAsync (DevLogin) — create node via public API.
+        // Self-access rule allows this: MainNode="TestHub" matches admin identity for the mesh hub.
+        // Grant admin permission so CreateNodeAsync doesn't fail on the RLS check.
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await securityService.AddUserRoleAsync("Roland", "Admin", "", "system", TestTimeout);
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("TestHub") { Name = "Test Hub" }, TestTimeout);
+    }
+
+    /// <summary>
+    /// A hub using ImpersonateAsHub can query its own MeshNode
+    /// even without any explicit permission grants.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task Hub_CanQueryOwnNode_WithImpersonateAsHub()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Create a hub with address "TestHub"
+        var hub = Mesh.ServiceProvider.CreateMessageHub(
+            new Address("TestHub"),
+            c => c);
+
+        MeshNode? node;
+        using (accessService.ImpersonateAsHub(hub))
+        {
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            node = await meshService.QueryAsync<MeshNode>("path:TestHub scope:exact").FirstOrDefaultAsync();
+        }
+
+        node.Should().NotBeNull("hub should always be able to see its own node");
+        node!.Id.Should().Be("TestHub");
+    }
+
+    /// <summary>
+    /// Without ImpersonateAsHub and without permissions, a random user
+    /// should NOT be able to see the hub's node.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task UnauthorizedUser_CannotQueryHubNode()
+    {
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        // Set context to an unauthorized user
+        accessService.SetContext(new AccessContext { ObjectId = "random-user", Name = "Random" });
+        accessService.SetCircuitContext(new AccessContext { ObjectId = "random-user", Name = "Random" });
+
+        try
+        {
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            var node = await meshService.QueryAsync<MeshNode>("path:TestHub scope:exact").FirstOrDefaultAsync();
+            node.Should().BeNull("unauthorized user should not see the hub's node without permissions");
+        }
+        finally
+        {
+            TestUsers.DevLogin(Mesh);
+        }
     }
 }
 

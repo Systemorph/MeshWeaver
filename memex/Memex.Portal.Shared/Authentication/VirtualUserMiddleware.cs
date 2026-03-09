@@ -1,7 +1,6 @@
 using MeshWeaver.Blazor.Infrastructure;
-using MeshWeaver.Mesh;
+using MeshWeaver.Blazor.Portal.Infrastructure;
 using MeshWeaver.Mesh.Security;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -104,72 +103,16 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
         return (newId, true);
     }
 
-    /// <summary>
-    /// Checks if the VUser node exists by pinging its hub address.
-    /// If the node doesn't exist, creates it via IMeshService.
-    /// Uses ImpersonateAsHub scope so the portal hub's address becomes the identity —
-    /// VUserAccessRule allows portal namespace.
-    /// </summary>
     private async Task EnsureVirtualUserNodeAsync(PortalApplication portalApp, string virtualUserId)
     {
         try
         {
-            var hub = portalApp.Hub;
-            var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
-
-            using (accessService.ImpersonateAsHub(hub))
-            {
-                var vUserAddress = new Address("VUser", virtualUserId);
-
-                // Check if VUser node exists by pinging its hub
-                var exists = await CheckNodeExistsAsync(hub, vUserAddress);
-                if (exists)
-                    return;
-
-                // Node doesn't exist — create it
-                var userNode = new MeshNode(virtualUserId, "VUser")
-                {
-                    Name = "Guest",
-                    NodeType = "VUser",
-                    State = MeshNodeState.Active,
-                    Content = new AccessObject
-                    {
-                        Id = virtualUserId,
-                        Name = "Guest",
-                        IsVirtual = true
-                    }
-                };
-
-                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-                await meshService.CreateNodeAsync(userNode, CancellationToken.None);
-
-                logger.LogDebug("VirtualUser: Created VUser node {Path}", userNode.Path);
-            }
+            await VUserHelper.EnsureVUserNodeAsync(portalApp, virtualUserId, logger);
         }
         catch (Exception ex)
         {
             // Non-critical — don't block the request on VUser node creation failure
             logger.LogWarning(ex, "VirtualUser: Failed to ensure VUser node for {VirtualUserId}", virtualUserId);
-        }
-    }
-
-    /// <summary>
-    /// Checks if a node exists by sending a PingRequest to its hub address.
-    /// Returns true if the hub responds, false if it fails.
-    /// </summary>
-    private static async Task<bool> CheckNodeExistsAsync(IMessageHub hub, Address nodeAddress)
-    {
-        try
-        {
-            await hub.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
-            return true;
-        }
-        catch
-        {
-            return false;
         }
     }
 }

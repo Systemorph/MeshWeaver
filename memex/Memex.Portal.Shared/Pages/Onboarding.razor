@@ -129,53 +129,63 @@
             if (!string.IsNullOrWhiteSpace(model.AvatarUrl))
                 content["avatar"] = model.AvatarUrl.Trim();
 
-            // Check if this is the first user (no existing User nodes = platform admin)
-            var isFirstUser = true;
-            await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 }))
+            // Use ImpersonateAsHub so the portal hub identity is recognized
+            // by UserSelfRegistryAccessRule (portal namespace = create/read/update User nodes)
+            using (AccessService.ImpersonateAsHub(PortalApplication.Hub))
             {
-                isFirstUser = false;
-                break;
-            }
+                // Check if this is the first user (no existing User nodes = platform admin)
+                var isFirstUser = true;
+                await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 }))
+                {
+                    isFirstUser = false;
+                    break;
+                }
 
-            // Check that the username is not already taken
-            var existingNode = await MeshQuery.QueryAsync<MeshNode>(
-                $"path:User/{username} scope:self").FirstOrDefaultAsync();
-            if (existingNode != null)
-            {
-                errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
-                return;
-            }
+                // Check that the username is not already taken
+                var existingNode = await MeshQuery.QueryAsync<MeshNode>(
+                    $"path:User/{username} scope:self").FirstOrDefaultAsync();
+                if (existingNode != null)
+                {
+                    errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
+                    return;
+                }
 
-            // Check that the email is not already assigned to another user
-            var emailValue = model.Email.Trim();
-            var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
-                $"nodeType:User content.email:\"{emailValue}\"").FirstOrDefaultAsync();
-            if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
-            {
-                errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";
-                return;
-            }
+                // Check that the email is not already assigned to another user
+                var emailValue = model.Email.Trim();
+                var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
+                    $"nodeType:User content.email:\"{emailValue}\"").FirstOrDefaultAsync();
+                if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
+                {
+                    errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";
+                    return;
+                }
 
-            var node = new MeshNode(username, "User")
-            {
-                Name = username,
-                NodeType = "User",
-                State = MeshNodeState.Active,
-                Content = content
-            };
+                var node = new MeshNode(username, "User")
+                {
+                    Name = username,
+                    NodeType = "User",
+                    State = MeshNodeState.Active,
+                    Content = content
+                };
 
-            await NodeFactory.CreateNodeAsync(node);
+                await NodeFactory.CreateNodeAsync(node);
 
-            // First user becomes PlatformAdmin
-            if (isFirstUser)
-            {
-                var securityService = PortalApplication.Hub.ServiceProvider
-                    .GetService<ISecurityService>();
-                if (securityService != null)
-                    await securityService.AddUserRoleAsync(username, "PlatformAdmin", null, username);
+                // First user becomes PlatformAdmin
+                if (isFirstUser)
+                {
+                    var securityService = PortalApplication.Hub.ServiceProvider
+                        .GetService<ISecurityService>();
+                    if (securityService != null)
+                        await securityService.AddUserRoleAsync(username, "PlatformAdmin", null, username);
+                }
             }
 
             Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+            // NavigateTo with forceLoad throws NavigationException — let it propagate
+            throw;
         }
         catch (Exception ex)
         {

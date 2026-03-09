@@ -68,10 +68,19 @@ public static class VUserNodeType
 
         public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            // Allow if the identity is in the portal namespace
-            if (!string.IsNullOrEmpty(userId) &&
-                userId.StartsWith(PortalNamespace + "/", StringComparison.OrdinalIgnoreCase))
-                return Task.FromResult(true);
+            // Allow if the identity is in the portal namespace.
+            // userId may be a full address like "_graph~portal/abc123" (hosted hub)
+            // or just "portal/abc123" (direct). Extract the inner address after last '~'.
+            if (!string.IsNullOrEmpty(userId))
+            {
+                var innerAddress = userId;
+                var tildeIndex = userId.LastIndexOf('~');
+                if (tildeIndex >= 0)
+                    innerAddress = userId[(tildeIndex + 1)..];
+
+                if (innerAddress.StartsWith(PortalNamespace + "/", StringComparison.OrdinalIgnoreCase))
+                    return Task.FromResult(true);
+            }
 
             // Deny all others
             return Task.FromResult(false);

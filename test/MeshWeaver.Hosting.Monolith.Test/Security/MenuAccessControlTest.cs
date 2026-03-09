@@ -131,7 +131,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Threads", "Versions", "Settings"],
+            ["Files", "Export", "Threads", "Versions", "Settings"],
             "Viewer has only Read — no Create, Update, or Delete items");
     }
 
@@ -162,7 +162,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // Editor gets Edit, Suggest, Create, Import, plus always-visible items
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Suggest", "Create", "Import", "Files", "Threads", "Versions", "Settings"],
+            ["Edit", "Suggest", "Create", "Import", "Files", "Export", "Threads", "Versions", "Settings"],
             "Editor has Read|Create|Update|Comment — Edit/Suggest/Create/Import plus always-visible items");
     }
 
@@ -190,9 +190,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(9, "Admin should see all default menu items");
+        items.Should().HaveCount(10, "Admin should see all default menu items");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Suggest", "Create", "Import", "Files", "Threads", "Versions", "Settings", "Delete"]);
+            ["Edit", "Suggest", "Create", "Import", "Files", "Export", "Threads", "Versions", "Settings", "Delete"]);
     }
 
     [Fact(Timeout = 5000)]

@@ -37,6 +37,15 @@ public class RlsNodeValidator : INodeValidator
 
     public async Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
+        // Self-access: hubs always have full control of their own nodes
+        var userId = GetUserId(context);
+        if (!string.IsNullOrEmpty(userId)
+            && !string.IsNullOrEmpty(context.Node.MainNode)
+            && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
+        {
+            return NodeValidationResult.Valid();
+        }
+
         // Map operation to required permission
         var requiredPermission = context.Operation switch
         {
@@ -50,9 +59,6 @@ public class RlsNodeValidator : INodeValidator
         // No permission required
         if (requiredPermission == Permission.None)
             return NodeValidationResult.Valid();
-
-        // Get the user ID from the request or AccessContext
-        var userId = GetUserId(context);
 
         // Check for a custom access rule for this node type
         if (!string.IsNullOrEmpty(context.Node.NodeType) &&

@@ -123,7 +123,18 @@ public class MeshOperations
         logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
 
         var resolvedBase = basePath != null ? ResolvePath(basePath) : null;
-        var fullQuery = string.IsNullOrEmpty(resolvedBase) ? query : $"path:{resolvedBase} {query}";
+        string fullQuery;
+        if (string.IsNullOrEmpty(resolvedBase))
+        {
+            fullQuery = query;
+        }
+        else
+        {
+            // Remove empty namespace: placeholder — basePath provides the namespace context.
+            // Use namespace: (not path:) so scope defaults to Children (search within, not exact).
+            var cleanQuery = query.Replace("namespace:", "").Trim();
+            fullQuery = $"namespace:{resolvedBase} {cleanQuery}".Trim();
+        }
 
         try
         {

@@ -518,6 +518,7 @@ public class PostgreSqlSqlGenerator
         return $"""
             (
                 n.node_type = 'NodeType'
+                OR n.main_node = {paramName}
                 OR
                 (SELECT uep.is_allow
                  FROM user_effective_permissions uep

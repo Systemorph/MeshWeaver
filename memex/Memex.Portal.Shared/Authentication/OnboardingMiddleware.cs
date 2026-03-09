@@ -62,7 +62,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                             using (accessService.ImpersonateAsHub(portalApp.Hub))
                             {
                                 node = await meshQuery.QueryAsync<MeshNode>(
-                                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
+                                    $"nodeType:User namespace:User content.email:\"{email}\" limit:1").FirstOrDefaultAsync();
                             }
 
                             if (node == null || node.State == MeshNodeState.Transient)

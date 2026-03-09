@@ -1,17 +1,13 @@
-using MeshWeaver.AI;
-using MeshWeaver.Blazor.Portal.Chat;
-using MeshWeaver.Blazor.Portal.Components;
+﻿using MeshWeaver.AI;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
+using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Blazor.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Layout;
