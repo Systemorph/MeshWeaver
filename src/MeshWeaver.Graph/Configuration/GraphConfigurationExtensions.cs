@@ -27,6 +27,7 @@ public static class GraphConfigurationExtensions
                 .AddAgentType()
                 .AddCodeType()
                 .AddMarkdownType()
+                .AddHtmlType()
                 .AddThreadType(config => config
                     .AddThreadViews()
                     .AddMeshDataSource(source => source
