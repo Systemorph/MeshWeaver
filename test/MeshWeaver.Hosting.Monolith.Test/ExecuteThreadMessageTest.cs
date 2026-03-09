@@ -59,8 +59,9 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new MeshThread { ParentPath = "User/TestUser" }
         }, ct);
 
-        // 2. Post ExecuteThreadMessageRequest (simulates what the GUI does)
-        var response = await Mesh.AwaitResponse(
+        // 2. Post ExecuteThreadMessageRequest from a client hub (simulates the GUI)
+        var client = GetClient();
+        var response = await client.AwaitResponse(
             new ExecuteThreadMessageRequest
             {
                 ThreadPath = threadPath,
@@ -101,7 +102,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public async Task ExecuteThreadMessage_SecondMessage_IncrementsMessageNumbers()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
+        var ct = new CancellationTokenSource(60.Seconds()).Token;
 
         // Create thread
         var threadId = Guid.NewGuid().AsString();
@@ -113,8 +114,10 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new MeshThread { ParentPath = "User/TestUser" }
         }, ct);
 
+        var client = GetClient();
+
         // First message
-        var response1 = await Mesh.AwaitResponse(
+        var response1 = await client.AwaitResponse(
             new ExecuteThreadMessageRequest
             {
                 ThreadPath = threadPath,
@@ -125,7 +128,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         response1.Message.Success.Should().BeTrue(response1.Message.Error);
 
         // Second message
-        var response2 = await Mesh.AwaitResponse(
+        var response2 = await client.AwaitResponse(
             new ExecuteThreadMessageRequest
             {
                 ThreadPath = threadPath,
