@@ -58,7 +58,15 @@
     min-width: 28px;
     border-radius: 50%;
     flex-shrink: 0;
-    object-fit: contain;
+    -webkit-mask-image: var(--icon-url);
+    mask-image: var(--icon-url);
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    background-color: currentColor;
 }
 
 .mesh-node-picker-info {

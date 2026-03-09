@@ -25,7 +25,14 @@
             <div class="mesh-node-collection-item" @onclick="() => NavigateToItem(capturedNode.Path)">
                 @if (!string.IsNullOrEmpty(imageUrl))
                 {
-                    <img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="@(imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "mesh-node-collection-avatar-icon" : "mesh-node-collection-avatar-img")" />
+                    @if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div style="--icon-url: url('@imageUrl')" class="mesh-node-collection-avatar-icon"></div>
+                    }
+                    else
+                    {
+                        <img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-collection-avatar-img" />
+                    }
                 }
                 else
                 {
