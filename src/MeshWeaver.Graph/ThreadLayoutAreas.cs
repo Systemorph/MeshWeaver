@@ -479,7 +479,7 @@ public static class ThreadLayoutAreas
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var userId = accessService?.Context?.ObjectId;
-        await nodeFactory.CreateNodeAsync(messageNode, userId);
+        await nodeFactory.CreateNodeAsync(messageNode);
         return messagePath;
     }
 

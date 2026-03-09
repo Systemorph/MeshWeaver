@@ -188,7 +188,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             Content = replyComment
         };
 
-        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, "TestReviewer", TestTimeout);
+        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, TestTimeout);
         createdReply.Should().NotBeNull();
         Output.WriteLine($"Reply created at path: {createdReply.Path}");
 
@@ -269,7 +269,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
                 Content = reply
             };
 
-            var created = await NodeFactory.CreateNodeAsync(replyNode, $"Reviewer{i + 1}", TestTimeout);
+            var created = await NodeFactory.CreateNodeAsync(replyNode, TestTimeout);
             replyPaths.Add(created.Path!);
             Output.WriteLine($"Created reply {i + 1}: {created.Path}");
         }

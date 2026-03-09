@@ -1,6 +1,7 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,27 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
 
         if (userContext is not null)
         {
+            // If the circuit already has a context for this same user, reuse it
+            // (avoids mesh lookup on every request — only needed once per circuit).
+            var existing = userService.Context;
+            if (existing is not null && existing.Email == userContext.Email)
+            {
+                userService.SetContext(existing);
+                await next(context);
+                return;
+            }
+
+            // First request for this user in this circuit — look up the mesh User node
+            // to get the system name (overrides the claim name).
+            if (!string.IsNullOrEmpty(userContext.Email))
+            {
+                var meshUser = await TryLoadMeshUserAsync(userContext.Email, hub);
+                if (meshUser is not null && !string.IsNullOrEmpty(meshUser.Name))
+                {
+                    userContext = userContext with { Name = meshUser.Name };
+                }
+            }
+
             logger.LogDebug("UserContext: ObjectId={ObjectId}, Name={Name}, Email={Email}, Roles=[{Roles}]",
                 userContext.ObjectId, userContext.Name, userContext.Email, string.Join(", ", userContext.Roles ?? []));
 
@@ -85,6 +107,30 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         catch
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Queries the mesh for a User node whose email matches the authenticated user's email.
+    /// Uses ImpersonateAsHub scope since the user context hasn't been set yet at this point.
+    /// Returns the MeshNode if found, so we can use its Name (from the system) instead of the claim.
+    /// </summary>
+    private ValueTask<MeshNode?> TryLoadMeshUserAsync(string email, IMessageHub hub)
+    {
+        try
+        {
+            var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+            using (accessService.ImpersonateAsHub(hub))
+            {
+                var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                return meshService.QueryAsync<MeshNode>(
+                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to load mesh user for email {Email}", email);
+            return default;
         }
     }
 

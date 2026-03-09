@@ -1,105 +1,70 @@
 ---
 Category: Documentation
-Description: Comprehensive documentation for MeshWeaver platform architecture, concepts, and operational guides
+Description: Your AI-powered data mesh platform — explore, ask, build
 Icon: /static/storage/content/MeshWeaver/logo.svg
 ---
 
-# MeshWeaver Documentation
+# Welcome to MeshWeaver
 
-Welcome to the MeshWeaver documentation. This section contains comprehensive guides covering the platform architecture, core concepts, and operational procedures.
+**Your data, your mesh, your AI.** MeshWeaver is a distributed data mesh platform where every piece of data is a node you can query, transform, and collaborate on — with AI agents ready to help at every step.
+
+> **New here?** Just open the chat below and ask anything. Our AI assistant knows the platform inside out and will guide you through whatever you need.
+
+---
+
+## Get Started in Seconds
+
+You don't need to read pages of documentation. Just **ask**. Here are some things you can try:
+
+- *"What is a data mesh?"*
+- *"Show me how node types work"*
+- *"Walk me through the Northwind analytics example"*
+- *"How do I create a custom node type?"*
+- *"Explain the query syntax"*
+
+---
 
 ## Featured Videos
 
-| Article | Description |
-|---------|-------------|
-| [The Beginning](Doc/TheBeginning) | Roland and Stefan introduce the Mesh Bros channel, discussing their journey and the future of data management |
-| [What is a Data Mesh](Doc/DataMesh/WhatIsADataMesh) | The Mesh Bros explain the basic concepts of a data mesh |
+| | |
+|---|---|
+| [The Beginning](Doc/TheBeginning) | Roland and Stefan introduce the Mesh Bros channel and the future of data management |
+| [What is a Data Mesh](Doc/DataMesh/WhatIsADataMesh) | The Mesh Bros explain the core concepts behind a data mesh |
 
 ---
 
-## Documentation Sections
+## Explore by Topic
 
 ### Architecture
-
-Deep dive into MeshWeaver's distributed architecture:
-- Message-based communication through MessageHubs
-- UI streaming and two-way binding
-- AI agent integration
-- Data management and versioning
-- Security and access control
-
+Message-based communication, UI streaming, AI integration, security, and more.
 [Explore Architecture](Doc/Architecture)
 
----
-
 ### Data Mesh
-
-Learn how to set up and operate the mesh:
-- Node type configuration
-- Query syntax and filtering
-- Unified content references (UCR)
-- Interactive markdown features
-- Collaborative editing
-
+Node types, query syntax, unified content references, interactive markdown, collaborative editing.
 [Explore Data Mesh](Doc/DataMesh)
 
----
-
-### Graphical User Interface (GUI)
-
-Gain an understanding of the relevant GUI controls and concepts:
-- Editors
-- Data Grids
-- Attributes
-- Data Binding
-- Observables
-
+### GUI
+Editors, data grids, data binding, observables, and layout controls.
 [Explore GUI](Doc/GUI)
 
----
-
 ### AI Integration
-
-Learn how AI agents integrate with MeshWeaver:
-- MeshPlugin tools for mesh operations
-- Agent definition patterns
-- Remote control philosophy
-- Natural language interfaces
-
+MeshPlugin tools, agent definitions, remote control, natural language interfaces.
 [Explore AI Integration](Doc/AI)
 
 ---
 
 ## Use Cases
 
-### ACME Corporation
-
-Learn MeshWeaver through a task management app:
-- Shared NodeTypes across projects
-- AI agent integration in practice
-- Real-world task management scenarios
-
-[Explore ACME Use Case](Software/Documentation)
+| | |
+|---|---|
+| [ACME Corporation](Software/Documentation) | Task management with shared NodeTypes and AI agents |
+| [Cornerstone Insurance](Cornerstone/Documentation) | Agent-based pricing, risk mapping, document workflows |
+| [Northwind Traders](Northwind/Documentation) | Gourmet food analytics with 53 views and natural language queries |
 
 ---
 
-### Cornerstone Insurance
+## Ask Anything
 
-Learn MeshWeaver through an agent-based pricing process:
-- Hierarchical insurance data modeling (Insured → Pricing structure)
-- Geographic risk visualization with mapping (PropertyRisks + RiskMap)
-- Document management and Excel import workflows (Submissions + ImportConfigs)
+Don't search — just ask. The chat below connects you to an AI assistant that understands the entire MeshWeaver platform.
 
-[Explore Cornerstone Insurance Use Case](Cornerstone/Documentation)
-
----
-
-### Northwind Traders
-
-Learn MeshWeaver through gourmet food analytics:
-- Virtual data cube combining Orders, OrderDetails, and Products
-- Multi-year analytics with year-over-year comparison
-- 53 views organized across 8 analytics categories
-- Natural language queries with the NorthwindAgent
-
-[Explore Northwind Use Case](Northwind/Documentation)
+@@("MeshWeaver/Documentation/Chat")

@@ -45,7 +45,9 @@ public static class GraphConfigurationExtensions
                 .AddNotificationType()
                 .AddActivityLogType()
                 .AddUserActivityType()
-                .AddApiTokenType();
+                .AddApiTokenType()
+                .AddMeshDataSourceType()
+                .AddGlobalSettingsType();
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>

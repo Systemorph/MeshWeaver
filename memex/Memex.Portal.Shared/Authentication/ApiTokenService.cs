@@ -51,7 +51,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             Content = apiToken,
         };
 
-        var created = await nodeFactory.CreateNodeAsync(node, userId);
+        var created = await nodeFactory.CreateNodeAsync(node);
 
         logger.LogInformation("Created API token {Label} for user {UserId} (hash prefix {HashPrefix})",
             label, userId, hashPrefix);

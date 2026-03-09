@@ -101,6 +101,9 @@ public static class NodeMenuItemsExtensions
         if (perms.HasFlag(Permission.Read))
             yield return new("Files", MeshNodeLayoutAreas.FilesArea, Order: 25);
 
+        if (perms.HasFlag(Permission.Read))
+            yield return new("Export", MeshNodeLayoutAreas.ExportArea, Order: 26);
+
         yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, Order: 50);
 
         if (perms.HasFlag(Permission.Read))

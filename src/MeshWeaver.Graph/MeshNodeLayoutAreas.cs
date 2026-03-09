@@ -68,7 +68,9 @@ public static class MeshNodeLayoutAreas
     public const string EditArea = "Edit";
     public const string DeleteArea = "Delete";
     public const string ThreadsArea = "Threads";
+    public const string ChatArea = "Chat";
     public const string ImportMeshNodesArea = "ImportMeshNodes";
+    public const string ExportArea = "Export";
     public const string VersionsArea = "Versions";
     public const string VersionDiffArea = "VersionDiff";
 
@@ -104,11 +106,13 @@ public static class MeshNodeLayoutAreas
             .WithView(FilesArea, Files)
             .WithView(ChildrenArea, Children)
             .WithView(ThreadsArea, Threads)
+            .WithView(ChatArea, Chat)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
+            .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
             .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
@@ -1113,6 +1117,25 @@ public static class MeshNodeLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> Groups(LayoutAreaHost host, RenderingContext ctx)
         => GroupsLayoutArea.Groups(host, ctx);
+
+    #endregion
+
+    #region Chat
+
+    /// <summary>
+    /// Renders a standalone ThreadChatControl for the current node.
+    /// Can be embedded in markdown via @@("path/Chat").
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Chat(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        var nodeName = nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
+
+        return Observable.Return<UiControl?>(new ThreadChatControl()
+            .WithInitialContext(nodePath)
+            .WithInitialContextDisplayName(nodeName));
+    }
 
     #endregion
 

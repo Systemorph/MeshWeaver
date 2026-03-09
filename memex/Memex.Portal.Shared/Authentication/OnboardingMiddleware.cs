@@ -55,9 +55,15 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                         {
                             var email = userContext.Email ?? userContext.ObjectId;
 
-                            // Look up User node by email stored in content (search all namespaces)
-                            var node = await meshQuery.QueryAsync<MeshNode>(
-                                $"nodeType:User content.email:\"{email}\"").FirstOrDefaultAsync();
+                            // Look up User node by email stored in content.
+                            // Use ImpersonateAsHub scope because user context may not have
+                            // sufficient permissions yet at this point in the pipeline.
+                            MeshNode? node;
+                            using (accessService.ImpersonateAsHub(portalApp.Hub))
+                            {
+                                node = await meshQuery.QueryAsync<MeshNode>(
+                                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
+                            }
 
                             if (node == null || node.State == MeshNodeState.Transient)
                             {

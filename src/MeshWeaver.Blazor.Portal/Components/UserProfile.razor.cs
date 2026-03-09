@@ -36,6 +36,7 @@ public partial class UserProfile : ComponentBase
     private string? name;
     private string? username;
     private string? initials;
+    private bool isPlatformAdmin;
     private string NameClaimType { get; } = "name";
     public string UsernameClaimType { get; } = "preferred_username";
 
@@ -55,6 +56,9 @@ public partial class UserProfile : ComponentBase
 
             username = name;
             initials = GetInitials(name);
+
+            // Check if the user has PlatformAdmin role
+            isPlatformAdmin = AccessService.Context?.Roles?.Contains("PlatformAdmin") == true;
         }
 
     }

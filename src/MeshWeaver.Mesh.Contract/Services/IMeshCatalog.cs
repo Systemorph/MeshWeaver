@@ -27,13 +27,13 @@ internal interface IMeshCatalog : IPathResolver
     /// <summary>
     /// Creates a new node in the catalog with validation.
     /// The node is created in Transient state, validated, and then confirmed.
+    /// Identity is resolved from AccessContext.
     /// </summary>
     /// <param name="node">The node to create</param>
-    /// <param name="createdBy">The user or system creating the node</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The created node with State set to Confirmed</returns>
     /// <exception cref="InvalidOperationException">If node already exists or validation fails</exception>
-    Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default);
+    Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default);
 
     /// <summary>
     /// Creates a transient node for UI creation flows.

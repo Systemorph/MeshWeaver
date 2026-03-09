@@ -147,7 +147,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread { ParentPath = "ACME/ProductLaunch" }
         };
-        await NodeFactory.CreateNodeAsync(threadNode, "test-user", ct);
+        await NodeFactory.CreateNodeAsync(threadNode, ct);
 
         // 2. Create user message as child node
         var messageId = Guid.NewGuid().AsString();
@@ -163,7 +163,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = userMessage
-        }, "test-user", ct);
+        }, ct);
 
         // 3. Initialize AgentChatClient with context
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
@@ -221,7 +221,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = replyMessage
-        }, "test-user", ct);
+        }, ct);
 
         // 7. Verify thread contains both messages
         var children = new List<MeshNode>();
@@ -264,7 +264,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Name = "Non-Streaming Test Thread",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread { ParentPath = "ACME/ProductLaunch" }
-        }, "test-user", ct);
+        }, ct);
 
         // Initialize agent
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);
@@ -328,14 +328,14 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             Name = "Thread 1",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread { ParentPath = "ACME/ProductLaunch" }
-        }, "test-user", ct);
+        }, ct);
 
         await NodeFactory.CreateNodeAsync(new MeshNode(threadPath2)
         {
             Name = "Thread 2",
             NodeType = ThreadNodeType.NodeType,
             Content = new Thread { ParentPath = "ACME/ProductLaunch" }
-        }, "test-user", ct);
+        }, ct);
 
         // Initialize agent
         var agentChat = new AgentChatClient(Mesh.ServiceProvider);

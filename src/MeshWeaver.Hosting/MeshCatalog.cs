@@ -167,8 +167,8 @@ internal sealed class MeshCatalog(
     // IMeshCatalog — delegate to HubNodePersistence
     private HubNodePersistence NodePersistence => new(hub, this);
 
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-        => NodePersistence.CreateNodeAsync(node, createdBy, ct);
+    public Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
+        => NodePersistence.CreateNodeAsync(node, ct);
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
         => NodePersistence.CreateTransientAsync(node, ct);
@@ -178,7 +178,7 @@ internal sealed class MeshCatalog(
     /// Creates a new node in Transient state without confirming it.
     /// This is internal - used by handlers that need direct node creation after validation.
     /// </summary>
-    internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+    internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, CancellationToken ct = default)
     {
         // 1. Check if node already exists in cache
         if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode)
@@ -225,7 +225,7 @@ internal sealed class MeshCatalog(
         // 8. Update cache with enriched transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
 
-        logger.LogInformation("Created transient node at path {Path} by {CreatedBy}", savedNode.Path, createdBy ?? "system");
+        logger.LogInformation("Created transient node at path {Path}", savedNode.Path);
 
         return savedNode;
     }

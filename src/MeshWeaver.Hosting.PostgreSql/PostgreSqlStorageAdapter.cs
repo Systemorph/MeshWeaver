@@ -49,7 +49,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         await using var cmd = _dataSource.CreateCommand(
             "SELECT id, namespace, name, node_type, category, icon, display_order, " +
-            "last_modified, version, state, content, desired_id " +
+            "last_modified, version, state, content, desired_id, main_node " +
             "FROM mesh_nodes WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);

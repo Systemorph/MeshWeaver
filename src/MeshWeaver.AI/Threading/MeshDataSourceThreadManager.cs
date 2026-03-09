@@ -60,7 +60,7 @@ public class MeshDataSourceThreadManager : IThreadManager
                 ProviderId = thread.ProviderId
             }
         };
-        await _nodeFactory.CreateNodeAsync(threadNode, GetUserId(), ct);
+        await _nodeFactory.CreateNodeAsync(threadNode, ct);
 
         return thread;
     }
@@ -90,7 +90,7 @@ public class MeshDataSourceThreadManager : IThreadManager
             Content = threadMessage
         };
 
-        await _nodeFactory.CreateNodeAsync(messageNode, GetUserId(), ct);
+        await _nodeFactory.CreateNodeAsync(messageNode, ct);
         _logger?.LogDebug("Saved message {MessageId} as child node: {Path}", messageId, messagePath);
 
         // Auto-title from first user message

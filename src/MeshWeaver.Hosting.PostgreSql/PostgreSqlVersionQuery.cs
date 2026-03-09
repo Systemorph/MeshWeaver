@@ -59,7 +59,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         var (ns, id) = SplitPath(path);
         await using var cmd = _dataSource.CreateCommand(
             "SELECT id, namespace, name, node_type, category, icon, display_order, " +
-            "last_modified, version, state, content, desired_id " +
+            "last_modified, version, state, content, desired_id, main_node " +
             "FROM mesh_node_history WHERE namespace = $1 AND id = $2 AND version = $3");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
@@ -79,7 +79,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         var (ns, id) = SplitPath(path);
         await using var cmd = _dataSource.CreateCommand(
             "SELECT id, namespace, name, node_type, category, icon, display_order, " +
-            "last_modified, version, state, content, desired_id " +
+            "last_modified, version, state, content, desired_id, main_node " +
             "FROM mesh_node_history WHERE namespace = $1 AND id = $2 AND version < $3 " +
             "ORDER BY version DESC LIMIT 1");
         cmd.Parameters.AddWithValue(ns);
@@ -117,7 +117,10 @@ public class PostgreSqlVersionQuery : IVersionQuery
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             Content = content,
-            DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id"))
+            DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id")),
+            MainNode = reader.IsDBNull(reader.GetOrdinal("main_node"))
+                ? (string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}")
+                : reader.GetString(reader.GetOrdinal("main_node"))
         };
     }
 }

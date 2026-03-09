@@ -21,11 +21,6 @@ public static class UserActivityLayoutAreas
     private const string ThinScrollbar = "scrollbar-width: thin; scrollbar-color: rgba(128,128,128,0.3) transparent;";
     private const string ColumnHeight = "calc(100vh - 280px)";
 
-    private static readonly HashSet<string> SystemNodeTypes =
-    [
-        "AccessAssignment", "NodeType", "User", "Role", "Group", "PartitionAccessPolicy"
-    ];
-
     /// <summary>
     /// Adds the Activity view to the User node's layout.
     /// </summary>
@@ -89,8 +84,7 @@ public static class UserActivityLayoutAreas
 
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
-            .WithInitialContextDisplayName("Home")
-            .WithHideEmptyState();
+            .WithInitialContextDisplayName("Home");
 
         section = section.WithView(chatControl);
         return section;
@@ -98,6 +92,7 @@ public static class UserActivityLayoutAreas
 
     /// <summary>
     /// Activity timeline — social-media style feed with rich cards, fixed height with scroll.
+    /// Always shows a pinned documentation welcome card as the first item.
     /// </summary>
     private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host)
     {
@@ -110,24 +105,17 @@ public static class UserActivityLayoutAreas
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Activity Feed</div>"));
 
+        var feed = Controls.Stack.WithVerticalGap(12);
+
+        // Pinned documentation card — always first
+        feed = feed.WithView(BuildDocumentationCard());
+
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var activityLogNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:descendants"))
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:subtree"))
             activityLogNodes.Add(n);
         var activityLogs = activityLogNodes.Select(n => n.Content).OfType<ActivityLog>().ToList();
 
-        if (activityLogs.Count == 0)
-        {
-            section = section.WithView(Controls.Html(
-                "<div style=\"padding: 48px 24px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 12px; margin-top: 8px;\">" +
-                "<div style=\"font-size: 2rem; margin-bottom: 8px;\">&#128240;</div>" +
-                "<div style=\"font-weight: 600; margin-bottom: 4px;\">No activity yet</div>" +
-                "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Edits, approvals and other events will appear here.</div>" +
-                "</div>"));
-            return section;
-        }
-
-        var feed = Controls.Stack.WithVerticalGap(12);
         foreach (var log in activityLogs)
         {
             feed = feed.WithView(BuildActivityCard(log));
@@ -135,6 +123,43 @@ public static class UserActivityLayoutAreas
 
         section = section.WithView(feed);
         return section;
+    }
+
+    /// <summary>
+    /// Pinned welcome card linking to the documentation — styled like a social feed post.
+    /// </summary>
+    private static UiControl BuildDocumentationCard()
+    {
+        return Controls.Html(
+            "<a href=\"/MeshWeaver/Documentation\" style=\"text-decoration: none; color: inherit; display: block;\">" +
+            "<div style=\"display: flex; gap: 14px; padding: 14px 16px; border-radius: 12px; " +
+            "background: var(--neutral-layer-2); border-left: 3px solid var(--accent-fill-rest); " +
+            "transition: transform 0.15s ease, box-shadow 0.15s ease;\" " +
+            "onmouseenter=\"this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 16px rgba(0,0,0,0.12)'\" " +
+            "onmouseleave=\"this.style.transform='none'; this.style.boxShadow='none'\">" +
+
+            // Logo avatar
+            "<div style=\"flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; " +
+            "background: var(--neutral-layer-3); " +
+            "display: flex; align-items: center; justify-content: center;\">" +
+            "<img src=\"/static/storage/content/MeshWeaver/logo.svg\" alt=\"\" style=\"width: 24px; height: 24px;\" />" +
+            "</div>" +
+
+            // Content
+            "<div style=\"flex: 1; min-width: 0;\">" +
+            "<div style=\"display: flex; align-items: center; gap: 8px;\">" +
+            "<span style=\"font-weight: 600; font-size: 0.9rem;\">MeshWeaver</span>" +
+            "<span style=\"font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; " +
+            "background: rgba(100,100,100,0.12); color: var(--accent-fill-rest); font-weight: 500;\">Pinned</span>" +
+            "</div>" +
+            "<div style=\"font-size: 0.9rem; margin-top: 6px; line-height: 1.5;\">" +
+            "Explore the documentation, try the use cases, or just <strong>open the chat below</strong> and ask anything.</div>" +
+            "<div style=\"display: inline-flex; align-items: center; gap: 4px; " +
+            "margin-top: 8px; padding: 4px 12px; border-radius: 6px; " +
+            "background: var(--neutral-layer-3); " +
+            "color: var(--accent-foreground-rest); font-size: 0.8rem; font-weight: 500;\">" +
+            "&#8594; Documentation</div>" +
+            "</div></div></a>");
     }
 
     /// <summary>
@@ -215,8 +240,6 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        const int displayLimit = 10;
-
         // Fixed-height scrollable section
         var section = Controls.Stack
             .WithHeight(ColumnHeight)
@@ -228,8 +251,17 @@ public static class UserActivityLayoutAreas
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var recentNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity sort:lastAccessedAt-desc limit:10 scope:descendants"))
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity sort:lastAccessedAt-desc limit:10 scope:subtree"))
             recentNodes.Add(n);
+
+        if (recentNodes.Count == 0)
+        {
+            section = section.WithView(Controls.Html(
+                "<div style=\"padding: 48px 24px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 12px; margin-top: 8px;\">" +
+                "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Items you visit will appear here.</div>" +
+                "</div>"));
+            return section;
+        }
 
         var grid = Controls.LayoutGrid.WithStyle("gap: 8px;");
 
@@ -238,44 +270,6 @@ public static class UserActivityLayoutAreas
             grid = grid.WithView(
                 MeshNodeCardControl.FromNode(node, node.Path ?? ""),
                 skin => skin.WithXs(12));
-        }
-
-        // Fill remaining slots from catalog
-        var remaining = displayLimit - recentNodes.Count;
-        if (remaining > 0)
-        {
-            var recentPaths = new HashSet<string>(recentNodes.Where(n => n.Path != null).Select(n => n.Path!));
-
-            {
-                var fillerNodes = new List<MeshNode>();
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = $"namespace:{host.Hub.Address}", Limit = 20 }))
-                {
-                    if (node.NodeType != null && SystemNodeTypes.Contains(node.NodeType))
-                        continue;
-
-                    if (node.Path != null && recentPaths.Contains(node.Path))
-                        continue;
-
-                    fillerNodes.Add(node);
-                    if (fillerNodes.Count >= remaining)
-                        break;
-                }
-
-                if (fillerNodes.Count > 0 && recentNodes.Count > 0)
-                {
-                    grid = grid.WithView(Controls.Html(
-                        "<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); padding: 4px 8px; " +
-                        "border-top: 1px solid var(--neutral-stroke-divider-rest); margin-top: 4px; padding-top: 8px;\">Suggested</div>"),
-                        skin => skin.WithXs(12));
-                }
-
-                foreach (var node in fillerNodes)
-                {
-                    grid = grid.WithView(
-                        MeshNodeCardControl.FromNode(node, node.Path ?? ""),
-                        skin => skin.WithXs(12));
-                }
-            }
         }
 
         section = section.WithView(grid);

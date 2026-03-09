@@ -9,28 +9,21 @@ namespace MeshWeaver.Hosting;
 /// <summary>
 /// Scoped IMeshService implementation that composes HubNodePersistence (writes)
 /// and MeshQuery (reads) into a single unified service.
+/// Identity is always resolved from AccessService.Context.
+/// Use accessService.ImpersonateAsHub(hub) to temporarily switch identity.
 /// </summary>
 internal sealed class MeshService : IMeshService
 {
     private readonly HubNodePersistence? _persistence;
     private readonly MeshQuery _query;
-    private readonly IEnumerable<IMeshQueryProvider> _providers;
-    private readonly IMessageHub _hub;
-    private readonly MeshCatalog? _catalog;
-    private readonly bool _impersonate;
 
     public MeshService(
         IEnumerable<IMeshQueryProvider> providers,
         IMessageHub hub,
-        MeshCatalog? catalog = null,
-        bool impersonate = false)
+        MeshCatalog? catalog = null)
     {
-        _providers = providers;
-        _hub = hub;
-        _catalog = catalog;
-        _impersonate = impersonate;
-        _persistence = catalog != null ? new HubNodePersistence(hub, catalog, impersonate) : null;
-        _query = new MeshQuery(providers, hub, impersonate);
+        _persistence = catalog != null ? new HubNodePersistence(hub, catalog) : null;
+        _query = new MeshQuery(providers, hub);
     }
 
     // === Node CRUD (delegated to HubNodePersistence) ===
@@ -39,14 +32,14 @@ internal sealed class MeshService : IMeshService
         => _persistence ?? throw new InvalidOperationException(
             "Write operations require MeshCatalog. Register it via AddMeshCatalog().");
 
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-        => Persistence.CreateNodeAsync(node, createdBy, ct);
+    public Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
+        => Persistence.CreateNodeAsync(node, ct);
 
-    public Task<MeshNode> UpdateNodeAsync(MeshNode node, string? updatedBy = null, CancellationToken ct = default)
-        => Persistence.UpdateNodeAsync(node, updatedBy, ct);
+    public Task<MeshNode> UpdateNodeAsync(MeshNode node, CancellationToken ct = default)
+        => Persistence.UpdateNodeAsync(node, ct);
 
-    public Task DeleteNodeAsync(string path, string? deletedBy = null, CancellationToken ct = default)
-        => Persistence.DeleteNodeAsync(path, deletedBy, ct);
+    public Task DeleteNodeAsync(string path, CancellationToken ct = default)
+        => Persistence.DeleteNodeAsync(path, ct);
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
         => Persistence.CreateTransientAsync(node, ct);
@@ -70,9 +63,4 @@ internal sealed class MeshService : IMeshService
 
     public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
         => _query.SelectAsync<T>(path, property, ct);
-
-    // === Impersonation ===
-
-    public IMeshService ImpersonateAsNode()
-        => _impersonate ? this : new MeshService(_providers, _hub, _catalog, true);
 }

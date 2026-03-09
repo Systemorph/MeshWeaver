@@ -1,5 +1,6 @@
 ﻿using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Messaging;
@@ -21,13 +22,36 @@ builder.Services.AddDataProtection()
 // Add Aspire service defaults (health checks, OpenTelemetry, service discovery)
 builder.AddServiceDefaults();
 
+// Resolve the graph storage base path for sample data source registration
+var graphBasePath = builder.Configuration["Graph:Storage:BasePath"];
+if (!string.IsNullOrEmpty(graphBasePath) && !Path.IsPathRooted(graphBasePath))
+    graphBasePath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), graphBasePath));
+
 // Configure MeshWeaver mesh
 builder.UseMeshWeaver(
     AddressExtensions.CreateMeshAddress(),
-    config => config
-        .ConfigureMemexPortal()
-        .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
-        .UseMonolithMesh()
+    config =>
+    {
+        config = config
+            .ConfigureMemexPortal()
+            .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment());
+
+        // Register sample data source repositories (file system only)
+        if (!string.IsNullOrEmpty(graphBasePath))
+        {
+            config = config
+                .AddFileSystemDataSource("ACME", "ACME Corporation",
+                    Path.Combine(graphBasePath, "ACME"), "Sample ACME organization data")
+                .AddFileSystemDataSource("Northwind", "Northwind Traders",
+                    Path.Combine(graphBasePath, "Northwind"), "Sample Northwind trading data")
+                .AddFileSystemDataSource("Cornerstone", "Cornerstone",
+                    Path.Combine(graphBasePath, "Cornerstone"), "Sample Cornerstone data")
+                .AddFileSystemDataSource("FutuRe", "FutuRe",
+                    Path.Combine(graphBasePath, "FutuRe"), "Sample FutuRe reinsurance data");
+        }
+
+        return config.UseMonolithMesh();
+    }
 );
 
 var app = builder.Build();
