@@ -67,7 +67,9 @@ public static class ThreadLayoutAreas
         LayoutAreaHost host, RenderingContext ctx)
     {
         await Task.CompletedTask;
-        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12);
+        var hubPath = host.Hub.Address.ToString();
+        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
+            Href: MeshNodeLayoutAreas.BuildContentUrl(hubPath, ThreadNodeType.HistoryArea));
     }
 
     private static string GetContextDisplayName(string path)

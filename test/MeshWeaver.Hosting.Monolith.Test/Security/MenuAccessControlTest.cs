@@ -131,7 +131,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Export", "Threads", "Versions", "Settings"],
+            ["Files", "Export Test Project", "Threads", "Versions", "Settings"],
             "Viewer has only Read — no Create, Update, or Delete items");
     }
 
@@ -139,7 +139,6 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     public async Task Menu_Editor_ShowsCreateItems()
     {
         // Editor role: Read|Create|Update|Comment → has Create but not Delete
-        // No "Edit" — replaced by node-name item which requires a MeshNode with NodeType
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
             TestContext.Current.CancellationToken);
@@ -160,10 +159,10 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        // Editor gets Edit, Suggest, Create, Import, plus always-visible items
+        // Editor gets Edit, Create, Import, plus always-visible items
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Suggest", "Create", "Import", "Files", "Export", "Threads", "Versions", "Settings"],
-            "Editor has Read|Create|Update|Comment — Edit/Suggest/Create/Import plus always-visible items");
+            ["Edit Test Project", "Create", "Import", "Files", "Export Test Project", "Threads", "Versions", "Settings"],
+            "Editor has Read|Create|Update|Comment — Edit/Create/Import plus always-visible items");
     }
 
     [Fact(Timeout = 5000)]
@@ -190,9 +189,9 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(10, "Admin should see all default menu items");
+        items.Should().HaveCount(9, "Admin should see all default menu items");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Suggest", "Create", "Import", "Files", "Export", "Threads", "Versions", "Settings", "Delete"]);
+            ["Edit Test Project", "Create", "Import", "Files", "Export Test Project", "Threads", "Versions", "Settings", "Delete Test Project"]);
     }
 
     [Fact(Timeout = 5000)]

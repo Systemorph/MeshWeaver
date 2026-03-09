@@ -101,7 +101,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     }
 
     /// <summary>
-    /// Navigates to the specified area for the current node (e.g., "Edit", "Suggest").
+    /// Fallback: navigates to the specified area for the current node.
+    /// Prefer setting Href on NodeMenuItemDefinition so navigation is independent of client state.
     /// </summary>
     private void NavigateToArea(string area)
     {

@@ -571,37 +571,37 @@ public class MessageService : IMessageService
 
         // Complete the buffers to stop accepting new messages
         var bufferStopwatch = Stopwatch.StartNew();
-        logger.LogWarning("[DISPOSE-TRACE] {address}: Completing buffers (bufferCount={bufferCount}, deferredCount={deferredCount})",
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Completing buffers (bufferCount={bufferCount}, deferredCount={deferredCount})",
             Address, buffer.Count, deferredBuffer.Count);
         buffer.Complete();
         deferredBuffer.Complete();
         executionBuffer.Complete();
-        logger.LogWarning("[DISPOSE-TRACE] {address}: Buffers completed in {elapsed}ms", Address, bufferStopwatch.ElapsedMilliseconds);
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Buffers completed in {elapsed}ms", Address, bufferStopwatch.ElapsedMilliseconds);
 
         var deliveryStopwatch = Stopwatch.StartNew();
         try
         {
-            logger.LogWarning("[DISPOSE-TRACE] {address}: Awaiting deliveryAction.Completion (isCompleted={isCompleted})",
+            logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting deliveryAction.Completion (isCompleted={isCompleted})",
                 Address, deliveryAction.Completion.IsCompleted);
             using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogWarning("[DISPOSE-TRACE] {address}: deliveryAction.Completion done in {elapsed}ms",
+            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion done in {elapsed}ms",
                 Address, deliveryStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
         {
-            logger.LogWarning("[DISPOSE-TRACE] {address}: deliveryAction.Completion TIMED OUT after {elapsed}ms",
+            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion TIMED OUT after {elapsed}ms",
                 Address, deliveryStopwatch.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
-            logger.LogWarning("[DISPOSE-TRACE] {address}: deliveryAction.Completion ERROR after {elapsed}ms: {error}",
+            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion ERROR after {elapsed}ms: {error}",
                 Address, deliveryStopwatch.ElapsedMilliseconds, ex.Message);
         }
 
         // Don't wait for execution completion during disposal as this disposal itself
         // runs as an execution and might cause deadlocks waiting for itself
-        logger.LogWarning("[DISPOSE-TRACE] {address}: Skipping executionBlock.Completion wait", Address);
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Skipping executionBlock.Completion wait", Address);
 
         // Complete the startup task if it's still pending
         try
