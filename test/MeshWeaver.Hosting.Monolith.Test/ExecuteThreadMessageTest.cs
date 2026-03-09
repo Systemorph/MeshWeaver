@@ -44,6 +44,10 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
+        base.ConfigureClient(configuration)
+            .WithTypes(typeof(ExecuteThreadMessageResponse));
+
     [Fact]
     public async Task ExecuteThreadMessage_CreatesUserAndResponseNodes()
     {

@@ -106,7 +106,10 @@
       "mcp__aspire__list_console_logs",
       "mcp__aspire__list_structured_logs",
       "mcp__aspire__list_traces",
-      "Bash(az postgres:*)"
+      "Bash(az postgres:*)",
+      "WebFetch(domain:aspire.dev)",
+      "mcp__aspire__list_apphosts",
+      "Bash(az account:*)"
     ],
     "deny": []
   },

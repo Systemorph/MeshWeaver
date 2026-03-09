@@ -213,6 +213,15 @@ internal sealed class MeshCatalog(
         // 5. Create node with Transient state
         var transientNode = node with { State = MeshNodeState.Transient };
 
+        // 5a. Auto-set MainNode for satellite types: point to parent node, not self
+        if (!string.IsNullOrEmpty(transientNode.NodeType)
+            && !string.IsNullOrEmpty(transientNode.Namespace)
+            && Configuration.IsSatelliteNodeType(transientNode.NodeType)
+            && transientNode.MainNode == transientNode.Path)
+        {
+            transientNode = transientNode with { MainNode = transientNode.Namespace };
+        }
+
         // 6. Enrich with HubConfiguration based on NodeType
         if (NodeTypeService != null)
         {

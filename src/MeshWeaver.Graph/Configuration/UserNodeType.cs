@@ -68,8 +68,8 @@ public static class UserNodeType
 
     /// <summary>
     /// Access rule for User nodes when self-registry is enabled.
-    /// Allows portal namespace hubs to create/read/update User nodes (for onboarding).
-    /// Falls through to standard RLS for other identities.
+    /// - Read: granted to all authenticated users (public view rights)
+    /// - Create/Update: granted to portal namespace hubs (for onboarding)
     /// </summary>
     private class UserSelfRegistryAccessRule : INodeTypeAccessRule
     {
@@ -80,6 +80,24 @@ public static class UserNodeType
 
         public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
+            // All authenticated users can read User nodes (public profile view)
+            if (context.Operation == NodeOperation.Read && !string.IsNullOrEmpty(userId))
+                return Task.FromResult(true);
+
+            // Users can update their own User node
+            if (context.Operation == NodeOperation.Update && !string.IsNullOrEmpty(userId))
+            {
+                var nodePath = context.Node.Path;
+                if (!string.IsNullOrEmpty(nodePath))
+                {
+                    var userScopePath = $"User/{userId}";
+                    if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
+                        || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
+                        return Task.FromResult(true);
+                }
+            }
+
+            // Create/Update: portal namespace hubs (onboarding flow)
             if (!string.IsNullOrEmpty(userId))
             {
                 var innerAddress = userId;

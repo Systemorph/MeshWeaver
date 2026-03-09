@@ -49,8 +49,12 @@
         flex-shrink: 0;
     }
 
+    [data-theme="dark"] .mesh-node-thumbnail-image {
+        filter: invert(1);
+    }
+
     @@media (prefers-color-scheme: dark) {
-        .mesh-node-thumbnail-image {
+        :root:not([data-theme="light"]) .mesh-node-thumbnail-image {
             filter: invert(1);
         }
     }

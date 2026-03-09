@@ -2,8 +2,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
@@ -11,7 +9,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Memex.Portal.Shared;
+namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Represents a company, team, or organizational unit.
@@ -72,6 +70,7 @@ public static class OrganizationNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Organization>())
+            .AddDefaultLayoutAreas()
             .AddLayout(layout => layout
                 .WithView("Overview", OrganizationViews.Overview))
     };

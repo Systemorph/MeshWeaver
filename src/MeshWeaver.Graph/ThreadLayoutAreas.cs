@@ -487,8 +487,16 @@ public static class ThreadLayoutAreas
     /// Handles ExecuteThreadMessageRequest by creating both user and response nodes,
     /// running the agent on the hub side, and streaming updates to the response node.
     /// This decouples agent execution from the GUI component lifecycle.
+    ///
+    /// IMPORTANT: The async work runs on a background task (Task.Run) to avoid deadlock.
+    /// The hub's execution block processes messages sequentially. If we await
+    /// nodeFactory.CreateNodeAsync() (which uses hub.AwaitResponse internally) from
+    /// within a handler, the response callback can't be processed because the execution
+    /// block is occupied by the waiting handler — classic deadlock.
+    /// By returning delivery.Processed() immediately and running the work on a background
+    /// task, the execution block is freed to process response callbacks.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleExecuteThreadMessage(
+    private static Task<IMessageDelivery> HandleExecuteThreadMessage(
         IMessageHub hub,
         IMessageDelivery<ExecuteThreadMessageRequest> delivery,
         CancellationToken ct)
@@ -496,11 +504,27 @@ public static class ThreadLayoutAreas
         var request = delivery.Message;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
 
+        // Schedule the async work on a background task to avoid deadlocking the execution block.
+        _ = Task.Run(() => ExecuteThreadMessageAsync(hub, delivery, request, logger, ct), ct);
+
+        return Task.FromResult<IMessageDelivery>(delivery.Processed());
+    }
+
+    /// <summary>
+    /// Executes the thread message processing on a background task.
+    /// Creates user + response nodes, runs the agent, and streams updates.
+    /// </summary>
+    private static async Task ExecuteThreadMessageAsync(
+        IMessageHub hub,
+        IMessageDelivery<ExecuteThreadMessageRequest> delivery,
+        ExecuteThreadMessageRequest request,
+        ILogger logger,
+        CancellationToken ct)
+    {
         try
         {
             // 1. Compute next message number from existing children
             var nextNumber = await ComputeNextMessageNumberAsync(hub, request.ThreadPath);
-            logger.LogInformation("[HandleExecuteThreadMessage] nextNumber={NextNumber} for {ThreadPath}", nextNumber, request.ThreadPath);
 
             // 2. Create user message node
             var userMessage = new ThreadMessage
@@ -512,7 +536,6 @@ public static class ThreadLayoutAreas
                 Type = ThreadMessageType.ExecutedInput
             };
             await CreateMessageNodeAsync(hub, request.ThreadPath, nextNumber, userMessage);
-            logger.LogInformation("[HandleExecuteThreadMessage] User message created at {ThreadPath}/{Number}", request.ThreadPath, nextNumber);
 
             // 3. Create empty response node
             var responseNumber = nextNumber + 1;
@@ -524,9 +547,7 @@ public static class ThreadLayoutAreas
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse
             };
-            logger.LogInformation("[HandleExecuteThreadMessage] Creating response node at {ThreadPath}/{Number}", request.ThreadPath, responseNumber);
             var responsePath = await CreateMessageNodeAsync(hub, request.ThreadPath, responseNumber, responseMessage);
-            logger.LogInformation("[HandleExecuteThreadMessage] Response node created at {ResponsePath}", responsePath);
 
             // 4. Initialize agent chat client
             var chatClient = new AgentChatClient(hub.ServiceProvider);
@@ -588,8 +609,6 @@ public static class ThreadLayoutAreas
             hub.Post(new ExecuteThreadMessageResponse { Success = false, Error = ex.Message },
                 o => o.ResponseFor(delivery));
         }
-
-        return delivery.Processed();
     }
 
     private static void UpdateResponseNode(IMessageHub hub, string responsePath, string text, string? agentName = null, string? modelName = null)

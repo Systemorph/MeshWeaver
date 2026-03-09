@@ -178,6 +178,15 @@ public static class MeshExtensions
             // 4. Create node with Active state (validated, ready to persist)
             var newNode = node with { State = MeshNodeState.Active };
 
+            // 4a. Auto-set MainNode for satellite types: point to parent node, not self
+            if (!string.IsNullOrEmpty(newNode.NodeType)
+                && !string.IsNullOrEmpty(newNode.Namespace)
+                && catalog.Configuration.IsSatelliteNodeType(newNode.NodeType)
+                && newNode.MainNode == newNode.Path) // still at default (self-referencing)
+            {
+                newNode = newNode with { MainNode = newNode.Namespace };
+            }
+
             // 5. Enrich with HubConfiguration based on NodeType
             var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
             if (nodeTypeService != null)
