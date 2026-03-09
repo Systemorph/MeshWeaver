@@ -500,6 +500,7 @@ public static class ThreadLayoutAreas
         {
             // 1. Compute next message number from existing children
             var nextNumber = await ComputeNextMessageNumberAsync(hub, request.ThreadPath);
+            logger.LogInformation("[HandleExecuteThreadMessage] nextNumber={NextNumber} for {ThreadPath}", nextNumber, request.ThreadPath);
 
             // 2. Create user message node
             var userMessage = new ThreadMessage
@@ -511,6 +512,7 @@ public static class ThreadLayoutAreas
                 Type = ThreadMessageType.ExecutedInput
             };
             await CreateMessageNodeAsync(hub, request.ThreadPath, nextNumber, userMessage);
+            logger.LogInformation("[HandleExecuteThreadMessage] User message created at {ThreadPath}/{Number}", request.ThreadPath, nextNumber);
 
             // 3. Create empty response node
             var responseNumber = nextNumber + 1;
@@ -522,7 +524,9 @@ public static class ThreadLayoutAreas
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse
             };
+            logger.LogInformation("[HandleExecuteThreadMessage] Creating response node at {ThreadPath}/{Number}", request.ThreadPath, responseNumber);
             var responsePath = await CreateMessageNodeAsync(hub, request.ThreadPath, responseNumber, responseMessage);
+            logger.LogInformation("[HandleExecuteThreadMessage] Response node created at {ResponsePath}", responsePath);
 
             // 4. Initialize agent chat client
             var chatClient = new AgentChatClient(hub.ServiceProvider);

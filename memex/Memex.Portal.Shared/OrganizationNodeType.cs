@@ -8,6 +8,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Memex.Portal.Shared;
 
@@ -48,7 +50,17 @@ public static class OrganizationNodeType
     public static TBuilder AddOrganizationType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.ConfigureServices(services =>
+            services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>());
         return builder;
+    }
+
+    private class OrganizationNodeProvider : IStaticNodeProvider
+    {
+        public IEnumerable<MeshNode> GetStaticNodes()
+        {
+            yield return CreateMeshNode();
+        }
     }
 
     public static MeshNode CreateMeshNode() => new(NodeType)

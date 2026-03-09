@@ -9,8 +9,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Mode        | PostgreSQL              | Blob Storage | Orleans    | Portal Name
 //   ----------- | ----------------------- | ------------ | ---------- | -----------
 //   local       | Docker pgvector (memex)      | Emulated     | Emulated   | memex-local
-//   local-test  | Azure (memex-test)           | Emulated     | Emulated   | memex-local
-//   local-prod  | Azure (memex)                | Emulated     | Emulated   | memex-local
+//   local-test  | Azure (memex-test)           | Azure (test) | Emulated   | memex-local
+//   local-prod  | Azure (memex)                | Azure (prod) | Emulated   | memex-local
 //   test        | Azure (memex-test)           | Azure         | Azure      | memex-test
 //   prod        | Azure (memex)                | Azure         | Azure      | memex-prod
 //   monolith    | FileSystem (standalone) | —            | —          | memex-monolith
@@ -26,8 +26,9 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
 //
-// For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
-//   ConnectionStrings:meshweaver  (Aspire uses this if set, bypassing provisioning)
+// For local-test/local-prod, also set connection strings to existing Azure resources:
+//   ConnectionStrings:meshweaver  (Azure PostgreSQL, bypassing provisioning)
+//   ConnectionStrings:storage     (Azure Blob Storage, bypassing provisioning)
 
 var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "local";
 
@@ -59,28 +60,6 @@ var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secr
 var isDeployed = mode is "test" or "prod";
 var useLocalDb = mode == "local";
 
-// --- Azure Blob Storage ---
-var contentStorage = builder.AddAzureStorage("memexblobs");
-if (isDeployed)
-{
-    contentStorage = contentStorage.ConfigureInfrastructure(infra =>
-    {
-        var storageAccount = infra.GetProvisionableResources()
-            .OfType<Azure.Provisioning.Storage.StorageAccount>()
-            .Single();
-        storageAccount.Location = new Azure.Core.AzureLocation("swedencentral");
-    });
-}
-else if (builder.Environment.IsDevelopment())
-{
-    contentStorage = contentStorage.RunAsEmulator(
-        azurite => azurite
-            .WithDataBindMount("../../Azurite/Data")
-            .WithLifetime(ContainerLifetime.Persistent)
-            .WithExternalHttpEndpoints());
-}
-var storageBlobs = contentStorage.AddBlobs("storage");
-
 // --- Orleans (ephemeral, fresh cluster on each restart) ---
 var orleansStorage = builder.AddAzureStorage("orleansstorage");
 if (!isDeployed && builder.Environment.IsDevelopment())
@@ -104,7 +83,6 @@ var portal = builder
     .AddProject<Projects.Memex_Portal_Distributed>(isDeployed ? $"memex-{mode}" : "memex-local")
     .WithExternalHttpEndpoints()
     .WithReference(orleans)
-    .WithReference(storageBlobs)
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__ApiKey", embeddingKey)
@@ -125,10 +103,44 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
     // Wait for dependencies
-    .WaitFor(storageBlobs)
     .WaitFor(orleansTables)
     .WaitFor(grainStateBlobs)
     .WaitForCompletion(dbMigration);
+
+// --- Azure Blob Storage ---
+if (useLocalDb)
+{
+    // Local emulated storage
+    var contentStorage = builder.AddAzureStorage("memexblobs")
+        .RunAsEmulator(
+            azurite => azurite
+                .WithDataBindMount("../../Azurite/Data")
+                .WithLifetime(ContainerLifetime.Persistent)
+                .WithExternalHttpEndpoints());
+    var storageBlobs = contentStorage.AddBlobs("storage");
+    portal.WithReference(storageBlobs).WaitFor(storageBlobs);
+}
+else if (mode is "local-test" or "local-prod")
+{
+    // Use pre-configured connection string (set via dotnet user-secrets)
+    // to connect to existing Azure Blob Storage without Aspire provisioning.
+    var storage = builder.AddConnectionString("storage");
+    portal.WithReference(storage);
+}
+else
+{
+    // Deployed modes: provision Azure Blob Storage in Sweden Central
+    var contentStorage = builder.AddAzureStorage("memexblobs")
+        .ConfigureInfrastructure(infra =>
+        {
+            var storageAccount = infra.GetProvisionableResources()
+                .OfType<Azure.Provisioning.Storage.StorageAccount>()
+                .Single();
+            storageAccount.Location = new Azure.Core.AzureLocation("swedencentral");
+        });
+    var storageBlobs = contentStorage.AddBlobs("storage");
+    portal.WithReference(storageBlobs).WaitFor(storageBlobs);
+}
 
 // --- PostgreSQL ---
 if (useLocalDb)
