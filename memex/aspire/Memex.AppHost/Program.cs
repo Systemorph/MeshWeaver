@@ -144,9 +144,17 @@ if (useLocalDb)
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
 }
+else if (mode is "local-test" or "local-prod")
+{
+    // Use pre-configured connection string (set via dotnet user-secrets)
+    // to connect to existing Azure PostgreSQL without Aspire provisioning.
+    var db = builder.AddConnectionString("meshweaver");
+    dbMigration.WithReference(db);
+    portal.WithReference(db);
+}
 else
 {
-    // Azure PostgreSQL Flexible Server in Sweden Central (one server, db name per environment)
+    // Deployed modes: provision Azure PostgreSQL Flexible Server in Sweden Central
     var postgres = builder.AddAzurePostgresFlexibleServer("memex-postgres")
         .ConfigureInfrastructure(infra =>
         {
@@ -155,7 +163,7 @@ else
                 .Single();
             server.Location = new Azure.Core.AzureLocation("swedencentral");
         });
-    var dbName = mode is "local-test" or "test" ? "memex-test" : "memex";
+    var dbName = mode is "test" ? "memex-test" : "memex";
     var db = postgres.AddDatabase("meshweaver", databaseName: dbName);
 
     dbMigration.WithReference(db).WaitFor(db);

@@ -29,6 +29,12 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // and it's not the correct hub identity for security checks.
         var node = await persistence.GetNodeAsync(address.ToString(), cancellationToken);
 
+        // Fallback to static node providers (e.g., DocumentationNodeProvider)
+        // for nodes that are never persisted but served as embedded resources.
+        node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, address.ToString(), StringComparison.OrdinalIgnoreCase));
+
         if (node is null)
             throw new MeshException(
                 $"Cannot instantiate Node {streamId}. No {nameof(MeshNode.HubConfiguration)} is specified.");

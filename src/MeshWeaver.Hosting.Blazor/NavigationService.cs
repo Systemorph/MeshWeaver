@@ -290,6 +290,7 @@ internal class NavigationService : INavigationService
         "User",
         "Role",
         "Group",
+        "AccessAssignment",
     };
 
     /// <summary>
