@@ -180,6 +180,18 @@
                 }
             }
 
+            // Update circuit context so the OnboardingMiddleware on the next request
+            // recognizes this user as already onboarded (the query for newly created
+            // nodes may not return results immediately due to routing/caching).
+            var updatedContext = (AccessService.Context ?? new AccessContext()) with
+            {
+                ObjectId = username,
+                Name = username,
+                Email = model.Email.Trim()
+            };
+            AccessService.SetContext(updatedContext);
+            AccessService.SetCircuitContext(updatedContext);
+
             Navigation.NavigateTo("/", forceLoad: true);
         }
         catch (Microsoft.AspNetCore.Components.NavigationException)

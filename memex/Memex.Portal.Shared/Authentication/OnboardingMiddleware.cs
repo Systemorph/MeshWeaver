@@ -48,13 +48,25 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                 // Skip virtual users — they don't need onboarding
                 if (userContext is { IsVirtual: false } && !string.IsNullOrEmpty(userContext.ObjectId))
                 {
+                    var email = userContext.Email ?? userContext.ObjectId;
+
+                    // If the context's ObjectId was already resolved to a username
+                    // (different from the email), this user was onboarded in the current
+                    // session. Skip the query — it may not find newly created nodes
+                    // immediately due to routing/caching in the mesh query layer.
+                    if (!string.IsNullOrEmpty(email) &&
+                        !string.IsNullOrEmpty(userContext.ObjectId) &&
+                        userContext.ObjectId != email)
+                    {
+                        await next(context);
+                        return;
+                    }
+
                     var meshQuery = portalApp.Hub.ServiceProvider.GetService<IMeshService>();
                     if (meshQuery != null)
                     {
                         try
                         {
-                            var email = userContext.Email ?? userContext.ObjectId;
-
                             // Look up User node by email stored in content.
                             // Use ImpersonateAsHub scope because user context may not have
                             // sufficient permissions yet at this point in the pipeline.
