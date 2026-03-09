@@ -52,17 +52,13 @@ public static class UserActivityLayoutAreas
                 $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
                 "</div>"));
 
-            // Content area: two-column grid — Activity Feed left, Recently Viewed far right
-            var topPanel = Controls.LayoutGrid
-                .WithStyle("padding: 0 24px; gap: 24px; width: 100%; flex: 1; min-height: 0;");
+            // Content area: vertical stack — Recently Viewed on top, Activity Feed below
+            var topPanel = Controls.Stack
+                .WithStyle($"padding: 0 24px; gap: 24px; width: 100%; flex: 1; min-height: 0; overflow: hidden;");
 
-            topPanel = topPanel.WithView(
-                await BuildActivityFeed(host),
-                skin => skin.WithXs(12).WithSm(8));
+            topPanel = topPanel.WithView(await BuildRecentActivity(host, userId));
 
-            topPanel = topPanel.WithView(
-                await BuildRecentActivity(host, userId),
-                skin => skin.WithXs(12).WithSm(4));
+            topPanel = topPanel.WithView(await BuildActivityFeed(host));
 
             dashboard = dashboard.WithView(topPanel);
 
@@ -240,9 +236,9 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
     {
-        // Scrollable section — grows to fill available space via flex
+        // Fixed-height scrollable section
         var section = Controls.Stack
-            .WithStyle($"flex: 1; min-height: 0; overflow-y: auto; {ThinScrollbar}");
+            .WithStyle($"flex-shrink: 0; max-height: 40%; overflow-y: auto; {ThinScrollbar}");
 
         // Section header
         section = section.WithView(Controls.Html(

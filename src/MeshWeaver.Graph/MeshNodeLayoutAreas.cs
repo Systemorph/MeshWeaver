@@ -241,7 +241,7 @@ public static class MeshNodeLayoutAreas
             if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
             {
                 titleContent = titleContent.WithView(Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img{(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? " svg-icon" : "")}\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />"));
+                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />"));
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
@@ -805,7 +805,7 @@ public static class MeshNodeLayoutAreas
 
         return Controls.Html($@"
             <div style=""display: flex; align-items: center; gap: 8px;"">
-                <img src=""{iconUrl}"" alt="""" class=""{(iconUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "svg-icon" : "")}"" style=""width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;"" />
+                <img src=""{iconUrl}"" alt="""" style=""width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;"" />
                 <span>{name}</span>
             </div>");
     }
