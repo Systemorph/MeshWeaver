@@ -42,12 +42,14 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 10000)]
     public async Task CreateNode_WithoutPermission_ThrowsUnauthorized()
     {
-        // Arrange
-        const string userId = "unauthorized-user";
+        // Arrange — switch to unauthorized user who has NO permissions
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var unauthorizedUser = new AccessContext { ObjectId = "unauthorized-user", Name = "Unauthorized" };
+        accessService.SetContext(unauthorizedUser);
+        accessService.SetCircuitContext(unauthorizedUser);
+
         const string parentPath = "Restricted/Parent";
         var nodePath = $"{parentPath}/TestNode_{Guid.NewGuid().AsString()}";
-
-        // Note: User has NO permissions assigned - should be denied
 
         var node = MeshNode.FromPath(nodePath) with
         {
@@ -55,11 +57,19 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
             NodeType = "Markdown"
         };
 
-        // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
-        var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
-        var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
-        exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
-        Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
+        try
+        {
+            // Act & Assert - CreateNodeAsync should throw UnauthorizedAccessException
+            var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
+            var exception = await act.Should().ThrowAsync<UnauthorizedAccessException>();
+            exception.Which.Message.Should().Contain("Access denied", "Should indicate authorization failure");
+            Output.WriteLine($"Exception thrown as expected: {exception.Which.Message}");
+        }
+        finally
+        {
+            // Restore admin context
+            TestUsers.DevLogin(Mesh);
+        }
     }
 
     /// <summary>

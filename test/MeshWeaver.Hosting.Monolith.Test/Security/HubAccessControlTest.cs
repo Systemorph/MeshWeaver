@@ -67,17 +67,19 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// A portal hub can create VUser nodes using explicit createdBy identity.
+    /// A portal hub can create VUser nodes using ImpersonateAsHub scope.
     /// The VUserAccessRule allows portal namespace identities.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task PortalHub_CanCreateVUserNode_WithExplicitCreatedBy()
+    public async Task PortalHub_CanCreateVUserNode_WithImpersonateScope()
     {
         var ct = TestContext.Current.CancellationToken;
 
-        var hubAddress = new Address("portal", "test1");
-        var portalIdentity = hubAddress.ToFullString();
+        var portalHub = Mesh.ServiceProvider.CreateMessageHub(
+            new Address("portal", "test1"),
+            c => c);
 
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var vUserNode = new MeshNode("testVUser", "VUser")
@@ -93,9 +95,12 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             }
         };
 
-        var created = await nodeFactory.CreateNodeAsync(vUserNode, ct);
-        created.Should().NotBeNull();
-        created.Path.Should().Be("VUser/testVUser");
+        using (accessService.ImpersonateAsHub(portalHub))
+        {
+            var created = await nodeFactory.CreateNodeAsync(vUserNode, ct);
+            created.Should().NotBeNull();
+            created.Path.Should().Be("VUser/testVUser");
+        }
     }
 
     /// <summary>

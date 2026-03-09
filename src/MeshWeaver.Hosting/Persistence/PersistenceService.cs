@@ -88,13 +88,23 @@ internal class PersistenceService(
     private static bool IsPubliclyReadable(MeshNode node)
         => node.NodeType == MeshNode.NodeTypePath;
 
+    /// <summary>
+    /// Users can always read their own User/VUser profile nodes,
+    /// and hubs can always access their own nodes (MainNode == userId).
+    /// </summary>
+    private static bool IsSelfAccess(MeshNode node, string? userId)
+        => !string.IsNullOrEmpty(userId)
+           && (((node.Namespace == "User" || node.Namespace == "VUser")
+                && string.Equals(node.Id, userId, StringComparison.OrdinalIgnoreCase))
+               || string.Equals(node.MainNode, userId, StringComparison.OrdinalIgnoreCase));
+
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
     {
         var node = await core.GetNodeAsync(path, Options, ct);
         if (node == null || securityService == null)
             return node;
 
-        if (IsPubliclyReadable(node))
+        if (IsPubliclyReadable(node) || IsSelfAccess(node, userId))
             return node;
 
         var hasPermission = string.IsNullOrEmpty(userId)
@@ -114,7 +124,7 @@ internal class PersistenceService(
     {
         await foreach (var node in core.GetChildrenAsync(parentPath, Options))
         {
-            if (securityService == null || IsPubliclyReadable(node))
+            if (securityService == null || IsPubliclyReadable(node) || IsSelfAccess(node, userId))
             {
                 yield return node;
                 continue;
@@ -133,7 +143,7 @@ internal class PersistenceService(
     {
         await foreach (var node in core.GetDescendantsAsync(parentPath, Options))
         {
-            if (securityService == null || IsPubliclyReadable(node))
+            if (securityService == null || IsPubliclyReadable(node) || IsSelfAccess(node, userId))
             {
                 yield return node;
                 continue;

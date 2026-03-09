@@ -274,6 +274,7 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                .AddSelfRegistry()
                 .AddDocumentation()
                 // Add kernel for interactive markdown code execution
                 .AddKernel()

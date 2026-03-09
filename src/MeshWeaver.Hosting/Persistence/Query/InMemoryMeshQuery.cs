@@ -108,8 +108,16 @@ internal class InMemoryMeshQuery(
                 continue;
             }
 
-            // Apply access control filtering if security service is available
-            if (securityService != null)
+            // Apply access control filtering.
+            // For MeshNode items, rely solely on INodeValidator (which handles custom access
+            // rules, self-access, and standard RLS). For non-MeshNode items (partition objects),
+            // use inline permission check since validators only apply to MeshNodes.
+            if (node is MeshNode meshNode)
+            {
+                if (!await ValidateReadAsync(meshNode, userId, ct))
+                    continue;
+            }
+            else if (securityService != null)
             {
                 var itemPath = GetItemPath(node);
                 if (!string.IsNullOrEmpty(itemPath))
@@ -120,10 +128,6 @@ internal class InMemoryMeshQuery(
                         continue;
                 }
             }
-
-            // Apply INodeValidator Read validators (same as MeshCatalog.ValidateReadAsync)
-            if (node is MeshNode meshNode && !await ValidateReadAsync(meshNode, userId, ct))
-                continue;
 
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
@@ -240,12 +244,12 @@ internal class InMemoryMeshQuery(
         if (nodeValidators == null)
             return true;
 
-        // Use the existing AccessContext if available, or create one from the effective userId
-        var accessContext = accessService?.Context;
-        if (accessContext == null && !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous)
-        {
-            accessContext = new AccessContext { ObjectId = userId };
-        }
+        // Always use the effective userId for the validation context.
+        // The query's explicit UserId takes precedence over session AccessContext
+        // to prevent admin context from leaking into public queries.
+        var accessContext = !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous
+            ? new AccessContext { ObjectId = userId }
+            : accessService?.Context;
 
         var context = new NodeValidationContext
         {
