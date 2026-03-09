@@ -78,43 +78,51 @@ public static class NodeMenuItemsExtensions
             .FirstAsync();
         var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
+        var nodeName = node?.Name ?? "";
+        string Href(string area, string? qs = null) => MeshNodeLayoutAreas.BuildContentUrl(hubPath, area, qs);
+
         if (perms.HasFlag(Permission.Update))
         {
-            yield return new("Edit", "Edit",
-                RequiredPermission: Permission.Update, Order: -10);
-            yield return new("Suggest", "Suggest",
-                RequiredPermission: Permission.Update, Order: -9);
+            var editLabel = string.IsNullOrEmpty(nodeName) ? "Edit" : $"Edit {nodeName}";
+            yield return new(editLabel, "Edit",
+                RequiredPermission: Permission.Update, Order: -10, Href: Href("Edit"));
         }
 
         if (perms.HasFlag(Permission.Create))
         {
             // When on a NodeType definition page, pass the type as query parameter
-            var createHref = node?.NodeType == MeshNode.NodeTypePath
-                ? MeshNodeLayoutAreas.BuildContentUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, $"type={Uri.EscapeDataString(hubPath)}")
+            var createQs = node?.NodeType == MeshNode.NodeTypePath
+                ? $"type={Uri.EscapeDataString(hubPath)}"
                 : null;
             yield return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
-                RequiredPermission: Permission.Create, Order: 0, Href: createHref);
+                RequiredPermission: Permission.Create, Order: 0, Href: Href(MeshNodeLayoutAreas.CreateNodeArea, createQs));
             yield return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
-                RequiredPermission: Permission.Create, Order: 1);
+                RequiredPermission: Permission.Create, Order: 1, Href: Href(MeshNodeLayoutAreas.ImportMeshNodesArea));
         }
 
         if (perms.HasFlag(Permission.Read))
-            yield return new("Files", MeshNodeLayoutAreas.FilesArea, Order: 25);
+            yield return new("Files", MeshNodeLayoutAreas.FilesArea, Order: 25, Href: Href(MeshNodeLayoutAreas.FilesArea));
 
         if (perms.HasFlag(Permission.Read))
-            yield return new("Export", MeshNodeLayoutAreas.ExportArea, Order: 26);
+        {
+            var exportLabel = string.IsNullOrEmpty(nodeName) ? "Export" : $"Export {nodeName}";
+            yield return new(exportLabel, MeshNodeLayoutAreas.ExportArea, Order: 26, Href: Href(MeshNodeLayoutAreas.ExportArea));
+        }
 
-        yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, Order: 50);
+        yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, Order: 50, Href: Href(MeshNodeLayoutAreas.ThreadsArea));
 
         if (perms.HasFlag(Permission.Read))
-            yield return new("Versions", MeshNodeLayoutAreas.VersionsArea, Order: 55);
+            yield return new("Versions", MeshNodeLayoutAreas.VersionsArea, Order: 55, Href: Href(MeshNodeLayoutAreas.VersionsArea));
 
         if (perms.HasFlag(Permission.Read))
-            yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, Order: 90);
+            yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, Order: 90, Href: Href(MeshNodeLayoutAreas.SettingsArea));
 
         if (perms.HasFlag(Permission.Delete))
-            yield return new("Delete", MeshNodeLayoutAreas.DeleteArea,
-                RequiredPermission: Permission.Delete, Order: 100);
+        {
+            var deleteLabel = string.IsNullOrEmpty(nodeName) ? "Delete" : $"Delete {nodeName}";
+            yield return new(deleteLabel, MeshNodeLayoutAreas.DeleteArea,
+                RequiredPermission: Permission.Delete, Order: 100, Href: Href(MeshNodeLayoutAreas.DeleteArea));
+        }
     }
 
     /// <summary>

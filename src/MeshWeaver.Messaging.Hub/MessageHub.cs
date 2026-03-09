@@ -793,20 +793,20 @@ public sealed class MessageHub : IMessageHub
                 {
                     try
                     {
-                        logger.LogWarning("[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
                             Address, hostedHubs.Disposal?.IsCompleted);
                         await hostedHubs.Disposal!;
-                        logger.LogWarning("[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
                             Address, disposeHostedHubsStopwatch.ElapsedMilliseconds);
                     }
                     catch (Exception e)
                     {
-                        logger.LogWarning("[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
                             Address, disposeHostedHubsStopwatch.ElapsedMilliseconds, e.Message);
                     }
                     finally
                     {
-                        logger.LogWarning("[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
                             Address, Version);
                         Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                     }
@@ -822,26 +822,26 @@ public sealed class MessageHub : IMessageHub
                     {
                         if (RunLevel == MessageHubRunLevel.ShutDown)
                         {
-                            logger.LogWarning("[DISPOSE-TRACE] {address}: ShutDown already processed, ignoring", Address);
+                            logger.LogDebug("[DISPOSE-TRACE] {address}: ShutDown already processed, ignoring", Address);
                             return request.Ignored();
                         }
 
-                        logger.LogWarning("[DISPOSE-TRACE] {address}: STARTING ShutDown phase", Address);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: STARTING ShutDown phase", Address);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
 
                     CancelCallbacks();
                     DisposeImpl();
 
-                    logger.LogWarning("[DISPOSE-TRACE] {address}: Awaiting messageService.DisposeAsync()...", Address);
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting messageService.DisposeAsync()...", Address);
                     await messageService.DisposeAsync();
-                    logger.LogWarning("[DISPOSE-TRACE] {address}: messageService.DisposeAsync() done in {elapsed}ms",
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.DisposeAsync() done in {elapsed}ms",
                         Address, shutdownStopwatch.ElapsedMilliseconds);
 
                     try
                     {
                         disposingTaskCompletionSource.TrySetResult();
-                        logger.LogWarning("[DISPOSE-TRACE] {address}: Disposal COMPLETED in {elapsed}ms total",
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: Disposal COMPLETED in {elapsed}ms total",
                             Address, disposalStopwatch.ElapsedMilliseconds);
                     }
                     catch (InvalidOperationException)
