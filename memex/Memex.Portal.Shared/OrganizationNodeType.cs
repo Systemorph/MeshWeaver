@@ -54,7 +54,7 @@ public static class OrganizationNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Organization",
-        NodeType = "NodeType",
+        NodeType = NodeType,
         Icon = "/static/NodeTypeIcons/building.svg",
         AssemblyLocation = typeof(OrganizationNodeType).Assembly.Location,
         HubConfiguration = config => config

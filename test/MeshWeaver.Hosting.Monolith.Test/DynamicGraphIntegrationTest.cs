@@ -1187,7 +1187,6 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddOrganization()
             .AddUserData()
             .AddTypeData()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))

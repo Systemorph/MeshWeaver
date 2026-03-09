@@ -39,11 +39,26 @@ public class RlsNodeValidator : INodeValidator
     {
         // Self-access: hubs always have full control of their own nodes
         var userId = GetUserId(context);
-        if (!string.IsNullOrEmpty(userId)
-            && !string.IsNullOrEmpty(context.Node.MainNode)
-            && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrEmpty(userId))
         {
-            return NodeValidationResult.Valid();
+            // Check MainNode match (original check)
+            if (!string.IsNullOrEmpty(context.Node.MainNode)
+                && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
+            {
+                return NodeValidationResult.Valid();
+            }
+
+            // Check if node is under the user's own User scope (User/{userId} and descendants)
+            var nodePath = context.Node.Path;
+            if (!string.IsNullOrEmpty(nodePath))
+            {
+                var userScopePath = $"User/{userId}";
+                if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return NodeValidationResult.Valid();
+                }
+            }
         }
 
         // Map operation to required permission

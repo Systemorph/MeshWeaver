@@ -34,7 +34,6 @@ public class AutocompleteIconTests : MonolithMeshTestBase
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddSystemorph()
             .AddAcme()
-            .AddOrganization()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph();
     }
