@@ -40,35 +40,14 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         ).Token;
     }
 
-    private async Task<Address> CreateKernelNodeAsync(IMessageHub client, string kernelId)
-    {
-        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
-        // Create a kernel node as child of the template kernel node
-        // MeshNode(Id, Namespace) constructs Path as "{Namespace}/{Id}"
-        // So this creates path "kernel/test-kernel"
-        var kernelNode = new MeshNode(kernelId, AddressExtensions.KernelType)
-        {
-            NodeType = AddressExtensions.KernelType,
-            Name = $"Kernel-{kernelId}"
-        };
-
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(kernelNode),
-            o => o.WithTarget(Mesh.Address),
-            GetTimeoutToken(10000));
-
-        response.Message.Success.Should().BeTrue($"Failed to create kernel node: {response.Message.Error}");
-        return kernelAddress;
-    }
-
     [Fact(Timeout = DefaultTimeoutMs)]
     public async Task HelloWorld()
     {
         var client = GetClient();
 
-        // Create the kernel node before addressing it (unique per test)
+        // Each test gets a unique kernel ID — the kernel hub creates local subhosts on demand
         var kernelId = $"test-kernel-{Guid.NewGuid().ToString("N")[..8]}";
-        var kernelAddress = await CreateKernelNodeAsync(client, kernelId);
+        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
 
         var command = new SubmitCode("Console.WriteLine(\"Hello World\");");
         client.Post(
@@ -112,9 +91,8 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
         const string url = "http://localhost/area";
         var client = GetClient();
 
-        // Create the kernel node before addressing it (unique per test)
         var kernelId = $"test-kernel-{Guid.NewGuid().ToString("N")[..8]}";
-        var kernelAddress = await CreateKernelNodeAsync(client, kernelId);
+        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
 
         client.Post(
             new SubmitCodeRequest(TestHubExtensions.GetDashboardCommand) { IFrameUrl = url },
@@ -154,9 +132,8 @@ Mesh.Edit(new Calculator(1,2), CalculatorSum)
         const string Area = nameof(Area);
         var client = GetClient();
 
-        // Create the kernel node before addressing it (unique per test)
         var kernelId = $"test-kernel-{Guid.NewGuid().ToString("N")[..8]}";
-        var kernelAddress = await CreateKernelNodeAsync(client, kernelId);
+        var kernelAddress = AddressExtensions.CreateKernelAddress(kernelId);
 
         client.Post(
             new SubmitCodeRequest(Code) { Id = Area },
