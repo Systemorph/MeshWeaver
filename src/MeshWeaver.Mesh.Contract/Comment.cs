@@ -78,20 +78,6 @@ public record Comment
     /// </summary>
     [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
-
-    /// <summary>
-    /// Character offset in the clean (marker-stripped) content where the comment begins.
-    /// Null means the comment is attached to the bottom of the screen (page-level comment).
-    /// </summary>
-    [Browsable(false)]
-    public int? Position { get; init; }
-
-    /// <summary>
-    /// Length of the highlighted text in clean content.
-    /// Null means no text is highlighted.
-    /// </summary>
-    [Browsable(false)]
-    public int? Length { get; init; }
 }
 
 /// <summary>
@@ -121,18 +107,6 @@ public record TrackedChange
     /// </summary>
     [Browsable(false)]
     public TrackedChangeType ChangeType { get; init; }
-
-    /// <summary>
-    /// Character offset in the clean (marker-stripped) content.
-    /// </summary>
-    [Browsable(false)]
-    public int? Position { get; init; }
-
-    /// <summary>
-    /// Length of the affected text range in clean content.
-    /// </summary>
-    [Browsable(false)]
-    public int? Length { get; init; }
 
     /// <summary>
     /// Author of the change.

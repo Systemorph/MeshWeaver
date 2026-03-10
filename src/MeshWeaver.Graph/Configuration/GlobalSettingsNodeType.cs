@@ -6,7 +6,7 @@ namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
 /// Provides configuration for the GlobalSettings node type.
-/// A single node of this type at path <c>_settings</c> hosts the platform-wide settings page.
+/// A single node of this type at path <c>_Setting</c> hosts the platform-wide settings page.
 /// </summary>
 public static class GlobalSettingsNodeType
 {
@@ -18,18 +18,18 @@ public static class GlobalSettingsNodeType
     /// <summary>
     /// Well-known path for the global settings node.
     /// </summary>
-    public const string SettingsPath = "_settings";
+    public const string SettingsPath = "_Setting";
 
     /// <summary>
     /// Registers the built-in "GlobalSettings" MeshNode on the mesh builder
-    /// and creates the singleton _settings node.
+    /// and creates the singleton _Setting node.
     /// </summary>
     public static TBuilder AddGlobalSettingsType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
 
-        // Create the well-known _settings node
+        // Create the well-known _Setting node
         builder.AddMeshNodes(new MeshNode(SettingsPath)
         {
             NodeType = NodeType,
