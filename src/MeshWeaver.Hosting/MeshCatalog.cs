@@ -353,6 +353,19 @@ internal sealed class MeshCatalog(
             return new AddressResolution(matchedPath, remainder);
         }
 
+        // 3. Fallback: check the in-memory cache (covers transient nodes not yet visible to persistence queries)
+        var firstSegment = segments[0];
+        if (cache.TryGetValue(firstSegment, out var cachedValue) && cachedValue is MeshNode cachedNode)
+        {
+            var remainder = segments.Length > 1
+                ? string.Join("/", segments.Skip(1))
+                : null;
+            logger.LogDebug("ResolvePathAsync: cache fallback found node at path={Path} for input={Input}",
+                cachedNode.Path, path);
+            return new AddressResolution(cachedNode.Path, remainder);
+        }
+
+        logger.LogDebug("ResolvePathAsync: no match found for path={Path}", path);
         return null;
     }
 

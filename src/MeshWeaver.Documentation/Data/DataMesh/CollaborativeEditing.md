@@ -1,19 +1,43 @@
 ---
 Name: Collaborative Editing
 Category: Documentation
-Description: How to use collaborative markdown editing with comments and track changes
+Description: How to use collaborative markdown editing with comments, track changes, and annotation entities
 Icon: /static/DocContent/DataMesh/CollaborativeEditing/icon.svg
 ---
 
 Work together on documents in real-time with comments and suggestions.
 
+## Architecture: Annotations as Satellite Entities
+
+All annotations (comments, tracked changes) are stored as **satellite entities** under the `_annotations` namespace alongside the document. The markdown content itself keeps inline markers for backward compatibility, but during editing the system separates content from annotations:
+
+1. **Load**: Read markdown with markers + load annotation entities from `_annotations`
+2. **Separate**: Strip markers to get clean text; build annotation position map from entities
+3. **Edit**: User edits clean text; annotations are rendered as overlays from entity positions
+4. **Save**: Compute position shifts, update entity positions, reassemble markers, save both
+
+### Annotation Entity Types
+
+- **Comment** — a comment anchored to a text range or attached to the page
+  - `Position` / `Length`: character offset in clean content (null = bottom of page)
+  - `Status`: Active or Resolved
+  - `PrimaryNodePath`: document path for permission delegation
+
+- **TrackedChange** — a suggested insertion or deletion
+  - `Position` / `Length`: character offset in clean content
+  - `ChangeType`: Insertion or Deletion
+  - `Status`: Pending, Accepted, or Rejected
+  - `PrimaryNodePath`: document path for permission delegation
+
+Both types are satellite entities (`IsSatelliteType = true`) and are stored under the `_annotations` partition.
+
+---
+
 ## Adding Comments
 
-To add a comment, select the text you want to comment on and click the **Comment** button in the toolbar. Your comment will appear as a popover when you click on the highlighted text.
+Select text and click **Comment** in the toolbar. A Comment entity is created with `Position` and `Length` pointing to the selected range. Comments with no position are attached to the bottom of the page.
 
 ### Example: A paragraph with comments
-
-The following paragraph demonstrates how comments appear in a document:
 
 > MeshWeaver is a <!--comment:c1-->powerful platform<!--/comment:c1--> for building <!--comment:c2-->collaborative applications<!--/comment:c2-->. It provides real-time synchronization and <!--comment:c3-->conflict-free editing<!--/comment:c3-->.
 
@@ -26,7 +50,7 @@ In this example:
 
 ## Making Suggestions (Track Changes)
 
-When you want to suggest changes without directly editing, use **Track Changes** mode. Your edits will appear as suggestions that others can accept or reject.
+Use **Suggest Edit** to propose changes without directly editing. A TrackedChange entity is created with the change details. Others can accept or reject your suggestions.
 
 ### Suggested Additions
 
@@ -42,8 +66,6 @@ Text you want to remove appears with a <!--delete:d1:Carol:Dec 20-->red striketh
 
 ### Combined Example
 
-Here's a paragraph with multiple suggestions:
-
 > Our team has completed the <!--delete:d3:Bob:Dec 22-->initial<!--/delete:d3--><!--insert:i3:Bob:Dec 22-->comprehensive<!--/insert:i3--> analysis of the <!--comment:c4-->market trends<!--/comment:c4-->. We recommend <!--insert:i4:Alice:Dec 23-->immediate action on the following priorities<!--/insert:i4-->:
 >
 > 1. <!--insert:i5:Bob:Dec 23-->Expand into European markets<!--/insert:i5-->
@@ -57,14 +79,14 @@ Here's a paragraph with multiple suggestions:
 ### Accepting Changes
 
 Click the **checkmark** next to a suggestion to accept it:
-- **Accept insertion**: The suggested text becomes permanent
-- **Accept deletion**: The marked text is removed
+- **Accept insertion**: The suggested text becomes permanent; TrackedChange status becomes Accepted
+- **Accept deletion**: The marked text is removed; TrackedChange status becomes Accepted
 
 ### Rejecting Changes
 
 Click the **X** next to a suggestion to reject it:
-- **Reject insertion**: The suggested text is removed
-- **Reject deletion**: The original text is kept
+- **Reject insertion**: The suggested text is removed; TrackedChange status becomes Rejected
+- **Reject deletion**: The original text is kept; TrackedChange status becomes Rejected
 
 ### Accept All / Reject All
 
@@ -72,14 +94,27 @@ Use the toolbar buttons to accept or reject all pending changes at once.
 
 ---
 
+## Position Tracking and Shifts
+
+When you edit text, annotation positions are automatically recomputed:
+
+1. The system detects the **edit zone** (where content changed) by comparing old and new text
+2. Annotations **before** the edit zone keep their positions
+3. Annotations **after** the edit zone shift by the content length delta
+4. Annotations **within** the edit zone are clamped to boundaries
+
+This happens on every save (using the existing 500ms auto-save throttle).
+
+---
+
 ## Working with Multiple Collaborators
 
 When multiple people edit the same document:
 
-- You'll see colored cursors showing where others are working
 - Each person's suggestions are color-coded
 - Comments show the author's name and timestamp
-- Changes sync automatically - no need to save
+- Changes sync automatically via the auto-save window
+- Annotation entities update reactively for all connected editors
 
 ### Example: Team Review Session
 

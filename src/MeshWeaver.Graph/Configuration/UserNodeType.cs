@@ -37,6 +37,7 @@ public static class UserNodeType
         {
             services.AddSingleton<IStaticNodeProvider, UserNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule, UserAccessRule>();
+            services.AddSingleton(new NodeTypePermission(NodeType, PublicRead: true));
             return services;
         });
         return builder;
