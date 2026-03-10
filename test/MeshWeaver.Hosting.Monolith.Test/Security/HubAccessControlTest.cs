@@ -89,8 +89,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             State = MeshNodeState.Active,
             Content = new AccessObject
             {
-                Id = "testVUser",
-                Name = "Test Guest",
                 IsVirtual = true
             }
         };
@@ -121,8 +119,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             State = MeshNodeState.Active,
             Content = new AccessObject
             {
-                Id = "anonUser",
-                Name = "Anonymous Guest",
                 IsVirtual = true
             }
         };
@@ -154,8 +150,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             State = MeshNodeState.Active,
             Content = new AccessObject
             {
-                Id = "guest42",
-                Name = "Guest 42",
                 IsVirtual = true
             }
         };
@@ -194,8 +188,6 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
             State = MeshNodeState.Active,
             Content = new AccessObject
             {
-                Id = "guest99",
-                Name = "Guest 99",
                 IsVirtual = true
             }
         };

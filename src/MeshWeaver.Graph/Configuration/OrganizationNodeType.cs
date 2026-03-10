@@ -25,8 +25,10 @@ public record Organization
 
     public string? Website { get; init; }
 
+    [ContentItem]
     public string? Logo { get; init; }
 
+    [ContentItem]
     [MeshNodeProperty(nameof(MeshNode.Icon))]
     public string Icon { get; init; } = "Building";
 
@@ -41,6 +43,7 @@ public record Organization
 
 /// <summary>
 /// Provides configuration for Organization nodes in the graph.
+/// Access rules: public read. Update/Create/Delete fall through to standard RLS.
 /// </summary>
 public static class OrganizationNodeType
 {
@@ -76,30 +79,35 @@ public static class OrganizationNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Organization>())
+            .WithPublicRead()
             .AddDefaultLayoutAreas()
             .AddLayout(layout => layout
                 .WithView("Overview", OrganizationViews.Overview))
     };
 
     /// <summary>
-    /// Access rule for Organization nodes.
-    /// Read: granted to all authenticated users.
-    /// Create/Update/Delete: falls through to standard RLS.
+    /// DI-registered access rule for Organization nodes.
+    /// Read: all authenticated users. Update: requires Admin role (via ISecurityService).
     /// </summary>
-    private class OrganizationAccessRule : INodeTypeAccessRule
+    private class OrganizationAccessRule(ISecurityService securityService) : INodeTypeAccessRule
     {
         public string NodeType => OrganizationNodeType.NodeType;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
-            [NodeOperation.Read];
+            [NodeOperation.Read, NodeOperation.Update];
 
-        public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            // All authenticated users can read Organization nodes
-            if (context.Operation == NodeOperation.Read && !string.IsNullOrEmpty(userId))
-                return Task.FromResult(true);
+            if (string.IsNullOrEmpty(userId))
+                return false;
 
-            return Task.FromResult(false);
+            if (context.Operation == NodeOperation.Read)
+                return true;
+
+            if (context.Operation == NodeOperation.Update)
+                return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Update, ct);
+
+            return false;
         }
     }
 }

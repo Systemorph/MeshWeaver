@@ -6,9 +6,8 @@
   "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
-    "id": "Roland",
-    "name": "Roland Buergi",
+    "$type": "User",
     "email": "rbuergi@systemorph.com",
-    "role": "Admin"
+    "bio": "Founder of Systemorph and creator of MeshWeaver."
   }
 }

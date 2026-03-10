@@ -40,16 +40,16 @@ graph LR
 
 ## Explore by Topic
 
-### [Architecture](Doc/Architecture)
+### [Architecture](/Doc/Architecture)
 The backbone of MeshWeaver: message-based communication, actor model, partitioned persistence, access control, and UI streaming. Start here to understand how the platform works under the hood.
 
-### [Data Mesh](Doc/DataMesh)
+### [Data Mesh](/Doc/DataMesh)
 Everything about nodes: node types, query syntax, unified content references, interactive markdown, collaborative editing, and CRUD operations. The data layer that powers all of MeshWeaver.
 
-### [GUI](Doc/GUI)
+### [GUI](/Doc/GUI)
 Build reactive UIs from C# code: editors, data grids, layout areas, data binding, observables, container controls, and attributes. No frontend framework required.
 
-### [AI Integration](Doc/AI)
+### [AI Integration](/Doc/AI)
 MeshPlugin tools, agent definitions, model selection, remote control, and natural language interfaces. Let AI agents work alongside your data mesh.
 
 ---

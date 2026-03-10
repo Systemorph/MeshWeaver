@@ -138,8 +138,6 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         State = MeshNodeState.Active,
         Content = new AccessObject
         {
-            Id = id,
-            Name = "Guest",
             IsVirtual = true
         }
     };

@@ -117,20 +117,15 @@
             }
 
             var username = model.Username.Trim();
-            var content = new Dictionary<string, object?>
+            var userContent = new User
             {
-                ["email"] = model.Email.Trim(),
+                Email = model.Email.Trim(),
+                Bio = string.IsNullOrWhiteSpace(model.Bio) ? null : model.Bio.Trim(),
+                Role = string.IsNullOrWhiteSpace(model.Role) ? null : model.Role.Trim(),
             };
 
-            if (!string.IsNullOrWhiteSpace(model.Bio))
-                content["bio"] = model.Bio.Trim();
-            if (!string.IsNullOrWhiteSpace(model.Role))
-                content["role"] = model.Role.Trim();
-            if (!string.IsNullOrWhiteSpace(model.AvatarUrl))
-                content["avatar"] = model.AvatarUrl.Trim();
-
             // Use ImpersonateAsHub so the portal hub identity is recognized
-            // by UserSelfRegistryAccessRule (portal namespace = create/read/update User nodes)
+            // by the portal create access rule (portal namespace = create/read/update User nodes)
             using (AccessService.ImpersonateAsHub(PortalApplication.Hub))
             {
                 // Check if this is the first user (no existing User nodes = platform admin)
@@ -165,7 +160,8 @@
                     Name = username,
                     NodeType = "User",
                     State = MeshNodeState.Active,
-                    Content = content
+                    Icon = string.IsNullOrWhiteSpace(model.AvatarUrl) ? null : model.AvatarUrl.Trim(),
+                    Content = userContent
                 };
 
                 await NodeFactory.CreateNodeAsync(node);

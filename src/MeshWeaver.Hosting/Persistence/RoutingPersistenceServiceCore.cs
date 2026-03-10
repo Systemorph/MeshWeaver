@@ -115,10 +115,18 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     private IStorageService? TryGetStore(string? path)
     {
-        var segment = PathPartition.GetFirstSegment(path);
-        if (segment == null) return null;
-        return _stores.TryGetValue(segment, out var store) ? store : null;
+        // Use longest-prefix matching: check registered prefixes from longest to shortest.
+        // Falls back to first-segment for backward compatibility.
+        var prefix = PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
+        if (prefix == null) return null;
+        return _stores.TryGetValue(prefix, out var store) ? store : null;
     }
+
+    /// <summary>
+    /// Gets the partition prefix for a given path (longest matching registered prefix).
+    /// </summary>
+    internal string? GetPartitionPrefix(string? path)
+        => PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
