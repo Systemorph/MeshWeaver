@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Security;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -205,5 +206,28 @@ public class PostgreSqlAccessControl
         await cmd.ExecuteNonQueryAsync(ct);
 
         await RebuildDenormalizedTableAsync(ct);
+    }
+
+    /// <summary>
+    /// Syncs DI-registered NodeTypePermission records to the node_type_permissions table.
+    /// Called at startup to populate the DB with module-declared permissions.
+    /// Uses INSERT ON CONFLICT to be idempotent.
+    /// </summary>
+    public async Task SyncNodeTypePermissionsAsync(
+        IEnumerable<NodeTypePermission> permissions,
+        CancellationToken ct = default)
+    {
+        foreach (var p in permissions)
+        {
+            await using var cmd = _dataSource.CreateCommand(
+                """
+                INSERT INTO node_type_permissions (node_type, public_read)
+                VALUES ($1, $2)
+                ON CONFLICT (node_type) DO UPDATE SET public_read = EXCLUDED.public_read
+                """);
+            cmd.Parameters.AddWithValue(p.NodeType);
+            cmd.Parameters.AddWithValue(p.PublicRead);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 }

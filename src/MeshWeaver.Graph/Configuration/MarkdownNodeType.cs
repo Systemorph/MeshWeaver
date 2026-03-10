@@ -38,6 +38,7 @@ public static class MarkdownNodeType
             .AddMarkdownViews()
             .AddMeshDataSource()
             .AddContentCollections()
+            .AddTracking()
             .AddApprovals()
     };
 }

@@ -17,8 +17,13 @@ internal class PersistenceService(
     IStorageService core,
     IMessageHub hub,
     ISecurityService? securityService = null,
-    ILogger<PersistenceService>? logger = null) : IMeshStorage
+    ILogger<PersistenceService>? logger = null,
+    IEnumerable<INodeTypeAccessRule>? nodeTypeAccessRules = null) : IMeshStorage
 {
+    private readonly Dictionary<string, INodeTypeAccessRule> _nodeTypeAccessRules =
+        (nodeTypeAccessRules ?? [])
+            .Where(r => r.SupportedOperations.Contains(NodeOperation.Read))
+            .ToDictionary(r => r.NodeType, StringComparer.OrdinalIgnoreCase);
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
     public Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
@@ -102,43 +107,51 @@ internal class PersistenceService(
                 && string.Equals(node.Id, userId, StringComparison.OrdinalIgnoreCase))
                || string.Equals(node.MainNode, userId, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Checks if a user has read access to a node.
+    /// Checks: publicly readable → self-access → INodeTypeAccessRule → ISecurityService.
+    /// </summary>
+    private async Task<bool> HasReadAccessAsync(MeshNode node, string? userId, CancellationToken ct = default)
+    {
+        if (securityService == null || IsPubliclyReadable(node) || IsSelfAccess(node, userId))
+            return true;
+
+        // Check INodeTypeAccessRule (e.g., User, VUser, Organization with WithPublicRead)
+        if (!string.IsNullOrEmpty(node.NodeType)
+            && _nodeTypeAccessRules.TryGetValue(node.NodeType, out var rule))
+        {
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node
+            };
+            if (await rule.HasAccessAsync(context, userId, ct))
+                return true;
+        }
+
+        return string.IsNullOrEmpty(userId)
+            ? await securityService.HasPermissionAsync(node.Path, Permission.Read, ct)
+            : await securityService.HasPermissionAsync(node.Path, userId, Permission.Read, ct);
+    }
+
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
     {
         var node = await core.GetNodeAsync(path, Options, ct);
         if (node == null || securityService == null)
             return node;
 
-        if (IsPubliclyReadable(node) || IsSelfAccess(node, userId))
+        if (await HasReadAccessAsync(node, userId, ct))
             return node;
 
-        var hasPermission = string.IsNullOrEmpty(userId)
-            ? await securityService.HasPermissionAsync(path, Permission.Read, ct)
-            : await securityService.HasPermissionAsync(path, userId, Permission.Read, ct);
-
-        if (!hasPermission)
-        {
-            logger?.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
-            return null;
-        }
-
-        return node;
+        logger?.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+        return null;
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
     {
         await foreach (var node in core.GetChildrenAsync(parentPath, Options))
         {
-            if (securityService == null || IsPubliclyReadable(node) || IsSelfAccess(node, userId))
-            {
-                yield return node;
-                continue;
-            }
-
-            var hasPermission = string.IsNullOrEmpty(userId)
-                ? await securityService.HasPermissionAsync(node.Path, Permission.Read)
-                : await securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
-
-            if (hasPermission)
+            if (securityService == null || await HasReadAccessAsync(node, userId))
                 yield return node;
         }
     }
@@ -147,17 +160,7 @@ internal class PersistenceService(
     {
         await foreach (var node in core.GetDescendantsAsync(parentPath, Options))
         {
-            if (securityService == null || IsPubliclyReadable(node) || IsSelfAccess(node, userId))
-            {
-                yield return node;
-                continue;
-            }
-
-            var hasPermission = string.IsNullOrEmpty(userId)
-                ? await securityService.HasPermissionAsync(node.Path, Permission.Read)
-                : await securityService.HasPermissionAsync(node.Path, userId, Permission.Read);
-
-            if (hasPermission)
+            if (securityService == null || await HasReadAccessAsync(node, userId))
                 yield return node;
         }
     }

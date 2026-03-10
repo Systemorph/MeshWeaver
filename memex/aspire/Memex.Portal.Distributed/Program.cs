@@ -23,6 +23,9 @@ else
     builder.AddNpgsqlDataSource("meshweaver",
         configureDataSourceBuilder: dsb => dsb.UseVector());
 
+// Disable dev login in the distributed deployment
+builder.Configuration["Authentication:EnableDevLogin"] = "false";
+
 // Add web portal services
 builder.ConfigureMemexServices();
 

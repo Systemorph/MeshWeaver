@@ -9,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -52,6 +53,22 @@ public static class CreateLayoutArea
 
             // Permission gate: check Create permission on current path
             var canCreate = await PermissionHelper.CanCreateAsync(host.Hub, currentPath);
+            if (!canCreate)
+            {
+                // Fallback: in cross-hub layout rendering, ISecurityService may not have
+                // the real user's context (ImpersonateAsHub sets hub identity instead).
+                // Check if a DI-registered INodeTypeAccessRule supports Create for this type;
+                // if so, show the form and let the backend (RlsNodeValidator) enforce actual security.
+                var nodeType = currentNode?.NodeType;
+                if (!string.IsNullOrEmpty(nodeType))
+                {
+                    var accessRules = host.Hub.ServiceProvider.GetServices<INodeTypeAccessRule>();
+                    var rule = accessRules.FirstOrDefault(r =>
+                        r.NodeType.Equals(nodeType, StringComparison.OrdinalIgnoreCase));
+                    if (rule != null && rule.SupportedOperations.Contains(NodeOperation.Create))
+                        canCreate = true;
+                }
+            }
             if (!canCreate)
             {
                 return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")

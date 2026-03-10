@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Npgsql;
@@ -18,6 +19,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly IEmbeddingProvider? _embeddingProvider;
     private readonly AccessService? _accessService;
+    private readonly IReadOnlyList<NodeTypePermission> _nodeTypePermissions;
     private readonly string _baseConnectionString;
 
     public PostgreSqlPartitionedStoreFactory(
@@ -26,7 +28,8 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         PostgreSqlStorageOptions options,
         IDataChangeNotifier? changeNotifier = null,
         IEmbeddingProvider? embeddingProvider = null,
-        AccessService? accessService = null)
+        AccessService? accessService = null,
+        IEnumerable<NodeTypePermission>? nodeTypePermissions = null)
     {
         _baseDataSource = baseDataSource;
         _baseConnectionString = baseConnectionString;
@@ -34,6 +37,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         _changeNotifier = changeNotifier;
         _embeddingProvider = embeddingProvider;
         _accessService = accessService;
+        _nodeTypePermissions = (nodeTypePermissions ?? []).ToList();
     }
 
     public async Task<PartitionedStore> CreateStoreAsync(string firstSegment, CancellationToken ct = default)
@@ -77,6 +81,13 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
             _baseDataSource, schemaDataSource, versionsDataSource,
             schemaOptions, versionsSchemaName, ct);
+
+        // Sync node type permissions to the new schema
+        if (_nodeTypePermissions.Count > 0)
+        {
+            var ac = new PostgreSqlAccessControl(schemaDataSource);
+            await ac.SyncNodeTypePermissionsAsync(_nodeTypePermissions, ct);
+        }
 
         // Create the storage adapter using the schema-specific data source
         var adapter = new PostgreSqlStorageAdapter(schemaDataSource, _embeddingProvider);

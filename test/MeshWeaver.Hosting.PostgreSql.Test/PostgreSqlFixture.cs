@@ -64,6 +64,7 @@ public class PostgreSqlFixture : IAsyncLifetime
             DELETE FROM user_effective_permissions_shadow;
             DELETE FROM access_control;
             DELETE FROM group_members;
+            DELETE FROM node_type_permissions;
             """);
         await cmd.ExecuteNonQueryAsync();
     }

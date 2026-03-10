@@ -412,6 +412,12 @@ public static class PostgreSqlSchemaInitializer
                 PRIMARY KEY (group_name, member_id)
             );
 
+            -- Node type permission flags (populated from DI-registered NodeTypePermission records)
+            CREATE TABLE IF NOT EXISTS node_type_permissions (
+                node_type   TEXT    NOT NULL PRIMARY KEY,
+                public_read BOOLEAN NOT NULL DEFAULT false
+            );
+
             -- Drop legacy triggers if they exist (tables are now reused)
             DROP TRIGGER IF EXISTS access_control_changed ON access_control;
             DROP TRIGGER IF EXISTS group_members_changed ON group_members;
@@ -782,6 +788,12 @@ public static class PostgreSqlSchemaInitializer
                 group_name  TEXT    NOT NULL,
                 member_id   TEXT    NOT NULL,
                 PRIMARY KEY (group_name, member_id)
+            );
+
+            -- Node type permission flags (populated from DI-registered NodeTypePermission records)
+            CREATE TABLE IF NOT EXISTS node_type_permissions (
+                node_type   TEXT    NOT NULL PRIMARY KEY,
+                public_read BOOLEAN NOT NULL DEFAULT false
             );
 
             -- Drop legacy triggers if they exist (tables are now reused)

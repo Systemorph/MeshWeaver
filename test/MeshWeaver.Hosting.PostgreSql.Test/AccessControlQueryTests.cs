@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -420,5 +421,109 @@ public class AccessControlQueryTests
         (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Update", TestContext.Current.CancellationToken)).Should().BeTrue();
         (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Delete", TestContext.Current.CancellationToken)).Should().BeFalse("Delete denied by policy");
         (await ac.HasPermissionAsync("alice", "ACME/Docs/Doc1", "Comment", TestContext.Current.CancellationToken)).Should().BeFalse("Comment denied by policy");
+    }
+
+    /// <summary>
+    /// Seeds the node_type_permissions table with public-read entries for User and Organization.
+    /// </summary>
+    private async Task SeedPublicReadPermissionsAsync()
+    {
+        var ac = _fixture.AccessControl;
+        await ac.SyncNodeTypePermissionsAsync([
+            new NodeTypePermission("User", PublicRead: true),
+            new NodeTypePermission("Organization", PublicRead: true)
+        ], TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task PublicReadNodeTypes_VisibleWithoutExplicitGrants()
+    {
+        await _fixture.CleanDataAsync();
+        await SeedPublicReadPermissionsAsync();
+        var adapter = _fixture.StorageAdapter;
+
+        // Seed User and Organization nodes (public-read types) plus a regular node
+        await adapter.WriteAsync(new MeshNode("Roland", "User")
+        {
+            Name = "Roland",
+            NodeType = "User"
+        }, _options, TestContext.Current.CancellationToken);
+
+        await adapter.WriteAsync(new MeshNode("Acme")
+        {
+            Name = "Acme Corp",
+            NodeType = "Organization"
+        }, _options, TestContext.Current.CancellationToken);
+
+        await adapter.WriteAsync(new MeshNode("Secret", "Private")
+        {
+            Name = "Secret Doc",
+            NodeType = "Document"
+        }, _options, TestContext.Current.CancellationToken);
+
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        // Query as unprivileged user with NO explicit grants
+        var request = MeshQueryRequest.FromQuery("scope:descendants", "alice");
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+        {
+            if (item is MeshNode node) results.Add(node);
+        }
+
+        var paths = results.Select(n => n.Path).ToList();
+        paths.Should().Contain("User/Roland", "User nodes are publicly readable");
+        paths.Should().Contain("Acme", "Organization nodes are publicly readable");
+        paths.Should().NotContain("Private/Secret", "Document nodes still require explicit grants");
+    }
+
+    [Fact]
+    public async Task PublicReadNodeTypes_NotVisibleToAnonymous()
+    {
+        await _fixture.CleanDataAsync();
+        await SeedPublicReadPermissionsAsync();
+        var adapter = _fixture.StorageAdapter;
+
+        await adapter.WriteAsync(new MeshNode("Roland", "User")
+        {
+            Name = "Roland",
+            NodeType = "User"
+        }, _options, TestContext.Current.CancellationToken);
+
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        var request = MeshQueryRequest.FromQuery("scope:descendants", WellKnownUsers.Anonymous);
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+        {
+            if (item is MeshNode node) results.Add(node);
+        }
+
+        results.Should().BeEmpty("Anonymous users should not see public-read nodes without explicit grants");
+    }
+
+    [Fact]
+    public async Task PublicReadNodeTypes_QueryByNodeType()
+    {
+        await _fixture.CleanDataAsync();
+        await SeedPublicReadPermissionsAsync();
+        var adapter = _fixture.StorageAdapter;
+
+        await adapter.WriteAsync(new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Alice", "User") { Name = "Alice", NodeType = "User" }, _options, TestContext.Current.CancellationToken);
+        await adapter.WriteAsync(new MeshNode("Acme") { Name = "Acme", NodeType = "Organization" }, _options, TestContext.Current.CancellationToken);
+
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        // Query by nodeType:User as unprivileged user
+        var request = MeshQueryRequest.FromQuery("nodeType:User", "bob");
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+        {
+            if (item is MeshNode node) results.Add(node);
+        }
+
+        results.Should().HaveCount(2, "Both User nodes should be publicly readable");
+        results.Select(n => n.Path).Should().BeEquivalentTo("User/Roland", "User/Alice");
     }
 }

@@ -35,6 +35,7 @@ public static class GraphConfigurationExtensions
                         .WithType<ThreadMessage>(ThreadMessageNodeType.NodeType)))
                 .AddThreadMessageType()
                 .AddCommentType()
+                .AddTrackedChangeType()
                 .AddAccessAssignmentType()
                 .AddPartitionAccessPolicyType()
                 .AddUserType()
