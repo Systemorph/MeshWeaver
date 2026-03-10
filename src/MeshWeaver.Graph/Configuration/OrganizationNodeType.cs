@@ -6,6 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -49,7 +50,11 @@ public static class OrganizationNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureServices(services =>
-            services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>());
+        {
+            services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>();
+            services.AddSingleton<INodeTypeAccessRule, OrganizationAccessRule>();
+            return services;
+        });
         return builder;
     }
 
@@ -67,6 +72,7 @@ public static class OrganizationNodeType
         NodeType = NodeType,
         Icon = "/static/NodeTypeIcons/building.svg",
         AssemblyLocation = typeof(OrganizationNodeType).Assembly.Location,
+        Content = new NodeTypeDefinition { DefaultNamespace = "Organization" },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Organization>())
@@ -74,6 +80,28 @@ public static class OrganizationNodeType
             .AddLayout(layout => layout
                 .WithView("Overview", OrganizationViews.Overview))
     };
+
+    /// <summary>
+    /// Access rule for Organization nodes.
+    /// Read: granted to all authenticated users.
+    /// Create/Update/Delete: falls through to standard RLS.
+    /// </summary>
+    private class OrganizationAccessRule : INodeTypeAccessRule
+    {
+        public string NodeType => OrganizationNodeType.NodeType;
+
+        public IReadOnlyCollection<NodeOperation> SupportedOperations =>
+            [NodeOperation.Read];
+
+        public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
+        {
+            // All authenticated users can read Organization nodes
+            if (context.Operation == NodeOperation.Read && !string.IsNullOrEmpty(userId))
+                return Task.FromResult(true);
+
+            return Task.FromResult(false);
+        }
+    }
 }
 
 /// <summary>

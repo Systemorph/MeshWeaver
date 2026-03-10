@@ -5,10 +5,9 @@ using NpgsqlTypes;
 namespace MeshWeaver.Hosting.PostgreSql;
 
 /// <summary>
-/// PostgreSQL activity store using the user_activity table.
-/// Kept for later refactoring to work with the MeshNode-based activity system.
+/// PostgreSQL activity store using the dedicated user_activity table.
 /// </summary>
-public class PostgreSqlActivityStore
+public class PostgreSqlActivityStore : IActivityStore
 {
     private readonly NpgsqlDataSource _dataSource;
 
@@ -51,6 +50,9 @@ public class PostgreSqlActivityStore
 
         return results;
     }
+
+    public Task TrackActivityAsync(UserActivityRecord record, CancellationToken ct = default)
+        => SaveActivitiesAsync(record.UserId, [record], ct);
 
     public async Task SaveActivitiesAsync(string userId, IReadOnlyCollection<UserActivityRecord> records, CancellationToken ct = default)
     {

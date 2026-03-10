@@ -92,6 +92,15 @@ public partial class UserProfile : ComponentBase
         Navigation.NavigateTo(loginUrl, forceLoad: true);
     }
 
+    private void NavigateToUserNode()
+    {
+        var userId = AccessService.Context?.ObjectId;
+        if (!string.IsNullOrEmpty(userId))
+        {
+            Navigation.NavigateTo($"/User/{userId}");
+        }
+    }
+
     private void Logout()
     {
         var logoutUrl = AuthNavigation.GetLogoutUrl();

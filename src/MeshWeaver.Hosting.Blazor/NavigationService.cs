@@ -295,90 +295,48 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
+    /// Uses <see cref="IActivityStore"/> (dedicated table) instead of mesh nodes.
     /// Fire-and-forget: failures are logged but don't affect navigation.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
         if (accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: no user context (AccessService.Context.ObjectId is null/empty)", node.Path);
             return;
-        }
 
         // Skip system/internal paths
         if (string.IsNullOrEmpty(node.Path) || node.Path.StartsWith('_'))
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: system/internal path", node.Path);
             return;
-        }
 
-        // Skip satellite content (Threads, AccessAssignments, etc.) and excluded node types
+        // Skip satellite content and excluded node types
         if (node.MainNode != node.Path)
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: satellite content", node.Path);
             return;
-        }
         if (node.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: excluded node type {NodeType}", node.Path, node.NodeType);
             return;
-        }
 
-        _logger?.LogDebug("Recording activity: user={UserId} path={Path} type={NodeType}", userId, node.Path, node.NodeType);
+        var activityStore = _hub.ServiceProvider.GetService<IActivityStore>();
+        if (activityStore == null)
+            return;
+
         _ = Task.Run(async () =>
         {
             try
             {
-                var nodeFactory = _hub.ServiceProvider.GetRequiredService<IMeshService>();
-                var encodedPath = node.Path.Replace("/", "_");
-                var activityPath = $"_useractivity/{userId}/{encodedPath}";
-
-                // Try to find existing activity node
-                MeshNode? existing = null;
-                try { existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath} scope:exact").FirstOrDefaultAsync(); }
-                catch { /* ignore */ }
-
-                if (existing?.Content is UserActivityRecord prevRecord)
+                var now = DateTimeOffset.UtcNow;
+                var record = new UserActivityRecord
                 {
-                    var updated = existing with
-                    {
-                        Content = prevRecord with
-                        {
-                            LastAccessedAt = DateTimeOffset.UtcNow,
-                            AccessCount = prevRecord.AccessCount + 1,
-                            ActivityType = ActivityType.Read,
-                            NodeName = node.Name ?? prevRecord.NodeName,
-                            NodeType = node.NodeType ?? prevRecord.NodeType,
-                        }
-                    };
-                    _hub.Post(new UpdateNodeRequest(updated));
-                }
-                else
-                {
-                    var now = DateTimeOffset.UtcNow;
-                    var record = new UserActivityRecord
-                    {
-                        Id = encodedPath,
-                        NodePath = node.Path,
-                        UserId = userId,
-                        ActivityType = ActivityType.Read,
-                        FirstAccessedAt = now,
-                        LastAccessedAt = now,
-                        AccessCount = 1,
-                        NodeName = node.Name,
-                        NodeType = node.NodeType,
-                        Namespace = node.Namespace
-                    };
-                    var activityNode = MeshNode.FromPath(activityPath) with
-                    {
-                        NodeType = "UserActivity",
-                        Name = node.Name ?? node.Path,
-                        State = MeshNodeState.Active,
-                        Content = record
-                    };
-                    await nodeFactory.CreateNodeAsync(activityNode);
-                }
+                    Id = node.Path.Replace("/", "_"),
+                    NodePath = node.Path,
+                    UserId = userId,
+                    ActivityType = ActivityType.Read,
+                    FirstAccessedAt = now,
+                    LastAccessedAt = now,
+                    AccessCount = 1,
+                    NodeName = node.Name,
+                    NodeType = node.NodeType,
+                    Namespace = node.Namespace
+                };
+                await activityStore.TrackActivityAsync(record);
             }
             catch (Exception ex)
             {

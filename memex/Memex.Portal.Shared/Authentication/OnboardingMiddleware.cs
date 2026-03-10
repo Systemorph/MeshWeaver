@@ -1,5 +1,7 @@
-﻿using MeshWeaver.Blazor.Infrastructure;
+﻿using System.Text.Json;
+using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Http;
@@ -89,10 +91,16 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
 
                             // Active user — update AccessContext with username (node ID)
                             var username = node.Id;
+
+                            // Query global AccessAssignment to populate roles
+                            var roles = await LoadUserRolesAsync(
+                                meshQuery, accessService, portalApp.Hub, username);
+
                             var updatedContext = userContext with
                             {
                                 ObjectId = username,
-                                Name = node.Name ?? username
+                                Name = node.Name ?? username,
+                                Roles = roles
                             };
                             accessService.SetContext(updatedContext);
                             accessService.SetCircuitContext(updatedContext);
@@ -110,6 +118,49 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         }
 
         await next(context);
+    }
+
+    /// <summary>
+    /// Loads the user's role names from AccessAssignment nodes across all scopes.
+    /// Used to populate AccessContext.Roles so permission checks work in Blazor components.
+    /// </summary>
+    private static async Task<IReadOnlyCollection<string>> LoadUserRolesAsync(
+        IMeshService meshQuery, AccessService accessService, IMessageHub hub, string username)
+    {
+        try
+        {
+            var roles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (accessService.ImpersonateAsHub(hub))
+            {
+                await foreach (var accessNode in meshQuery.QueryAsync<MeshNode>(
+                    $"nodeType:AccessAssignment content.accessObject:\"{username}\" scope:subtree limit:10"))
+                {
+                    if (accessNode.Content == null)
+                        continue;
+
+                    AccessAssignment? assignment = accessNode.Content switch
+                    {
+                        AccessAssignment aa => aa,
+                        JsonElement je => JsonSerializer.Deserialize<AccessAssignment>(
+                            je.GetRawText(), hub.JsonSerializerOptions),
+                        _ => null
+                    };
+
+                    if (assignment == null)
+                        continue;
+
+                    foreach (var r in assignment.Roles.Where(r => !r.Denied && !string.IsNullOrEmpty(r.Role)))
+                        roles.Add(r.Role);
+                }
+            }
+
+            return roles.ToList();
+        }
+        catch
+        {
+            // Non-critical — return empty roles on failure
+            return [];
+        }
     }
 
     private static bool IsExcludedPath(PathString path)

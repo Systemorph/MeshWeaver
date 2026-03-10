@@ -259,6 +259,76 @@ public class NavigationServiceTest
         service.Context.Id.Should().BeNull();
     }
 
+    [Fact]
+    public async Task OnLocationChanged_ConfigNodeWithAreaSuffix_ResolvesAreaCorrectly()
+    {
+        // Arrange - simulates Organization/Search where Organization is a config node
+        var service = CreateService();
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
+            .Returns(new AddressResolution("ACME", null));
+        await service.InitializeAsync();
+
+        // Organization/Search: address is "Organization", remainder is "Search"
+        _pathResolver.ResolvePathAsync("Organization/Search")
+            .Returns(new AddressResolution("Organization", "Search"));
+
+        // Act
+        _navigationManager.SimulateLocationChanged("http://localhost/Organization/Search");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        // Assert
+        service.Context.Should().NotBeNull();
+        service.Context!.Area.Should().Be("Search");
+        service.Context.Id.Should().BeNull();
+        service.Context.Namespace.Should().Be("Organization");
+    }
+
+    [Fact]
+    public async Task OnLocationChanged_ConfigNodeWithAreaAndId_ResolvesCorrectly()
+    {
+        // Arrange - simulates Organization/Settings/Metadata
+        var service = CreateService();
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
+            .Returns(new AddressResolution("ACME", null));
+        await service.InitializeAsync();
+
+        _pathResolver.ResolvePathAsync("Organization/Settings/Metadata")
+            .Returns(new AddressResolution("Organization", "Settings/Metadata"));
+
+        // Act
+        _navigationManager.SimulateLocationChanged("http://localhost/Organization/Settings/Metadata");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        // Assert
+        service.Context.Should().NotBeNull();
+        service.Context!.Area.Should().Be("Settings");
+        service.Context.Id.Should().Be("Metadata");
+        service.Context.Namespace.Should().Be("Organization");
+    }
+
+    [Fact]
+    public async Task OnLocationChanged_UserNodeWithArea_ResolvesCorrectly()
+    {
+        // Arrange - simulates User/Roland/Settings where User/Roland is a persisted node
+        var service = CreateService();
+        _pathResolver.ResolvePathAsync(Arg.Any<string>())
+            .Returns(new AddressResolution("ACME", null));
+        await service.InitializeAsync();
+
+        _pathResolver.ResolvePathAsync("User/Roland/Settings")
+            .Returns(new AddressResolution("User/Roland", "Settings"));
+
+        // Act
+        _navigationManager.SimulateLocationChanged("http://localhost/User/Roland/Settings");
+        await Task.Delay(100, TestContext.Current.CancellationToken);
+
+        // Assert
+        service.Context.Should().NotBeNull();
+        service.Context!.Area.Should().Be("Settings");
+        service.Context.Id.Should().BeNull();
+        service.Context.Namespace.Should().Be("User/Roland");
+    }
+
     #endregion
 
     #region Creatable Types Tests

@@ -1,4 +1,5 @@
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -112,8 +113,9 @@ public static class PostgreSqlExtensions
 
         services.AddPersistence(storageAdapter);
 
-        // Register access control
+        // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
+        services.TryAddSingleton<IActivityStore>(new PostgreSqlActivityStore(dataSource));
 
         return services;
     }
@@ -157,8 +159,9 @@ public static class PostgreSqlExtensions
             return new PostgreSqlChangeListener(dataSource, notifier, logger);
         });
 
-        // Register access control
+        // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
+        services.TryAddSingleton<IActivityStore>(new PostgreSqlActivityStore(dataSource));
 
         return services;
     }
@@ -215,6 +218,9 @@ public static class PostgreSqlExtensions
                 sp.GetService<AccessService>()));
 
         services.AddPartitionedCoreAndWrapperServices();
+
+        // Register activity store
+        services.TryAddSingleton<IActivityStore>(new PostgreSqlActivityStore(baseDataSource));
 
         return services;
     }

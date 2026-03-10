@@ -174,6 +174,32 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         return await reader.ReadAsync(ct);
     }
 
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var normalizedPath = NormalizePath(fullPath);
+        if (string.IsNullOrEmpty(normalizedPath))
+            return (null, 0);
+
+        // Single SQL query: find the node whose path is the longest prefix of the input.
+        // Matches exact path or any ancestor (input starts with path + '/').
+        // Ordered by path length descending to get the deepest (most specific) match first.
+        await using var cmd = _dataSource.CreateCommand(
+            "SELECT id, namespace, name, node_type, category, icon, display_order, " +
+            "last_modified, version, state, content, desired_id, main_node " +
+            "FROM mesh_nodes WHERE $1 = path OR $1 LIKE path || '/%' " +
+            "ORDER BY LENGTH(path) DESC LIMIT 1");
+        cmd.Parameters.AddWithValue(normalizedPath);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return (null, 0);
+
+        var node = ReadMeshNode(reader, options);
+        var matchedSegments = node.Path.Split('/').Length;
+        return (node, matchedSegments);
+    }
+
     #region Partition Storage
 
     public async IAsyncEnumerable<object> GetPartitionObjectsAsync(

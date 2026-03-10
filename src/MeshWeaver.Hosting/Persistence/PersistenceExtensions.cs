@@ -1,6 +1,8 @@
 using System.Text.Json;
+using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -253,6 +255,7 @@ public static class PersistenceExtensions
     {
         // Register the data change notifier as singleton
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        services.TryAddSingleton<IActivityStore, InMemoryActivityStore>();
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton(persistenceServiceCore);
@@ -354,6 +357,7 @@ public static class PersistenceExtensions
     public static IServiceCollection AddPartitionedCoreAndWrapperServices(this IServiceCollection services)
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+        services.TryAddSingleton<IActivityStore, InMemoryActivityStore>();
 
         // Register the routing persistence core
         services.AddSingleton<RoutingPersistenceServiceCore>(sp =>
@@ -402,6 +406,9 @@ public static class PersistenceExtensions
     {
         // Register the data change notifier as singleton (use TryAdd to avoid duplicates)
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        // Register in-memory activity store as default (PostgreSQL overrides with its own)
+        services.TryAddSingleton<IActivityStore, InMemoryActivityStore>();
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton<IStorageService, TPersistenceCore>();
