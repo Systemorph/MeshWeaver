@@ -29,4 +29,10 @@ public interface INodeTypeService
     /// Applies the DefaultNodeHubConfiguration from MeshConfiguration if available.
     /// </summary>
     Func<MessageHubConfiguration, MessageHubConfiguration>? GetCachedHubConfiguration(string nodeTypePath);
+
+    /// <summary>
+    /// Gets the access rule extracted from the hub configuration for a node type.
+    /// Returns null if no access rules are defined in the hub config.
+    /// </summary>
+    INodeTypeAccessRule? GetAccessRule(string nodeTypePath) => null;
 }

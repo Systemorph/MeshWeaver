@@ -48,6 +48,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Compilation errors by nodeTypePath - tracks last compilation failure for error reporting
     private readonly ConcurrentDictionary<string, string> _compilationErrors = new();
 
+    // Cached access rules extracted from hub configurations
+    private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
+
     public NodeTypeService(
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
@@ -107,6 +110,13 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 _notCreatableTypes[nodeTypePath] = true;
                 logger.LogDebug("Marked {Path} as NotCreatable", nodeTypePath);
             }
+
+            var accessRuleSet = configured.GetNodeAccessRuleSet();
+            if (accessRuleSet != null)
+            {
+                _accessRules[nodeTypePath] = accessRuleSet.ToAccessRule(nodeTypePath);
+                logger.LogDebug("Cached AccessRule for {Path}", nodeTypePath);
+            }
         }
         catch (Exception ex)
         {
@@ -121,6 +131,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     public CreatableTypesRules? GetCreatableTypesRules(string nodeTypePath)
     {
         return _creatableTypesRules.GetValueOrDefault(nodeTypePath);
+    }
+
+    /// <summary>
+    /// Gets the access rule extracted from the hub configuration for a node type.
+    /// </summary>
+    public INodeTypeAccessRule? GetAccessRule(string nodeTypePath)
+    {
+        return _accessRules.GetValueOrDefault(nodeTypePath);
     }
 
     /// <summary>
@@ -211,6 +229,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _hubConfigurations.TryRemove(nodeTypePath, out _);
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
+        _accessRules.TryRemove(nodeTypePath, out _);
 
         // Dispose subscription (will re-subscribe on next access)
         if (_subscriptions.TryRemove(nodeTypePath, out var subscription))
@@ -964,6 +983,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.Clear();
         _releaseKeys.Clear();
         _hubConfigurations.Clear();
+        _accessRules.Clear();
     }
 
     /// <summary>

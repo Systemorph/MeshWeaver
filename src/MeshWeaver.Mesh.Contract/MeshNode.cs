@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -161,6 +162,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <summary>
     /// Icon URL or identifier for display in UI.
     /// </summary>
+    [ContentItem]
     public string? Icon { get; init; }
 
     /// <summary>

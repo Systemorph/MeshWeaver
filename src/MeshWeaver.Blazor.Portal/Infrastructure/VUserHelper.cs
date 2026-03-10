@@ -38,8 +38,6 @@ public static class VUserHelper
                 State = MeshNodeState.Active,
                 Content = new AccessObject
                 {
-                    Id = virtualUserId,
-                    Name = "Guest",
                     IsVirtual = true
                 }
             };

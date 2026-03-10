@@ -111,6 +111,7 @@ public static class MeshNodeLayoutAreas
             .WithView(AccessControlArea, AccessControl)
             .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
+            .WithView(EditArea, EditNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(ExportArea, ExportLayoutArea.Export)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
@@ -1171,6 +1172,72 @@ public static class MeshNodeLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> CreateNode(LayoutAreaHost host, RenderingContext ctx)
         => CreateLayoutArea.Create(host, ctx);
+
+    /// <summary>
+    /// Renders the Edit area showing all content type fields in pure edit mode with auto-save.
+    /// Unlike Overview (which is toggleable click-to-edit), Edit shows all fields as editable immediately.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> EditNode(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+
+        return nodeStream.SelectMany(async nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+
+            if (!permissions.HasFlag(Permission.Update))
+                return (UiControl?)BuildAccessDenied(hubPath);
+
+            return (UiControl?)BuildEditNodeContent(host, node);
+        });
+    }
+
+    private static UiControl BuildEditNodeContent(LayoutAreaHost host, MeshNode? node)
+    {
+        if (node == null)
+            return Controls.Markdown("*Node not found*");
+
+        var instance = node.Content;
+        if (instance == null)
+            return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
+                .WithView(BuildHeader(host, node, false))
+                .WithView(Controls.Markdown("*No content type configured for this node.*")
+                    .WithStyle("color: var(--neutral-foreground-hint);"));
+
+        if (instance is JsonElement je)
+            instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
+
+        // Skip edit form for NodeTypeDefinition content (type root nodes)
+        if (instance is Configuration.NodeTypeDefinition)
+            return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
+                .WithView(BuildHeader(host, node, false))
+                .WithView(Controls.Markdown("*Built-in type nodes cannot be edited here.*")
+                    .WithStyle("color: var(--neutral-foreground-hint);"));
+
+        var contentType = instance.GetType();
+        var nodePath = node.Path;
+        var dataId = Layout.Domain.EditLayoutArea.GetDataId(nodePath);
+        host.UpdateData(dataId, instance);
+
+        // Setup auto-save (same mechanism as Overview)
+        OverviewLayoutArea.SetupAutoSave(host, dataId, instance, node);
+
+        var container = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host));
+
+        // Header with title
+        container = container.WithView(BuildHeader(host, node, canEdit: true));
+
+        // Property form in pure edit mode (not toggleable)
+        container = container.WithView(Layout.Domain.EditLayoutArea.BuildPropertyForm(
+            host, contentType, dataId, canEdit: true, isToggleable: false));
+
+        return container;
+    }
 
     #endregion
 

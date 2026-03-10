@@ -174,6 +174,55 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
+    /// Simulates the production onboarding flow: creates a User node at runtime
+    /// (not pre-registered via AddMeshNodes), then verifies the Activity area resolves.
+    /// This tests the path: persistence → MeshCatalog.ResolvePathAsync → routing → hub creation.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ActivityArea_WorksForRuntimeCreatedUser()
+    {
+        // Arrange — create a user node at runtime (simulating onboarding)
+        var username = "RuntimeUser";
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        using (accessService.ImpersonateAsHub(Mesh))
+        {
+            await meshService.CreateNodeAsync(new MeshNode(username, "User")
+            {
+                Name = "Runtime Test User",
+                NodeType = "User",
+                State = MeshNodeState.Active,
+                Content = new User { Email = "runtime@test.com", Bio = "Created at runtime" }
+            });
+        }
+
+        // Act — request the Activity area (same as Index.razor does)
+        var client = GetClient();
+        var userAddress = new Address("User", username);
+
+        // First, verify the hub can be created
+        var pingResponse = await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(userAddress),
+            TestContext.Current.CancellationToken);
+        pingResponse.Should().NotBeNull($"User/{username} hub should be created and respond to ping");
+
+        // Now request the Activity layout area
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            userAddress, reference);
+
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+
+        // Assert
+        value.Should().NotBe(default(JsonElement),
+            "Activity area should render for a runtime-created User node — " +
+            "this simulates the production onboarding → Index.razor flow");
+    }
+
+    /// <summary>
     /// Also verify the Overview area works (baseline — this uses AddDefaultLayoutAreas).
     /// </summary>
     [Fact(Timeout = 10000)]

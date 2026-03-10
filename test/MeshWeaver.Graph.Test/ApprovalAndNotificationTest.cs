@@ -343,9 +343,8 @@ public class ApprovalAndNotificationTest
     [Fact]
     public void AccessObject_IsVirtual_CanBeSetTrue()
     {
-        var obj = new AccessObject { IsVirtual = true, Name = "Guest" };
+        var obj = new AccessObject { IsVirtual = true };
         obj.IsVirtual.Should().BeTrue();
-        obj.Name.Should().Be("Guest");
     }
 
     [Fact]

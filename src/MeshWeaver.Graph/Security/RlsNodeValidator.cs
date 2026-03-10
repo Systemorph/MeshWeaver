@@ -15,14 +15,17 @@ public class RlsNodeValidator : INodeValidator
     private readonly ISecurityService _securityService;
     private readonly ILogger<RlsNodeValidator> _logger;
     private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
+    private readonly INodeTypeService? _nodeTypeService;
 
     public RlsNodeValidator(
         ISecurityService securityService,
         ILogger<RlsNodeValidator> logger,
-        IEnumerable<INodeTypeAccessRule> accessRules)
+        IEnumerable<INodeTypeAccessRule> accessRules,
+        INodeTypeService? nodeTypeService = null)
     {
         _securityService = securityService;
         _logger = logger;
+        _nodeTypeService = nodeTypeService;
         _accessRules = accessRules
             .ToDictionary(r => r.NodeType, r => r, StringComparer.OrdinalIgnoreCase);
     }
@@ -75,7 +78,26 @@ public class RlsNodeValidator : INodeValidator
         if (requiredPermission == Permission.None)
             return NodeValidationResult.Valid();
 
-        // Check for a custom access rule for this node type
+        // Check hub-config access rules (from NodeTypeService) — grant-only, fall through on no match
+        if (!string.IsNullOrEmpty(context.Node.NodeType))
+        {
+            var hubRule = _nodeTypeService?.GetAccessRule(context.Node.NodeType);
+            if (hubRule != null &&
+                (hubRule.SupportedOperations.Count == 0 ||
+                 hubRule.SupportedOperations.Contains(context.Operation)))
+            {
+                var hasHubAccess = await hubRule.HasAccessAsync(context, userId, ct);
+                if (hasHubAccess)
+                {
+                    _logger.LogTrace(
+                        "RLS: Hub-config rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
+                        userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
+                    return NodeValidationResult.Valid();
+                }
+            }
+        }
+
+        // Check DI-registered custom access rules for this node type
         if (!string.IsNullOrEmpty(context.Node.NodeType) &&
             _accessRules.TryGetValue(context.Node.NodeType, out var accessRule) &&
             (accessRule.SupportedOperations.Count == 0 ||
