@@ -72,7 +72,7 @@ public static class SampleDataExtensions
 
     /// <summary>Includes the activity tracking partition.</summary>
     public static TBuilder AddActivity<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("_activity");
+        => builder.IncludePartition("_Activity");
 
     // === Convenience bundles ===
 
