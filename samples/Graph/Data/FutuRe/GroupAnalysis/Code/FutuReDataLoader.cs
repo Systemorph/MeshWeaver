@@ -104,19 +104,32 @@ public static class FutuReDataLoader
 
     /// <summary>
     /// Aggregates local data cube rows to group level by applying
-    /// transaction mapping rules. Each local row is split by percentage
-    /// into one or more group LoB rows.
+    /// transaction mapping rules and FX conversion.
+    /// Each local row is split by percentage into one or more group LoB rows,
+    /// with amounts converted to group reporting currency (CHF).
     /// </summary>
     public static IEnumerable<FutuReDataCube> AggregateToGroupLevel(
         IEnumerable<FutuReDataCube> localRows,
         IEnumerable<TransactionMapping> mappings,
-        IEnumerable<LineOfBusiness> groupLobs)
+        IEnumerable<LineOfBusiness> groupLobs,
+        IEnumerable<ExchangeRate> exchangeRates,
+        IEnumerable<BusinessUnit> businessUnits,
+        string currencyMode = CurrencyModes.PlanChf)
     {
         var mappingLookup = mappings
             .GroupBy(m => (m.BusinessUnit, m.LocalLineOfBusiness))
             .ToDictionary(g => g.Key, g => g.ToList());
         var lobLookup = groupLobs
             .ToDictionary(l => l.SystemName, l => l.DisplayName);
+        var buCurrencyLookup = businessUnits
+            .ToDictionary(bu => bu.Id, bu => bu.Currency);
+        var planFxLookup = exchangeRates
+            .ToDictionary(fx => fx.FromCurrency, fx => fx.PlanRate);
+        var actualFxLookup = exchangeRates
+            .ToDictionary(fx => fx.FromCurrency, fx => fx.ActualRate);
+
+        var isOriginal = currencyMode == CurrencyModes.OriginalCurrency;
+        var useActualRateForBoth = currencyMode == CurrencyModes.ActualsChf;
 
         return localRows.SelectMany(row =>
         {
@@ -124,15 +137,42 @@ public static class FutuReDataLoader
             if (!mappingLookup.TryGetValue(key, out var rules))
                 return Enumerable.Empty<FutuReDataCube>();
 
+            var buCurrency = buCurrencyLookup.GetValueOrDefault(row.BusinessUnit, "CHF");
+
+            double estimateFxRate, actualFxRate;
+            string currency;
+
+            if (isOriginal)
+            {
+                estimateFxRate = 1.0;
+                actualFxRate = 1.0;
+                currency = buCurrency;
+            }
+            else if (useActualRateForBoth)
+            {
+                var rate = actualFxLookup.GetValueOrDefault(buCurrency, 1.0);
+                estimateFxRate = rate;
+                actualFxRate = rate;
+                currency = "CHF";
+            }
+            else // Plan (CHF) — default
+            {
+                var rate = planFxLookup.GetValueOrDefault(buCurrency, 1.0);
+                estimateFxRate = rate;
+                actualFxRate = rate;
+                currency = "CHF";
+            }
+
             return rules.Select(rule => row with
             {
                 Id = $"{row.Month}-{rule.GroupLineOfBusiness}-{row.AmountType}-{row.BusinessUnit}-{row.LocalLineOfBusiness}",
                 LineOfBusiness = rule.GroupLineOfBusiness,
                 LineOfBusinessName = lobLookup.GetValueOrDefault(
                     rule.GroupLineOfBusiness, rule.GroupLineOfBusiness),
-                Estimate = row.Estimate * rule.Percentage,
+                Currency = currency,
+                Estimate = row.Estimate * rule.Percentage * estimateFxRate,
                 Actual = row.Actual.HasValue
-                    ? row.Actual.Value * rule.Percentage
+                    ? row.Actual.Value * rule.Percentage * actualFxRate
                     : null
             });
         });
@@ -257,6 +297,37 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
+    /// Loads ExchangeRate reference data from MeshNodes via IMeshService.
+    /// </summary>
+    public static IObservable<IEnumerable<ExchangeRate>> LoadExchangeRates(IWorkspace workspace)
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToExchangeRate)
+                .Where(fx => fx != null)
+                .Cast<ExchangeRate>()
+                .OrderBy(fx => fx.Order));
+    }
+
+    /// <summary>
+    /// Loads BusinessUnit reference data from MeshNodes via IMeshService.
+    /// </summary>
+    public static IObservable<IEnumerable<BusinessUnit>> LoadBusinessUnits(IWorkspace workspace)
+    {
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        return meshQuery
+            .ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active"))
+            .Select(change => change.Items
+                .Select(ConvertToBusinessUnit)
+                .Where(bu => bu != null)
+                .Cast<BusinessUnit>());
+    }
+
+    /// <summary>
     /// Loads group-level LineOfBusiness instances from MeshNode graph via IMeshService.
     /// </summary>
     public static IObservable<IEnumerable<LineOfBusiness>> LoadLinesOfBusinessFromNodes(IWorkspace workspace)
@@ -351,6 +422,38 @@ public static class FutuReDataLoader
             Alpha3Code = GetString(json, "alpha3Code"),
             Region = GetString(json, "region"),
             Order = GetInt(json, "order")
+        };
+    }
+
+    private static ExchangeRate? ConvertToExchangeRate(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new ExchangeRate
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            FromCurrency = GetString(json, "fromCurrency") ?? string.Empty,
+            ToCurrency = GetString(json, "toCurrency") ?? string.Empty,
+            PlanRate = GetDouble(json, "planRate"),
+            ActualRate = GetDouble(json, "actualRate"),
+            Order = GetInt(json, "order")
+        };
+    }
+
+    private static BusinessUnit? ConvertToBusinessUnit(MeshNode node)
+    {
+        if (node.Content is not JsonElement json)
+            return null;
+
+        return new BusinessUnit
+        {
+            Id = GetString(json, "id") ?? node.Id,
+            Name = GetString(json, "name") ?? node.Name ?? node.Id,
+            Description = GetString(json, "description"),
+            Currency = GetString(json, "currency") ?? "USD",
+            Region = GetString(json, "region"),
+            Icon = GetString(json, "icon") ?? "Building"
         };
     }
 

@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #f0f6ff; }
+    .nf { fill: #616161; }
+    .af { fill: #1B6EC2; }
+  </style>
+  <rect class="bg" width="140" height="79" rx="8"/>
+  <!-- KPI cards row -->
+  <rect class="nf" x="8" y="8" width="36" height="18" rx="3" opacity="0.1"/>
+  <rect class="af" x="11" y="11" width="14" height="2" rx="1"/>
+  <rect class="nf" x="11" y="16" width="20" height="4" rx="1" opacity="0.6"/>
+  <rect class="nf" x="52" y="8" width="36" height="18" rx="3" opacity="0.1"/>
+  <rect class="af" x="55" y="11" width="12" height="2" rx="1"/>
+  <rect class="nf" x="55" y="16" width="18" height="4" rx="1" opacity="0.6"/>
+  <rect class="nf" x="96" y="8" width="36" height="18" rx="3" opacity="0.1"/>
+  <rect class="af" x="99" y="11" width="16" height="2" rx="1"/>
+  <rect class="nf" x="99" y="16" width="22" height="4" rx="1" opacity="0.6"/>
+  <!-- Chart area -->
+  <line x1="12" y1="34" x2="12" y2="68" stroke="#1B6EC2" stroke-width="0.8" opacity="0.3"/>
+  <line x1="12" y1="68" x2="128" y2="68" stroke="#1B6EC2" stroke-width="0.8" opacity="0.3"/>
+  <!-- Bars -->
+  <rect class="af" x="20" y="46" width="10" height="22" rx="1" opacity="0.7"/>
+  <rect class="af" x="36" y="40" width="10" height="28" rx="1" opacity="0.9"/>
+  <rect class="af" x="52" y="50" width="10" height="18" rx="1" opacity="0.6"/>
+  <rect class="af" x="68" y="38" width="10" height="30" rx="1"/>
+  <rect class="af" x="84" y="52" width="10" height="16" rx="1" opacity="0.5"/>
+  <rect class="af" x="100" y="44" width="10" height="24" rx="1" opacity="0.8"/>
+  <!-- Trend line -->
+  <polyline points="25,44 41,38 57,48 73,36 89,50 105,42" fill="none" stroke="#1B6EC2" stroke-width="1.5" opacity="0.6"/>
+</svg>

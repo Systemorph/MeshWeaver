@@ -175,6 +175,42 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
     }
 
+    /// <summary>
+    /// Verifies that the AsiaRe business unit renders its Overview area
+    /// with actual content (not just an error control).
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task AsiaRe_Overview_ShouldRender()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/AsiaRe");
+
+        Output.WriteLine("Initializing hub for FutuRe/AsiaRe...");
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+        Output.WriteLine("Hub initialized.");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            address, reference);
+
+        Output.WriteLine("Waiting for AsiaRe Overview control...");
+        var control = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync(x => x is not null);
+
+        Output.WriteLine($"Received control: {control?.GetType().Name}");
+        control.Should().NotBeNull("Overview area should render for AsiaRe business unit");
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().HaveCountGreaterThanOrEqualTo(2,
+            "BusinessUnit Overview should have H2 title + child areas (not just an error control)");
+    }
 
     /// <summary>
     /// Verifies that TransactionMapping MeshNodes are loaded via IMeshService
@@ -265,6 +301,28 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         ids.Should().Contain("US");
         ids.Should().Contain("CH");
         ids.Should().Contain("DE");
+    }
+
+    /// <summary>
+    /// Verifies that ExchangeRate MeshNodes are loaded via IMeshService.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ExchangeRates_ShouldLoadFromMeshNodes()
+    {
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var query = "nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active";
+        Output.WriteLine($"Querying: {query}");
+
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+
+        Output.WriteLine($"Found {results.Count} ExchangeRate nodes");
+        results.Count.Should().Be(4, "Should find EUR-CHF, USD-CHF, JPY-CHF, CHF-CHF");
+
+        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
+        Output.WriteLine($"Exchange rates: {string.Join(", ", ids)}");
+        ids.Should().Contain("EUR-CHF");
+        ids.Should().Contain("JPY-CHF");
     }
 
     /// <summary>
@@ -489,7 +547,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task EuropeRe_KeyMetrics_ShouldHaveNonZeroData()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics");
         md.Should().Contain("Total Premium", "KeyMetrics should show premium");
         md.Should().Contain("Loss Ratio", "KeyMetrics should show loss ratio");
@@ -498,7 +556,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task EuropeRe_ProfitabilityTable_ShouldHaveNonZeroData()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityTable");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityTable", unwrap: true);
         var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe ProfitabilityTable");
         md.Should().Contain("Line of Business", "table should have headers");
         md.Should().Contain("Total", "table should have totals row");
@@ -507,7 +565,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task EuropeRe_ProfitabilityOverview_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityOverview");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityOverview", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
     }
 
@@ -521,21 +579,21 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task EuropeRe_ProfitByLoB_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitByLoB");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitByLoB", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitByLoB should be a chart");
     }
 
     [Fact(Timeout = 10000)]
     public async Task EuropeRe_LossRatio_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LossRatio");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "LossRatio", unwrap: true);
         control.Should().BeOfType<ChartControl>("LossRatio should be a chart");
     }
 
     [Fact(Timeout = 10000)]
     public async Task EuropeRe_QuarterlyTrend_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "QuarterlyTrend");
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "QuarterlyTrend", unwrap: true);
         control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
     }
 
@@ -667,7 +725,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Group_ProfitabilityOverview_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityOverview");
+        var control = await GetControlAsync("FutuRe/Analysis", "ProfitabilityOverview", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitabilityOverview should be a chart");
     }
 
@@ -681,22 +739,36 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Group_ProfitByLoB_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/Analysis", "ProfitByLoB");
+        var control = await GetControlAsync("FutuRe/Analysis", "ProfitByLoB", unwrap: true);
         control.Should().BeOfType<ChartControl>("ProfitByLoB should be a chart");
     }
 
     [Fact(Timeout = 10000)]
     public async Task Group_LossRatio_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/Analysis", "LossRatio");
+        var control = await GetControlAsync("FutuRe/Analysis", "LossRatio", unwrap: true);
         control.Should().BeOfType<ChartControl>("LossRatio should be a chart");
     }
 
     [Fact(Timeout = 10000)]
     public async Task Group_QuarterlyTrend_ShouldRenderChart()
     {
-        var control = await GetControlAsync("FutuRe/Analysis", "QuarterlyTrend");
+        var control = await GetControlAsync("FutuRe/Analysis", "QuarterlyTrend", unwrap: true);
         control.Should().BeOfType<ChartControl>("QuarterlyTrend should be a chart");
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task EuropeRe_AnnualProfitabilityWaterfall_ShouldRender()
+    {
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
+        control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Group_AnnualProfitabilityWaterfall_ShouldRender()
+    {
+        var control = await GetControlAsync("FutuRe/Analysis", "AnnualProfitabilityWaterfall", unwrap: true);
+        control.Should().BeOfType<HtmlControl>("AnnualProfitabilityWaterfall should return an HtmlControl with SVG");
     }
 
     // ── Business Unit Layout Areas ──
@@ -761,6 +833,7 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         ids.Should().Contain("AmountType");
         ids.Should().Contain("Currency");
         ids.Should().Contain("Country");
+        ids.Should().Contain("ExchangeRate");
         ids.Should().Contain("Report");
     }
 
@@ -776,12 +849,13 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
 
         Output.WriteLine($"Found {results.Count} BusinessUnits");
-        results.Count.Should().Be(3, "Should have EuropeRe, AmericasIns, and AsiaRe");
+        results.Count.Should().Be(4, "Should have EuropeRe, AmericasIns, AsiaRe, and Group");
 
         var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
         ids.Should().Contain("EuropeRe");
         ids.Should().Contain("AmericasIns");
         ids.Should().Contain("AsiaRe");
+        ids.Should().Contain("Group");
     }
 
     // ── Report ──
@@ -862,7 +936,8 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     private async Task<UiControl?> GetControlAsync(
         string addressPath, string areaName,
-        bool waitForData = false, int timeoutSeconds = 15)
+        bool waitForData = false, int timeoutSeconds = 15,
+        bool unwrap = false)
     {
         var client = GetClient();
         var address = new Address(addressPath);
@@ -881,9 +956,39 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         var control = await stream
             .GetControlStream(reference.Area!)
             .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
-            .FirstAsync(x => x is not null && (!waitForData || HasNonTrivialData(x)));
+            .FirstAsync(x => x is not null);
 
         control.Should().NotBeNull($"{areaName} should render at {addressPath}");
+
+        if (unwrap)
+        {
+            // Navigate through StackControl wrapping layers (from RenderView/Toolbar).
+            // Each WithView creates a child area at parentKey/N; Toolbar puts content last.
+            // Apply waitForData at every level: HasNonTrivialData returns true for
+            // non-MarkdownControl (StackControl passes immediately), so only the leaf
+            // MarkdownControl actually waits — using a single subscription per key.
+            for (var depth = 0; depth < 3 && control is StackControl stack && stack.Areas?.Count > 0; depth++)
+            {
+                var childArea = stack.Areas.Last();
+                var childKey = childArea.Area?.ToString();
+                if (string.IsNullOrEmpty(childKey)) break;
+
+                Output.WriteLine($"  Unwrap [{depth}]: '{childKey}'...");
+                control = await stream
+                    .GetControlStream(childKey)
+                    .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
+                    .FirstAsync(x => x is not null && (!waitForData || HasNonTrivialData(x)));
+                Output.WriteLine($"  → {control?.GetType().Name}");
+            }
+        }
+        else if (waitForData && !HasNonTrivialData(control))
+        {
+            control = await stream
+                .GetControlStream(reference.Area!)
+                .Timeout(TimeSpan.FromSeconds(timeoutSeconds))
+                .FirstAsync(x => x is not null && HasNonTrivialData(x));
+        }
+
         return control;
     }
 

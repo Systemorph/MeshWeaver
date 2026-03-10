@@ -109,7 +109,14 @@
       "Bash(az postgres:*)",
       "WebFetch(domain:aspire.dev)",
       "mcp__aspire__list_apphosts",
-      "Bash(az account:*)"
+      "Bash(az account:*)",
+      "WebFetch(domain:www.helvetia.com)",
+      "WebFetch(domain:www.eqs-news.com)",
+      "WebFetch(domain:www.webdisclosure.com)",
+      "Bash(git status:*)",
+      "WebFetch(domain:www.helvetia-baloise.com)",
+      "WebFetch(domain:en.wikipedia.org)",
+      "WebFetch(domain:www.finanzwire.com)"
     ],
     "deny": []
   },

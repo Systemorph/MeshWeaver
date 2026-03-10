@@ -81,6 +81,15 @@ public record FutuReDataCube
     public string BusinessUnit { get; init; } = string.Empty;
 
     /// <summary>
+    /// Currency code for this row (e.g. "CHF", "EUR", "USD", "JPY").
+    /// In CHF modes, all rows have "CHF"; in Original Currency mode,
+    /// each row retains the BU's local currency.
+    /// </summary>
+    [Dimension(typeof(string), nameof(Currency))]
+    [Display(Name = "Currency")]
+    public string Currency { get; init; } = string.Empty;
+
+    /// <summary>
     /// Estimated (budgeted) amount for this month/LoB/AmountType combination.
     /// </summary>
     [Display(Name = "Estimate")]
@@ -102,4 +111,21 @@ public record FutuReDataCube
     [Display(Name = "Variance")]
     [DisplayFormat(DataFormatString = "{0:N0}")]
     public double? Variance => Actual.HasValue ? Actual.Value - Estimate : null;
+}
+
+public static class AmountTypes
+{
+    public const string Premium = "Premium";
+    public const string Claims = "Claims";
+    public const string InternalCost = "InternalCost";
+    public const string ExternalCost = "ExternalCost";
+    public const string CapitalCost = "CapitalCost";
+    public const string ExpectedProfit = "ExpectedProfit";
+}
+
+public static class CurrencyModes
+{
+    public const string PlanChf = "Plan (CHF)";
+    public const string ActualsChf = "Actuals (CHF)";
+    public const string OriginalCurrency = "Original Currency";
 }
