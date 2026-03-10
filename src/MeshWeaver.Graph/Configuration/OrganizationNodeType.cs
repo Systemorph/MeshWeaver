@@ -96,11 +96,12 @@ public static class OrganizationNodeType
 
         public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            if (string.IsNullOrEmpty(userId))
-                return false;
-
+            // Read: all users including anonymous
             if (context.Operation == NodeOperation.Read)
                 return true;
+
+            if (string.IsNullOrEmpty(userId))
+                return false;
 
             if (context.Operation == NodeOperation.Update)
                 return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Update, ct);
