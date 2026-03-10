@@ -52,7 +52,7 @@ public record Role
         Id = "Editor",
         DisplayName = "Editor",
         Description = "Can read, create, update nodes, and comment",
-        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment,
+        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute,
         IsInheritable = true
     };
 
@@ -64,7 +64,7 @@ public record Role
         Id = "Viewer",
         DisplayName = "Viewer",
         Description = "Read-only access",
-        Permissions = Permission.Read,
+        Permissions = Permission.Read | Permission.Execute,
         IsInheritable = true
     };
 

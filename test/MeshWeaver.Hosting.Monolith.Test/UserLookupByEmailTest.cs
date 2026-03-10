@@ -54,7 +54,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
     {
         // Arrange - Roland.json has content.email = "rbuergi@systemorph.com"
         var email = "rbuergi@systemorph.com";
-        var query = $"nodeType:User namespace:User content.email:\"{email}\" limit:1";
+        var query = $"nodeType:User namespace:User content.email:{email} limit:1";
 
         // Act - use ImpersonateAsHub scope like the middleware does
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -82,7 +82,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
     {
         // Arrange - email that doesn't exist in any User node
         var email = "nonexistent@example.com";
-        var query = $"nodeType:User namespace:User content.email:\"{email}\" limit:1";
+        var query = $"nodeType:User namespace:User content.email:{email} limit:1";
 
         // Act
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -115,7 +115,7 @@ public class UserLookupByEmailTest : MonolithMeshTestBase
         using (accessService.ImpersonateAsHub(Mesh))
         {
             await foreach (var node in MeshQuery.QueryAsync<MeshNode>(
-                $"nodeType:User namespace:User content.email:\"{claimEmail}\" limit:1",
+                $"nodeType:User namespace:User content.email:{claimEmail} limit:1",
                 ct: TestContext.Current.CancellationToken))
             {
                 meshUser = node;

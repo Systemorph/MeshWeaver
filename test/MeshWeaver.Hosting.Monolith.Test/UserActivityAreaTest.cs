@@ -14,6 +14,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -182,7 +183,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task ActivityArea_WorksForRuntimeCreatedUser()
     {
         // Arrange — create a user node at runtime (simulating onboarding)
-        var username = "RuntimeUser";
+        var username = $"RuntimeUser_{Guid.NewGuid():N}"[..20];
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 

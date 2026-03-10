@@ -200,12 +200,15 @@ public static class MeshExtensions
                 newNode = await persistence.SaveNodeAsync(newNode, ct);
             }
 
-            // 7. Write version history snapshot (non-critical)
-            var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-            if (versionQuery != null)
+            // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
+            if (!catalog.Configuration.IsSatelliteNodeType(newNode.NodeType))
             {
-                try { await versionQuery.WriteVersionAsync(newNode, hub.JsonSerializerOptions, ct); }
-                catch { /* version write failure is non-critical */ }
+                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                if (versionQuery != null)
+                {
+                    try { await versionQuery.WriteVersionAsync(newNode, hub.JsonSerializerOptions, ct); }
+                    catch { /* version write failure is non-critical */ }
+                }
             }
 
             logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
@@ -556,12 +559,15 @@ public static class MeshExtensions
             var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
             var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
 
-            // 5b. Write version history snapshot (non-critical)
-            var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
-            if (versionQuery != null)
+            // 5b. Write version history snapshot (non-critical, skip satellite types like threads/comments)
+            if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
             {
-                try { await versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, ct); }
-                catch { /* version write failure is non-critical */ }
+                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                if (versionQuery != null)
+                {
+                    try { await versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, ct); }
+                    catch { /* version write failure is non-critical */ }
+                }
             }
 
             // 6. Update workspace stream via DataChangeRequest (fire-and-forget, non-blocking)

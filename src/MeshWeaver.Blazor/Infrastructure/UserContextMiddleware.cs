@@ -124,7 +124,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             {
                 var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
                 return meshService.QueryAsync<MeshNode>(
-                    $"nodeType:User namespace:User content.email:\"{email}\" limit:1").FirstOrDefaultAsync();
+                    $"nodeType:User namespace:User content.email:{email} limit:1").FirstOrDefaultAsync();
             }
         }
         catch (Exception ex)

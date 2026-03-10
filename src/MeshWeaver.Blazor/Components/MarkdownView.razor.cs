@@ -28,10 +28,8 @@ public partial class MarkdownView
     private readonly string _kernelId = Guid.NewGuid().AsString();
     private Address? _kernelAddress;
     private Address KernelAddress => _kernelAddress ??= AddressExtensions.CreateKernelAddress(_kernelId);
-    private string? _kernelPath;
 
     private bool _codeSubmitted;
-    private bool _kernelNodeCreated;
 
     /// <summary>
     /// Collection of UCR hyperlink references found in the markdown (@ syntax).
@@ -103,48 +101,10 @@ public partial class MarkdownView
         await base.OnAfterRenderAsync(firstRender);
 
         // Submit code to kernel on first render
+        // The kernel hub creates local subhosts on demand — no mesh node creation needed
         if (firstRender && !_codeSubmitted && CodeSubmissions != null && CodeSubmissions.Count > 0)
         {
             _codeSubmitted = true;
-
-            // Create the kernel node first - required for proper routing
-            // Without this, all kernel/* messages go to a single shared hub at "kernel"
-            if (!_kernelNodeCreated)
-            {
-                _kernelNodeCreated = true;
-                var kernelNode = new MeshNode(_kernelId, AddressExtensions.KernelType)
-                {
-                    Name = $"Kernel-{_kernelId}",
-                    NodeType = AddressExtensions.KernelType
-                };
-
-                try
-                {
-                    var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
-                    var response = await Hub.AwaitResponse(
-                        new CreateNodeRequest(kernelNode) { CreatedBy = Stream?.Owner?.ToString() },
-                        o => o.WithTarget(meshAddress));
-
-                    // If node already exists, that's fine - it means another instance already created it
-                    if (!response.Message.Success && !response.Message.Error?.Contains("already exists") == true)
-                    {
-                        // Log error but continue - code will still be submitted
-                        Console.WriteLine($"Warning: Failed to create kernel node: {response.Message.Error}");
-                    }
-                    else
-                    {
-                        // Store the path for cleanup on disposal
-                        _kernelPath = kernelNode.Path;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Log error but continue - code will still be submitted
-                    Console.WriteLine($"Warning: Error creating kernel node: {ex.Message}");
-                }
-            }
-
-            // Now submit the code to the kernel
             foreach (var submission in CodeSubmissions)
             {
                 Hub.Post(submission, o => o.WithTarget(KernelAddress));
@@ -154,22 +114,6 @@ public partial class MarkdownView
 
     public override async ValueTask DisposeAsync()
     {
-        // Clean up the kernel node if one was created
-        if (_kernelPath != null)
-        {
-            try
-            {
-                var meshAddress = Hub.Configuration.ParentHub?.Address ?? Hub.Address;
-                await Hub.AwaitResponse(
-                    new DeleteNodeRequest(_kernelPath),
-                    o => o.WithTarget(meshAddress));
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Warning: Error deleting kernel node: {ex.Message}");
-            }
-        }
-
         await base.DisposeAsync();
     }
 

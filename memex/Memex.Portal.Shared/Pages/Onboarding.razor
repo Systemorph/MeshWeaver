@@ -148,7 +148,7 @@
                 // Check that the email is not already assigned to another user
                 var emailValue = model.Email.Trim();
                 var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
-                    $"nodeType:User content.email:\"{emailValue}\"").FirstOrDefaultAsync();
+                    $"nodeType:User content.email:{emailValue}").FirstOrDefaultAsync();
                 if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
                 {
                     errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";

@@ -55,7 +55,7 @@ public static class NodeTypeLayoutAreas
         => configuration
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
-                .WithDefaultArea(OverviewArea)
+                .WithDefaultArea(SearchArea)
                 .WithView(MeshNodeLayoutAreas.OverviewArea, ListOverview)  // Override default Overview for listings
                 .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
                 .WithView(OverviewArea, Overview)

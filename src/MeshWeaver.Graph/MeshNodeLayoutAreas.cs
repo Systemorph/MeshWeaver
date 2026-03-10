@@ -502,9 +502,11 @@ public static class MeshNodeLayoutAreas
 
                 // Build create href with type restriction and optional namespace restrictions
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
-                var createNs = nodeTypeDefinition?.DefaultNamespace ?? hubPath;
-                var createPath = string.IsNullOrEmpty(createNs) ? CreateNodeArea : $"{createNs}/{CreateNodeArea}";
-                var createHref = $"/{createPath}?types={Uri.EscapeDataString(nodeTypePath)}";
+                // Route through the current hub; DefaultNamespace is passed to the Create form via the type definition
+                var createNs = !string.IsNullOrEmpty(nodeTypeDefinition?.DefaultNamespace)
+                    ? nodeTypeDefinition.DefaultNamespace
+                    : hubPath;
+                var createHref = $"/{createNs}/{CreateNodeArea}?types={Uri.EscapeDataString(nodeTypePath)}";
                 if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
                     createHref += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
 
