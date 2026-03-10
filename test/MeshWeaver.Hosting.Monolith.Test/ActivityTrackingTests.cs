@@ -7,81 +7,91 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
 
 /// <summary>
-/// Tests for activity tracking via IMeshService (UserActivity nodes).
-/// Activity is tracked at the navigation level (ApplicationPage), not at the persistence layer.
+/// Tests for activity tracking via IActivityStore (dedicated store, not mesh nodes).
 /// </summary>
 public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
-    private async Task CreateUserActivityNodeAsync(string userId, string path, string? name = null, string? nodeType = null, ActivityType type = ActivityType.Read)
+
+    [Fact(Timeout = 10000)]
+    public async Task TrackActivity_SavesAndRetrieves()
     {
+        // Arrange
+        var store = Mesh.ServiceProvider.GetRequiredService<IActivityStore>();
+        var userId = "user-123";
         var now = System.DateTimeOffset.UtcNow;
-        var encodedPath = path.Replace("/", "_");
-        var activityPath = $"_useractivity/{userId}/{encodedPath}";
-        var record = new UserActivityRecord
+
+        // Act
+        await store.TrackActivityAsync(new UserActivityRecord
         {
-            Id = encodedPath,
-            NodePath = path,
+            Id = "org_acme",
+            NodePath = "org/acme",
             UserId = userId,
-            ActivityType = type,
+            ActivityType = ActivityType.Read,
             FirstAccessedAt = now,
             LastAccessedAt = now,
             AccessCount = 1,
-            NodeName = name,
-            NodeType = nodeType,
-        };
-        var activityNode = MeshNode.FromPath(activityPath) with
-        {
-            NodeType = "UserActivity",
-            Name = name ?? path,
-            State = MeshNodeState.Active,
-            Content = record
-        };
-        await NodeFactory.CreateNodeAsync(activityNode);
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task SaveActivities_TracksReadActivity()
-    {
-        // Arrange
-        var userId = "user-123";
-
-        // Act
-        await CreateUserActivityNodeAsync(userId, "org/acme", "Acme Corp", "Markdown");
+            NodeName = "Acme Corp",
+            NodeType = "Markdown",
+            Namespace = "org"
+        });
 
         // Assert
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:_useractivity/{userId}/org_acme scope:exact").FirstOrDefaultAsync();
-        node.Should().NotBeNull();
-        var activity = node!.Content as UserActivityRecord;
-        activity.Should().NotBeNull();
-        activity!.NodePath.Should().Be("org/acme");
+        var activities = await store.GetActivitiesAsync(userId);
+        activities.Should().ContainSingle();
+        var activity = activities[0];
+        activity.NodePath.Should().Be("org/acme");
         activity.UserId.Should().Be(userId);
         activity.ActivityType.Should().Be(ActivityType.Read);
         activity.AccessCount.Should().Be(1);
+        activity.NodeName.Should().Be("Acme Corp");
     }
 
     [Fact(Timeout = 10000)]
-    public async Task SaveActivities_TracksWriteActivity()
+    public async Task TrackActivity_UpsertIncrementsCount()
     {
         // Arrange
+        var store = Mesh.ServiceProvider.GetRequiredService<IActivityStore>();
         var userId = "user-456";
+        var now = System.DateTimeOffset.UtcNow;
 
-        // Act
-        await CreateUserActivityNodeAsync(userId, "org/contoso", "Contoso Ltd", "Markdown", ActivityType.Write);
+        // Act - track same path twice
+        await store.TrackActivityAsync(new UserActivityRecord
+        {
+            Id = "org_contoso",
+            NodePath = "org/contoso",
+            UserId = userId,
+            ActivityType = ActivityType.Read,
+            FirstAccessedAt = now,
+            LastAccessedAt = now,
+            AccessCount = 1,
+            NodeName = "Contoso Ltd",
+            NodeType = "Markdown",
+        });
+        await store.TrackActivityAsync(new UserActivityRecord
+        {
+            Id = "org_contoso",
+            NodePath = "org/contoso",
+            UserId = userId,
+            ActivityType = ActivityType.Read,
+            FirstAccessedAt = now,
+            LastAccessedAt = now,
+            AccessCount = 1,
+            NodeName = "Contoso Ltd",
+            NodeType = "Markdown",
+        });
 
         // Assert
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:_useractivity/{userId}/org_contoso scope:exact").FirstOrDefaultAsync();
-        node.Should().NotBeNull();
-        var activity = node!.Content as UserActivityRecord;
-        activity.Should().NotBeNull();
-        activity!.NodePath.Should().Be("org/contoso");
-        activity.ActivityType.Should().Be(ActivityType.Write);
+        var activities = await store.GetActivitiesAsync(userId);
+        activities.Should().ContainSingle();
+        activities[0].AccessCount.Should().Be(2);
     }
 }
 

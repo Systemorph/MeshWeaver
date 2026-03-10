@@ -194,8 +194,14 @@ public static class MeshNodeLayoutAreas
         // Header with title/icon
         stack = stack.WithView(BuildHeader(host, node, canEdit));
 
+        // For built-in type nodes (Content is NodeTypeDefinition), show type info
+        // instead of property editor which would expose internal NodeTypeDefinition fields.
+        if (node?.Content is NodeTypeDefinition ntd)
+        {
+            stack = stack.WithView(BuildTypeInfoSection(node, ntd));
+        }
         // Property overview (read-only with click-to-edit)
-        if (node != null)
+        else if (node != null)
         {
             stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
         }
@@ -219,6 +225,21 @@ public static class MeshNodeLayoutAreas
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Builds a description section for built-in type nodes.
+    /// Shows the type description from NodeTypeDefinition or a default message.
+    /// </summary>
+    private static UiControl BuildTypeInfoSection(MeshNode node, NodeTypeDefinition typeDef)
+    {
+        var description = typeDef.Description
+            ?? $"Built-in type for managing {node.Name ?? node.NodeType ?? "content"} nodes.";
+
+        return Controls.Stack
+            .WithStyle("margin-top: 16px; padding: 16px 0;")
+            .WithView(Controls.Markdown(description)
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 1rem;"));
     }
 
     /// <summary>
@@ -514,6 +535,7 @@ public static class MeshNodeLayoutAreas
     /// Renders the Children view showing child nodes as thumbnails without search.
     /// Groups children by NodeType (default) or Category if set, excludes NodeType nodes.
     /// Uses MeshSearchControl for unified search/catalog functionality.
+    /// Includes a "Create Sub-Node" button when the user has Create permission.
     /// </summary>
     [Browsable(false)]
     public static UiControl Children(LayoutAreaHost host, RenderingContext _)
@@ -529,7 +551,8 @@ public static class MeshNodeLayoutAreas
             // No explicit grouping - defaults to NodeType which gives meaningful labels
             .WithSectionCounts(true)
             .WithItemLimit(10)
-            .WithCollapsibleSections(true);
+            .WithCollapsibleSections(true)
+            .WithCreateHref($"/{hubPath}/{CreateNodeArea}");
     }
 
     /// <summary>

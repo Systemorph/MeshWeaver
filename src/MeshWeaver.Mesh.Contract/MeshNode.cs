@@ -94,9 +94,11 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
 
     /// <summary>
     /// Single segments as used for matching and addressing.
+    /// Must be a computed property (not a readonly field) so that it reflects
+    /// updated Namespace/Id after record copy via 'with {}'.
     /// </summary>
     [JsonIgnore, NotMapped]
-    public readonly IReadOnlyList<string> Segments =
+    public IReadOnlyList<string> Segments =>
         string.IsNullOrEmpty(Namespace)
             ? (string.IsNullOrEmpty(Id) ? Array.Empty<string>() : Id.Split('/'))
             : Namespace.Split('/').Append(Id).ToArray();

@@ -253,9 +253,7 @@ public static class CreateLayoutArea
         }
         else
         {
-            // Fallback: basic properties form for nodes without ContentType
-            stack = stack.WithView(BuildBasicPropertiesForm(host, node));
-
+            // No content type editor — the metadata Name field above is sufficient.
             // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
@@ -417,37 +415,6 @@ public static class CreateLayoutArea
             title
         ).WithSize("M").WithClosable(true);
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-    }
-
-    /// <summary>
-    /// Builds basic properties form for nodes without ContentType.
-    /// </summary>
-    private static UiControl BuildBasicPropertiesForm(LayoutAreaHost host, MeshNode node)
-    {
-        var dataId = $"create_{node.Path.Replace("/", "_")}";
-        var formData = new Dictionary<string, object?>
-        {
-            ["name"] = node.Name ?? "",
-            ["category"] = node.Category ?? "",
-            ["icon"] = node.Icon ?? ""
-        };
-        host.UpdateData(dataId, formData);
-
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
-
-        // Name field
-        stack = stack.WithView(Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("name"))
-            {
-                Placeholder = "Display name",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("width: 100%;")));
-
-        return stack;
     }
 
     /// <summary>
@@ -643,8 +610,9 @@ public static class CreateLayoutArea
                 {
                     lastAutoId = generatedId;
                     isAutoUpdating = true;
-                    data["id"] = generatedId;
-                    host.UpdateData(formId, data);
+                    // Create a new dictionary to ensure the data stream emits a fresh value
+                    var updated = new Dictionary<string, object?>(data) { ["id"] = generatedId };
+                    host.UpdateData(formId, updated);
                     isAutoUpdating = false;
                 }
             });

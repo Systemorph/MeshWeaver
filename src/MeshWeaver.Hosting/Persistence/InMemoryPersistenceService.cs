@@ -408,6 +408,41 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         return false;
     }
 
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var normalizedPath = NormalizePath(fullPath);
+        if (string.IsNullOrEmpty(normalizedPath))
+            return (null, 0);
+
+        // Try storage adapter first (e.g., PostgreSQL with dedicated SQL)
+        if (_storageAdapter != null)
+        {
+            var (adapterNode, adapterSegments) = await _storageAdapter.FindBestPrefixMatchAsync(normalizedPath, options, ct);
+            if (adapterNode != null)
+                return (adapterNode, adapterSegments);
+        }
+
+        // Fall back to in-memory LINQ scan
+        var match = _nodes.Values
+            .Where(n =>
+            {
+                var nodePath = NormalizePath(n.Path);
+                return normalizedPath.Equals(nodePath, StringComparison.OrdinalIgnoreCase)
+                    || normalizedPath.StartsWith(nodePath + "/", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderByDescending(n => n.Path.Length)
+            .FirstOrDefault();
+
+        if (match != null)
+        {
+            var segments = match.Path.Split('/').Length;
+            return (match, segments);
+        }
+
+        return (null, 0);
+    }
+
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
 

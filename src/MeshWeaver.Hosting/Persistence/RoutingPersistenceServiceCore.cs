@@ -284,6 +284,19 @@ internal class RoutingPersistenceServiceCore : IStorageService
         return await store.ExistsAsync(path, ct);
     }
 
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var segment = PathPartition.GetFirstSegment(fullPath);
+        if (segment == null) return (null, 0);
+
+        await EnsureInitializedAsync(ct);
+        var store = TryGetStore(fullPath);
+        if (store == null) return (null, 0);
+
+        return await store.FindBestPrefixMatchAsync(fullPath, options, ct);
+    }
+
     #endregion
 
     #region Comments

@@ -83,6 +83,18 @@ internal interface IStorageService
     Task<bool> ExistsAsync(string path, CancellationToken ct = default);
 
     /// <summary>
+    /// Finds the node whose path is the longest prefix of the given full path.
+    /// Uses a single query instead of iterating through ancestor paths.
+    /// </summary>
+    /// <param name="fullPath">The full path to find the best prefix match for</param>
+    /// <param name="options">JSON serializer options for type polymorphism</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The matching node and number of matched segments, or (null, 0) if not found</returns>
+    Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+        => Task.FromResult<(MeshNode?, int)>((null, 0));
+
+    /// <summary>
     /// Initializes the persistence service.
     /// </summary>
     /// <param name="ct">Cancellation token</param>

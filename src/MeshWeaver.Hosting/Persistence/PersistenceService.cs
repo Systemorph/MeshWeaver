@@ -45,6 +45,10 @@ internal class PersistenceService(
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => core.ExistsAsync(path, ct);
 
+    public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, CancellationToken ct = default)
+        => core.FindBestPrefixMatchAsync(fullPath, Options, ct);
+
     public Task InitializeAsync(CancellationToken ct = default)
         => core.InitializeAsync(ct);
 

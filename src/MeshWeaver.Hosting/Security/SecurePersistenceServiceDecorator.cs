@@ -138,6 +138,10 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => _inner.ExistsAsync(path, ct);
 
+    public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.FindBestPrefixMatchAsync(fullPath, options, ct);
+
     public Task InitializeAsync(CancellationToken ct = default)
         => _inner.InitializeAsync(ct);
 

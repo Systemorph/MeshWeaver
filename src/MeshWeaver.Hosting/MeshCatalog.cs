@@ -358,21 +358,21 @@ internal sealed class MeshCatalog(
 
     private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPersistenceMatchAsync(string[] segments)
     {
-        // Walk from full path down to single segment, finding deepest existing node
+        var fullPath = string.Join("/", segments);
+
+        // 1. Try dedicated prefix match query (single SQL call in PostgreSQL)
+        var (prefixMatch, prefixSegments) = await Persistence.FindBestPrefixMatchAsync(fullPath);
+        if (prefixMatch != null)
+        {
+            logger.LogDebug("FindBestPersistenceMatchAsync: prefix match found node at path={Path}", prefixMatch.Path);
+            return (prefixMatch, prefixSegments);
+        }
+
+        // 2. Check for virtual namespaces (paths with children but no explicit node)
         for (int depth = segments.Length; depth >= 1; depth--)
         {
             var testPath = string.Join("/", segments.Take(depth));
 
-            var node = await Persistence.GetNodeAsync(testPath);
-            if (node != null)
-            {
-                logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", testPath);
-                return (node, depth);
-            }
-
-            // Check if this path is a virtual namespace (has children but no explicit node).
-            // This handles directories like FutuRe/EuropeRe/LineOfBusiness which contain
-            // instance nodes but have no node file themselves.
             await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
             if (await enumerator.MoveNextAsync())
             {
@@ -386,7 +386,7 @@ internal sealed class MeshCatalog(
             }
         }
 
-        // Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
+        // 3. Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
         var staticNodes = hub.ServiceProvider.GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
             .ToArray();
@@ -426,10 +426,8 @@ internal sealed class MeshCatalog(
                 return new AddressResolution(matchedPath, persistenceRemainder);
             }
 
-            // Path goes deeper than config node but nothing exists in persistence.
-            // Config nodes are type templates (e.g. "User"), not routing targets for
-            // arbitrary child paths. Return null so the caller gets a proper error.
-            return null;
+            // No deeper persistence match — fall through to use the config node itself.
+            // The extra segments are the layout area/id remainder (e.g., Organization/Search).
         }
 
         // Exact match or config node covers the full path - use it directly
