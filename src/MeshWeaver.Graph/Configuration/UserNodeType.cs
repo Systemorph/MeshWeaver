@@ -100,12 +100,12 @@ public static class UserNodeType
 
         public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            if (string.IsNullOrEmpty(userId))
-                return Task.FromResult(false);
-
-            // Read: all authenticated users
+            // Read: all users including anonymous
             if (context.Operation == NodeOperation.Read)
                 return Task.FromResult(true);
+
+            if (string.IsNullOrEmpty(userId))
+                return Task.FromResult(false);
 
             // Update: user can edit their own node
             if (context.Operation == NodeOperation.Update)
