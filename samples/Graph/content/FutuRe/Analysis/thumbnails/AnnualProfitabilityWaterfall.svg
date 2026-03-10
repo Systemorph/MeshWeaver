@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #f0f6ff; }
+    .nf { fill: #616161; }
+    .af { fill: #1B6EC2; }
+  </style>
+  <rect class="bg" width="140" height="79" rx="8"/>
+  <!-- Chart frame -->
+  <rect class="nf" x="9" y="7" width="122" height="64" rx="5"/>
+  <rect class="bg" x="11" y="9" width="118" height="60" rx="3"/>
+  <!-- Axis -->
+  <rect class="nf" x="18" y="56" width="104" height="1" rx="0.5" opacity="0.3"/>
+  <!-- Waterfall bars -->
+  <!-- Premium (grounded, tall) -->
+  <rect class="af" x="22" y="16" width="12" height="40" rx="1"/>
+  <!-- Claims (floating decrease) -->
+  <rect class="af" x="42" y="16" width="12" height="18" rx="1" opacity="0.5"/>
+  <!-- Expenses (floating decrease) -->
+  <rect class="af" x="62" y="34" width="12" height="10" rx="1" opacity="0.5"/>
+  <!-- Other (floating decrease) -->
+  <rect class="af" x="82" y="44" width="12" height="6" rx="1" opacity="0.5"/>
+  <!-- Profit (grounded, short) -->
+  <rect class="af" x="102" y="50" width="12" height="6" rx="1"/>
+  <!-- Connecting lines -->
+  <rect class="nf" x="34" y="16" width="8" height="0.5" opacity="0.3"/>
+  <rect class="nf" x="54" y="34" width="8" height="0.5" opacity="0.3"/>
+  <rect class="nf" x="74" y="44" width="8" height="0.5" opacity="0.3"/>
+  <rect class="nf" x="94" y="50" width="8" height="0.5" opacity="0.3"/>
+  <!-- Bar labels -->
+  <rect class="nf" x="24" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="44" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="64" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="84" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="104" y="60" width="8" height="2" rx="1" opacity="0.3"/>
+</svg>
