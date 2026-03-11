@@ -427,6 +427,7 @@ public partial class QueryParser
                     source = value.ToLowerInvariant() switch
                     {
                         "activity" => QuerySource.Activity,
+                        "accessed" => QuerySource.Accessed,
                         _ => QuerySource.Default
                     };
                     continue;

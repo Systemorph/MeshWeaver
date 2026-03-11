@@ -116,7 +116,6 @@ public static class PostgreSqlExtensions
 
         // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
-        services.TryAddSingleton<IActivityStore>(new PostgreSqlActivityStore(dataSource));
 
         return services;
     }
@@ -162,7 +161,6 @@ public static class PostgreSqlExtensions
 
         // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
-        services.TryAddSingleton<IActivityStore>(new PostgreSqlActivityStore(dataSource));
 
         return services;
     }
@@ -229,9 +227,6 @@ public static class PostgreSqlExtensions
                 sp.GetServices<NodeTypePermission>()));
 
         services.AddPartitionedCoreAndWrapperServices();
-
-        // Register activity store
-        services.TryAddSingleton<IActivityStore>(new PostgreSqlActivityStore(baseDataSource));
 
         return services;
     }

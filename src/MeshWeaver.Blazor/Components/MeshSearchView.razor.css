@@ -282,6 +282,45 @@
     }
 }
 
+/* Empty state with create prompt */
+.mesh-search-empty-create {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px;
+    border: 1px dashed var(--neutral-stroke-divider-rest, #d1d1d1);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s, transform 0.15s;
+    color: var(--neutral-foreground-hint, #666);
+}
+
+.mesh-search-empty-create:hover {
+    border-color: var(--accent-fill-rest, #0078d4);
+    background: var(--neutral-layer-2);
+    transform: translateY(-1px);
+}
+
+.mesh-search-empty-icon {
+    margin-bottom: 12px;
+    transition: transform 0.2s;
+}
+
+.mesh-search-empty-create:hover .mesh-search-empty-icon {
+    transform: scale(1.1);
+}
+
+.mesh-search-empty-title {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.mesh-search-empty-hint {
+    font-size: 0.85rem;
+}
+
 /* Skeleton loading placeholders */
 .mesh-search-skeleton-avatar {
     width: 48px;

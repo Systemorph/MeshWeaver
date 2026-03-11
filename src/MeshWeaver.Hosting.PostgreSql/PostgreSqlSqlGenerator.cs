@@ -142,24 +142,49 @@ public class PostgreSqlSqlGenerator
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId);
 
-        var isActivityQuery = query.Source == QuerySource.Activity && !string.IsNullOrEmpty(activityUserId);
+        var isAccessedQuery = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
+        var isActivityQuery = query.Source == QuerySource.Activity;
 
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
             "n.desired_id, n.main_node FROM mesh_nodes n");
 
-        if (isActivityQuery)
+        if (isAccessedQuery)
         {
-            parameters["@actUserId"] = activityUserId!;
-            sql.Append(" LEFT JOIN user_activity ua ON n.path = ua.node_path AND ua.user_id = @actUserId");
+            // JOIN with UserActivity MeshNodes stored at User/{userId}/_userActivity/{encodedPath}
+            // where encodedPath = node.path with / replaced by _
+            parameters["@actUserPrefix"] = $"User/{activityUserId}/_userActivity/";
+            sql.Append(" INNER JOIN mesh_nodes ua ON ua.namespace LIKE @actUserPrefix || '%'" +
+                        " AND ua.node_type = 'UserActivity'" +
+                        " AND REPLACE(n.path, '/', '_') = ua.id");
+        }
+        else if (isActivityQuery)
+        {
+            // JOIN with Activity satellites to find main nodes with recent activity
+            sql.Append(" INNER JOIN mesh_nodes act ON act.main_node = n.path" +
+                        " AND act.node_type = 'Activity'");
+        }
+
+        // Both source queries restrict to main content nodes only (main_node = path)
+        if (isActivityQuery || isAccessedQuery)
+        {
+            var mainNodeFilter = "n.main_node = n.path";
+            whereClause = string.IsNullOrEmpty(whereClause)
+                ? $"WHERE {mainNodeFilter}"
+                : $"{whereClause} AND {mainNodeFilter}";
         }
 
         if (!string.IsNullOrEmpty(whereClause))
             sql.Append($" {whereClause}");
 
-        if (isActivityQuery)
+        if (isAccessedQuery)
         {
-            sql.Append(" ORDER BY ua.last_accessed DESC NULLS LAST");
+            sql.Append(" ORDER BY ua.last_modified DESC NULLS LAST");
+        }
+        else if (isActivityQuery && query.OrderBy == null)
+        {
+            // Default ordering: most recent activity first
+            sql.Append(" ORDER BY act.content->>'Start' DESC NULLS LAST");
         }
         else if (query.OrderBy != null)
         {

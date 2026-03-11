@@ -85,7 +85,25 @@
         }
         else if (!HasResults() && BoundShowEmptyMessage)
         {
-            <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+            @if (ShowCreateButton)
+            {
+                <div class="mesh-search-empty-create" @onclick="HandleCreateClick">
+                    <div class="mesh-search-empty-icon">
+                        <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="8" y="12" width="48" height="40" rx="6" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3" opacity="0.4"/>
+                            <circle cx="32" cy="32" r="14" fill="var(--accent-fill-rest)" opacity="0.12"/>
+                            <line x1="32" y1="24" x2="32" y2="40" stroke="var(--accent-fill-rest)" stroke-width="2.5" stroke-linecap="round"/>
+                            <line x1="24" y1="32" x2="40" y2="32" stroke="var(--accent-fill-rest)" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
+                    </div>
+                    <div class="mesh-search-empty-title">Nothing here yet</div>
+                    <div class="mesh-search-empty-hint">Click to create your first item</div>
+                </div>
+            }
+            else
+            {
+                <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+            }
         }
         else
         {

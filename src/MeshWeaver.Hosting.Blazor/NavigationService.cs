@@ -295,7 +295,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
-    /// Uses <see cref="IActivityStore"/> (dedicated table) instead of mesh nodes.
+    /// Stores as MeshNode at User/{userId}/_userActivity/{encodedPath}.
     /// Fire-and-forget: failures are logged but don't affect navigation.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
@@ -314,29 +314,57 @@ internal class NavigationService : INavigationService
         if (node.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
             return;
 
-        var activityStore = _hub.ServiceProvider.GetService<IActivityStore>();
-        if (activityStore == null)
-            return;
-
         _ = Task.Run(async () =>
         {
             try
             {
                 var now = DateTimeOffset.UtcNow;
-                var record = new UserActivityRecord
+                var encodedPath = node.Path.Replace("/", "_");
+                var activityPath = $"User/{userId}/_userActivity/{encodedPath}";
+
+                // Query for existing activity node
+                var existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath} scope:exact").FirstOrDefaultAsync();
+
+                UserActivityRecord record;
+                if (existing?.Content is UserActivityRecord existingRecord)
                 {
-                    Id = node.Path.Replace("/", "_"),
-                    NodePath = node.Path,
-                    UserId = userId,
-                    ActivityType = ActivityType.Read,
-                    FirstAccessedAt = now,
-                    LastAccessedAt = now,
-                    AccessCount = 1,
-                    NodeName = node.Name,
-                    NodeType = node.NodeType,
-                    Namespace = node.Namespace
-                };
-                await activityStore.TrackActivityAsync(record);
+                    record = existingRecord with
+                    {
+                        ActivityType = ActivityType.Read,
+                        LastAccessedAt = now,
+                        AccessCount = existingRecord.AccessCount + 1,
+                        NodeName = node.Name ?? existingRecord.NodeName,
+                        NodeType = node.NodeType ?? existingRecord.NodeType,
+                        Namespace = node.Namespace ?? existingRecord.Namespace,
+                    };
+
+                    await _meshQuery.UpdateNodeAsync(existing with { Content = record });
+                }
+                else
+                {
+                    record = new UserActivityRecord
+                    {
+                        Id = encodedPath,
+                        NodePath = node.Path,
+                        UserId = userId,
+                        ActivityType = ActivityType.Read,
+                        FirstAccessedAt = now,
+                        LastAccessedAt = now,
+                        AccessCount = 1,
+                        NodeName = node.Name,
+                        NodeType = node.NodeType,
+                        Namespace = node.Namespace
+                    };
+
+                    await _meshQuery.CreateNodeAsync(MeshNode.FromPath(activityPath) with
+                    {
+                        NodeType = "UserActivity",
+                        Name = node.Name ?? encodedPath,
+                        MainNode = $"User/{userId}",
+                        State = MeshNodeState.Active,
+                        Content = record
+                    });
+                }
             }
             catch (Exception ex)
             {

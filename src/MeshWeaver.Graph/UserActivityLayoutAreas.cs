@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -55,9 +54,19 @@ public static class UserActivityLayoutAreas
             // Chat — full width
             dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
 
-            // Content area: two-column grid — Activity Feed left, Recently Viewed right
+            // Scrollable content area
+            var content = Controls.Stack
+                .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
+
+            // Latest Threads section
+            content = content.WithView(BuildLatestThreads(nodePath));
+
+            // Children section
+            content = content.WithView(BuildChildren(nodePath));
+
+            // Two-column grid — Activity Feed left, Recently Viewed right
             var contentGrid = Controls.LayoutGrid
-                .WithStyle("padding: 0 24px; gap: 24px; width: 100%; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
+                .WithStyle("gap: 24px; width: 100%; margin-top: 24px;");
 
             contentGrid = contentGrid.WithView(
                 await BuildActivityFeed(host),
@@ -67,7 +76,8 @@ public static class UserActivityLayoutAreas
                 await BuildRecentActivity(host, userId),
                 skin => skin.WithXs(12).WithSm(4));
 
-            dashboard = dashboard.WithView(contentGrid);
+            content = content.WithView(contentGrid);
+            dashboard = dashboard.WithView(content);
 
             return (UiControl?)dashboard;
         });
@@ -92,8 +102,8 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Activity timeline — social-media style feed with rich cards, fixed height with scroll.
-    /// Always shows a pinned documentation welcome card as the first item.
+    /// Activity timeline — shows main content nodes with recent changes, plus a pinned docs card.
+    /// source:activity JOINs with Activity satellites and orders by most recent activity.
     /// </summary>
     private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host)
     {
@@ -109,16 +119,19 @@ public static class UserActivityLayoutAreas
         feed = feed.WithView(BuildDocumentationCard());
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var activityLogNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("nodeType:ActivityLog sort:Start-desc limit:30 scope:subtree"))
-            activityLogNodes.Add(n);
-        var activityLogs = activityLogNodes.Select(n => n.Content).OfType<ActivityLog>().ToList();
+        var recentlyChangedNodes = new List<MeshNode>();
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity limit:30 scope:subtree"))
+            recentlyChangedNodes.Add(n);
 
-        foreach (var log in activityLogs)
+        var grid = Controls.LayoutGrid.WithStyle("gap: 8px; width: 100%;");
+        foreach (var node in recentlyChangedNodes)
         {
-            feed = feed.WithView(BuildActivityCard(log));
+            grid = grid.WithView(
+                MeshNodeCardControl.FromNode(node, node.Path ?? ""),
+                skin => skin.WithXs(12));
         }
 
+        feed = feed.WithView(grid);
         section = section.WithView(feed);
         return section;
     }
@@ -161,82 +174,10 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Single activity card — social-media post style with avatar, action, link, and timestamp.
-    /// </summary>
-    private static UiControl BuildActivityCard(ActivityLog log)
-    {
-        var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
-        var initials = GetInitials(userName);
-        var hubPath = log.HubPath ?? "unknown";
-        var hubName = hubPath.Contains('/') ? hubPath.Substring(hubPath.LastIndexOf('/') + 1) : hubPath;
-        var message = log.Messages.Count > 0 ? log.Messages[0].Message : "data changes";
-        var timeAgo = GetRelativeTime(new DateTimeOffset(log.Start, TimeSpan.Zero));
-
-        // Category styling
-        var (categoryIcon, categoryColor, categoryBg) = log.Category switch
-        {
-            "Approval" => ("&#10003;", "#2e7d32", "rgba(46,125,50,0.12)"),
-            "DataUpdate" => ("&#9998;", "#1565c0", "rgba(21,101,192,0.12)"),
-            _ => ("&#9679;", "var(--accent-fill-rest)", "rgba(100,100,100,0.12)")
-        };
-
-        var statusBorderLeft = log.Status switch
-        {
-            ActivityStatus.Failed => "border-left: 3px solid var(--error);",
-            ActivityStatus.Warning => "border-left: 3px solid var(--warning);",
-            _ => $"border-left: 3px solid {categoryColor};"
-        };
-
-        // Avatar color based on user name hash
-        var avatarHue = Math.Abs(userName.GetHashCode()) % 360;
-
-        return Controls.Html(
-            $"<div style=\"display: flex; gap: 14px; padding: 14px 16px; border-radius: 12px; " +
-            $"background: var(--neutral-layer-2); {statusBorderLeft} " +
-            $"transition: transform 0.15s ease, box-shadow 0.15s ease;\" " +
-            $"onmouseenter=\"this.style.transform='translateY(-1px)'; this.style.boxShadow='0 4px 16px rgba(0,0,0,0.12)'\" " +
-            $"onmouseleave=\"this.style.transform='none'; this.style.boxShadow='none'\">" +
-
-            // User avatar
-            $"<div style=\"flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; " +
-            $"background: hsl({avatarHue}, 55%, 55%); " +
-            $"display: flex; align-items: center; justify-content: center; " +
-            $"color: white; font-weight: 700; font-size: 0.85rem; letter-spacing: 0.5px;\">{EscapeHtml(initials)}</div>" +
-
-            // Content
-            $"<div style=\"flex: 1; min-width: 0;\">" +
-
-            // Top row: user + category badge + time
-            $"<div style=\"display: flex; align-items: center; gap: 8px; flex-wrap: wrap;\">" +
-            $"<span style=\"font-weight: 600; font-size: 0.9rem;\">{EscapeHtml(userName)}</span>" +
-            $"<span style=\"font-size: 0.7rem; padding: 2px 8px; border-radius: 10px; " +
-            $"background: {categoryBg}; color: {categoryColor}; font-weight: 500;\">" +
-            $"{categoryIcon} {EscapeHtml(log.Category)}</span>" +
-            $"<span style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-left: auto;\">{timeAgo}</span>" +
-            $"</div>" +
-
-            // Action description
-            $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-rest); margin-top: 6px; line-height: 1.5;\">" +
-            $"{EscapeHtml(message)}</div>" +
-
-            // Target link
-            $"<a href=\"/{EscapeHtml(hubPath)}\" style=\"display: inline-flex; align-items: center; gap: 4px; " +
-            $"margin-top: 8px; padding: 4px 12px; border-radius: 6px; " +
-            $"background: var(--neutral-layer-3); text-decoration: none; " +
-            $"color: var(--accent-foreground-rest); font-size: 0.8rem; font-weight: 500; " +
-            $"transition: background 0.1s ease;\" " +
-            $"onmouseenter=\"this.style.background='var(--accent-fill-rest)'; this.style.color='white'\" " +
-            $"onmouseleave=\"this.style.background='var(--neutral-layer-3)'; this.style.color='var(--accent-foreground-rest)'\">" +
-            $"&#8594; {EscapeHtml(hubName)}</a>" +
-
-            "</div></div>");
-    }
-
-    /// <summary>
     /// Recently Viewed panel — compact card grid, max 10 items, fixed height with scroll.
     /// Resolves full MeshNode for each item to get proper icon/thumbnail.
     /// </summary>
-    private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string userId)
+    private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string _)
     {
         var section = Controls.Stack;
 
@@ -246,7 +187,7 @@ public static class UserActivityLayoutAreas
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var recentNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity sort:lastAccessedAt-desc limit:10 scope:subtree"))
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:accessed limit:10 scope:subtree"))
             recentNodes.Add(n);
 
         if (recentNodes.Count == 0)
@@ -271,7 +212,54 @@ public static class UserActivityLayoutAreas
         return section;
     }
 
-    private static UiControl BuildNotifications(string nodePath, string userId)
+    /// <summary>
+    /// Latest threads — shows the user's most recently accessed threads.
+    /// </summary>
+    private static UiControl BuildLatestThreads(string nodePath)
+    {
+        var section = Controls.Stack.WithStyle("margin-top: 16px;");
+
+        section = section.WithView(Controls.Html(
+            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Latest Threads</div>"));
+
+        section = section.WithView(Controls.MeshSearch
+            .WithHiddenQuery($"source:activity nodeType:Thread namespace:{nodePath}")
+            .WithNamespace(nodePath)
+            .WithShowSearchBox(false)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithItemLimit(5)
+            .WithCreateNodeType("Thread")
+            .WithCreateNamespace(nodePath));
+
+        return section;
+    }
+
+    /// <summary>
+    /// Child nodes — shows sub-nodes grouped by type, like the standard Children view.
+    /// </summary>
+    private static UiControl BuildChildren(string nodePath)
+    {
+        var section = Controls.Stack.WithStyle("margin-top: 24px;");
+
+        section = section.WithView(Controls.Html(
+            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">My Items</div>"));
+
+        section = section.WithView(Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithSectionCounts(true)
+            .WithItemLimit(10)
+            .WithCollapsibleSections(true)
+            .WithCreateHref($"/{nodePath}/{MeshNodeLayoutAreas.CreateNodeArea}"));
+
+        return section;
+    }
+
+    private static UiControl BuildNotifications(string _, string userId)
     {
         var section = Controls.Stack
             .WithVerticalGap(8)
@@ -293,7 +281,7 @@ public static class UserActivityLayoutAreas
         return section;
     }
 
-    private static UiControl BuildPendingActions(string userId)
+    private static UiControl BuildPendingActions(string _)
     {
         var section = Controls.Stack
             .WithVerticalGap(8)
@@ -313,24 +301,6 @@ public static class UserActivityLayoutAreas
 
         section = section.WithView(searchControl);
         return section;
-    }
-
-    private static string GetInitials(string name)
-    {
-        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2)
-            return $"{parts[0][0]}{parts[parts.Length - 1][0]}".ToUpperInvariant();
-        return parts.Length > 0 ? parts[0][..Math.Min(2, parts[0].Length)].ToUpperInvariant() : "?";
-    }
-
-    private static string GetRelativeTime(DateTimeOffset time)
-    {
-        var diff = DateTimeOffset.UtcNow - time;
-        if (diff.TotalMinutes < 1) return "just now";
-        if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
-        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
-        if (diff.TotalDays < 7) return $"{(int)diff.TotalDays}d ago";
-        return time.ToString("MMM dd");
     }
 
     private static string EscapeHtml(string? text)
