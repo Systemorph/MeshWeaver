@@ -23,7 +23,8 @@ public static class PartitionNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStaticNodeProvider, PartitionNodeProvider>();
-            services.AddSingleton<INodeTypeAccessRule, PartitionAccessRule>();
+            services.AddSingleton<INodeTypeAccessRule>(sp =>
+                new PartitionAccessRule(sp.GetRequiredService<ISecurityService>()));
             services.AddSingleton(new NodeTypePermission(NodeType, PublicRead: true));
             return services;
         });

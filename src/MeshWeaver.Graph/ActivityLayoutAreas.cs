@@ -8,18 +8,18 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Overview and Thumbnail views for individual ActivityLog nodes.
-/// Registered via ActivityLogNodeType's AddActivityLogViews().
+/// Overview and Thumbnail views for individual Activity nodes.
+/// Registered via ActivityNodeType's AddActivityViews().
 /// </summary>
-public static class ActivityLogLayoutAreas
+public static class ActivityLayoutAreas
 {
     public const string OverviewArea = "Overview";
     public const string ThumbnailArea = "Thumbnail";
 
     /// <summary>
-    /// Registers the ActivityLog-specific views (Overview, Thumbnail).
+    /// Registers the Activity-specific views (Overview, Thumbnail).
     /// </summary>
-    public static MessageHubConfiguration AddActivityLogViews(this MessageHubConfiguration configuration)
+    public static MessageHubConfiguration AddActivityViews(this MessageHubConfiguration configuration)
         => configuration
             .AddLayout(layout => layout
                 .WithDefaultArea(OverviewArea)
@@ -27,7 +27,7 @@ public static class ActivityLogLayoutAreas
                 .WithView(ThumbnailArea, Thumbnail));
 
     /// <summary>
-    /// Overview for an ActivityLog node. Shows user, category, status, timestamps, and messages.
+    /// Overview for an Activity node. Shows user, category, status, timestamps, and messages.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -37,7 +37,7 @@ public static class ActivityLogLayoutAreas
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
                 if (node?.Content is not ActivityLog log)
-                    return (UiControl?)Controls.Html("<div>No activity log data.</div>");
+                    return (UiControl?)Controls.Html("<div>No activity data.</div>");
 
                 var userName = log.User?.DisplayName ?? log.User?.Email ?? "System";
                 var timeStr = log.Start.ToString("g");
@@ -66,10 +66,10 @@ public static class ActivityLogLayoutAreas
     }
 
     /// <summary>
-    /// Thumbnail view -- compact label for activity log entries.
+    /// Thumbnail view — compact label for activity entries.
     /// </summary>
     public static UiControl Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
-        return Controls.Html("<div>Activity Log</div>");
+        return Controls.Html("<div>Activity</div>");
     }
 }

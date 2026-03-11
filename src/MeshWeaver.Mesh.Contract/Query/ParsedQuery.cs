@@ -73,7 +73,12 @@ public enum QuerySource
     Default,
 
     /// <summary>
-    /// User activity records from _Activity/{userId} partition.
+    /// ActivityLog nodes — implies nodeType:Activity filter.
     /// </summary>
-    Activity
+    Activity,
+
+    /// <summary>
+    /// Nodes the current user has accessed, ordered by UserActivity last-access time.
+    /// </summary>
+    Accessed
 }

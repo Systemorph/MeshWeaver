@@ -1,7 +1,5 @@
-using MeshWeaver.Data;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -9,16 +7,15 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph.Configuration;
 
 /// <summary>
-/// Provides configuration for UserActivity nodes in the graph.
-/// UserActivity nodes track user navigation/access to mesh nodes.
-/// Stored as satellite MeshNodes under User/{userId}/_userActivity/.
-/// Access is delegated to the MainNode (User node) via SatelliteAccessRule.
+/// Provides configuration for Portal session nodes in the graph.
+/// Portal nodes are ephemeral satellite nodes created when a portal session starts
+/// and deleted when it ends. Access is delegated to the MainNode (parent) via SatelliteAccessRule.
 /// </summary>
-public static class UserActivityNodeType
+public static class PortalNodeType
 {
-    public const string NodeType = "UserActivity";
+    public const string NodeType = "Portal";
 
-    public static TBuilder AddUserActivityType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddPortalType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
@@ -33,11 +30,9 @@ public static class UserActivityNodeType
 
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
-        Name = "User Activity",
+        Name = "Portal Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
-        AssemblyLocation = typeof(UserActivityNodeType).Assembly.Location,
-        HubConfiguration = config => config
-            .AddMeshDataSource(source => source.WithContentType<UserActivityRecord>())
+        AssemblyLocation = typeof(PortalNodeType).Assembly.Location,
     };
 }

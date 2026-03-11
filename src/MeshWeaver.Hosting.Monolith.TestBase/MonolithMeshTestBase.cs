@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -26,6 +27,7 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         => builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
+            .AddRowLevelSecurity()
             .AddGraph();
 
     /// <summary>

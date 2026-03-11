@@ -63,6 +63,13 @@ internal class InMemoryMeshQuery(
             parsedQuery = parsedQuery with { Limit = request.Limit };
         }
 
+        // Both source:activity and source:accessed restrict to main nodes only (main_node = path).
+        // In-memory doesn't support the JOIN — returns main nodes without activity ordering.
+        if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
+        {
+            parsedQuery = parsedQuery with { IsMain = true };
+        }
+
         // If no path is specified, use the default path from request or default to root
         var effectivePath = parsedQuery.Path;
         var effectiveScope = parsedQuery.Scope;

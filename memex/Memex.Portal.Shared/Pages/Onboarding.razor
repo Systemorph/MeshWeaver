@@ -126,7 +126,7 @@
 
             // Use ImpersonateAsHub so the portal hub identity is recognized
             // by the portal create access rule (portal namespace = create/read/update User nodes)
-            using (AccessService.ImpersonateAsHub(PortalApplication.Hub))
+            using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
             {
                 // Check if this is the first user (no existing User nodes = platform admin)
                 var isFirstUser = true;

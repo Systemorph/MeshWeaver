@@ -5,95 +5,13 @@ using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Monolith.Test;
-
-/// <summary>
-/// Tests for activity tracking via IActivityStore (dedicated store, not mesh nodes).
-/// </summary>
-public class ActivityTrackingTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
-{
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder);
-
-    [Fact(Timeout = 10000)]
-    public async Task TrackActivity_SavesAndRetrieves()
-    {
-        // Arrange
-        var store = Mesh.ServiceProvider.GetRequiredService<IActivityStore>();
-        var userId = "user-123";
-        var now = System.DateTimeOffset.UtcNow;
-
-        // Act
-        await store.TrackActivityAsync(new UserActivityRecord
-        {
-            Id = "org_acme",
-            NodePath = "org/acme",
-            UserId = userId,
-            ActivityType = ActivityType.Read,
-            FirstAccessedAt = now,
-            LastAccessedAt = now,
-            AccessCount = 1,
-            NodeName = "Acme Corp",
-            NodeType = "Markdown",
-            Namespace = "org"
-        });
-
-        // Assert
-        var activities = await store.GetActivitiesAsync(userId);
-        activities.Should().ContainSingle();
-        var activity = activities[0];
-        activity.NodePath.Should().Be("org/acme");
-        activity.UserId.Should().Be(userId);
-        activity.ActivityType.Should().Be(ActivityType.Read);
-        activity.AccessCount.Should().Be(1);
-        activity.NodeName.Should().Be("Acme Corp");
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task TrackActivity_UpsertIncrementsCount()
-    {
-        // Arrange
-        var store = Mesh.ServiceProvider.GetRequiredService<IActivityStore>();
-        var userId = "user-456";
-        var now = System.DateTimeOffset.UtcNow;
-
-        // Act - track same path twice
-        await store.TrackActivityAsync(new UserActivityRecord
-        {
-            Id = "org_contoso",
-            NodePath = "org/contoso",
-            UserId = userId,
-            ActivityType = ActivityType.Read,
-            FirstAccessedAt = now,
-            LastAccessedAt = now,
-            AccessCount = 1,
-            NodeName = "Contoso Ltd",
-            NodeType = "Markdown",
-        });
-        await store.TrackActivityAsync(new UserActivityRecord
-        {
-            Id = "org_contoso",
-            NodePath = "org/contoso",
-            UserId = userId,
-            ActivityType = ActivityType.Read,
-            FirstAccessedAt = now,
-            LastAccessedAt = now,
-            AccessCount = 1,
-            NodeName = "Contoso Ltd",
-            NodeType = "Markdown",
-        });
-
-        // Assert
-        var activities = await store.GetActivitiesAsync(userId);
-        activities.Should().ContainSingle();
-        activities[0].AccessCount.Should().Be(2);
-    }
-}
 
 public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -125,32 +43,30 @@ public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Catalog_WithActivity_CanLoadNodesFromActivityPaths()
+    public async Task SourceActivity_ReturnsMainNodesOnly()
     {
-        // Arrange - Create nodes
+        // Arrange - Create main content node and Activity satellite
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha/_activity/log1") with
         {
-            Name = "Beta",
-            NodeType = "Markdown"
-        });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/gamma") with
-        {
-            Name = "Gamma",
-            NodeType = "Markdown"
+            Name = "Activity Log 1",
+            NodeType = "Activity",
+            MainNode = "org/alpha",
+            Content = new ActivityLog("DataUpdate") { HubPath = "org/alpha" }
         });
 
-        // Act - query using source:activity (returns all matching nodes in InMemory mode)
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown namespace:org")
+        // Act - source:activity returns main content nodes (not satellites)
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity namespace:org scope:descendants")
             .ToListAsync();
 
-        // Assert - all matching nodes are returned
-        results.Should().HaveCount(3);
-        results.Select(n => n.Name).Should().Contain(["Alpha", "Beta", "Gamma"]);
+        // Assert - returns the main node, not the Activity satellite
+        results.Should().ContainSingle();
+        results[0].Name.Should().Be("Alpha");
+        results[0].NodeType.Should().Be("Markdown");
     }
 }
 
@@ -305,87 +221,112 @@ public class CatalogSearchAndPaginationTests(ITestOutputHelper output) : Monolit
 }
 
 /// <summary>
-/// Tests that source:activity queries work via IMeshService.
-/// InMemory doesn't support SQL JOIN, so source:activity is treated like a normal query
-/// (returns all matching nodes without activity ordering). Activity ordering is only
-/// available with PostgreSQL provider.
+/// Tests that source:activity queries return main content nodes (not satellites).
+/// source:activity adds IsMain=true filter in InMemory, INNER JOIN in PostgreSQL.
 /// </summary>
-public class InMemoryActivityOrderedQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
+public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 10000)]
-    public async Task SourceActivity_ReturnsAllMatchingNodes()
+    public async Task SourceActivity_ReturnsMainNodesOnly()
     {
-        // Arrange
+        // Arrange - create main content nodes and Activity satellites
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha") with
         {
             Name = "Alpha",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/beta") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha/_activity/log1") with
         {
-            Name = "Beta",
-            NodeType = "Markdown"
+            Name = "Activity Log 1",
+            NodeType = "Activity",
+            MainNode = "org/alpha",
+            Content = new ActivityLog("DataUpdate") { HubPath = "org/alpha" }
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/gamma") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/alpha/_activity/log2") with
         {
-            Name = "Gamma",
-            NodeType = "Markdown"
-        });
-
-        // Act - source:activity query via InMemory (filters still apply, ordering is default)
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown namespace:org")
-            .ToListAsync();
-
-        // Assert - all matching nodes are returned (source:activity is stripped by parser)
-        results.Should().HaveCount(3);
-        results.Select(n => n.Name).Should().Contain(["Alpha", "Beta", "Gamma"]);
-    }
-
-    [Fact(Timeout = 10000)]
-    public async Task SourceActivity_RespectsNodeTypeFilter()
-    {
-        // Arrange
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/proj1") with
-        {
-            Name = "Project One",
-            NodeType = "Code"
-        });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("data/doc1") with
-        {
-            Name = "Document One",
-            NodeType = "Markdown"
+            Name = "Activity Log 2",
+            NodeType = "Activity",
+            MainNode = "org/alpha",
+            Content = new ActivityLog("Approval") { HubPath = "org/alpha" }
         });
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Code namespace:data")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity scope:descendants")
             .ToListAsync();
 
-        // Assert - only Code nodes returned
+        // Assert - returns main content node, not Activity satellites
         results.Should().ContainSingle();
-        results[0].Name.Should().Be("Project One");
+        results[0].Name.Should().Be("Alpha");
+        results[0].NodeType.Should().Be("Markdown");
     }
 
     [Fact(Timeout = 10000)]
-    public async Task SourceActivity_RespectsLimit()
+    public async Task SourceActivity_ExcludesSatelliteNodes()
     {
-        // Arrange
+        // Arrange - create main nodes and satellites
         for (var i = 0; i < 5; i++)
         {
-            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"items/item{i}") with
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"org/node{i}") with
             {
-                Name = $"Item {i}",
+                Name = $"Node {i}",
                 NodeType = "Markdown"
+            });
+            await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"org/node{i}/_activity/log{i}") with
+            {
+                Name = $"Activity {i}",
+                NodeType = "Activity",
+                MainNode = $"org/node{i}",
+                Content = new ActivityLog("DataUpdate") { HubPath = $"org/node{i}" }
             });
         }
 
         // Act
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity nodeType:Markdown namespace:items limit:3")
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity scope:descendants limit:3")
             .ToListAsync();
 
-        // Assert
+        // Assert - only main nodes returned, respects limit
         results.Should().HaveCount(3);
+        results.Should().AllSatisfy(n => n.NodeType.Should().Be("Markdown"));
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task SourceActivity_WithPathFilter()
+    {
+        // Arrange - create main nodes with Activity satellites in different paths
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/a") with
+        {
+            Name = "Org A",
+            NodeType = "Markdown"
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/a/_activity/log1") with
+        {
+            Name = "Org A Activity",
+            NodeType = "Activity",
+            MainNode = "org/a",
+            Content = new ActivityLog("DataUpdate") { HubPath = "org/a" }
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/b") with
+        {
+            Name = "Org B",
+            NodeType = "Markdown"
+        });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/b/_activity/log1") with
+        {
+            Name = "Org B Activity",
+            NodeType = "Activity",
+            MainNode = "org/b",
+            Content = new ActivityLog("Approval") { HubPath = "org/b" }
+        });
+
+        // Act - filter by path (subtree includes self + descendants)
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity path:org/a scope:subtree")
+            .ToListAsync();
+
+        // Assert - returns only the main node under org/a
+        results.Should().ContainSingle();
+        results[0].Name.Should().Be("Org A");
     }
 }

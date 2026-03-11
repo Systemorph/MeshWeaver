@@ -144,7 +144,7 @@ public static class EditLayoutArea
     /// <summary>
     /// Builds the Edit view for an entity using the same layout as Overview but with all fields in edit mode.
     /// </summary>
-    public static UiControl Edit(LayoutAreaHost host, ITypeDefinition typeDefinition, object id, RenderingContext ctx)
+    public static UiControl Edit(LayoutAreaHost host, ITypeDefinition typeDefinition, object id, RenderingContext _)
     {
         // Title with right-aligned navigation icons
         var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 1.5em; line-height: 1;\">⧉</a>";

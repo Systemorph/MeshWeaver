@@ -286,7 +286,7 @@ public static class ThreadLayoutAreas
         });
     }
 
-    private static UiControl BuildHistoryView(LayoutAreaHost host, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
+    private static UiControl BuildHistoryView(LayoutAreaHost _, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
     {
         var container = Controls.Stack
             .WithWidth("100%")
