@@ -171,3 +171,34 @@ public enum NodeRejectionReason
     /// </summary>
     NodeHidden
 }
+
+/// <summary>
+/// Post-creation handler invoked after a node is successfully persisted.
+/// Used for side effects like granting initial access to the creator.
+/// Register via DI as a singleton; matched by NodeType.
+/// </summary>
+public interface INodePostCreationHandler
+{
+    /// <summary>
+    /// The node type this handler applies to (e.g. "Organization").
+    /// </summary>
+    string NodeType { get; }
+
+    /// <summary>
+    /// Executes after the node has been saved to persistence.
+    /// Failures are logged but do not prevent the creation response.
+    /// </summary>
+    /// <param name="createdNode">The persisted node</param>
+    /// <param name="createdBy">The ObjectId of the creating user (may be null)</param>
+    /// <param name="ct">Cancellation token</param>
+    Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct);
+
+    /// <summary>
+    /// Returns additional nodes that should be created as side effects of the primary node creation.
+    /// These are persisted directly (bypassing the hub message pipeline) to avoid deadlocks.
+    /// Default implementation returns empty.
+    /// </summary>
+    /// <param name="createdNode">The persisted node</param>
+    /// <returns>Additional nodes to persist</returns>
+    IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode) => [];
+}

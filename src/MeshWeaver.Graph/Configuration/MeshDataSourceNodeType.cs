@@ -18,7 +18,7 @@ public static class MeshDataSourceNodeType
     /// <summary>
     /// The namespace under which data source nodes are stored.
     /// </summary>
-    public const string SourcesNamespace = "_sources";
+    public const string SourcesNamespace = "_Source";
 
     /// <summary>
     /// Registers the built-in "MeshDataSource" MeshNode on the mesh builder.

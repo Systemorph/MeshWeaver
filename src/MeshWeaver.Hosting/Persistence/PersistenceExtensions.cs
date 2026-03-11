@@ -367,9 +367,13 @@ public static class PersistenceExtensions
         services.AddSingleton<IStorageService>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
-        // Register the routing query provider
+        // Register the routing query provider with access filtering
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new RoutingMeshQueryProvider(sp.GetRequiredService<RoutingPersistenceServiceCore>()));
+            new RoutingMeshQueryProvider(
+                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
+                sp.GetService<AccessService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<IDataChangeNotifier>()));
 
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>

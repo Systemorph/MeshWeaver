@@ -132,6 +132,9 @@ public static class MeshExtensions
                     // Post the change to ourselves to update the workspace
                     hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(hub.Address));
 
+                    // Run post-creation handlers (e.g. grant creator Admin role)
+                    await RunPostCreationHandlersAsync(hub, confirmedNode, createRequest.CreatedBy, logger, ct);
+
                     hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
                     logger.LogInformation("Confirmed transient node at {Path}", confirmedNode.Path);
                     return request.Processed();
@@ -213,7 +216,10 @@ public static class MeshExtensions
 
             logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
 
-            // 7. Return success response
+            // 8. Run post-creation handlers (e.g. grant creator Admin role)
+            await RunPostCreationHandlersAsync(hub, newNode, createRequest.CreatedBy, logger, ct);
+
+            // 9. Return success response
             hub.Post(CreateNodeResponse.Ok(newNode), o => o.ResponseFor(request));
 
             return request.Processed();
@@ -432,6 +438,63 @@ public static class MeshExtensions
         }
 
         return null; // All validators passed
+    }
+
+    /// <summary>
+    /// Runs DI-registered post-creation handlers for the given node type.
+    /// Failures are logged but do not affect the creation response.
+    /// Additional nodes returned by handlers are persisted directly via IMeshStorage
+    /// (bypassing the hub pipeline to avoid deadlocks).
+    /// </summary>
+    private static async Task RunPostCreationHandlersAsync(
+        IMessageHub hub,
+        MeshNode node,
+        string? createdBy,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(node.NodeType))
+            return;
+
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>();
+        foreach (var handler in handlers)
+        {
+            if (!handler.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                await handler.HandleAsync(node, createdBy, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Post-creation handler {Handler} failed for node {Path}",
+                    handler.GetType().Name, node.Path);
+            }
+
+            // Persist additional nodes directly (bypass hub pipeline to avoid deadlocks)
+            try
+            {
+                var additionalNodes = handler.GetAdditionalNodes(node);
+                foreach (var additional in additionalNodes)
+                {
+                    if (persistence != null)
+                    {
+                        var saved = await persistence.SaveNodeAsync(additional with { State = MeshNodeState.Active }, ct);
+                        hub.Post(DataChangeRequest.Update([saved]), o => o.WithTarget(hub.Address));
+                        logger.LogInformation("Post-creation handler created additional node at {Path}", saved.Path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Post-creation handler {Handler} failed to create additional nodes for {Path}",
+                    handler.GetType().Name, node.Path);
+            }
+        }
     }
 
     /// <summary>
