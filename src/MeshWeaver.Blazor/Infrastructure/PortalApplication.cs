@@ -1,7 +1,6 @@
 ﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;

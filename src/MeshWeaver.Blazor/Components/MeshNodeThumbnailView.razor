@@ -49,16 +49,6 @@
         flex-shrink: 0;
     }
 
-    [data-theme="dark"] .mesh-node-thumbnail-image {
-        filter: invert(1);
-    }
-
-    @@media (prefers-color-scheme: dark) {
-        :root:not([data-theme="light"]) .mesh-node-thumbnail-image {
-            filter: invert(1);
-        }
-    }
-
     .mesh-node-thumbnail-placeholder {
         width: 48px;
         height: 48px;

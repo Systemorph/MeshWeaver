@@ -133,7 +133,7 @@ public static class ApprovalsView
             dueDate = parsed;
 
         var approvalId = Guid.NewGuid().AsString();
-        var approvalPath = $"{nodePath}/{approvalId}";
+        var approvalPath = $"{nodePath}/{ApprovalExtensions.ApprovalPartition}/{approvalId}";
 
         var approval = new Approval
         {
@@ -149,7 +149,7 @@ public static class ApprovalsView
 
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var approvalNode = new MeshNode(approvalId, nodePath)
+        var approvalNode = new MeshNode(approvalId, $"{nodePath}/{ApprovalExtensions.ApprovalPartition}")
         {
             Name = $"Approval: {purpose}",
             NodeType = ApprovalNodeType.NodeType,
@@ -189,7 +189,7 @@ public static class ApprovalsView
         host.UpdateData(approvalsDataId, Array.Empty<LayoutAreaControl>());
 
         meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"namespace:{nodePath} nodeType:{ApprovalNodeType.NodeType}"))
+                $"namespace:{nodePath}/{ApprovalExtensions.ApprovalPartition} nodeType:{ApprovalNodeType.NodeType}"))
             .Scan(new List<MeshNode>(), (list, change) =>
             {
                 if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

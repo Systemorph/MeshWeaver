@@ -1,6 +1,7 @@
 {
   "$type": "MeshNode",
   "id": "reply1",
+  "path": "Doc/DataMesh/CollaborativeEditing/_Comment/c1/reply1",
   "name": "Reply to Alice",
   "nodeType": "Comment",
   "icon": "/static/NodeTypeIcons/comment.svg",

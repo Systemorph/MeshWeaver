@@ -13,12 +13,9 @@
                     <FluentStack VerticalAlignment="VerticalAlignment.Center">
                         <FluentLabel>Logged in as:</FluentLabel>
                         <FluentSpacer />
-                        @if (isPlatformAdmin)
-                        {
-                            <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => Navigation.NavigateTo("/_settings"))">
-                                Admin Settings
-                            </FluentButton>
-                        }
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => Navigation.NavigateTo("/_settings"))">
+                            Settings
+                        </FluentButton>
                         <FluentButton Appearance="Appearance.Stealth" OnClick="Logout">Sign out</FluentButton>
                     </FluentStack>
                 </HeaderTemplate>
