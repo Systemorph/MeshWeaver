@@ -30,26 +30,26 @@ graph LR
     MW --> GUI["GUI\nControls, layout areas,\ndata binding, observables"]:::gui
     MW --> AI["AI Integration\nAgents, tools,\nnatural language"]:::ai
 
-    click ARCH "/Doc/Architecture"
-    click DM "/Doc/DataMesh"
-    click GUI "/Doc/GUI"
-    click AI "/Doc/AI"
+    click ARCH "Architecture"
+    click DM "DataMesh"
+    click GUI "GUI"
+    click AI "AI"
 ```
 
 ---
 
 ## Explore by Topic
 
-### [Architecture](/Doc/Architecture)
+### [Architecture](Architecture)
 The backbone of MeshWeaver: message-based communication, actor model, partitioned persistence, access control, and UI streaming. Start here to understand how the platform works under the hood.
 
-### [Data Mesh](/Doc/DataMesh)
+### [Data Mesh](DataMesh)
 Everything about nodes: node types, query syntax, unified content references, interactive markdown, collaborative editing, and CRUD operations. The data layer that powers all of MeshWeaver.
 
-### [GUI](/Doc/GUI)
+### [GUI](GUI)
 Build reactive UIs from C# code: editors, data grids, layout areas, data binding, observables, container controls, and attributes. No frontend framework required.
 
-### [AI Integration](/Doc/AI)
+### [AI Integration](AI)
 MeshPlugin tools, agent definitions, model selection, remote control, and natural language interfaces. Let AI agents work alongside your data mesh.
 
 ---

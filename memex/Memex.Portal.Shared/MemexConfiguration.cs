@@ -267,9 +267,15 @@ public static class MemexConfiguration
                 }
             }
 
+            // Use partitioned persistence for FileSystem to support per-org partitions
+            var usePartitioned = string.Equals(graphStorageConfig.Type, "FileSystem", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(graphStorageConfig.BasePath);
+
             return (TBuilder)builder
                 // Configure persistence from Graph:Storage section
-                .ConfigureServices(services => services.AddPersistence(graphStorageConfig))
+                .ConfigureServices(services => usePartitioned
+                    ? services.AddPartitionedFileSystemPersistence(graphStorageConfig.BasePath!)
+                    : services.AddPersistence(graphStorageConfig))
                 // Enable Row-Level Security for access control
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path

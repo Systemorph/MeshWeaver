@@ -9,33 +9,38 @@ Work together on documents in real-time with comments and suggestions.
 
 ## Architecture: Annotations as Satellite Entities
 
-All annotations (comments, tracked changes) are stored as **satellite entities** under the `_annotations` namespace alongside the document. The markdown content itself keeps inline markers for backward compatibility, but during editing the system separates content from annotations:
+Annotations are stored as **satellite entities** alongside the document:
 
-1. **Load**: Read markdown with markers + load annotation entities from `_annotations`
-2. **Separate**: Strip markers to get clean text; build annotation position map from entities
-3. **Edit**: User edits clean text; annotations are rendered as overlays from entity positions
-4. **Save**: Compute position shifts, update entity positions, reassemble markers, save both
+- **Comments** live in the `_Comment` partition (see `CommentsExtensions`)
+- **Tracked changes** live in the `_Tracking` partition (see `AnnotationExtensions`)
+
+The markdown content keeps inline markers (`<!--comment:id-->text<!--/comment:id-->`) as the source of truth for text ranges. During editing, the system separates content from markers:
+
+1. **Load**: Read markdown with markers
+2. **Separate**: Strip markers to get clean text + annotation ranges (ephemeral positions derived from markers)
+3. **Edit**: User edits clean text; annotations rendered as overlays
+4. **Save**: Compute position shifts, reassemble markers into text, save
 
 ### Annotation Entity Types
 
-- **Comment** — a comment anchored to a text range or attached to the page
-  - `Position` / `Length`: character offset in clean content (null = bottom of page)
+- **Comment** (`_Comment` partition) — a comment anchored to a text range or attached to the page
+  - `MarkerId`: links to the inline marker in the markdown
+  - `HighlightedText`: the original selected text
   - `Status`: Active or Resolved
   - `PrimaryNodePath`: document path for permission delegation
 
-- **TrackedChange** — a suggested insertion or deletion
-  - `Position` / `Length`: character offset in clean content
+- **TrackedChange** (`_Tracking` partition) — a suggested insertion or deletion
   - `ChangeType`: Insertion or Deletion
   - `Status`: Pending, Accepted, or Rejected
   - `PrimaryNodePath`: document path for permission delegation
 
-Both types are satellite entities (`IsSatelliteType = true`) and are stored under the `_annotations` partition.
+Both types are satellite entities (`IsSatelliteType = true`). Text range positions are always derived from inline markers at load time — they are not stored on the entities.
 
 ---
 
 ## Adding Comments
 
-Select text and click **Comment** in the toolbar. A Comment entity is created with `Position` and `Length` pointing to the selected range. Comments with no position are attached to the bottom of the page.
+Select text and click **Comment** in the toolbar. A Comment entity is created with a `MarkerId` linking it to the inline marker wrapping the selected text. Comments without a marker are attached to the bottom of the page.
 
 ### Example: A paragraph with comments
 
@@ -96,14 +101,16 @@ Use the toolbar buttons to accept or reject all pending changes at once.
 
 ## Position Tracking and Shifts
 
-When you edit text, annotation positions are automatically recomputed:
+When you edit text, annotation positions are automatically recomputed from inline markers:
 
-1. The system detects the **edit zone** (where content changed) by comparing old and new text
-2. Annotations **before** the edit zone keep their positions
-3. Annotations **after** the edit zone shift by the content length delta
-4. Annotations **within** the edit zone are clamped to boundaries
+1. On load, `AnnotationSyncService.Separate()` parses markers into clean text + ephemeral position ranges
+2. After editing, `ComputePositionShifts()` detects the **edit zone** by comparing old and new clean text
+3. Annotations **before** the edit zone keep their positions
+4. Annotations **after** the edit zone shift by the content length delta
+5. Annotations **within** the edit zone are clamped to boundaries
+6. `Reassemble()` re-injects markers at the shifted positions
 
-This happens on every save (using the existing 500ms auto-save throttle).
+This happens on every save (using the existing 500ms auto-save throttle). Positions are never persisted — they are derived from markers each time.
 
 ---
 

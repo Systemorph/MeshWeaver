@@ -49,6 +49,7 @@ public static class GraphConfigurationExtensions
                 .AddUserActivityType()
                 .AddApiTokenType()
                 .AddMeshDataSourceType()
+                .AddPartitionType()
                 .AddGlobalSettingsType();
 
             // Register services that don't need hub-level dependencies at the mesh level
