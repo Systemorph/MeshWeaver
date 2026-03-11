@@ -85,6 +85,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         AddBinding(valueUpdateSubject
             .Debounce(TimeSpan.FromMilliseconds(DebounceWindow))
             .DistinctUntilChanged()
+            .Skip(1)
             .Subscribe(x =>
             {
                 if (DataPointer is not null)
