@@ -7,7 +7,7 @@
   "isPersistent": true,
   "content": {
     "$type": "User",
-    "email": "samuel.glauser@gmail.com",
+    "email": "sglauser@systemorph.com",
     "bio": "Software engineer and MeshWeaver contributor."
   }
 }
