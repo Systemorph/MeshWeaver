@@ -120,7 +120,8 @@ public static class OrganizationNodeType
     }
 
     /// <summary>
-    /// Grants the creator Admin role on the newly created Organization.
+    /// Grants the creator Admin role on the newly created Organization
+    /// and creates a Partition node for the organization's storage partition.
     /// </summary>
     private class OrganizationCreatorAdminHandler(
         ISecurityService securityService,
@@ -136,8 +137,29 @@ public static class OrganizationNodeType
                 return;
             }
 
+            // Grant Admin role to creator on the organization
             logger.LogInformation("Granting Admin role to {User} on Organization {Path}", createdBy, createdNode.Path);
             await securityService.AddUserRoleAsync(createdBy, Role.Admin.Id, createdNode.Path, assignedBy: "system", ct);
+        }
+
+        /// <summary>
+        /// Returns a Partition node to be created alongside the Organization.
+        /// Persisted directly by RunPostCreationHandlersAsync (bypasses hub pipeline).
+        /// </summary>
+        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
+        {
+            yield return new MeshNode(createdNode.Id, PartitionNodeType.Namespace)
+            {
+                NodeType = PartitionNodeType.NodeType,
+                Name = createdNode.Name ?? createdNode.Id,
+                State = MeshNodeState.Active,
+                Content = new PartitionDefinition
+                {
+                    BasePaths = new HashSet<string> { createdNode.Id },
+                    StorageType = "Auto",
+                    Description = $"Partition for organization {createdNode.Name ?? createdNode.Id}"
+                }
+            };
         }
     }
 }

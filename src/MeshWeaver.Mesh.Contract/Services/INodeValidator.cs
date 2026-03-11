@@ -192,4 +192,13 @@ public interface INodePostCreationHandler
     /// <param name="createdBy">The ObjectId of the creating user (may be null)</param>
     /// <param name="ct">Cancellation token</param>
     Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct);
+
+    /// <summary>
+    /// Returns additional nodes that should be created as side effects of the primary node creation.
+    /// These are persisted directly (bypassing the hub message pipeline) to avoid deadlocks.
+    /// Default implementation returns empty.
+    /// </summary>
+    /// <param name="createdNode">The persisted node</param>
+    /// <returns>Additional nodes to persist</returns>
+    IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode) => [];
 }

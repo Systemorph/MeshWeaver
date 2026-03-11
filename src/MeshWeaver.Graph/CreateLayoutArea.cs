@@ -683,7 +683,17 @@ public static class CreateLayoutArea
                 if (string.IsNullOrWhiteSpace(id))
                     id = GenerateIdFromName(name);
 
-                var nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+                // For satellite types, inject _TypeName segment (e.g. MyProject/_Thread/MyThread)
+                string nodePath;
+                if (meshConfiguration.IsSatelliteNodeType(selectedType))
+                {
+                    var typeSegment = $"_{selectedType}";
+                    nodePath = string.IsNullOrEmpty(ns) ? $"{typeSegment}/{id}" : $"{ns}/{typeSegment}/{id}";
+                }
+                else
+                {
+                    nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+                }
 
                 try
                 {
