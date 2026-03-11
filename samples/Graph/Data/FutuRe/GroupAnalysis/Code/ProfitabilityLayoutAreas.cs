@@ -12,6 +12,17 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
 
 /// <summary>
+/// Toolbar for selecting currency conversion mode in the group profitability dashboard.
+/// </summary>
+public record CurrencyModeToolbar
+{
+    [UiControl<SelectControl>(Options = new[] { CurrencyModes.PlanChf, CurrencyModes.ActualsChf, CurrencyModes.OriginalCurrency },
+        Style = "font-size: 1rem;")]
+    [Display(Name = "Currency")]
+    public string CurrencyMode { get; init; } = CurrencyModes.PlanChf;
+}
+
+/// <summary>
 /// Profitability analysis views for FutuRe insurance data.
 /// Charts show monthly estimates vs actuals, profit/loss by line of business,
 /// loss ratios, and quarterly trends.
@@ -32,14 +43,21 @@ public static class ProfitabilityLayoutAreas
             .WithView(nameof(EstimateVsActual), EstimateVsActual)
             .WithView(nameof(ProfitByLoB), ProfitByLoB)
             .WithView(nameof(LossRatio), LossRatio)
-            .WithView(nameof(QuarterlyTrend), QuarterlyTrend);
+            .WithView(nameof(QuarterlyTrend), QuarterlyTrend)
+            .WithView(nameof(AnnualProfitabilityWaterfall), AnnualProfitabilityWaterfall);
 
     /// <summary>
-    /// Gets the data cube stream. On local hubs returns raw local data;
-    /// on the group hub applies transaction mapping rules to aggregate
-    /// local rows into group lines of business.
+    /// Gets the data cube stream with default Plan (CHF) currency mode.
+    /// On local hubs returns raw local data; on the group hub applies
+    /// transaction mapping rules to aggregate local rows into group lines of business.
     /// </summary>
     private static IObservable<IEnumerable<FutuReDataCube>> GetDataCube(LayoutAreaHost host)
+        => GetDataCube(host, CurrencyModes.PlanChf);
+
+    /// <summary>
+    /// Gets the data cube stream with the specified currency mode.
+    /// </summary>
+    private static IObservable<IEnumerable<FutuReDataCube>> GetDataCube(LayoutAreaHost host, string currencyMode)
     {
         var rawStream = host.Workspace.GetStream<FutuReDataCube>()!
             .Select(data => data?.AsEnumerable() ?? Enumerable.Empty<FutuReDataCube>());
@@ -48,161 +66,317 @@ public static class ProfitabilityLayoutAreas
         if (mappingStream == null)
             return rawStream;
 
-        var lobStream = host.Workspace.GetStream<LineOfBusiness>()!
-            .Select(data => data?.AsEnumerable() ?? Enumerable.Empty<LineOfBusiness>());
+        var rawLobStream = host.Workspace.GetStream<LineOfBusiness>();
+        var lobStream = rawLobStream != null
+            ? rawLobStream.Select(data => data?.AsEnumerable() ?? Enumerable.Empty<LineOfBusiness>())
+            : Observable.Return(Enumerable.Empty<LineOfBusiness>());
+
+        var rawFxStream = host.Workspace.GetStream<ExchangeRate>();
+        var fxStream = rawFxStream != null
+            ? rawFxStream.Select(data => data?.AsEnumerable() ?? Enumerable.Empty<ExchangeRate>())
+            : Observable.Return(Enumerable.Empty<ExchangeRate>());
+
+        var rawBuStream = host.Workspace.GetStream<BusinessUnit>();
+        var buStream = rawBuStream != null
+            ? rawBuStream.Select(data => data?.AsEnumerable() ?? Enumerable.Empty<BusinessUnit>())
+            : Observable.Return(Enumerable.Empty<BusinessUnit>());
 
         return rawStream.CombineLatest(
             mappingStream.Select(m => m?.AsEnumerable() ?? Enumerable.Empty<TransactionMapping>()),
             lobStream,
-            FutuReDataLoader.AggregateToGroupLevel);
+            fxStream,
+            buStream,
+            (rows, mappings, lobs, fx, bus) =>
+                FutuReDataLoader.AggregateToGroupLevel(rows, mappings, lobs, fx, bus, currencyMode));
     }
 
+    // ---------------------------------------------------------------
+    // Currency Grouping Helper
+    // ---------------------------------------------------------------
+
     /// <summary>
-    /// Key performance indicators: total premium, claims, combined ratio, net profit.
+    /// Groups data by currency when in Original Currency mode;
+    /// returns a single unnamed group otherwise.
     /// </summary>
-    [Display(GroupName = "Profitability", Order = 10)]
-    public static IObservable<UiControl> KeyMetrics(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+    private static IEnumerable<(string Label, List<FutuReDataCube> Data)> GroupByCurrency(
+        List<FutuReDataCube> allData, bool isOriginal)
+    {
+        if (isOriginal)
+            return allData.GroupBy(d => d.Currency).OrderBy(g => g.Key)
+                .Select(g => (g.Key, g.ToList()));
+        return [("", allData)];
+    }
+
+    // ---------------------------------------------------------------
+    // Group Profitability Dashboard (with currency mode toolbar)
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Group-level profitability dashboard with currency mode selector.
+    /// Renders all profitability sections with amounts converted
+    /// according to the selected currency mode.
+    /// </summary>
+    [Display(Name = "Group Profitability Dashboard", GroupName = "Profitability", Order = 1)]
+    public static UiControl GroupProfitabilityDashboard(this LayoutAreaHost host, RenderingContext _)
+    {
+        return host.Toolbar(new CurrencyModeToolbar(),
+            (toolbar, area, ctx) => BuildDashboard(area, toolbar.CurrencyMode));
+    }
+
+    private static IObservable<UiControl> BuildDashboard(LayoutAreaHost host, string currencyMode)
+    {
+        var isOriginal = currencyMode == CurrencyModes.OriginalCurrency;
+        var currencyLabel = isOriginal ? "" : " (CHF)";
+
+        return GetDataCube(host, currencyMode).Select(data =>
         {
             var allData = data.ToList();
-            var totalPremium = allData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
-            var totalClaims = allData.Where(d => d.AmountType == "Claims").Sum(d => d.Estimate);
-            var totalInternal = allData.Where(d => d.AmountType == "InternalCost").Sum(d => d.Estimate);
-            var totalExternal = allData.Where(d => d.AmountType == "ExternalCost").Sum(d => d.Estimate);
-            var totalCapital = allData.Where(d => d.AmountType == "CapitalCost").Sum(d => d.Estimate);
-            var totalCosts = totalClaims + totalInternal + totalExternal + totalCapital;
-            var netProfit = totalPremium - totalCosts;
-            var lossRatio = totalPremium > 0 ? totalClaims / totalPremium * 100 : 0;
-            var combinedRatio = totalPremium > 0 ? totalCosts / totalPremium * 100 : 0;
-            var profitMargin = totalPremium > 0 ? netProfit / totalPremium * 100 : 0;
-            var lobCount = allData.Select(d => d.LineOfBusinessName).Distinct().Count();
-            var monthCount = allData.Select(d => d.Month).Distinct().Count();
 
-            var md = $@"### Revenue & Profitability
+            var stack = Controls.Stack
+                .WithView(Controls.Markdown("## Key Performance Indicators"))
+                .WithView(RenderKeyMetrics(allData, isOriginal, currencyLabel));
 
-- **Total Premium**: {totalPremium:N0}
-- **Total Claims**: {totalClaims:N0}
-- **Net Profit**: {netProfit:N0}
+            foreach (var view in RenderProfitByLoB(allData, isOriginal, currencyLabel))
+                stack = stack.WithView(view);
 
-### Ratios
+            stack = stack.WithView(Controls.Markdown(
+                "---\n\n## Monthly Profitability Overview\n\n" +
+                "The chart below shows the monthly P&L waterfall \u2014 premium income (positive) " +
+                "stacked against claims and cost components (negative), with a net profit line overlay."));
 
-- **Loss Ratio**: {lossRatio:F1}%
-- **Combined Ratio**: {combinedRatio:F1}%
-- **Profit Margin**: {profitMargin:F1}%
+            foreach (var view in RenderProfitabilityOverview(allData, isOriginal, currencyLabel))
+                stack = stack.WithView(view);
 
-### Scope
+            stack = stack.WithView(Controls.Markdown(
+                "---\n\n## Line of Business Breakdown\n\n" +
+                "The table summarises estimated premium, claims, operating costs, net profit, " +
+                "and loss ratio for each group line of business across the full 18-month window."));
 
-- **Lines of Business**: {lobCount}
-- **Months**: {monthCount}
-- **Business Units**: {allData.Select(d => d.BusinessUnit).Distinct().Count()}";
+            foreach (var view in RenderProfitabilityTable(allData, isOriginal, currencyLabel))
+                stack = stack.WithView(view);
 
-            return (UiControl)Controls.Markdown(md);
+            stack = stack
+                .WithView(Controls.Markdown(
+                    "---\n\n## Loss Ratios\n\n" +
+                    "Loss ratio (Claims / Premium) is the primary underwriting performance metric. " +
+                    "A ratio above 100 % indicates an underwriting loss on that line."))
+                .WithView(RenderLossRatio(allData))
+                .WithView(Controls.Markdown(
+                    "---\n\n## Quarterly Trend\n\n" +
+                    "Quarterly aggregation smooths monthly volatility and reveals seasonal patterns. " +
+                    "The chart compares actual computed profit against expected profit budgets."));
+
+            foreach (var view in RenderQuarterlyTrend(allData, isOriginal, currencyLabel))
+                stack = stack.WithView(view);
+
+            stack = stack
+                .WithView(Controls.Markdown(
+                    "---\n\n## Annual Profitability Waterfall\n\n" +
+                    "The waterfall chart below shows how total premium flows through claims " +
+                    "and cost components to arrive at net profit."))
+                .WithView(RenderWaterfall(allData, isOriginal))
+                .WithView(Controls.Markdown(
+                    "---\n\n## Estimate vs Actual\n\n" +
+                    "For amount types that track actuals (Premium, Claims, External Cost), " +
+                    "the section below shows a month-by-month comparison table and a Premium estimate-vs-actual chart."));
+
+            foreach (var view in RenderEstimateVsActual(allData, isOriginal, currencyLabel))
+                stack = stack.WithView(view);
+
+            return (UiControl)stack;
         });
+    }
 
-    /// <summary>
-    /// Line of business breakdown table showing premium, claims, costs, profit,
-    /// and loss ratio for each group LoB.
-    /// </summary>
-    [Display(GroupName = "Profitability", Order = 11)]
-    public static IObservable<UiControl> ProfitabilityTable(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+    // ---------------------------------------------------------------
+    // Dashboard Render Helpers
+    // ---------------------------------------------------------------
+
+    private static UiControl RenderKeyMetrics(List<FutuReDataCube> allData, bool isOriginal, string currencyLabel)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine(isOriginal
+            ? "### Revenue & Profitability by Currency"
+            : $"### Revenue & Profitability{currencyLabel}");
+        sb.AppendLine();
+
+        foreach (var (label, cd) in GroupByCurrency(allData, isOriginal))
         {
-            var allData = data.ToList();
-            var lobNames = allData.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
+            var premium = cd.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
+            var claims = cd.Where(d => d.AmountType == AmountTypes.Claims).Sum(d => d.Estimate);
+            // KeyMetrics rolls Claims into total "costs" for a single net-profit KPI,
+            // unlike ProfitabilityTable which separates Claims and "Other Costs".
+            // Both decompositions arrive at the same net profit.
+            var costs = cd.Where(d => d.AmountType != AmountTypes.Premium && d.AmountType != AmountTypes.ExpectedProfit).Sum(d => d.Estimate);
+            var profit = premium - costs;
+            var lossRatio = premium > 0 ? claims / premium * 100 : 0;
+            var combinedRatio = premium > 0 ? costs / premium * 100 : 0;
 
-            var sb = new StringBuilder();
+            var suffix = isOriginal ? $" {label}" : " CHF";
+
+            if (isOriginal)
+            {
+                sb.AppendLine($"#### {label}");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine($"- **Total Premium**: {premium:N0}{suffix}");
+            sb.AppendLine($"- **Total Claims**: {claims:N0}{suffix}");
+            sb.AppendLine($"- **Net Profit**: {profit:N0}{suffix}");
+
+            if (!isOriginal)
+            {
+                sb.AppendLine();
+                sb.AppendLine("### Ratios");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine($"- **Loss Ratio**: {lossRatio:F1}%");
+            sb.AppendLine($"- **Combined Ratio**: {combinedRatio:F1}%");
+
+            if (!isOriginal)
+            {
+                var profitMargin = premium > 0 ? profit / premium * 100 : 0;
+                sb.AppendLine($"- **Profit Margin**: {profitMargin:F1}%");
+            }
+
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("### Scope");
+        sb.AppendLine();
+        sb.AppendLine($"- **Lines of Business**: {allData.Select(d => d.LineOfBusinessName).Distinct().Count()}");
+        sb.AppendLine($"- **Months**: {allData.Select(d => d.Month).Distinct().Count()}");
+        sb.AppendLine($"- **Business Units**: {allData.Select(d => d.BusinessUnit).Distinct().Count()}");
+
+        return Controls.Markdown(sb.ToString());
+    }
+
+    private static IEnumerable<UiControl> RenderProfitabilityTable(List<FutuReDataCube> allData, bool isOriginal, string currencyLabel)
+    {
+        var sb = new StringBuilder();
+
+        foreach (var (label, groupData) in GroupByCurrency(allData, isOriginal))
+        {
+            var cd = groupData.Where(d => d.AmountType != AmountTypes.ExpectedProfit).ToList();
+            var lobNames = cd.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
+
+            if (!string.IsNullOrEmpty(label))
+            {
+                sb.AppendLine($"### {label}");
+                sb.AppendLine();
+            }
+
             sb.AppendLine("| Line of Business | Premium | Claims | Other Costs | Profit | Loss Ratio |");
             sb.AppendLine("|------------------|--------:|-------:|------------:|-------:|-----------:|");
 
-            double grandPremium = 0, grandClaims = 0, grandOther = 0, grandProfit = 0;
-
+            double gp = 0, gc = 0, go = 0, gpr = 0;
             foreach (var lob in lobNames)
             {
-                var lobData = allData.Where(d => d.LineOfBusinessName == lob).ToList();
-                var premium = lobData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
-                var claims = lobData.Where(d => d.AmountType == "Claims").Sum(d => d.Estimate);
-                var otherCosts = lobData
-                    .Where(d => d.AmountType is "InternalCost" or "ExternalCost" or "CapitalCost")
-                    .Sum(d => d.Estimate);
+                var lobData = cd.Where(d => d.LineOfBusinessName == lob).ToList();
+                var premium = lobData.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
+                var claims = lobData.Where(d => d.AmountType == AmountTypes.Claims).Sum(d => d.Estimate);
+                // ProfitabilityTable separates Claims from "Other Costs" (Internal + External + Capital)
+                // for a more detailed breakdown than KeyMetrics, but the net profit is the same.
+                var otherCosts = lobData.Where(d => d.AmountType is AmountTypes.InternalCost or AmountTypes.ExternalCost or AmountTypes.CapitalCost).Sum(d => d.Estimate);
                 var profit = premium - claims - otherCosts;
                 var lr = premium > 0 ? claims / premium * 100 : 0;
-
-                grandPremium += premium;
-                grandClaims += claims;
-                grandOther += otherCosts;
-                grandProfit += profit;
-
+                gp += premium; gc += claims; go += otherCosts; gpr += profit;
                 sb.AppendLine($"| {lob} | {premium:N0} | {claims:N0} | {otherCosts:N0} | {profit:N0} | {lr:F1}% |");
             }
+            var glr = gp > 0 ? gc / gp * 100 : 0;
+            sb.AppendLine($"| **Total** | **{gp:N0}** | **{gc:N0}** | **{go:N0}** | **{gpr:N0}** | **{glr:F1}%** |");
+            sb.AppendLine();
+        }
 
-            var grandLr = grandPremium > 0 ? grandClaims / grandPremium * 100 : 0;
-            sb.AppendLine($"| **Total** | **{grandPremium:N0}** | **{grandClaims:N0}** | **{grandOther:N0}** | **{grandProfit:N0}** | **{grandLr:F1}%** |");
+        yield return Controls.Markdown(sb.ToString());
+    }
 
-            return (UiControl)Controls.Markdown(sb.ToString());
-        });
+    private static IEnumerable<UiControl> RenderProfitabilityOverview(List<FutuReDataCube> allData, bool isOriginal, string currencyLabel)
+    {
+        var months = allData.Select(d => d.Month).Distinct().OrderBy(m => m).ToArray();
 
-    /// <summary>
-    /// Monthly profitability overview: stacked column chart showing Premium (positive)
-    /// and costs (negative) by month, with a profit line overlay.
-    /// </summary>
-    [Display(GroupName = "Profitability", Order = 100)]
-    public static IObservable<UiControl> ProfitabilityOverview(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+        foreach (var (label, cd) in GroupByCurrency(allData, isOriginal))
         {
-            var allData = data.ToList();
-            var months = allData.Select(d => d.Month).Distinct().OrderBy(m => m).ToArray();
+            var premiumByMonth = months.Select(m => cd.Where(d => d.Month == m && d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate)).ToArray();
+            var claimsByMonth = months.Select(m => -cd.Where(d => d.Month == m && d.AmountType == AmountTypes.Claims).Sum(d => d.Estimate)).ToArray();
+            var internalByMonth = months.Select(m => -cd.Where(d => d.Month == m && d.AmountType == AmountTypes.InternalCost).Sum(d => d.Estimate)).ToArray();
+            var externalByMonth = months.Select(m => -cd.Where(d => d.Month == m && d.AmountType == AmountTypes.ExternalCost).Sum(d => d.Estimate)).ToArray();
+            var capitalByMonth = months.Select(m => -cd.Where(d => d.Month == m && d.AmountType == AmountTypes.CapitalCost).Sum(d => d.Estimate)).ToArray();
+            var profitByMonth = months.Select((_, i) => premiumByMonth[i] + claimsByMonth[i] + internalByMonth[i] + externalByMonth[i] + capitalByMonth[i]).ToArray();
 
-            var premiumByMonth = months.Select(m =>
-                allData.Where(d => d.Month == m && d.AmountType == "Premium").Sum(d => d.Estimate)).ToArray();
-            var claimsByMonth = months.Select(m =>
-                -allData.Where(d => d.Month == m && d.AmountType == "Claims").Sum(d => d.Estimate)).ToArray();
-            var internalCostByMonth = months.Select(m =>
-                -allData.Where(d => d.Month == m && d.AmountType == "InternalCost").Sum(d => d.Estimate)).ToArray();
-            var externalCostByMonth = months.Select(m =>
-                -allData.Where(d => d.Month == m && d.AmountType == "ExternalCost").Sum(d => d.Estimate)).ToArray();
-            var capitalCostByMonth = months.Select(m =>
-                -allData.Where(d => d.Month == m && d.AmountType == "CapitalCost").Sum(d => d.Estimate)).ToArray();
+            var title = isOriginal
+                ? $"Monthly Profitability Overview ({label})"
+                : $"Monthly Profitability Overview (Estimates{currencyLabel})";
 
-            var profitByMonth = months.Select((m, i) =>
-                premiumByMonth[i] + claimsByMonth[i] + internalCostByMonth[i] +
-                externalCostByMonth[i] + capitalCostByMonth[i]).ToArray();
-
-            return (UiControl)Charts.Mixed(
-                new ColumnSeries(premiumByMonth, "Premium"),
-                new ColumnSeries(claimsByMonth, "Claims"),
-                new ColumnSeries(internalCostByMonth, "Internal Cost"),
-                new ColumnSeries(externalCostByMonth, "External Cost"),
-                new ColumnSeries(capitalCostByMonth, "Capital Cost"),
+            yield return Charts.Mixed(
+                new ColumnSeries(premiumByMonth, AmountTypes.Premium),
+                new ColumnSeries(claimsByMonth, AmountTypes.Claims),
+                new ColumnSeries(internalByMonth, "Internal Cost"),
+                new ColumnSeries(externalByMonth, "External Cost"),
+                new ColumnSeries(capitalByMonth, "Capital Cost"),
                 new LineSeries(profitByMonth, "Profit")
-            ).WithLabels(months).WithTitle("Monthly Profitability Overview (Estimates)");
-        });
+            ).WithLabels(months).WithWidth("100%").WithTitle(title);
+        }
+    }
 
-    /// <summary>
-    /// Estimate vs Actual comparison for Premium, Claims, and External Cost by month.
-    /// Shows grouped bars for each amount type with both estimate and actual values.
-    /// </summary>
-    [Display(GroupName = "Profitability", Order = 101)]
-    public static IObservable<UiControl> EstimateVsActual(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+    private static IEnumerable<UiControl> RenderEstimateVsActual(List<FutuReDataCube> allData, bool isOriginal, string currencyLabel)
+    {
+        var withActuals = allData.Where(d => d.Actual.HasValue).ToList();
+        if (!withActuals.Any())
         {
-            var withActuals = data.Where(d => d.Actual.HasValue).ToList();
-            if (!withActuals.Any())
-                return (UiControl)Controls.Markdown("*No actual data available yet.*");
+            yield return Controls.Markdown("*No actual data available yet.*");
+            yield break;
+        }
 
-            var months = withActuals.Select(d => d.Month).Distinct().OrderBy(m => m).ToArray();
-            var amountTypes = new[] { "Premium", "Claims", "ExternalCost" };
+        var months = withActuals.Select(d => d.Month).Distinct().OrderBy(m => m).ToArray();
+        var amountTypes = new[] { AmountTypes.Premium, AmountTypes.Claims, AmountTypes.ExternalCost };
+
+        // Charts
+        foreach (var (label, cd) in GroupByCurrency(withActuals, isOriginal))
+        {
+            var cMonths = cd.Select(d => d.Month).Distinct().OrderBy(m => m).ToArray();
+            var estLabel = isOriginal ? $"Estimate ({label})" : "Premium Estimate";
+            var actLabel = isOriginal ? $"Actual ({label})" : "Premium Actual";
+            var estSeries = new ColumnSeries(
+                cMonths.Select(m => cd.Where(d => d.Month == m && d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate)),
+                estLabel);
+            var actSeries = new ColumnSeries(
+                cMonths.Select(m => cd.Where(d => d.Month == m && d.AmountType == AmountTypes.Premium).Sum(d => d.Actual ?? 0)),
+                actLabel);
+            var title = isOriginal
+                ? $"Premium: Estimate vs Actual ({label})"
+                : $"Premium: Estimate vs Actual{currencyLabel}";
+            yield return Charts.Column(estSeries, actSeries)
+                .WithLabels(cMonths)
+                .WithWidth("100%")
+                .WithTitle(title);
+        }
+
+        // Markdown table
+        var evaData = withActuals.Where(d => amountTypes.Contains(d.AmountType)).ToList();
+        var recentMonths = months.Skip(Math.Max(0, months.Length - 6)).ToArray();
+
+        foreach (var (label, cd) in GroupByCurrency(evaData, isOriginal))
+        {
+            var cMonths = recentMonths.Where(m => cd.Any(d => d.Month == m)).ToArray();
 
             var sb = new StringBuilder();
-            sb.AppendLine("## Estimate vs Actual Comparison");
-            sb.AppendLine();
+
+            if (!string.IsNullOrEmpty(label))
+            {
+                sb.AppendLine($"### {label}");
+                sb.AppendLine();
+            }
+
             sb.AppendLine("| Month | Type | Estimate | Actual | Variance |");
             sb.AppendLine("|-------|------|----------|--------|----------|");
 
-            foreach (var month in Enumerable.TakeLast(months, 6))
+            foreach (var month in cMonths)
             {
                 foreach (var at in amountTypes)
                 {
-                    var rows = withActuals.Where(d => d.Month == month && d.AmountType == at).ToList();
+                    var rows = cd.Where(d => d.Month == month && d.AmountType == at).ToList();
                     var estTotal = rows.Sum(d => d.Estimate);
                     var actTotal = rows.Sum(d => d.Actual ?? 0);
                     var variance = actTotal - estTotal;
@@ -211,96 +385,277 @@ public static class ProfitabilityLayoutAreas
                 }
             }
 
-            // Also show a chart for Premium estimate vs actual
-            var premiumEstimate = new ColumnSeries(
-                months.Select(m => withActuals.Where(d => d.Month == m && d.AmountType == "Premium").Sum(d => d.Estimate)),
-                "Premium Estimate");
-            var premiumActual = new ColumnSeries(
-                months.Select(m => withActuals.Where(d => d.Month == m && d.AmountType == "Premium").Sum(d => d.Actual ?? 0)),
-                "Premium Actual");
+            yield return Controls.Markdown(sb.ToString());
+        }
+    }
 
-            var chart = Charts.Column(premiumEstimate, premiumActual)
-                .WithLabels(months)
-                .WithTitle("Premium: Estimate vs Actual");
-
-            return (UiControl)Controls.Stack
-                .WithView(chart)
-                .WithView(Controls.Markdown(sb.ToString()));
-        });
-
-    /// <summary>
-    /// Profit by Line of Business: horizontal bar chart showing net profit
-    /// (Premium - all costs) per LoB across all months.
-    /// </summary>
-    [Display(GroupName = "Profitability", Order = 102)]
-    public static IObservable<UiControl> ProfitByLoB(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+    private static IEnumerable<UiControl> RenderProfitByLoB(List<FutuReDataCube> allData, bool isOriginal, string currencyLabel)
+    {
+        foreach (var (label, cd) in GroupByCurrency(allData, isOriginal))
         {
-            var allData = data.ToList();
-            var lobNames = allData.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
-
+            var lobNames = cd.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
             var profits = lobNames.Select(lob =>
             {
-                var lobData = allData.Where(d => d.LineOfBusinessName == lob);
-                var premium = lobData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
-                var costs = lobData.Where(d => d.AmountType != "Premium" && d.AmountType != "ExpectedProfit")
-                    .Sum(d => d.Estimate);
+                var lobData = cd.Where(d => d.LineOfBusinessName == lob);
+                var premium = lobData.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
+                var costs = lobData.Where(d => d.AmountType != AmountTypes.Premium && d.AmountType != AmountTypes.ExpectedProfit).Sum(d => d.Estimate);
                 return premium - costs;
             }).ToArray();
 
-            return (UiControl)Charts.Bar(profits, lobNames)
-                .WithTitle("Estimated Profit by Line of Business");
-        });
+            var title = isOriginal
+                ? $"Estimated Profit by Line of Business ({label})"
+                : $"Estimated Profit by Line of Business{currencyLabel}";
 
-    /// <summary>
-    /// Loss Ratio by Line of Business: Claims / Premium ratio.
-    /// A ratio above 1.0 indicates underwriting loss.
-    /// </summary>
-    [Display(GroupName = "Profitability", Order = 103)]
-    public static IObservable<UiControl> LossRatio(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+            yield return Charts.Bar(profits, lobNames)
+                .WithWidth("100%")
+                .WithTitle(title);
+        }
+    }
+
+    private static UiControl RenderLossRatio(List<FutuReDataCube> allData)
+    {
+        var lobNames = allData.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
+        var lossRatios = lobNames.Select(lob =>
         {
-            var allData = data.ToList();
-            var lobNames = allData.Select(d => d.LineOfBusinessName).Distinct().OrderBy(n => n).ToArray();
+            var lobData = allData.Where(d => d.LineOfBusinessName == lob);
+            var premium = lobData.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
+            var claims = lobData.Where(d => d.AmountType == AmountTypes.Claims).Sum(d => d.Estimate);
+            return premium > 0 ? Math.Round(claims / premium * 100, 1) : 0;
+        }).ToArray();
 
-            var lossRatios = lobNames.Select(lob =>
-            {
-                var lobData = allData.Where(d => d.LineOfBusinessName == lob);
-                var premium = lobData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
-                var claims = lobData.Where(d => d.AmountType == "Claims").Sum(d => d.Estimate);
-                return premium > 0 ? Math.Round(claims / premium * 100, 1) : 0;
-            }).ToArray();
+        return Charts.Column(lossRatios, lobNames)
+            .WithWidth("100%")
+            .WithTitle("Loss Ratio by Line of Business (Claims / Premium %)");
+    }
 
-            return (UiControl)Charts.Column(lossRatios, lobNames)
-                .WithTitle("Loss Ratio by Line of Business (Claims / Premium %)");
-        });
+    private static IEnumerable<UiControl> RenderQuarterlyTrend(List<FutuReDataCube> allData, bool isOriginal, string currencyLabel)
+    {
+        var quarters = allData.Select(d => d.Quarter).Distinct().OrderBy(q => q).ToArray();
 
-    /// <summary>
-    /// Quarterly profit trend: column chart showing aggregate profit per quarter.
-    /// </summary>
-    [Display(GroupName = "Profitability", Order = 104)]
-    public static IObservable<UiControl> QuarterlyTrend(this LayoutAreaHost host, RenderingContext _)
-        => GetDataCube(host).Select(data =>
+        foreach (var (label, cd) in GroupByCurrency(allData, isOriginal))
         {
-            var allData = data.ToList();
-            var quarters = allData.Select(d => d.Quarter).Distinct().OrderBy(q => q).ToArray();
-
             var profits = quarters.Select(q =>
             {
-                var qData = allData.Where(d => d.Quarter == q);
-                var premium = qData.Where(d => d.AmountType == "Premium").Sum(d => d.Estimate);
-                var costs = qData.Where(d => d.AmountType != "Premium" && d.AmountType != "ExpectedProfit")
-                    .Sum(d => d.Estimate);
+                var qData = cd.Where(d => d.Quarter == q);
+                var premium = qData.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
+                var costs = qData.Where(d => d.AmountType != AmountTypes.Premium && d.AmountType != AmountTypes.ExpectedProfit).Sum(d => d.Estimate);
                 return premium - costs;
             }).ToArray();
+            var expected = quarters.Select(q =>
+                cd.Where(d => d.Quarter == q && d.AmountType == AmountTypes.ExpectedProfit).Sum(d => d.Estimate)).ToArray();
 
-            var expectedProfits = quarters.Select(q =>
-                allData.Where(d => d.Quarter == q && d.AmountType == "ExpectedProfit")
-                    .Sum(d => d.Estimate)).ToArray();
+            var title = isOriginal
+                ? $"Quarterly Profit Trend ({label})"
+                : $"Quarterly Profit Trend: Actual vs Expected{currencyLabel}";
 
-            return (UiControl)Charts.Mixed(
+            yield return Charts.Mixed(
                 new ColumnSeries(profits, "Actual Profit"),
-                new LineSeries(expectedProfits, "Expected Profit")
-            ).WithLabels(quarters).WithTitle("Quarterly Profit Trend: Actual vs Expected");
-        });
+                new LineSeries(expected, "Expected Profit")
+            ).WithLabels(quarters).WithWidth("100%").WithTitle(title);
+        }
+    }
+
+    private static UiControl RenderWaterfall(List<FutuReDataCube> allData, bool isOriginal)
+    {
+        if (isOriginal)
+            return Controls.Markdown("*Waterfall chart is not available in Original Currency mode \u2014 switch to a CHF mode to view the waterfall.*");
+
+        var totalPremium = allData.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
+        var totalClaims = allData.Where(d => d.AmountType == AmountTypes.Claims).Sum(d => d.Estimate);
+        var totalInternal = allData.Where(d => d.AmountType == AmountTypes.InternalCost).Sum(d => d.Estimate);
+        var totalExternal = allData.Where(d => d.AmountType == AmountTypes.ExternalCost).Sum(d => d.Estimate);
+        var totalCapital = allData.Where(d => d.AmountType == AmountTypes.CapitalCost).Sum(d => d.Estimate);
+        var profit = totalPremium - totalClaims - totalInternal - totalExternal - totalCapital;
+
+        return Controls.Html(BuildWaterfallSvg(totalPremium, totalClaims, totalInternal, totalExternal, totalCapital, profit));
+    }
+
+    // ---------------------------------------------------------------
+    // Individual Views (toolbar shown on group hub only)
+    // ---------------------------------------------------------------
+
+    private static bool IsGroupHub(LayoutAreaHost host)
+        => host.Workspace.GetStream<TransactionMapping>() != null;
+
+    /// <summary>
+    /// Renders a view with currency toolbar on group hub, without toolbar on local hubs.
+    /// For render helpers that return a single UiControl.
+    /// </summary>
+    private static UiControl RenderView(
+        LayoutAreaHost host,
+        Func<List<FutuReDataCube>, bool, string, UiControl> render)
+    {
+        if (IsGroupHub(host))
+            return host.Toolbar(new CurrencyModeToolbar(), (toolbar, area, ctx) =>
+            {
+                var isOriginal = toolbar.CurrencyMode == CurrencyModes.OriginalCurrency;
+                var label = isOriginal ? "" : " (CHF)";
+                return GetDataCube(area, toolbar.CurrencyMode)
+                    .Select(data => render(data.ToList(), isOriginal, label));
+            });
+        return Controls.Stack.WithView((LayoutAreaHost area, RenderingContext ctx) =>
+            GetDataCube(area).Select(data => render(data.ToList(), false, "")));
+    }
+
+    /// <summary>
+    /// Renders a view with currency toolbar on group hub, without toolbar on local hubs.
+    /// For render helpers that return IEnumerable&lt;UiControl&gt;.
+    /// </summary>
+    private static UiControl RenderView(
+        LayoutAreaHost host,
+        Func<List<FutuReDataCube>, bool, string, IEnumerable<UiControl>> render)
+    {
+        IObservable<UiControl> BuildStack(LayoutAreaHost area, string mode, bool isOriginal, string label)
+            => GetDataCube(area, mode).Select(data =>
+            {
+                var stack = Controls.Stack.WithWidth("100%");
+                foreach (var v in render(data.ToList(), isOriginal, label))
+                    stack = stack.WithView(v);
+                return (UiControl)stack;
+            });
+
+        if (IsGroupHub(host))
+            return host.Toolbar(new CurrencyModeToolbar(), (toolbar, area, ctx) =>
+            {
+                var isOriginal = toolbar.CurrencyMode == CurrencyModes.OriginalCurrency;
+                var label = isOriginal ? "" : " (CHF)";
+                return BuildStack(area, toolbar.CurrencyMode, isOriginal, label);
+            });
+        return Controls.Stack.WithView((LayoutAreaHost area, RenderingContext ctx) =>
+            BuildStack(area, CurrencyModes.PlanChf, false, ""));
+    }
+
+    [Display(GroupName = "Profitability", Order = 10)]
+    public static UiControl KeyMetrics(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, RenderKeyMetrics);
+
+    [Display(GroupName = "Profitability", Order = 11)]
+    public static UiControl ProfitabilityTable(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, RenderProfitabilityTable);
+
+    [Display(GroupName = "Profitability", Order = 100)]
+    public static UiControl ProfitabilityOverview(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, RenderProfitabilityOverview);
+
+    [Display(GroupName = "Profitability", Order = 101)]
+    public static UiControl EstimateVsActual(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, RenderEstimateVsActual);
+
+    [Display(Name = "Profit by LoB", GroupName = "Profitability", Order = 102)]
+    public static UiControl ProfitByLoB(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, RenderProfitByLoB);
+
+    [Display(GroupName = "Profitability", Order = 103)]
+    public static UiControl LossRatio(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, (data, _, __) => RenderLossRatio(data));
+
+    [Display(GroupName = "Profitability", Order = 104)]
+    public static UiControl QuarterlyTrend(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, RenderQuarterlyTrend);
+
+    [Display(GroupName = "Profitability", Order = 106)]
+    public static UiControl AnnualProfitabilityWaterfall(this LayoutAreaHost host, RenderingContext _)
+        => RenderView(host, (data, isOriginal, _) => RenderWaterfall(data, isOriginal));
+
+    private static string BuildWaterfallSvg(
+        double premium, double claims, double internalCost,
+        double externalCost, double capitalCost, double profit)
+    {
+        // Layout constants
+        const int svgWidth = 1000;
+        const int svgHeight = 400;
+        const int marginTop = 30;
+        const int marginBottom = 50;
+        const int marginLeft = 70;
+        const int marginRight = 30;
+        const int barCount = 6;
+        const int barWidth = 100;
+
+        var chartWidth = svgWidth - marginLeft - marginRight;
+        var chartHeight = svgHeight - marginTop - marginBottom;
+        var barSpacing = chartWidth / barCount;
+        var barOffset = (barSpacing - barWidth) / 2;
+
+        // Y-axis scale: max value is premium (all bars fit within this range)
+        var maxValue = premium;
+        if (maxValue <= 0) maxValue = 1; // guard against zero division
+
+        double ScaleY(double value) => chartHeight - (value / maxValue * chartHeight);
+
+        // Bar definitions: (label, value, runningTop, isTerminal, color)
+        var bars = new (string Label, double Value, double Top, double Bottom, string Color)[barCount];
+
+        // 1. Premium — terminal bar from 0 to Premium
+        bars[0] = (AmountTypes.Premium, premium, 0, premium, "#36A2EB");
+
+        // 2–5. Cost bars — floating, descending from Premium
+        var running = premium;
+
+        running -= claims;
+        bars[1] = (AmountTypes.Claims, claims, running, running + claims, "#C9CBCF");
+
+        running -= internalCost;
+        bars[2] = ("Internal Cost", internalCost, running, running + internalCost, "#C9CBCF");
+
+        running -= externalCost;
+        bars[3] = ("External Cost", externalCost, running, running + externalCost, "#C9CBCF");
+
+        running -= capitalCost;
+        bars[4] = ("Capital Cost", capitalCost, running, running + capitalCost, "#C9CBCF");
+
+        // 6. Net Profit — terminal bar from 0 to profit
+        var profitColor = profit >= 0 ? "#22C55E" : "#EF4444";
+        bars[5] = ("Net Profit", profit, 0, Math.Abs(profit), profitColor);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"<svg viewBox=\"0 0 {svgWidth} {svgHeight}\" width=\"100%\" xmlns=\"http://www.w3.org/2000/svg\" style=\"font-family: sans-serif;\">");
+
+        // Y-axis line
+        sb.AppendLine($"  <line x1=\"{marginLeft}\" y1=\"{marginTop}\" x2=\"{marginLeft}\" y2=\"{marginTop + chartHeight}\" style=\"stroke: var(--rz-chart-axis-color, #4f5154)\" stroke-width=\"1\"/>");
+
+        // X-axis line
+        sb.AppendLine($"  <line x1=\"{marginLeft}\" y1=\"{marginTop + chartHeight}\" x2=\"{marginLeft + chartWidth}\" y2=\"{marginTop + chartHeight}\" style=\"stroke: var(--rz-chart-axis-color, #4f5154)\" stroke-width=\"1\"/>");
+
+        // Y-axis gridlines and labels (5 ticks)
+        for (var i = 0; i <= 4; i++)
+        {
+            var tickValue = maxValue * i / 4;
+            var y = marginTop + ScaleY(tickValue);
+            sb.AppendLine($"  <line x1=\"{marginLeft}\" y1=\"{y:F0}\" x2=\"{marginLeft + chartWidth}\" y2=\"{y:F0}\" style=\"stroke: var(--rz-chart-axis-color, #4f5154)\" stroke-width=\"1\"/>");
+            sb.AppendLine($"  <text x=\"{marginLeft - 8}\" y=\"{y + 4:F0}\" text-anchor=\"end\" font-size=\"12\" style=\"fill: var(--rz-chart-axis-label-color, #c9cacd)\">{tickValue:F0}</text>");
+        }
+
+        // Bars, labels, and connectors
+        for (var i = 0; i < barCount; i++)
+        {
+            var (label, value, bottomVal, topVal, color) = bars[i];
+            var x = marginLeft + i * barSpacing + barOffset;
+            var yTop = marginTop + ScaleY(topVal);
+            var yBottom = marginTop + ScaleY(bottomVal);
+            var barHeight = Math.Max(yBottom - yTop, 1);
+
+            // Bar rectangle
+            sb.AppendLine($"  <rect x=\"{x}\" y=\"{yTop:F0}\" width=\"{barWidth}\" height=\"{barHeight:F0}\" fill=\"{color}\" rx=\"2\"/>");
+
+            // Value label above bar
+            var labelY = yTop - 6;
+            sb.AppendLine($"  <text x=\"{x + barWidth / 2}\" y=\"{labelY:F0}\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"bold\" fill=\"currentColor\">{Math.Abs(value):F0}</text>");
+
+            // Category label below x-axis
+            sb.AppendLine($"  <text x=\"{x + barWidth / 2}\" y=\"{marginTop + chartHeight + 20}\" text-anchor=\"middle\" font-size=\"12\" style=\"fill: var(--rz-chart-axis-label-color, #c9cacd)\">{label}</text>");
+
+            // Connector line to the next bar
+            if (i < barCount - 1)
+            {
+                var nextX = marginLeft + (i + 1) * barSpacing + barOffset;
+                // For Premium (terminal start), connect at top; for cost bars, connect at bottom
+                var connectorDataVal = i == 0 ? topVal : bottomVal;
+                var connectorY = marginTop + ScaleY(connectorDataVal);
+                sb.AppendLine($"  <line x1=\"{x + barWidth}\" y1=\"{connectorY:F0}\" x2=\"{nextX}\" y2=\"{connectorY:F0}\" stroke=\"#999\" stroke-width=\"1\" stroke-dasharray=\"4,3\"/>");
+            }
+        }
+
+        sb.AppendLine("</svg>");
+        return sb.ToString();
+    }
 }

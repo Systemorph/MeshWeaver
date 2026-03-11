@@ -6,65 +6,51 @@ Description: Insurance group with three business units, local-to-group LoB mappi
 Icon: /static/storage/content/FutuRe/icon.svg
 ---
 
-**FutuRe Insurance & Reinsurance** is a fictional group with three business units — **EuropeRe** (EUR), **AmericasIns** (USD), and **AsiaRe** (JPY). Each unit writes business under its own local Lines of Business. The group defines a standard LoB classification and uses **TransactionMapping** percentage splits to aggregate local data into group-level profitability.
+Welcome to **FutuRe Insurance & Reinsurance** — a fictional insurance group built to showcase what MeshWeaver can do. FutuRe has three business units spanning Europe, the Americas, and Asia, each writing business in their own local currencies and product classifications. The group consolidates everything into a unified view — without copying a single row of data.
 
-## Organization
+## The FutuRe Group at a Glance
 
 ```mermaid
 graph TD
-    G[FutuRe Group]
+    G[🏢 FutuRe Group<br/>CHF · Zurich]
 
-    G --> EUR[EuropeRe]
-    G --> AME[AmericasIns]
-    G --> ASIA[AsiaRe]
+    G --> EUR[🇪🇺 EuropeRe<br/>EUR · 8 LoBs]
+    G --> AME[🇺🇸 AmericasIns<br/>USD · 8 LoBs]
+    G --> ASIA[🇯🇵 AsiaRe<br/>JPY · 8 LoBs]
 
-    EUR --> EUR_LOB[8 local LoBs]
-    EUR --> EUR_MAP[13 mapping rules]
-
-    AME --> AME_LOB[8 local LoBs]
-    AME --> AME_MAP[14 mapping rules]
-
-    ASIA --> ASIA_LOB[LoBs pending]
-    ASIA --> ASIA_MAP[Mapping pending]
-
-    G --> G_LOB[10 group LoBs]
+    G --> G_LOB[10 Group Lines of Business]
 
     click EUR "FutuRe/EuropeRe"
     click AME "FutuRe/AmericasIns"
     click ASIA "FutuRe/AsiaRe"
-    click EUR_LOB "FutuRe/EuropeRe/LineOfBusiness/Search"
-    click EUR_MAP "FutuRe/EuropeRe/TransactionMapping/MappingRules"
-    click AME_LOB "FutuRe/AmericasIns/LineOfBusiness/Search"
-    click AME_MAP "FutuRe/AmericasIns/TransactionMapping/MappingRules"
     click G_LOB "FutuRe/LineOfBusiness/Search"
 ```
 
-## Analysis
+## What You'll See
 
-Each business unit has a **local analysis hub** that loads its own CSV data cube. The **group analysis hub** aggregates data from all local hubs via PartitionedHubDataSource, applying TransactionMapping percentage splits to map local LoBs to group LoBs. No data is physically copied — the group view is virtual.
+### 1. Onboarding a New Business Unit
 
-```mermaid
-graph LR
-    subgraph Local
-        EUR_A[EuropeRe Analysis]
-        AME_A[AmericasIns Analysis]
-        ASIA_A[AsiaRe Analysis]
-    end
+When FutuRe acquires AsiaRe, the new unit's local product lines need to map to the group standard. Traditionally a multi-month spreadsheet exercise — here, a MeshWeaver agent reads an email discussion and proposes structured mapping rules automatically.
 
-    EUR_A -->|% splits| GROUP[Group Profitability]
-    AME_A -->|% splits| GROUP
-    ASIA_A -.->|pending| GROUP
+[Explore the LoB Mapping story →](@FutuRe/LobMapping)
 
-    GROUP --> REPORT[Annual Report]
+---
 
-    click EUR_A "FutuRe/EuropeRe/Analysis"
-    click AME_A "FutuRe/AmericasIns/Analysis"
-    click ASIA_A "FutuRe/AsiaRe/Analysis"
-    click GROUP "FutuRe/Analysis"
-    click REPORT "FutuRe/Analysis/AnnualReport"
-```
+### 2. Multi-Currency Consolidation
 
-**Example**: EuropeRe's *Household* line maps **90 %** to group *Property* and **10 %** to group *Casualty*. The original data never leaves the EuropeRe hub — the group profitability cube reads it through a virtual transformation layer.
+Three currencies, two conversion modes, one dropdown. Non-technical users switch between Plan CHF, Actuals CHF, and Original Currency — MeshWeaver handles the math at query time with four exchange rate definitions.
+
+[Explore the FX Conversion story →](@FutuRe/FxConversion)
+
+---
+
+### 3. Data Where It Belongs
+
+Each business unit owns its data in local CSV files. The group view is assembled virtually — no ETL pipelines, no nightly batch jobs, no stale copies. Changes appear instantly.
+
+[Explore the Data Distribution story →](@FutuRe/DataDistribution)
+
+---
 
 ## Report
 

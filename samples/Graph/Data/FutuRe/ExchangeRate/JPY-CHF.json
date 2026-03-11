@@ -1,0 +1,17 @@
+{
+  "id": "JPY-CHF",
+  "namespace": "FutuRe/ExchangeRate",
+  "name": "JPY → CHF (Plan 0.006 / Actual 0.0055)",
+  "nodeType": "FutuRe/ExchangeRate",
+  "isPersistent": true,
+  "content": {
+    "$type": "ExchangeRate",
+    "id": "JPY-CHF",
+    "fromCurrency": "JPY",
+    "toCurrency": "CHF",
+    "planRate": 0.006,
+    "actualRate": 0.0055,
+    "order": 2
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}
