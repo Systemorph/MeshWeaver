@@ -293,40 +293,40 @@ public class SourceActivityQueryTests(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact(Timeout = 10000)]
-    public async Task SourceActivity_WithPathFilter()
+    public async Task SourceActivity_WithNamespaceFilter()
     {
-        // Arrange - create main nodes with Activity satellites in different paths
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/a") with
+        // Arrange - create main nodes with Activity satellites in different namespaces
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projA/doc1") with
         {
-            Name = "Org A",
+            Name = "Doc 1",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/a/_activity/log1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projA/doc1/_activity/log1") with
         {
-            Name = "Org A Activity",
+            Name = "Doc1 Activity",
             NodeType = "Activity",
-            MainNode = "org/a",
-            Content = new ActivityLog("DataUpdate") { HubPath = "org/a" }
+            MainNode = "projA/doc1",
+            Content = new ActivityLog("DataUpdate") { HubPath = "projA/doc1" }
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/b") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projB/doc2") with
         {
-            Name = "Org B",
+            Name = "Doc 2",
             NodeType = "Markdown"
         });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("org/b/_activity/log1") with
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("projB/doc2/_activity/log1") with
         {
-            Name = "Org B Activity",
+            Name = "Doc2 Activity",
             NodeType = "Activity",
-            MainNode = "org/b",
-            Content = new ActivityLog("Approval") { HubPath = "org/b" }
+            MainNode = "projB/doc2",
+            Content = new ActivityLog("Approval") { HubPath = "projB/doc2" }
         });
 
-        // Act - filter by path (subtree includes self + descendants)
-        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity path:org/a scope:subtree")
+        // Act - filter by namespace
+        var results = await MeshQuery.QueryAsync<MeshNode>("source:activity namespace:projA scope:descendants")
             .ToListAsync();
 
-        // Assert - returns only the main node under org/a
+        // Assert - returns only the main node under projA
         results.Should().ContainSingle();
-        results[0].Name.Should().Be("Org A");
+        results[0].Name.Should().Be("Doc 1");
     }
 }
