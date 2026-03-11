@@ -27,7 +27,7 @@ var builder = DistributedApplication.CreateBuilder(args);
 //   Parameters:microsoft-client-secret
 //
 // For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
-//   ConnectionStrings:meshweaver  (Azure PostgreSQL, bypassing provisioning)
+//   ConnectionStrings:memex  (Azure PostgreSQL, bypassing provisioning)
 // Blob Storage uses RunAsExisting with Azure Identity (az login) — no secrets needed.
 
 var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "local";
@@ -153,7 +153,7 @@ if (useLocalDb)
         .WithDataVolume("memex-pgdata")
         .WithLifetime(ContainerLifetime.Persistent)
         .WithPgAdmin(pgAdmin => pgAdmin.WithLifetime(ContainerLifetime.Persistent));
-    var db = postgres.AddDatabase("meshweaver");
+    var db = postgres.AddDatabase("memex");
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
@@ -162,7 +162,7 @@ else if (mode is "local-test" or "local-prod")
 {
     // Use pre-configured connection string (set via dotnet user-secrets)
     // to connect to existing Azure PostgreSQL without Aspire provisioning.
-    var db = builder.AddConnectionString("meshweaver");
+    var db = builder.AddConnectionString("memex");
     dbMigration.WithReference(db);
     portal.WithReference(db);
 }
@@ -178,7 +178,7 @@ else
             server.Location = new Azure.Core.AzureLocation("swedencentral");
         });
     var dbName = mode is "test" ? "memex-test" : "memex";
-    var db = postgres.AddDatabase("meshweaver", databaseName: dbName);
+    var db = postgres.AddDatabase("memex", databaseName: dbName);
 
     dbMigration.WithReference(db).WaitFor(db);
     portal.WithReference(db).WaitFor(db);
