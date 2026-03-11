@@ -11,7 +11,8 @@ public class EmbeddingOptions
     private static readonly FrozenDictionary<string, int> ModelDimensions =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
-            ["cohere-embed-v-4-0"] = 1024,
+            ["cohere-embed-v-4-0"] = 1536,
+            ["embed-v-4-0"] = 1536,
             ["text-embedding-3-small"] = 1536,
             ["text-embedding-3-large"] = 3072,
             ["text-embedding-ada-002"] = 1536,
@@ -24,7 +25,7 @@ public class EmbeddingOptions
     public string Model { get; set; } = "cohere-embed-v-4-0";
 
     /// <summary>
-    /// Vector dimensions. Auto-derived from <see cref="Model"/> for known models; defaults to 1024.
+    /// Vector dimensions. Auto-derived from <see cref="Model"/> for known models; defaults to 1536.
     /// </summary>
     public int Dimensions
     {
@@ -33,5 +34,5 @@ public class EmbeddingOptions
     }
 
     public static int GetDefaultDimensions(string model)
-        => ModelDimensions.GetValueOrDefault(model, 1024);
+        => ModelDimensions.GetValueOrDefault(model, 1536);
 }

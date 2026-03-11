@@ -38,6 +38,12 @@ public record PartitionDefinition
     public Dictionary<string, string>? TableMappings { get; init; }
 
     /// <summary>
+    /// Whether this partition tracks node history (versions schema + triggers).
+    /// Defaults to true. Set to false for ephemeral partitions (Portal, Kernel).
+    /// </summary>
+    public bool Versioned { get; init; } = true;
+
+    /// <summary>
     /// Human-readable description of this partition.
     /// </summary>
     public string? Description { get; init; }

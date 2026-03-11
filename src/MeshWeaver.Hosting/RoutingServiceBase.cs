@@ -98,6 +98,9 @@ namespace MeshWeaver.Hosting
                 if (!string.IsNullOrEmpty(resolution.Remainder))
                 {
                     delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
+                    // Update target to the resolved hub address to prevent routing loops.
+                    // The hub at the prefix will handle the message using the UnifiedPath property.
+                    delivery = delivery.WithTarget(address);
                 }
             }
 

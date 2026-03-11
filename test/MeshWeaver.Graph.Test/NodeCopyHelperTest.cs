@@ -132,6 +132,8 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
             => Task.FromResult<T?>(default);
 
+        public Task<string?> GetPreRenderedHtmlAsync(string path, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
     }
 
     [HubFact]

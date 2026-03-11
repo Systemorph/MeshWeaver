@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -26,6 +27,17 @@ public interface IPartitionedStoreFactory
     /// <param name="ct">Cancellation token</param>
     /// <returns>List of first-segment partition names</returns>
     Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Pre-creates storage for default partitions during initialization.
+    /// For PostgreSQL: creates schemas, tables, indexes, satellite tables, and triggers.
+    /// For FileSystem: no-op (directories are created on demand).
+    /// This is idempotent — safe to call multiple times.
+    /// Also called when new Partition nodes are created (e.g., organization creation).
+    /// </summary>
+    Task InitializeDefaultPartitionsAsync(
+        IEnumerable<PartitionDefinition> partitions, CancellationToken ct = default)
+        => Task.CompletedTask;
 }
 
 /// <summary>

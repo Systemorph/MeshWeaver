@@ -35,6 +35,23 @@ public static class PostgreSqlSchemaInitializer
     }
 
     /// <summary>
+    /// Initializes mesh tables only (no history/versioning). Used for unversioned partitions (Portal, Kernel).
+    /// </summary>
+    public static async Task InitializeMeshTablesAsync(
+        NpgsqlDataSource schemaDataSource, PostgreSqlStorageOptions options, CancellationToken ct = default)
+    {
+        await using (var conn = await schemaDataSource.OpenConnectionAsync(ct))
+        {
+            await conn.ReloadTypesAsync();
+        }
+
+        await using (var cmd = schemaDataSource.CreateCommand(GetUnversionedSchemaScript(options)))
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>
     /// Initializes mesh tables in the org schema and mesh_node_history in a separate versions schema.
     /// The trigger on mesh_nodes writes cross-schema to {versionsSchema}.mesh_node_history.
     /// </summary>
@@ -922,6 +939,70 @@ public static class PostgreSqlSchemaInitializer
                     CREATE TRIGGER mesh_node_copy_to_history
                         AFTER INSERT OR UPDATE ON mesh_nodes
                         FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_to_history();
+                END IF;
+            END;
+            $$;
+            """;
+    }
+
+    /// <summary>
+    /// Returns SQL for unversioned partitions: core tables only, no history table or triggers.
+    /// </summary>
+    private static string GetUnversionedSchemaScript(PostgreSqlStorageOptions options)
+    {
+        var dim = options.VectorDimensions;
+        return $$"""
+            CREATE EXTENSION IF NOT EXISTS vector;
+
+            CREATE TABLE IF NOT EXISTS mesh_nodes (
+                namespace       TEXT        NOT NULL DEFAULT '',
+                id              TEXT        NOT NULL,
+                path            TEXT        GENERATED ALWAYS AS (
+                                    CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
+                                ) STORED,
+                name            TEXT,
+                node_type       TEXT,
+                description     TEXT,
+                category        TEXT,
+                icon            TEXT,
+                display_order   INTEGER,
+                last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                version         BIGINT      NOT NULL DEFAULT 0,
+                state           SMALLINT    NOT NULL DEFAULT 0,
+                content         JSONB,
+                desired_id      TEXT,
+                main_node       TEXT,
+                embedding       vector({{dim}}),
+                PRIMARY KEY (namespace, id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_mn_path ON mesh_nodes (path);
+            CREATE INDEX IF NOT EXISTS idx_mn_path_prefix ON mesh_nodes (path text_pattern_ops);
+            CREATE INDEX IF NOT EXISTS idx_mn_namespace ON mesh_nodes (namespace);
+            CREATE INDEX IF NOT EXISTS idx_mn_node_type ON mesh_nodes (node_type);
+            CREATE INDEX IF NOT EXISTS idx_mn_content ON mesh_nodes USING gin (content jsonb_path_ops);
+
+            -- Notify function for change notifications
+            CREATE OR REPLACE FUNCTION notify_mesh_node_changes() RETURNS TRIGGER AS $$
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    PERFORM pg_notify('mesh_node_changes',
+                        json_build_object('path', CASE WHEN OLD.namespace = '' THEN OLD.id ELSE OLD.namespace || '/' || OLD.id END, 'op', 'DELETE')::text);
+                    RETURN OLD;
+                ELSE
+                    PERFORM pg_notify('mesh_node_changes',
+                        json_build_object('path', CASE WHEN NEW.namespace = '' THEN NEW.id ELSE NEW.namespace || '/' || NEW.id END, 'op', TG_OP)::text);
+                    RETURN NEW;
+                END IF;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_notify') THEN
+                    CREATE TRIGGER mesh_node_notify
+                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
+                        FOR EACH ROW EXECUTE FUNCTION notify_mesh_node_changes();
                 END IF;
             END;
             $$;

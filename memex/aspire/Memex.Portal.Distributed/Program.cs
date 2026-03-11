@@ -43,7 +43,7 @@ builder.UseOrleansMeshServer(address, silo =>
         })
     )
     .ConfigureServices(services => services
-        .AddPostgreSqlStorageFactory())
+        .AddPartitionedPostgreSqlPersistence())
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal();
 

@@ -188,10 +188,9 @@ internal class InMemoryMeshQuery(
             }
         }
 
-        // Ancestor children (AncestorsAndSelf, Hierarchy, Ancestors)
+        // Ancestor children (AncestorsAndSelf, Hierarchy — NOT plain Ancestors which only returns exact ancestor nodes)
         if (effectiveScope == QueryScope.AncestorsAndSelf
-            || effectiveScope == QueryScope.Hierarchy
-            || effectiveScope == QueryScope.Ancestors)
+            || effectiveScope == QueryScope.Hierarchy)
         {
             var pathsToSearchChildren = effectiveScope == QueryScope.Ancestors
                 ? GetPathsForScope(basePath, QueryScope.Ancestors)

@@ -3,6 +3,7 @@ using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -225,6 +226,47 @@ public static class PostgreSqlExtensions
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetService<AccessService>(),
                 sp.GetServices<NodeTypePermission>()));
+
+        services.AddPartitionedCoreAndWrapperServices();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Adds partitioned PostgreSQL persistence using an Aspire-injected NpgsqlDataSource from DI.
+    /// Each top-level path segment gets its own PostgreSQL schema with isolated tables.
+    /// Resolves the connection string from IConfiguration (Aspire convention) because
+    /// NpgsqlDataSource.ConnectionString strips the password by default.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedPostgreSqlPersistence(
+        this IServiceCollection services,
+        Action<PostgreSqlStorageOptions>? configure = null)
+    {
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+        {
+            var baseDataSource = sp.GetRequiredService<NpgsqlDataSource>();
+            // Resolve connection string from IConfiguration (Aspire-injected) rather than
+            // NpgsqlDataSource.ConnectionString which strips the password (PersistSecurityInfo=false).
+            var config = sp.GetService<IConfiguration>();
+            var connectionString = config?.GetConnectionString("memex")
+                                   ?? baseDataSource.ConnectionString;
+            var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
+            configure?.Invoke(opts);
+
+            return new PostgreSqlPartitionedStoreFactory(
+                baseDataSource,
+                connectionString,
+                opts,
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<IEmbeddingProvider>(),
+                sp.GetService<AccessService>(),
+                sp.GetServices<NodeTypePermission>());
+        });
 
         services.AddPartitionedCoreAndWrapperServices();
 

@@ -116,15 +116,12 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         foreach (var partition in partitions)
         {
             var schemaName = partition.Schema ?? SanitizeSchemaName(partition.Namespace);
-            var versionsSchemaName = schemaName + "_versions";
 
-            // Create the schema and its versions schema
+            // Create the main schema
             await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{schemaName}\""))
                 await cmd.ExecuteNonQueryAsync(ct);
-            await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{versionsSchemaName}\""))
-                await cmd.ExecuteNonQueryAsync(ct);
 
-            // Create per-schema data sources
+            // Create per-schema data source
             var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
             {
                 SearchPath = $"{schemaName},public"
@@ -133,22 +130,37 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             dataSourceBuilder.UseVector();
             var schemaDataSource = dataSourceBuilder.Build();
 
-            var versionsConnBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
-            {
-                SearchPath = $"{versionsSchemaName},public"
-            };
-            var versionsDataSource = new NpgsqlDataSourceBuilder(versionsConnBuilder.ConnectionString).Build();
-
-            // Initialize mesh tables + versions
             var schemaOptions = new PostgreSqlStorageOptions
             {
                 ConnectionString = builder.ConnectionString,
                 VectorDimensions = _options.VectorDimensions,
                 Schema = schemaName
             };
-            await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
-                _baseDataSource, schemaDataSource, versionsDataSource,
-                schemaOptions, versionsSchemaName, ct);
+
+            if (partition.Versioned)
+            {
+                var versionsSchemaName = schemaName + "_versions";
+                await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{versionsSchemaName}\""))
+                    await cmd.ExecuteNonQueryAsync(ct);
+
+                var versionsConnBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
+                {
+                    SearchPath = $"{versionsSchemaName},public"
+                };
+                var versionsDataSource = new NpgsqlDataSourceBuilder(versionsConnBuilder.ConnectionString).Build();
+
+                await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
+                    _baseDataSource, schemaDataSource, versionsDataSource,
+                    schemaOptions, versionsSchemaName, ct);
+
+                await versionsDataSource.DisposeAsync();
+            }
+            else
+            {
+                // Unversioned: just create mesh tables without history/triggers
+                await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(
+                    schemaDataSource, schemaOptions, ct);
+            }
 
             // Create satellite tables from TableMappings
             if (partition.TableMappings is { Count: > 0 })
@@ -165,7 +177,6 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             }
 
             await schemaDataSource.DisposeAsync();
-            await versionsDataSource.DisposeAsync();
         }
     }
 

@@ -1,5 +1,9 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MeshWeaver.Hosting.PostgreSql;
+using Npgsql;
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -11,8 +15,18 @@ else
 
 // Derive vector dimensions from embedding model (passed by AppHost via Embedding__Model)
 var embeddingOptions = builder.Configuration.GetSection("Embedding").Get<EmbeddingOptions>() ?? new EmbeddingOptions();
-builder.Services.Configure<PostgreSqlStorageOptions>(o => o.VectorDimensions = 1536);
-builder.Services.AddHostedService<Worker>();
+builder.Services.Configure<PostgreSqlStorageOptions>(o =>
+{
+    o.ConnectionString = connectionString;
+    o.VectorDimensions = embeddingOptions.Dimensions;
+});
 
 var host = builder.Build();
-host.Run();
+
+var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Migration");
+var dataSource = host.Services.GetRequiredService<NpgsqlDataSource>();
+var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions>>();
+
+logger.LogInformation("Running database migration...");
+await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options.Value);
+logger.LogInformation("Database migration completed successfully.");
