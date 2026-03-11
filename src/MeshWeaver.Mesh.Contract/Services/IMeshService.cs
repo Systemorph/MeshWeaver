@@ -81,4 +81,11 @@ public interface IMeshService
     /// </summary>
     Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
 
+    /// <summary>
+    /// Tries to look up a MeshNode at the exact path and return its PreRenderedHtml.
+    /// Used during Blazor prerender for instant display without full path resolution.
+    /// Returns null if no node exists or no pre-rendered HTML is available.
+    /// </summary>
+    Task<string?> GetPreRenderedHtmlAsync(string path, CancellationToken ct = default);
+
 }

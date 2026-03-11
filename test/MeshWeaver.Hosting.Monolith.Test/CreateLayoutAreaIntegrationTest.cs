@@ -11,6 +11,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -63,6 +64,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas())
             .AddGraph();
     }
 

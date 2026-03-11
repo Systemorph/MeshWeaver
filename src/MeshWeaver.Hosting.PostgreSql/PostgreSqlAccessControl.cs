@@ -176,16 +176,19 @@ public class PostgreSqlAccessControl
             ? $"jsonb_build_object({string.Join(", ", contentParts)})"
             : "'{}'::jsonb";
 
+        var mainNode = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
         await using var cmd = _dataSource.CreateCommand(
             $"""
-            INSERT INTO mesh_nodes (namespace, id, name, node_type, content)
-            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild})
+            INSERT INTO mesh_nodes (namespace, id, name, node_type, content, main_node)
+            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, $2)
             ON CONFLICT (namespace, id) DO UPDATE
             SET content = {jsonBuild},
                 node_type = 'PartitionAccessPolicy',
-                name = 'Access Policy'
+                name = 'Access Policy',
+                main_node = EXCLUDED.main_node
             """);
         cmd.Parameters.AddWithValue(ns);
+        cmd.Parameters.AddWithValue(mainNode);
         await cmd.ExecuteNonQueryAsync(ct);
 
         await RebuildDenormalizedTableAsync(ct);

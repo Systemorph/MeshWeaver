@@ -19,6 +19,9 @@ public record AccessObject
 /// </summary>
 public record User : AccessObject
 {
+    /// <summary>Full name from OAuth claims (e.g. "John Doe").</summary>
+    public string? FullName { get; init; }
+
     /// <summary>Email address (from OAuth, set during onboarding).</summary>
     public string? Email { get; init; }
 

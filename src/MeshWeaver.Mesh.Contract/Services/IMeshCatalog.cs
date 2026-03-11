@@ -30,10 +30,11 @@ internal interface IMeshCatalog : IPathResolver
     /// Identity is resolved from AccessContext.
     /// </summary>
     /// <param name="node">The node to create</param>
+    /// <param name="createdBy">Optional user who created the node (resolved from AccessContext if null)</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The created node with State set to Confirmed</returns>
     /// <exception cref="InvalidOperationException">If node already exists or validation fails</exception>
-    Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default);
+    Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default);
 
     /// <summary>
     /// Creates a transient node for UI creation flows.

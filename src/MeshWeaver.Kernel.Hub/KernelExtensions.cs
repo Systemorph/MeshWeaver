@@ -1,28 +1,26 @@
 using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Kernel.Hub;
 
 public static class KernelExtensions
 {
     /// <summary>
-    /// Registers a kernel node that handles all kernel/* addresses.
-    /// The kernel node matches any path starting with "kernel/" using score-based matching.
+    /// Registers kernel hub support:
+    /// 1. Kernel message types for JSON deserialization
+    /// 2. IKernelHubConfigurator implementation (KernelContainer)
+    /// The Kernel satellite type definition is registered by AddKernelType() in Graph.
     /// </summary>
     public static MeshBuilder AddKernel(this MeshBuilder builder)
         => builder
-            // Register Kernel types at mesh level for proper deserialization
             .ConfigureHub(AddKernelTypes)
-            .AddMeshNodes(
-                new MeshNode(AddressExtensions.KernelType)
-                {
-                    Name = "Kernel",
-                    ExcludeFromContext = new HashSet<string> { "search", "create" },
-                    AssemblyLocation = typeof(KernelExtensions).Assembly.Location,
-                    HubConfiguration = ConfigureHub
-                }
-            );
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IKernelHubConfigurator, KernelHubConfiguratorAdapter>();
+                return services;
+            });
 
     /// <summary>
     /// Registers Kernel message types for JSON deserialization.
@@ -38,9 +36,15 @@ public static class KernelExtensions
         return config;
     }
 
-    private static MessageHubConfiguration ConfigureHub(this MessageHubConfiguration config)
+    /// <summary>
+    /// Adapter that creates a fresh KernelContainer per hub and delegates configuration.
+    /// </summary>
+    private class KernelHubConfiguratorAdapter : IKernelHubConfigurator
     {
-        var kernelContainer = new KernelContainer(config.ParentHub!.ServiceProvider);
-        return kernelContainer.ConfigureHub(config);
+        public MessageHubConfiguration Configure(MessageHubConfiguration config)
+        {
+            var kernelContainer = new KernelContainer(config.ParentHub!.ServiceProvider);
+            return kernelContainer.ConfigureHub(config);
+        }
     }
 }

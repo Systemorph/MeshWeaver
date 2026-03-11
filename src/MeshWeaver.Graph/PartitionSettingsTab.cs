@@ -53,39 +53,59 @@ internal static class PartitionSettingsTab
         foreach (var node in nodes.OrderBy(n => n.Name))
         {
             var def = node.Content as PartitionDefinition;
-            var basePaths = def?.BasePaths != null && def.BasePaths.Count > 0
-                ? string.Join(", ", def.BasePaths)
-                : "(none)";
 
             var card = Controls.Stack.WithWidth("100%")
                 .WithStyle("padding: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 8px; gap: 8px;");
 
-            // Header row: name + storage type badge
+            // Header row: name + data source badge
             var header = Controls.Stack.WithOrientation(Orientation.Horizontal)
                 .WithStyle("align-items: center; gap: 8px;");
             header = header.WithView(Controls.Html(
                 $"<div style=\"font-size: 1.05rem; font-weight: 600;\">{Esc(node.Name ?? node.Path)}</div>"));
 
-            if (!string.IsNullOrEmpty(def?.StorageType))
+            if (!string.IsNullOrEmpty(def?.DataSource))
             {
                 header = header.WithView(Controls.Html(
-                    $"<span style=\"font-size: 0.75rem; padding: 2px 8px; background: var(--neutral-layer-2); border-radius: 4px;\">{Esc(def.StorageType)}</span>"));
+                    $"<span style=\"font-size: 0.75rem; padding: 2px 8px; background: var(--neutral-layer-2); border-radius: 4px;\">{Esc(def.DataSource)}</span>"));
             }
 
             card = card.WithView(header);
 
-            // Base paths
-            card = card.WithView(Controls.Html(
-                $"<div style=\"font-size: 0.85rem;\"><strong>Base Paths:</strong> {Esc(basePaths)}</div>"));
+            // Details grid
+            var details = Controls.Stack.WithStyle("gap: 4px;");
 
-            // Description
+            if (!string.IsNullOrEmpty(def?.Namespace))
+            {
+                details = details.WithView(Controls.Html(
+                    $"<div style=\"font-size: 0.85rem;\"><strong>Namespace:</strong> {Esc(def.Namespace)}</div>"));
+            }
+
+            if (!string.IsNullOrEmpty(def?.Schema))
+            {
+                details = details.WithView(Controls.Html(
+                    $"<div style=\"font-size: 0.85rem;\"><strong>Schema:</strong> {Esc(def.Schema)}</div>"));
+            }
+
+            details = details.WithView(Controls.Html(
+                $"<div style=\"font-size: 0.85rem;\"><strong>Table:</strong> {Esc(def?.Table ?? "mesh_nodes")}</div>"));
+
+            if (def?.TableMappings is { Count: > 0 })
+            {
+                var mappingsHtml = string.Join(", ",
+                    def.TableMappings.Select(m => $"<code>{Esc(m.Key)}</code>&nbsp;&rarr;&nbsp;<code>{Esc(m.Value)}</code>"));
+                details = details.WithView(Controls.Html(
+                    $"<div style=\"font-size: 0.85rem;\"><strong>Satellite tables:</strong> {mappingsHtml}</div>"));
+            }
+
             if (!string.IsNullOrEmpty(def?.Description))
             {
-                card = card.WithView(Controls.Html(
+                details = details.WithView(Controls.Html(
                     $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">{Esc(def.Description)}</div>"));
             }
 
-            // Open button
+            card = card.WithView(details);
+
+            // Action buttons
             var capturedPath = node.Path;
             var buttonRow = Controls.Stack.WithOrientation(Orientation.Horizontal)
                 .WithStyle("gap: 8px; margin-top: 4px;");

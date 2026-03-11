@@ -233,7 +233,7 @@ public static class VersionLayoutArea
 
         // Find the activity log node by known path pattern
         var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-        var activityNodePath = $"{hubPath}/_Activity/{msg.ActivityLogId}";
+        var activityNodePath = $"{hubPath}/_activity/{msg.ActivityLogId}";
         var activityNode = await persistence.GetNodeAsync(activityNodePath, ct);
 
         if (activityNode?.Content is not ActivityLog activityLog)

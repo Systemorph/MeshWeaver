@@ -72,6 +72,53 @@ public static class PostgreSqlSchemaInitializer
     }
 
     /// <summary>
+    /// Creates satellite tables (same structure as mesh_nodes) for satellite node types.
+    /// Each table name comes from the PartitionDefinition.TableMappings values.
+    /// </summary>
+    public static async Task CreateSatelliteTablesAsync(
+        NpgsqlDataSource schemaDataSource,
+        PostgreSqlStorageOptions options,
+        IEnumerable<string> tableNames,
+        CancellationToken ct = default)
+    {
+        var dim = options.VectorDimensions;
+        foreach (var tableName in tableNames.Distinct())
+        {
+            var sql = $$"""
+                CREATE TABLE IF NOT EXISTS "{{tableName}}" (
+                    namespace       TEXT        NOT NULL DEFAULT '',
+                    id              TEXT        NOT NULL,
+                    path            TEXT        GENERATED ALWAYS AS (
+                                        CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
+                                    ) STORED,
+                    name            TEXT,
+                    node_type       TEXT,
+                    description     TEXT,
+                    category        TEXT,
+                    icon            TEXT,
+                    display_order   INTEGER,
+                    last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    version         BIGINT      NOT NULL DEFAULT 0,
+                    state           SMALLINT    NOT NULL DEFAULT 0,
+                    content         JSONB,
+                    desired_id      TEXT,
+                    main_node       TEXT,
+                    embedding       vector({{dim}}),
+                    PRIMARY KEY (namespace, id)
+                );
+
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_path" ON "{{tableName}}" (path);
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_main_node" ON "{{tableName}}" (main_node);
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_node_type" ON "{{tableName}}" (node_type);
+                CREATE INDEX IF NOT EXISTS "idx_{{tableName}}_last_modified" ON "{{tableName}}" (last_modified DESC);
+                """;
+
+            await using var cmd = schemaDataSource.CreateCommand(sql);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    /// <summary>
     /// Returns SQL for the versions schema: mesh_node_history table + indexes.
     /// </summary>
     internal static string GetVersionsSchemaScript()

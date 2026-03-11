@@ -54,29 +54,28 @@ public static class UserActivityLayoutAreas
             // Chat — full width
             dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
 
-            // Scrollable content area
-            var content = Controls.Stack
-                .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
+            // Scrollable content area — full-width layout grid
+            var content = Controls.LayoutGrid
+                .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
 
-            // Latest Threads section
-            content = content.WithView(BuildLatestThreads(nodePath));
+            // Latest Threads — full width
+            content = content.WithView(BuildLatestThreads(nodePath),
+                skin => skin.WithXs(12));
 
-            // Children section
-            content = content.WithView(BuildChildren(nodePath));
+            // Children section — full width
+            content = content.WithView(BuildChildren(nodePath),
+                skin => skin.WithXs(12));
 
-            // Two-column grid — Activity Feed left, Recently Viewed right
-            var contentGrid = Controls.LayoutGrid
-                .WithStyle("gap: 24px; width: 100%; margin-top: 24px;");
-
-            contentGrid = contentGrid.WithView(
+            // Activity Feed — 2/3 width on desktop, full on mobile
+            content = content.WithView(
                 await BuildActivityFeed(host),
                 skin => skin.WithXs(12).WithSm(8));
 
-            contentGrid = contentGrid.WithView(
+            // Recently Viewed — 1/3 width on desktop, full on mobile
+            content = content.WithView(
                 await BuildRecentActivity(host, userId),
                 skin => skin.WithXs(12).WithSm(4));
 
-            content = content.WithView(contentGrid);
             dashboard = dashboard.WithView(content);
 
             return (UiControl?)dashboard;
@@ -128,7 +127,7 @@ public static class UserActivityLayoutAreas
         {
             grid = grid.WithView(
                 MeshNodeCardControl.FromNode(node, node.Path ?? ""),
-                skin => skin.WithXs(12));
+                skin => skin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
         }
 
         feed = feed.WithView(grid);
@@ -205,7 +204,7 @@ public static class UserActivityLayoutAreas
         {
             grid = grid.WithView(
                 MeshNodeCardControl.FromNode(node, node.Path ?? ""),
-                skin => skin.WithXs(12));
+                skin => skin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
         }
 
         section = section.WithView(grid);

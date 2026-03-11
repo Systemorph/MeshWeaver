@@ -37,9 +37,9 @@ public static class SecurityServiceExtensions
                 // Register RLS validator
                 services.AddSingleton<INodeValidator, RlsNodeValidator>();
 
-                // Note: No ISubscriptionAccessChecker registration — individual layout views
-                // handle permission checks (Overview shows "Access Denied", Menu filters items).
-                // Hub-specific read validation uses IDataValidator instead.
+                // Note: No ISubscriptionAccessChecker registration — DeliveryFailure for rejected
+                // subscriptions does not propagate to Observable streams. Individual layout views
+                // handle permission checks instead (Overview shows "Access Denied", Menu filters items).
 
                 return services;
             });

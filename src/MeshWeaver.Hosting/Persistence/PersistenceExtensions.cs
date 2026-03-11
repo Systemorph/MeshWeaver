@@ -272,7 +272,7 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetService<MeshCatalog>()));
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
@@ -395,7 +395,7 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetService<MeshCatalog>()));
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
@@ -436,13 +436,13 @@ public static class PersistenceExtensions
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetService<MeshCatalog>()));
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
 
     /// <summary>
-    /// Registers the MeshCatalog and IPathResolver.
+    /// Registers the MeshCatalog and its public interfaces (IMeshCatalog, IPathResolver).
     /// </summary>
     public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
     {

@@ -29,7 +29,7 @@ public class PartitionedSchemaTests
             new PostgreSqlStorageOptions());
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task CreateStore_CreatesSchemaTables()
     {
         var factory = CreateFactory();
@@ -52,7 +52,7 @@ public class PartitionedSchemaTests
         table.Should().NotBeNull("mesh_nodes table should exist in testdomain schema");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task SaveAndRead_AcrossSchemas_DataIsolated()
     {
         var factory = CreateFactory();
@@ -83,7 +83,7 @@ public class PartitionedSchemaTests
         readBeta!.Name.Should().Be("Beta Reports");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task RoutingCore_SaveRoutes_ByFirstSegment()
     {
         var factory = CreateFactory();
@@ -105,7 +105,7 @@ public class PartitionedSchemaTests
         readB!.Name.Should().Be("Delta Doc");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task RoutingCore_GetChildren_RootLevel_ReturnsFromAllPartitions()
     {
         var factory = CreateFactory();
@@ -125,7 +125,7 @@ public class PartitionedSchemaTests
         children.Should().Contain(n => n.Path == "Zeta");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task DiscoverPartitions_FindsExistingSchemas()
     {
         var factory = CreateFactory();
@@ -142,7 +142,7 @@ public class PartitionedSchemaTests
         partitions.Should().Contain("discover2");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task SanitizeSchemaName_VariousInputs()
     {
         PostgreSqlPartitionedStoreFactory.SanitizeSchemaName("ACME")
@@ -158,7 +158,7 @@ public class PartitionedSchemaTests
             .Should().Be("valid_name_99");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Delete_InOnePartition_DoesNotAffectOther()
     {
         var factory = CreateFactory();

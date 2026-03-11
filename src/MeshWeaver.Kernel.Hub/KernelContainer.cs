@@ -7,6 +7,7 @@ using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.DotNet.Interactive;
@@ -68,6 +69,21 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .WithInitialization((hub, _) =>
             {
                 DisposeOnTimeout(hub);
+                // Delete the kernel session MeshNode when the hub is disposed
+                hub.RegisterForDisposal(async (_, _) =>
+                {
+                    try
+                    {
+                        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+                        var nodePath = $"{hub.Address}";
+                        if (meshService != null)
+                            await meshService.DeleteNodeAsync(nodePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to delete kernel session node on dispose");
+                    }
+                });
                 return Task.CompletedTask;
             })
             .WithHandler<KernelCommandEnvelope>(HandleKernelCommandEnvelope)

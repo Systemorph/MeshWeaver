@@ -53,24 +53,46 @@ internal class SecurityService : ISecurityService
     // Static policies from IStaticNodeProvider (e.g., Doc, Agent, Role namespaces are read-only)
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
 
+    // Static access assignments from IStaticNodeProvider and MeshConfiguration
+    // Keyed by namespace (scope), value is list of AccessAssignment nodes at that scope
+    private readonly Dictionary<string, List<MeshNode>> _staticAccessAssignments;
+
     public SecurityService(
         IStorageService persistenceCore,
         AccessService accessService,
         IMessageHub hub,
         ILogger<SecurityService> logger,
-        IEnumerable<IStaticNodeProvider> staticNodeProviders)
+        IEnumerable<IStaticNodeProvider> staticNodeProviders,
+        MeshConfiguration? meshConfiguration = null)
     {
         _persistenceCore = persistenceCore;
         _accessService = accessService;
         _hub = hub;
         _logger = logger;
 
-        // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
-        _staticPolicies = staticNodeProviders
+        var allStaticNodes = staticNodeProviders
             .SelectMany(p => p.GetStaticNodes())
+            .ToList();
+
+        // Also include AccessAssignment nodes from MeshConfiguration (e.g., PublicAdminAccess)
+        if (meshConfiguration != null)
+        {
+            allStaticNodes.AddRange(
+                meshConfiguration.Nodes.Values
+                    .Where(n => n.NodeType == "AccessAssignment"));
+        }
+
+        // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
+        _staticPolicies = allStaticNodes
             .Where(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy" && n.Content is PartitionAccessPolicy)
             .GroupBy(n => n.Namespace ?? "")
             .ToDictionary(g => g.Key, g => (PartitionAccessPolicy)g.Last().Content!);
+
+        // Collect AccessAssignment nodes keyed by their parent namespace (scope)
+        _staticAccessAssignments = allStaticNodes
+            .Where(n => n.NodeType == "AccessAssignment" && n.Content != null)
+            .GroupBy(n => n.Namespace ?? "")
+            .ToDictionary(g => g.Key, g => g.ToList());
     }
 
     private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
@@ -141,6 +163,24 @@ internal class SecurityService : ISecurityService
                 if (staticPolicy.BreaksInheritance)
                     roleAssignments.Clear();
                 permissionCap &= staticPolicy.GetPermissionCap();
+            }
+
+            // Check static access assignments from MeshConfiguration and IStaticNodeProvider
+            if (_staticAccessAssignments.TryGetValue(scope, out var staticAssignmentNodes))
+            {
+                foreach (var staticNode in staticAssignmentNodes)
+                {
+                    var staticAssignment = DeserializeAssignment(staticNode);
+                    if (staticAssignment == null || staticAssignment.AccessObject != userId)
+                        continue;
+
+                    foreach (var roleAssignment in staticAssignment.Roles)
+                    {
+                        if (string.IsNullOrEmpty(roleAssignment.Role))
+                            continue;
+                        roleAssignments[roleAssignment.Role] = (roleAssignment.Denied, depth);
+                    }
+                }
             }
 
             await foreach (var node in _persistenceCore.GetChildrenAsync(scope, Options).WithCancellation(ct))
@@ -381,6 +421,7 @@ internal class SecurityService : ISecurityService
         {
             NodeType = "AccessAssignment",
             Name = $"{userId} Access",
+            MainNode = string.IsNullOrEmpty(ns) ? nodeId : ns,
             Content = new AccessAssignment
             {
                 AccessObject = userId,

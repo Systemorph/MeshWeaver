@@ -15,7 +15,7 @@ In a multi-tenant or multi-domain mesh, data from different organizations or bus
 - **Cosmos DB**: separate container pairs (`acme-nodes`, `contoso-nodes`)
 - **File System**: same directory tree with logical routing and isolated caches
 
-This isolation is transparent to callers. The `IMeshStorage` and `IMeshService` interfaces remain unchanged.
+This isolation is transparent to callers. The `IMeshStorage` and `IMeshQuery` interfaces remain unchanged.
 
 # Architecture
 

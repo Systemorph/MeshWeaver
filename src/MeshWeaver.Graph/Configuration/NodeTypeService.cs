@@ -539,20 +539,17 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<(NodeTypeRelease? Release, MeshNode? Node)> GatherInputsAsync(string nodeTypePath, CancellationToken ct)
     {
-        var meshQuery = meshHub.ServiceProvider.GetService<IMeshService>();
-        if (meshQuery == null)
+        // Use IMeshStorage directly to bypass routing/hub creation.
+        // This avoids the circular dependency: compilation → routing → hub creation → needs compilation.
+        var meshStorage = meshHub.ServiceProvider.GetService<IMeshStorage>();
+        if (meshStorage == null)
         {
-            logger.LogWarning("IMeshService not available for {NodeTypePath}", nodeTypePath);
+            logger.LogWarning("IMeshStorage not available for {NodeTypePath}", nodeTypePath);
             return (null, null);
         }
 
-        // Get the node via mesh query
-        MeshNode? node = null;
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath}", ct: ct).WithCancellation(ct))
-        {
-            node = n;
-            break;
-        }
+        // Get the node directly from persistence (no routing)
+        var node = await meshStorage.GetNodeAsync(nodeTypePath, ct);
         if (node == null)
         {
             logger.LogDebug("No node found for {NodeTypePath}", nodeTypePath);
@@ -567,11 +564,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Get CodeConfigurations from child MeshNodes under /Code path
-        // Collect ALL CodeConfiguration files and combine them
+        // Get CodeConfigurations from child MeshNodes under /Code path directly
         var codeFiles = new List<string>();
-        var codeQuery = $"namespace:{nodeTypePath}/Code";
-        await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
+        await foreach (var codeNode in meshStorage.GetChildrenAsync($"{nodeTypePath}/Code"))
         {
             if (codeNode.Content is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
             {
@@ -584,7 +579,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         {
             for (int i = 0; i < codeFiles.Count; i++)
             {
-                codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshQuery, ct);
+                codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshStorage, ct);
             }
         }
 

@@ -1,4 +1,5 @@
 using MeshWeaver.Graph.Security;
+using MeshWeaver.Kernel;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -22,17 +23,23 @@ public static class KernelNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetRequiredService<ISecurityService>()));
+                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             return services;
         });
         return builder;
     }
 
+    /// <summary>
+    /// Creates the Kernel satellite type MeshNode definition.
+    /// HubConfiguration resolves IKernelHubConfigurator from DI (registered by AddKernel()).
+    /// </summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Kernel Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(KernelNodeType).Assembly.Location,
+        HubConfiguration = config => config
+            .AddKernelHandlers()
     };
 }

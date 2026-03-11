@@ -99,6 +99,17 @@ internal class MeshNodeCompilationService(
         return await ResolveCodeIncludesAsync(code, meshQuery, resolved, ct);
     }
 
+    /// <summary>
+    /// Overload that uses IMeshStorage directly to bypass routing.
+    /// Used by NodeTypeService during compilation to avoid circular hub creation.
+    /// </summary>
+    internal async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshStorage meshStorage, CancellationToken ct)
+    {
+        var resolved = new HashSet<string>();
+        return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
+    }
+
     private async Task<string> ResolveCodeIncludesAsync(
         string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
     {
@@ -115,7 +126,6 @@ internal class MeshNodeCompilationService(
             var path = match.Groups[1].Value;
             if (!resolved.Add(path))
             {
-                // Already resolved this path — remove the duplicate reference
                 result = result.Replace(match.Value, string.Empty);
                 continue;
             }
@@ -136,8 +146,50 @@ internal class MeshNodeCompilationService(
             if (resolvedCode != null)
             {
                 logger.LogDebug("Resolved code include @@{Path}", path);
-                // Transitively resolve nested includes
                 resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshQuery, resolved, ct);
+                result = result.Replace(match.Value, resolvedCode);
+            }
+            else
+            {
+                logger.LogWarning("Could not resolve code include @@{Path}", path);
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshStorage meshStorage, HashSet<string> resolved, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
+            return code;
+
+        var matches = CodeIncludePattern.Matches(code);
+        if (matches.Count == 0)
+            return code;
+
+        var result = code;
+        foreach (Match match in matches)
+        {
+            var path = match.Groups[1].Value;
+            if (!resolved.Add(path))
+            {
+                result = result.Replace(match.Value, string.Empty);
+                continue;
+            }
+
+            // Use IMeshStorage directly to bypass routing
+            var referencedNode = await meshStorage.GetNodeAsync(path, ct);
+            string? resolvedCode = null;
+            if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+            {
+                resolvedCode = cf.Code;
+            }
+
+            if (resolvedCode != null)
+            {
+                logger.LogDebug("Resolved code include @@{Path}", path);
+                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshStorage, resolved, ct);
                 result = result.Replace(match.Value, resolvedCode);
             }
             else

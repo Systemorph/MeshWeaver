@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -98,6 +99,74 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         var versionQuery = new PostgreSqlVersionQuery(versionsDataSource);
 
         return new PartitionedStore(adapter, queryProvider, versionQuery);
+    }
+
+    /// <summary>
+    /// Pre-creates schemas for default partitions (Admin, User, etc.) during DB initialization.
+    /// Each PartitionDefinition's Schema (or sanitized Namespace) becomes a PostgreSQL schema.
+    /// Satellite table mappings from <see cref="PartitionDefinition.TableMappings"/> are also created.
+    /// </summary>
+    public async Task InitializeDefaultPartitionsAsync(
+        IEnumerable<PartitionDefinition> partitions, CancellationToken ct = default)
+    {
+        // Ensure vector extension exists first
+        await using var extCmd = _baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector");
+        await extCmd.ExecuteNonQueryAsync(ct);
+
+        foreach (var partition in partitions)
+        {
+            var schemaName = partition.Schema ?? SanitizeSchemaName(partition.Namespace);
+            var versionsSchemaName = schemaName + "_versions";
+
+            // Create the schema and its versions schema
+            await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{schemaName}\""))
+                await cmd.ExecuteNonQueryAsync(ct);
+            await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{versionsSchemaName}\""))
+                await cmd.ExecuteNonQueryAsync(ct);
+
+            // Create per-schema data sources
+            var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
+            {
+                SearchPath = $"{schemaName},public"
+            };
+            var dataSourceBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
+            dataSourceBuilder.UseVector();
+            var schemaDataSource = dataSourceBuilder.Build();
+
+            var versionsConnBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
+            {
+                SearchPath = $"{versionsSchemaName},public"
+            };
+            var versionsDataSource = new NpgsqlDataSourceBuilder(versionsConnBuilder.ConnectionString).Build();
+
+            // Initialize mesh tables + versions
+            var schemaOptions = new PostgreSqlStorageOptions
+            {
+                ConnectionString = builder.ConnectionString,
+                VectorDimensions = _options.VectorDimensions,
+                Schema = schemaName
+            };
+            await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
+                _baseDataSource, schemaDataSource, versionsDataSource,
+                schemaOptions, versionsSchemaName, ct);
+
+            // Create satellite tables from TableMappings
+            if (partition.TableMappings is { Count: > 0 })
+            {
+                await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
+                    schemaDataSource, _options, partition.TableMappings.Values, ct);
+            }
+
+            // Sync node type permissions
+            if (_nodeTypePermissions.Count > 0)
+            {
+                var ac = new PostgreSqlAccessControl(schemaDataSource);
+                await ac.SyncNodeTypePermissionsAsync(_nodeTypePermissions, ct);
+            }
+
+            await schemaDataSource.DisposeAsync();
+            await versionsDataSource.DisposeAsync();
+        }
     }
 
     public async Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default)

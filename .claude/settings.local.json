@@ -116,7 +116,10 @@
       "Bash(git status:*)",
       "WebFetch(domain:www.helvetia-baloise.com)",
       "WebFetch(domain:en.wikipedia.org)",
-      "WebFetch(domain:www.finanzwire.com)"
+      "WebFetch(domain:www.finanzwire.com)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//c/dev/MeshWeaver/test/MeshWeaver.Hosting.Monolith.Test/**)"
     ],
     "deny": []
   },

@@ -1,5 +1,7 @@
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.PostgreSql;
+using MeshWeaver.Mesh;
 using Npgsql;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -17,6 +19,7 @@ public class PostgreSqlFixture : IAsyncLifetime
     public string ConnectionString { get; private set; } = null!;
     public PostgreSqlStorageAdapter StorageAdapter { get; private set; } = null!;
     public PostgreSqlAccessControl AccessControl { get; private set; } = null!;
+    public PostgreSqlStorageOptions Options { get; private set; } = new();
 
     public async ValueTask InitializeAsync()
     {
@@ -34,8 +37,8 @@ public class PostgreSqlFixture : IAsyncLifetime
         DataSource = dataSourceBuilder.Build();
 
         // Initialize schema
-        var options = new PostgreSqlStorageOptions();
-        await PostgreSqlSchemaInitializer.InitializeAsync(DataSource, options);
+        Options = new PostgreSqlStorageOptions();
+        await PostgreSqlSchemaInitializer.InitializeAsync(DataSource, Options);
 
         StorageAdapter = new PostgreSqlStorageAdapter(DataSource);
         AccessControl = new PostgreSqlAccessControl(DataSource);
@@ -46,6 +49,40 @@ public class PostgreSqlFixture : IAsyncLifetime
         DataSource?.Dispose();
         if (_container != null)
             await _container.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Creates a per-schema data source and adapter for a named schema.
+    /// Initializes the schema with satellite tables if a PartitionDefinition with TableMappings is provided.
+    /// </summary>
+    public async Task<(NpgsqlDataSource SchemaDataSource, PostgreSqlStorageAdapter Adapter)>
+        CreateSchemaAdapterAsync(string schemaName, PartitionDefinition? partitionDef = null, CancellationToken ct = default)
+    {
+        // Create schema
+        await using (var cmd = DataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{schemaName}\""))
+            await cmd.ExecuteNonQueryAsync(ct);
+
+        // Create per-schema data source
+        var builder = new NpgsqlConnectionStringBuilder(ConnectionString)
+        {
+            SearchPath = $"{schemaName},public"
+        };
+        var dsBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
+        dsBuilder.UseVector();
+        var schemaDs = dsBuilder.Build();
+
+        // Initialize mesh_nodes table in the schema
+        await PostgreSqlSchemaInitializer.InitializeAsync(schemaDs, Options);
+
+        // Create satellite tables if partition definition has mappings
+        if (partitionDef?.TableMappings is { Count: > 0 })
+        {
+            await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
+                schemaDs, Options, partitionDef.TableMappings.Values, ct);
+        }
+
+        var adapter = new PostgreSqlStorageAdapter(schemaDs, partitionDefinition: partitionDef);
+        return (schemaDs, adapter);
     }
 
     /// <summary>

@@ -167,7 +167,7 @@ internal sealed class MeshCatalog(
     // IMeshCatalog — delegate to HubNodePersistence
     private HubNodePersistence NodePersistence => new(hub, this);
 
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
+    public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
         => NodePersistence.CreateNodeAsync(node, ct);
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)

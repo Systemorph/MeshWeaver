@@ -25,7 +25,7 @@ public static class UserActivityNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetRequiredService<ISecurityService>()));
+                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             return services;
         });
         return builder;

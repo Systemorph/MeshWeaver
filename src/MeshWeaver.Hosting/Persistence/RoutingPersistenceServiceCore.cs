@@ -30,7 +30,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
     /// <summary>
     /// Partition metadata keyed by partition node ID (e.g., "Documentation" -> set of base paths).
     /// </summary>
-    private readonly ConcurrentDictionary<string, HashSet<string>> _partitionBasePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _partitionNamespaces = new(StringComparer.OrdinalIgnoreCase);
 
     public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory, IDataChangeNotifier? changeNotifier = null)
     {
@@ -75,9 +75,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
     internal IReadOnlyDictionary<string, string> BasePathToPartition => _basePathToPartition;
 
     /// <summary>
-    /// Gets the partition metadata (partition ID -> base paths).
+    /// Gets the partition metadata (partition ID -> namespace).
     /// </summary>
-    internal IReadOnlyDictionary<string, HashSet<string>> PartitionBasePaths => _partitionBasePaths;
+    internal IReadOnlyDictionary<string, string> PartitionNamespaces => _partitionNamespaces;
 
     /// <summary>
     /// Discovers partitions not yet provisioned, provisions each, and yields its query provider.
@@ -185,22 +185,16 @@ internal class RoutingPersistenceServiceCore : IStorageService
         {
             if (ct.IsCancellationRequested) break;
 
-            if (child.Content is PartitionDefinition def && def.BasePaths.Count > 0)
+            if (child.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
             {
-                var basePaths = new HashSet<string>(def.BasePaths, StringComparer.OrdinalIgnoreCase);
-                _partitionBasePaths[child.Id] = basePaths;
+                _partitionNamespaces[child.Id] = def.Namespace;
 
-                foreach (var bp in basePaths)
-                {
-                    // Map base path to the partition that actually stores it.
-                    // If the base path matches an existing store, map it to that store.
-                    // Otherwise map it to the first segment store.
-                    var storeKey = _stores.ContainsKey(bp) ? bp
-                        : _stores.ContainsKey(child.Id) ? child.Id
-                        : PathPartition.GetFirstSegment(bp);
-                    if (storeKey != null)
-                        _basePathToPartition[bp] = storeKey;
-                }
+                // Map namespace to the partition that actually stores it.
+                var storeKey = _stores.ContainsKey(def.Namespace) ? def.Namespace
+                    : _stores.ContainsKey(child.Id) ? child.Id
+                    : PathPartition.GetFirstSegment(def.Namespace);
+                if (storeKey != null)
+                    _basePathToPartition[def.Namespace] = storeKey;
             }
         }
     }

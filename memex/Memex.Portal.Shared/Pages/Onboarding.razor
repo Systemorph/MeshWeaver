@@ -33,6 +33,12 @@
             <DataAnnotationsValidator />
 
             <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+                <FluentTextField Label="Full Name"
+                                 Required="true"
+                                 @bind-Value="model.FullName"
+                                 Placeholder="Your full name"
+                                 Style="width: 100%;" />
+
                 <FluentTextField Label="Username"
                                  Required="true"
                                  @bind-Value="model.Username"
@@ -83,16 +89,14 @@
         if (context != null)
         {
             model.Email = context.Email ?? "";
-            // Suggest the first name from OAuth claims, fallback to email prefix
+
+            // Pre-populate full name from OAuth claims
             if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
-            {
-                var firstName = context.Name.Split(' ')[0];
-                model.Username = firstName;
-            }
-            else if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
-            {
-                model.Username = context.Email.Split('@')[0];
-            }
+                model.FullName = context.Name;
+
+            // Suggest username from email prefix (lowercase)
+            if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
+                model.Username = context.Email.Split('@')[0].ToLowerInvariant();
         }
     }
 
@@ -116,9 +120,11 @@
                 return;
             }
 
-            var username = model.Username.Trim();
+            var username = model.Username.Trim().ToLowerInvariant();
+            var fullName = model.FullName?.Trim();
             var userContent = new User
             {
+                FullName = string.IsNullOrWhiteSpace(fullName) ? null : fullName,
                 Email = model.Email.Trim(),
                 Bio = string.IsNullOrWhiteSpace(model.Bio) ? null : model.Bio.Trim(),
                 Role = string.IsNullOrWhiteSpace(model.Role) ? null : model.Role.Trim(),
@@ -157,7 +163,7 @@
 
                 var node = new MeshNode(username, "User")
                 {
-                    Name = username,
+                    Name = string.IsNullOrWhiteSpace(fullName) ? username : fullName,
                     NodeType = "User",
                     State = MeshNodeState.Active,
                     Icon = string.IsNullOrWhiteSpace(model.AvatarUrl) ? null : model.AvatarUrl.Trim(),
@@ -207,6 +213,7 @@
 
     private class OnboardingModel
     {
+        public string? FullName { get; set; }
         public string Username { get; set; } = "";
         public string Email { get; set; } = "";
         public string? Bio { get; set; }

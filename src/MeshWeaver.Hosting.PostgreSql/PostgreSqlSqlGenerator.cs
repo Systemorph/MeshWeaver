@@ -153,8 +153,8 @@ public class PostgreSqlSqlGenerator
         {
             // JOIN with UserActivity MeshNodes stored at User/{userId}/_userActivity/{encodedPath}
             // where encodedPath = node.path with / replaced by _
-            parameters["@actUserPrefix"] = $"User/{activityUserId}/_userActivity/";
-            sql.Append(" INNER JOIN mesh_nodes ua ON ua.namespace LIKE @actUserPrefix || '%'" +
+            parameters["@actUserNs"] = $"User/{activityUserId}/_userActivity";
+            sql.Append(" INNER JOIN mesh_nodes ua ON ua.namespace = @actUserNs" +
                         " AND ua.node_type = 'UserActivity'" +
                         " AND REPLACE(n.path, '/', '_') = ua.id");
         }
