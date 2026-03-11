@@ -1,17 +1,14 @@
 {
-  "id": "Roland_Access",
+  "id": "Samuel_Access",
   "namespace": "FutuRe",
-  "name": "Roland Access",
+  "name": "Samuel Access",
   "icon": "/static/NodeTypeIcons/shield.svg",
   "nodeType": "AccessAssignment",
   "content": {
     "$type": "AccessAssignment",
-    "accessObject": "Roland",
-    "displayName": "Roland Buergi",
+    "accessObject": "Samuel",
+    "displayName": "Samuel Glauser",
     "roles": [
-      {
-        "role": "Editor"
-      },
       {
         "role": "Admin"
       }

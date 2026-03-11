@@ -1,0 +1,19 @@
+{
+  "id": "ExchangeRate",
+  "namespace": "FutuRe",
+  "name": "Exchange Rate",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "FX conversion rates from local currencies to group reporting currency (CHF)",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "ExchangeRate",
+    "namespace": "FutuRe",
+    "displayName": "Exchange Rate",
+    "iconName": "CurrencyExchange",
+    "description": "Exchange rate for converting local currency amounts to group reporting currency",
+    "configuration": "config => config.WithContentType<ExchangeRate>()"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

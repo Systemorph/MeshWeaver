@@ -32,7 +32,11 @@ public static class GroupAnalysisConfig
                     .WithVirtualType<Currency>(
                         workspace => FutuReDataLoader.LoadCurrencies(workspace))
                     .WithVirtualType<Country>(
-                        workspace => FutuReDataLoader.LoadCountries(workspace)))
+                        workspace => FutuReDataLoader.LoadCountries(workspace))
+                    .WithVirtualType<ExchangeRate>(
+                        workspace => FutuReDataLoader.LoadExchangeRates(workspace))
+                    .WithVirtualType<BusinessUnit>(
+                        workspace => FutuReDataLoader.LoadBusinessUnits(workspace)))
                 .WithVirtualDataSource("TransactionMapping", vs => vs
                     .WithVirtualType<TransactionMapping>(
                         workspace => FutuReDataLoader.LoadTransactionMappingsFromNodes(workspace)))
@@ -40,5 +44,7 @@ public static class GroupAnalysisConfig
                     .WithVirtualType<LineOfBusiness>(
                         workspace => FutuReDataLoader.LoadLinesOfBusinessFromNodes(workspace))))
             .AddDefaultLayoutAreas()
-            .AddLayout(layout => layout.AddProfitabilityLayoutAreas());
+            .AddLayout(layout => layout
+                .AddProfitabilityLayoutAreas()
+                .WithView("GroupProfitabilityDashboard", ProfitabilityLayoutAreas.GroupProfitabilityDashboard));
 }
