@@ -21,6 +21,17 @@ internal class RoutingPersistenceServiceCore : IStorageService
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
 
+    /// <summary>
+    /// Maps base path prefixes to partition names (e.g., "Doc" -> "Admin" for Documentation).
+    /// Populated from Partition nodes in Admin/Partition namespace.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _basePathToPartition = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Partition metadata keyed by partition node ID (e.g., "Documentation" -> set of base paths).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, HashSet<string>> _partitionBasePaths = new(StringComparer.OrdinalIgnoreCase);
+
     public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory, IDataChangeNotifier? changeNotifier = null)
     {
         _factory = factory;
@@ -57,6 +68,16 @@ internal class RoutingPersistenceServiceCore : IStorageService
     /// Gets all registered partition names.
     /// </summary>
     internal IEnumerable<string> PartitionNames => _stores.Keys;
+
+    /// <summary>
+    /// Gets the base-path-to-partition mapping for partition access filtering.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> BasePathToPartition => _basePathToPartition;
+
+    /// <summary>
+    /// Gets the partition metadata (partition ID -> base paths).
+    /// </summary>
+    internal IReadOnlyDictionary<string, HashSet<string>> PartitionBasePaths => _partitionBasePaths;
 
     /// <summary>
     /// Discovers partitions not yet provisioned, provisions each, and yields its query provider.
@@ -115,8 +136,18 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     private IStorageService? TryGetStore(string? path)
     {
-        // Use longest-prefix matching: check registered prefixes from longest to shortest.
-        // Falls back to first-segment for backward compatibility.
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        // First check the base-path-to-partition mapping (from Partition nodes)
+        var firstSegment = PathPartition.GetFirstSegment(path);
+        if (firstSegment != null && _basePathToPartition.TryGetValue(firstSegment, out var mappedPartition))
+        {
+            if (_stores.TryGetValue(mappedPartition, out var mappedStore))
+                return mappedStore;
+        }
+
+        // Fall back to longest-prefix matching on store keys
         var prefix = PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
         if (prefix == null) return null;
         return _stores.TryGetValue(prefix, out var store) ? store : null;
@@ -133,6 +164,45 @@ internal class RoutingPersistenceServiceCore : IStorageService
         // Drain to ensure all partitions are provisioned
         await foreach (var _ in DiscoverNewProvidersAsync(ct))
         { }
+
+        // Load partition metadata from Admin/Partition namespace
+        await LoadPartitionMetadataAsync(ct);
+    }
+
+    /// <summary>
+    /// Loads Partition nodes from the "Admin" store to populate base-path-to-partition mapping.
+    /// Each Partition node's Content (PartitionDefinition) declares which base paths it serves.
+    /// </summary>
+    private async Task LoadPartitionMetadataAsync(CancellationToken ct = default)
+    {
+        if (!_stores.TryGetValue("Admin", out var adminStore))
+            return;
+
+        // Use default JsonSerializerOptions for reading — this is internal bootstrap
+        var options = new JsonSerializerOptions();
+
+        await foreach (var child in adminStore.GetChildrenAsync("Admin/Partition", options))
+        {
+            if (ct.IsCancellationRequested) break;
+
+            if (child.Content is PartitionDefinition def && def.BasePaths.Count > 0)
+            {
+                var basePaths = new HashSet<string>(def.BasePaths, StringComparer.OrdinalIgnoreCase);
+                _partitionBasePaths[child.Id] = basePaths;
+
+                foreach (var bp in basePaths)
+                {
+                    // Map base path to the partition that actually stores it.
+                    // If the base path matches an existing store, map it to that store.
+                    // Otherwise map it to the first segment store.
+                    var storeKey = _stores.ContainsKey(bp) ? bp
+                        : _stores.ContainsKey(child.Id) ? child.Id
+                        : PathPartition.GetFirstSegment(bp);
+                    if (storeKey != null)
+                        _basePathToPartition[bp] = storeKey;
+                }
+            }
+        }
     }
 
     #region Node Operations

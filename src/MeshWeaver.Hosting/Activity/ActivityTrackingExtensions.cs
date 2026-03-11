@@ -28,7 +28,7 @@ public static class ActivityTrackingExtensions
                 var persistence = sp.GetRequiredService<IMeshStorage>();
                 return new ActivityLogBundler(hub, async log =>
                 {
-                    var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
+                    var node = MeshNode.FromPath($"{log.HubPath}/_Activity/{log.Id}") with
                     {
                         NodeType = ActivityLogNodeType.NodeType,
                         Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",

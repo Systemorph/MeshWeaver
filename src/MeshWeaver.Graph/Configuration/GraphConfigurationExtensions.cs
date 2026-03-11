@@ -35,6 +35,7 @@ public static class GraphConfigurationExtensions
                         .WithType<ThreadMessage>(ThreadMessageNodeType.NodeType)))
                 .AddThreadMessageType()
                 .AddCommentType()
+                .AddTrackedChangeType()
                 .AddAccessAssignmentType()
                 .AddPartitionAccessPolicyType()
                 .AddUserType()
@@ -48,6 +49,7 @@ public static class GraphConfigurationExtensions
                 .AddUserActivityType()
                 .AddApiTokenType()
                 .AddMeshDataSourceType()
+                .AddPartitionType()
                 .AddGlobalSettingsType();
 
             // Register services that don't need hub-level dependencies at the mesh level

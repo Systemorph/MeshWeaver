@@ -512,13 +512,24 @@ public class PostgreSqlSqlGenerator
         // Anonymous users only get their own permissions (no Public inheritance).
         // All other users also inherit Public permissions as a baseline floor.
         // NodeType definitions (node_type = 'NodeType') are always publicly readable.
+        // Node types marked as public_read in node_type_permissions are visible to authenticated users.
         var userList = userId == WellKnownUsers.Anonymous
             ? $"{paramName}"
             : $"{paramName}, 'Public'";
+
+        // Public-read node types (e.g. User, Organization) are visible to authenticated users
+        var publicReadClause = userId == WellKnownUsers.Anonymous
+            ? ""
+            : """
+
+                            OR EXISTS (SELECT 1 FROM node_type_permissions ntp
+                                       WHERE ntp.node_type = n.node_type AND ntp.public_read = true)
+            """;
+
         return $"""
             (
                 n.node_type = 'NodeType'
-                OR n.main_node = {paramName}
+                OR n.main_node = {paramName}{publicReadClause}
                 OR
                 (SELECT uep.is_allow
                  FROM user_effective_permissions uep

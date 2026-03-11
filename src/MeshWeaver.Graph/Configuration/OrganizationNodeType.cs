@@ -6,6 +6,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -53,6 +54,8 @@ public static class OrganizationNodeType
         {
             services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule, OrganizationAccessRule>();
+            services.AddSingleton<INodePostCreationHandler, OrganizationCreatorAdminHandler>();
+            services.AddSingleton(new NodeTypePermission(NodeType, PublicRead: true));
             return services;
         });
         return builder;
@@ -92,7 +95,7 @@ public static class OrganizationNodeType
         public string NodeType => OrganizationNodeType.NodeType;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
-            [NodeOperation.Read, NodeOperation.Update];
+            [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update];
 
         public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
@@ -103,10 +106,60 @@ public static class OrganizationNodeType
             if (string.IsNullOrEmpty(userId))
                 return false;
 
+            if (context.Operation == NodeOperation.Create)
+            {
+                var parentPath = context.Node.GetParentPath() ?? context.Node.Path;
+                return await securityService.HasPermissionAsync(parentPath, userId, Permission.Create, ct);
+            }
+
             if (context.Operation == NodeOperation.Update)
                 return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Update, ct);
 
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Grants the creator Admin role on the newly created Organization
+    /// and creates a Partition node for the organization's storage partition.
+    /// </summary>
+    private class OrganizationCreatorAdminHandler(
+        ISecurityService securityService,
+        ILogger<OrganizationCreatorAdminHandler> logger) : INodePostCreationHandler
+    {
+        public string NodeType => OrganizationNodeType.NodeType;
+
+        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        {
+            if (string.IsNullOrEmpty(createdBy))
+            {
+                logger.LogWarning("Cannot assign Admin role: no creator identity for Organization at {Path}", createdNode.Path);
+                return;
+            }
+
+            // Grant Admin role to creator on the organization
+            logger.LogInformation("Granting Admin role to {User} on Organization {Path}", createdBy, createdNode.Path);
+            await securityService.AddUserRoleAsync(createdBy, Role.Admin.Id, createdNode.Path, assignedBy: "system", ct);
+        }
+
+        /// <summary>
+        /// Returns a Partition node to be created alongside the Organization.
+        /// Persisted directly by RunPostCreationHandlersAsync (bypasses hub pipeline).
+        /// </summary>
+        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
+        {
+            yield return new MeshNode(createdNode.Id, PartitionNodeType.Namespace)
+            {
+                NodeType = PartitionNodeType.NodeType,
+                Name = createdNode.Name ?? createdNode.Id,
+                State = MeshNodeState.Active,
+                Content = new PartitionDefinition
+                {
+                    BasePaths = new HashSet<string> { createdNode.Id },
+                    StorageType = "Auto",
+                    Description = $"Partition for organization {createdNode.Name ?? createdNode.Id}"
+                }
+            };
         }
     }
 }

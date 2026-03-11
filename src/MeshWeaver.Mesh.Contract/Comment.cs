@@ -78,53 +78,52 @@ public record Comment
     /// </summary>
     [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
-
 }
 
 /// <summary>
 /// Represents a tracked change (insertion or deletion) in a collaborative document.
+/// Tracked changes are satellite entities — permissions delegate to the primary document node.
+/// The actual text content stays in the markers within the markdown;
+/// this entity only tracks location and metadata.
 /// </summary>
 public record TrackedChange
 {
     /// <summary>
     /// Unique identifier for the change.
     /// </summary>
+    [Browsable(false)]
     [Key]
     public string Id { get; init; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// Path of the node this change belongs to.
+    /// Path of the primary document node this change belongs to.
+    /// Used for permission checks (satellite permission delegation).
     /// </summary>
-    public string NodePath { get; init; } = string.Empty;
-
-    /// <summary>
-    /// Marker ID in the document.
-    /// </summary>
-    public string MarkerId { get; init; } = string.Empty;
+    [Browsable(false)]
+    public string? PrimaryNodePath { get; init; }
 
     /// <summary>
     /// Type of change (Insertion or Deletion).
     /// </summary>
+    [Browsable(false)]
     public TrackedChangeType ChangeType { get; init; }
-
-    /// <summary>
-    /// The text content of the change.
-    /// </summary>
-    public string Text { get; init; } = string.Empty;
 
     /// <summary>
     /// Author of the change.
     /// </summary>
+    [Browsable(false)]
     public string Author { get; init; } = string.Empty;
 
     /// <summary>
     /// When the change was made.
     /// </summary>
+    [Browsable(false)]
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Status of the change.
     /// </summary>
+    [Browsable(false)]
     public TrackedChangeStatus Status { get; init; } = TrackedChangeStatus.Pending;
 }
 

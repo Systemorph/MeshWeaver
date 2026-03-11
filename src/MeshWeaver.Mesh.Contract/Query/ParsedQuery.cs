@@ -73,7 +73,7 @@ public enum QuerySource
     Default,
 
     /// <summary>
-    /// User activity records from _activity/{userId} partition.
+    /// User activity records from _Activity/{userId} partition.
     /// </summary>
     Activity
 }

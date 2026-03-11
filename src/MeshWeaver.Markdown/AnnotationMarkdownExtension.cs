@@ -272,6 +272,56 @@ public class AnnotationMarkdownExtension : IMarkdownExtension
         return result;
     }
 
+    /// <summary>
+    /// Injects HTML spans into clean content based on annotation position data.
+    /// Used during editing when content is separated from markers and
+    /// annotations are tracked as entities with character-offset positions.
+    /// </summary>
+    /// <param name="cleanContent">Markdown content with no markers.</param>
+    /// <param name="annotations">Annotation ranges with position, length, type, and optional metadata.</param>
+    /// <returns>Content with HTML spans injected at annotation positions.</returns>
+    public static string InjectAnnotationSpans(
+        string cleanContent,
+        IReadOnlyList<AnnotationSpanInfo> annotations)
+    {
+        if (string.IsNullOrEmpty(cleanContent) || annotations.Count == 0)
+            return cleanContent;
+
+        // Sort by position descending so injecting from end preserves earlier positions
+        var sorted = annotations
+            .OrderByDescending(a => a.Position)
+            .ThenByDescending(a => a.Length)
+            .ToList();
+
+        var result = cleanContent;
+        foreach (var ann in sorted)
+        {
+            int pos = Math.Max(0, Math.Min(ann.Position, result.Length));
+            int len = Math.Max(0, Math.Min(ann.Length, result.Length - pos));
+            var text = result.Substring(pos, len);
+
+            string span;
+            switch (ann.Type)
+            {
+                case "comment":
+                    span = BuildCommentSpan(ann.Id, ann.Author, ann.Date, null, text);
+                    break;
+                case "insert":
+                    span = BuildChangeSpan("track-insert", ann.Id, ann.Author, ann.Date, text);
+                    break;
+                case "delete":
+                    span = BuildChangeSpan("track-delete", ann.Id, ann.Author, ann.Date, text);
+                    break;
+                default:
+                    continue;
+            }
+
+            result = $"{result[..pos]}{span}{result[(pos + len)..]}";
+        }
+
+        return result;
+    }
+
     public void Setup(MarkdownPipelineBuilder pipeline)
     {
         // No parser setup needed - we use pre-processing
@@ -281,6 +331,30 @@ public class AnnotationMarkdownExtension : IMarkdownExtension
     {
         // No renderer setup needed - we use pre-processing
     }
+}
+
+/// <summary>
+/// Information needed to inject an annotation span into clean content.
+/// </summary>
+public record AnnotationSpanInfo
+{
+    /// <summary>Unique identifier for the annotation.</summary>
+    public string Id { get; init; } = string.Empty;
+
+    /// <summary>Type: "comment", "insert", or "delete".</summary>
+    public string Type { get; init; } = string.Empty;
+
+    /// <summary>Character offset in clean content.</summary>
+    public int Position { get; init; }
+
+    /// <summary>Length of annotated text range.</summary>
+    public int Length { get; init; }
+
+    /// <summary>Author (optional, for display in popovers).</summary>
+    public string? Author { get; init; }
+
+    /// <summary>Date string (optional, for display in popovers).</summary>
+    public string? Date { get; init; }
 }
 
 /// <summary>

@@ -4,7 +4,7 @@ namespace MeshWeaver.Mesh.Activity;
 
 /// <summary>
 /// Records a user's access to a mesh node.
-/// Stored in partition storage at _activity/{userId}.
+/// Stored in partition storage at _Activity/{userId}.
 /// </summary>
 public record UserActivityRecord
 {

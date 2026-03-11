@@ -1,5 +1,6 @@
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -184,6 +185,15 @@ public static class PostgreSqlExtensions
             ?? new PostgreSqlStorageOptions();
 
         await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
+
+        // Sync DI-registered NodeTypePermission records to the database
+        var nodeTypePermissions = serviceProvider.GetServices<NodeTypePermission>();
+        if (nodeTypePermissions.Any())
+        {
+            var ac = serviceProvider.GetService<PostgreSqlAccessControl>()
+                ?? new PostgreSqlAccessControl(dataSource);
+            await ac.SyncNodeTypePermissionsAsync(nodeTypePermissions, ct);
+        }
     }
 
     /// <summary>
@@ -215,7 +225,8 @@ public static class PostgreSqlExtensions
                 opts,
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<IEmbeddingProvider>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetServices<NodeTypePermission>()));
 
         services.AddPartitionedCoreAndWrapperServices();
 
