@@ -149,6 +149,16 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
+            // 1b. Auto-set MainNode for satellite types before validation
+            // so that SatelliteAccessRule can delegate to the parent node.
+            if (!string.IsNullOrEmpty(node.NodeType)
+                && !string.IsNullOrEmpty(node.Namespace)
+                && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
+                && node.MainNode == node.Path) // still at default (self-referencing)
+            {
+                node = node with { MainNode = node.Namespace };
+            }
+
             // 2. Run validators (global + NodeType-specific)
             var validationError = await RunCreationValidatorsAsync(hub, catalog, node, createRequest, ct);
             if (validationError != null)
@@ -181,14 +191,7 @@ public static class MeshExtensions
             // 4. Create node with Active state (validated, ready to persist)
             var newNode = node with { State = MeshNodeState.Active };
 
-            // 4a. Auto-set MainNode for satellite types: point to parent node, not self
-            if (!string.IsNullOrEmpty(newNode.NodeType)
-                && !string.IsNullOrEmpty(newNode.Namespace)
-                && catalog.Configuration.IsSatelliteNodeType(newNode.NodeType)
-                && newNode.MainNode == newNode.Path) // still at default (self-referencing)
-            {
-                newNode = newNode with { MainNode = newNode.Namespace };
-            }
+            // 4a. MainNode already set in step 1b (before validation)
 
             // 5. Enrich with HubConfiguration based on NodeType
             var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();

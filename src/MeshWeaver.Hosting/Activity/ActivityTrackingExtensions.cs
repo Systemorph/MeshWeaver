@@ -23,7 +23,7 @@ public static class ActivityTrackingExtensions
             services.AddScoped<ActivityLogBundler>(sp =>
             {
                 var hub = sp.GetRequiredService<IMessageHub>();
-                // Use IMeshStorage directly — NOT IMeshService which routes through
+                // Use IMeshStorage directly — NOT IMeshNodePersistence which routes through
                 // handlers and would trigger activity tracking again (infinite loop).
                 var persistence = sp.GetRequiredService<IMeshStorage>();
                 return new ActivityLogBundler(hub, async log =>

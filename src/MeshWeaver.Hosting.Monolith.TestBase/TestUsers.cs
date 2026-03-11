@@ -40,20 +40,36 @@ public static class TestUsers
 
     /// <summary>
     /// AccessAssignment granting Public users Admin rights.
-    /// Every authenticated user inherits Public permissions, so this gives
-    /// all logged-in users full access — suitable for tests.
+    /// Creates one assignment per default partition namespace so that
+    /// access rights are visible in each partition's storage.
     /// </summary>
-    public static MeshNode PublicAdminAccess() =>
-        new(WellKnownUsers.Public + "_Access", "")
+    public static MeshNode[] PublicAdminAccess()
+    {
+        var assignment = new AccessAssignment
+        {
+            AccessObject = WellKnownUsers.Public,
+            DisplayName = "Public",
+            Roles = [new RoleAssignment { Role = "Admin" }]
+        };
+
+        // Create an access assignment at each default partition root
+        return
+        [
+            CreateAccessNode("", assignment),    // root level (fallback)
+            CreateAccessNode("Admin", assignment),
+            CreateAccessNode("User", assignment),
+            CreateAccessNode("Portal", assignment),
+            CreateAccessNode("Kernel", assignment),
+        ];
+    }
+
+    private static MeshNode CreateAccessNode(string ns, AccessAssignment assignment) =>
+        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_AccessAssignment" : "")
         {
             NodeType = "AccessAssignment",
             Name = "Public Access",
-            Content = new AccessAssignment
-            {
-                AccessObject = WellKnownUsers.Public,
-                DisplayName = "Public",
-                Roles = [new RoleAssignment { Role = "Admin" }]
-            }
+            Content = assignment,
+            MainNode = ns.Length > 0 ? ns : null,
         };
 
     /// <summary>

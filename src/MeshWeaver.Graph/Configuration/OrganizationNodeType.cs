@@ -54,7 +54,7 @@ public static class OrganizationNodeType
         {
             services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new OrganizationAccessRule(sp.GetRequiredService<ISecurityService>()));
+                new OrganizationAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler, OrganizationCreatorAdminHandler>();
             services.AddSingleton(new NodeTypePermission(NodeType, PublicRead: true));
             return services;
@@ -156,8 +156,10 @@ public static class OrganizationNodeType
                 State = MeshNodeState.Active,
                 Content = new PartitionDefinition
                 {
-                    BasePaths = new HashSet<string> { createdNode.Id },
-                    StorageType = "Auto",
+                    Namespace = createdNode.Id,
+                    DataSource = "default",
+                    Schema = createdNode.Id.ToLowerInvariant(),
+                    TableMappings = PartitionDefinition.StandardTableMappings,
                     Description = $"Partition for organization {createdNode.Name ?? createdNode.Id}"
                 }
             };

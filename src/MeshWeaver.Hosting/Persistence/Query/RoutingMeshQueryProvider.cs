@@ -66,20 +66,9 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         foreach (var (partitionKey, _) in _router.QueryProviders)
         {
-            // Check if user has read permission on the partition's base paths
-            var basePaths = GetBasePathsForPartition(partitionKey);
-            var hasAccess = false;
-
-            foreach (var bp in basePaths)
-            {
-                if (await _securityService.HasPermissionAsync(bp, userId, Permission.Read, ct))
-                {
-                    hasAccess = true;
-                    break;
-                }
-            }
-
-            if (hasAccess)
+            // Check if user has read permission on the partition's namespace
+            var ns = GetNamespaceForPartition(partitionKey);
+            if (await _securityService.HasPermissionAsync(ns, userId, Permission.Read, ct))
                 accessible.Add(partitionKey);
         }
 
@@ -88,26 +77,23 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// Gets the base paths for a partition. Uses Partition metadata if available,
-    /// otherwise falls back to the partition key itself as the base path.
+    /// Gets the namespace for a partition. Uses Partition metadata if available,
+    /// otherwise falls back to the partition key itself.
     /// </summary>
-    private IEnumerable<string> GetBasePathsForPartition(string partitionKey)
+    private string GetNamespaceForPartition(string partitionKey)
     {
         // Check if any partition metadata maps to this store key
-        foreach (var (_, basePaths) in _router.PartitionBasePaths)
+        foreach (var (_, ns) in _router.PartitionNamespaces)
         {
-            foreach (var bp in basePaths)
+            if (_router.BasePathToPartition.TryGetValue(ns, out var storeKey) &&
+                storeKey.Equals(partitionKey, StringComparison.OrdinalIgnoreCase))
             {
-                if (_router.BasePathToPartition.TryGetValue(bp, out var storeKey) &&
-                    storeKey.Equals(partitionKey, StringComparison.OrdinalIgnoreCase))
-                {
-                    return basePaths;
-                }
+                return ns;
             }
         }
 
-        // Default: the partition key itself is the base path
-        return [partitionKey];
+        // Default: the partition key itself is the namespace
+        return partitionKey;
     }
 
     public async IAsyncEnumerable<object> QueryAsync(

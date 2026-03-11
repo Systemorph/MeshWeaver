@@ -1,3 +1,4 @@
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -22,17 +23,24 @@ public static class PortalNodeType
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetRequiredService<ISecurityService>()));
+                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             return services;
         });
         return builder;
     }
 
+    /// <summary>
+    /// Creates the Portal satellite type MeshNode definition.
+    /// HubConfiguration provides standard portal services (content collections).
+    /// PortalApplication may add additional configuration (navigation, routing) at hub creation time.
+    /// </summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Portal Session",
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(PortalNodeType).Assembly.Location,
+        HubConfiguration = config => config
+            .AddContentCollections()
     };
 }

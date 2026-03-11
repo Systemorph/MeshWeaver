@@ -136,6 +136,10 @@
     <Project Path="test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj" />
     <Project Path="test/MeshWeaver.Hierarchies.Test/MeshWeaver.Hierarchies.Test.csproj" />
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
+    <Project Path="test/MeshWeaver.Monolith.Test.Content/MeshWeaver.Monolith.Test.Content.csproj" />
+    <Project Path="test/MeshWeaver.Monolith.Test.Persistence/MeshWeaver.Monolith.Test.Persistence.csproj" />
+    <Project Path="test/MeshWeaver.Monolith.Test.Query/MeshWeaver.Monolith.Test.Query.csproj" />
+    <Project Path="test/MeshWeaver.Monolith.Test.Security/MeshWeaver.Monolith.Test.Security.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />

@@ -63,4 +63,15 @@ internal sealed class MeshService : IMeshService
 
     public Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default)
         => _query.SelectAsync<T>(path, property, ct);
+
+    public async Task<string?> GetPreRenderedHtmlAsync(string path, CancellationToken ct = default)
+    {
+        await foreach (var result in _query.QueryAsync(
+            new MeshQueryRequest { Query = $"path:{path} scope:exact", Limit = 1 }, ct))
+        {
+            if (result is MeshNode node)
+                return node.PreRenderedHtml;
+        }
+        return null;
+    }
 }

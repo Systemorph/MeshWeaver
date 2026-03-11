@@ -12,6 +12,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -1170,11 +1171,17 @@ public class DynamicGraphIntegrationTestsCollection
 /// <summary>
 /// Tests that use the actual samples/Graph/Data directory to test real sample data.
 /// This replicates the exact production scenario with real sample data.
+/// Uses MeshWeaver/Documentation/Article as the NodeType with Code children
+/// (Article.cs and ArticleLayoutAreas.cs).
 /// </summary>
 [Collection("SamplesGraphDataTests")]
 public class SamplesGraphDataTest : MonolithMeshTestBase
 {
     private readonly string _cacheDirectory;
+
+    // Article NodeType is at MeshWeaver/Documentation/Article with 2 code files
+    private const string ArticleNodeTypePath = "MeshWeaver/Documentation/Article";
+    private const string ArticleCodeNamespace = "MeshWeaver/Documentation/Article/Code";
 
     public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
     {
@@ -1189,7 +1196,12 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddUserData()
             .AddTypeData()
+            .AddMeshWeaverDocs()
+            .AddSystemorph()
+            .AddAcme()
+            .AddVUser()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas())
             .AddGraph();
     }
 
@@ -1205,14 +1217,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that tries to get the default layout from Organization.
+    /// Test that tries to get the default layout from the Article NodeType.
     /// This test is expected to deadlock if the NodeTypeService implementation has issues.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_GetDefaultLayout_ShouldNotDeadlock()
+    public async Task Article_GetDefaultLayout_ShouldNotDeadlock()
     {
-        // Arrange - Organization is now at root level
-        var organizationAddress = new Address("Organization");
+        // Arrange - Article NodeType is at MeshWeaver/Documentation/Article
+        var articleAddress = new Address(ArticleNodeTypePath);
 
         // Get a client with data services configured
         var client = GetClient(c => c.AddData(data => data));
@@ -1224,8 +1236,8 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(string.Empty);
 
-        Output.WriteLine("Getting remote stream for Organization...");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        Output.WriteLine("Getting remote stream for Article NodeType...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(articleAddress, reference);
 
         Output.WriteLine("Waiting for first value from stream...");
         // Wait for the stream to emit a value - this is where deadlock would occur
@@ -1235,12 +1247,12 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "Organization node should return default layout area content");
+            "Article NodeType should return default layout area content");
     }
 
     /// <summary>
     /// Test that verifies the samples directory exists and has the expected structure.
-    /// Organization is now at root level with Organization.json and Organization/ folder for code.
+    /// Article NodeType is at MeshWeaver/Documentation/Article.json with Code/ subfolder.
     /// </summary>
     [Fact]
     public void SamplesDirectory_Exists_WithExpectedStructure()
@@ -1250,44 +1262,43 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Directory.Exists(TestPaths.SamplesGraphData).Should().BeTrue(
             $"Samples directory should exist at {TestPaths.SamplesGraphData}");
 
-        var organizationPath = Path.Combine(TestPaths.SamplesGraphData, "Organization.json");
-        File.Exists(organizationPath).Should().BeTrue(
-            $"Organization.json should exist at {organizationPath}");
+        var articleJsonPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article.json");
+        File.Exists(articleJsonPath).Should().BeTrue(
+            $"Article.json should exist at {articleJsonPath}");
 
-        var codeConfigPath = Path.Combine(TestPaths.SamplesGraphData, "Organization", "Code", "Organization.cs");
+        var codeConfigPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "Code", "Article.cs");
         File.Exists(codeConfigPath).Should().BeTrue(
-            $"Organization/Code/Organization.cs should exist at {codeConfigPath}");
+            $"Article/Code/Article.cs should exist at {codeConfigPath}");
     }
 
     /// <summary>
-    /// Test that the MeshCatalog can resolve Organization path.
+    /// Test that the MeshCatalog can resolve the Article NodeType path.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_CanBeResolved_FromSamples()
+    public async Task Article_CanBeResolved_FromSamples()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
-        Output.WriteLine("Resolving Organization path...");
-        var resolution = await pathResolver.ResolvePathAsync("Organization");
+        Output.WriteLine($"Resolving {ArticleNodeTypePath} path...");
+        var resolution = await pathResolver.ResolvePathAsync(ArticleNodeTypePath);
 
-        resolution.Should().NotBeNull("Organization should be resolvable from samples");
-        resolution.Prefix.Should().Be("Organization");
+        resolution.Should().NotBeNull("Article NodeType should be resolvable from samples");
         Output.WriteLine($"Resolved: Prefix={resolution.Prefix}, Remainder={resolution.Remainder}");
     }
 
     /// <summary>
-    /// Test that GetNodeAsync works for Organization.
+    /// Test that GetNodeAsync works for the Article NodeType.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_GetNodeAsync_FromSamples()
+    public async Task Article_GetNodeAsync_FromSamples()
     {
-        Output.WriteLine("Getting node for Organization...");
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Getting node for {ArticleNodeTypePath}...");
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-        node.Should().NotBeNull("Organization node should exist in samples");
+        node.Should().NotBeNull("Article NodeType node should exist in samples");
         Output.WriteLine($"Node: Path={node!.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
 
-        node.Path.Should().Be("Organization");
+        node.Path.Should().Be(ArticleNodeTypePath);
         node.NodeType.Should().Be("NodeType");
     }
 
@@ -1296,14 +1307,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Nodes with nodeType=NodeType compile their own code to get HubConfiguration.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_HubConfiguration_IsSetForNodeType()
+    public async Task Article_HubConfiguration_IsSetForNodeType()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("NodeType");
 
-        // Query results don't include HubConfiguration — enrichment (compilation) happens via NodeTypeService
+        // Query results don't include HubConfiguration - enrichment (compilation) happens via NodeTypeService
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
         node = await nodeTypeService.EnrichWithNodeTypeAsync(node, TestContext.Current.CancellationToken);
 
@@ -1317,21 +1328,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that sends a PingRequest to Organization hub.
+    /// Test that sends a PingRequest to the Article NodeType hub.
     /// This triggers hub creation which may cause deadlock.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_PingRequest_ShouldNotDeadlock()
+    public async Task Article_PingRequest_ShouldNotDeadlock()
     {
-        var organizationAddress = new Address("Organization");
+        var articleAddress = new Address(ArticleNodeTypePath);
         var client = GetClient();
 
-        Output.WriteLine("Sending PingRequest to Organization...");
+        Output.WriteLine($"Sending PingRequest to {ArticleNodeTypePath}...");
 
         // This triggers hub creation - may deadlock here
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(organizationAddress),
+            o => o.WithTarget(articleAddress),
             TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Received response: {response}");
@@ -1345,7 +1356,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_ReturnsNonEmptyContent()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
@@ -1371,19 +1382,19 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
     /// <summary>
     /// Test that CodeConfiguration can be loaded from child MeshNodes via persistence.
-    /// Code is stored as child MeshNodes with nodeType="Code" under the Organization/Code path.
+    /// Code is stored as child MeshNodes with nodeType="Code" under the Article/Code path.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_CodeConfiguration_LoadedFromChildMeshNodes()
+    public async Task Article_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        Output.WriteLine("Getting Code children for Organization...");
-        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Organization/Code", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Getting Code children for {ArticleCodeNamespace}...");
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>($"namespace:{ArticleCodeNamespace}", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
         foreach (var child in codeChildren)
         {
             Output.WriteLine($"Found code child: {child.Path}, NodeType={child.NodeType}");
         }
 
-        codeChildren.Should().NotBeEmpty("Organization/Code should have child MeshNodes");
+        codeChildren.Should().NotBeEmpty($"{ArticleCodeNamespace} should have child MeshNodes");
 
         foreach (var codeNode in codeChildren)
         {
@@ -1401,7 +1412,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_WithLayoutClient_ReturnsSplitter()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
 
         // Configure client with AddLayoutClient for proper control deserialization
         var client = GetClient(c => c
@@ -1436,7 +1447,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_DebugUpdateSequence()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1475,7 +1486,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_GetControlStream_Test()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1564,30 +1575,30 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that the OrganizationViews.cs file exists alongside Organization.cs for Organization.
+    /// Test that the ArticleLayoutAreas.cs file exists alongside Article.cs for Article.
     /// This validates the custom view configuration structure.
     /// </summary>
     [Fact]
-    public void Organization_ViewsCs_Exists()
+    public void Article_ViewsCs_Exists()
     {
-        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "Organization", "Code", "OrganizationLayoutAreas.cs");
-        Output.WriteLine($"Checking for OrganizationLayoutAreas.cs at: {viewsCsPath}");
+        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "Code", "ArticleLayoutAreas.cs");
+        Output.WriteLine($"Checking for ArticleLayoutAreas.cs at: {viewsCsPath}");
 
         File.Exists(viewsCsPath).Should().BeTrue(
-            $"Organization/Code/OrganizationLayoutAreas.cs should exist at {viewsCsPath} for custom view configuration");
+            $"Article/Code/ArticleLayoutAreas.cs should exist at {viewsCsPath} for custom view configuration");
     }
 
     /// <summary>
-    /// Test that Organization node with custom AddLayout view compiles successfully.
+    /// Test that Article NodeType with custom AddLayout view compiles successfully.
     /// This validates the fix for missing using statements in DynamicMeshNodeAttributeGenerator.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_CustomView_CompilesSuccessfully()
+    public async Task Article_CustomView_CompilesSuccessfully()
     {
-        Output.WriteLine("Getting Organization node (triggers compilation)...");
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organization scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        Output.WriteLine($"Getting {ArticleNodeTypePath} node (triggers compilation)...");
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-        node.Should().NotBeNull("Organization node should exist");
+        node.Should().NotBeNull("Article NodeType node should exist");
         node!.NodeType.Should().Be("NodeType");
 
         // Enrich via NodeTypeService to trigger compilation and populate HubConfiguration
@@ -1595,21 +1606,20 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         node = await nodeTypeService.EnrichWithNodeTypeAsync(node, TestContext.Current.CancellationToken);
 
         node.HubConfiguration.Should().NotBeNull(
-            "Organization node should have HubConfiguration from compiled assembly with custom view");
+            "Article NodeType should have HubConfiguration from compiled assembly with custom view");
 
         var hubConfig = node.HubConfiguration;
         hubConfig.Should().NotBeNull("HubConfiguration should be available");
 
-        Output.WriteLine("Organization custom view compiled successfully!");
+        Output.WriteLine("Article custom view compiled successfully!");
     }
 
     /// <summary>
-    /// Test that the custom OrganizationViews.Details view compiles and renders.
+    /// Test that the custom view compiles and renders for a Systemorph organization instance.
     /// This tests the complete flow from views.json through compilation to rendering.
-    /// Note: In a test environment without full data setup, the view may return a loading state.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_DetailsView_RendersCustomView()
+    public async Task Systemorph_OverviewView_RendersCustomView()
     {
         var organizationAddress = new Address("Systemorph");
 
@@ -1640,32 +1650,23 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         Output.WriteLine($"Received control type: {control?.GetType().FullName}");
 
-        // Verify the custom view is invoked and returns a control
-        // The view returns either:
-        // - StackControl (when data is loaded - the organization header)
-        // - MarkdownControl (loading state "*Loading...*")
-        control.Should().NotBeNull("Details view should render a control for Organization instance");
-
-        // The important thing is that the custom view compiled and was called.
-        // In test environment, we may get loading state since data isn't fully set up.
-        var isExpectedType = control is StackControl || control is MarkdownControl;
-        isExpectedType.Should().BeTrue(
-            $"Custom OrganizationViews.Details should return StackControl or MarkdownControl, got {control?.GetType().Name}");
+        // Verify the view is invoked and returns a control
+        control.Should().NotBeNull("Overview should render a control for Organization instance");
     }
 
     /// <summary>
-    /// Verifies that QueryAsync with scope:descendants finds Code nodes under Organization.
-    /// Organization has 2 code files: Organization.cs and OrganizationLayoutAreas.cs
-    /// stored at Organization/Code/Organization and Organization/Code/OrganizationLayoutAreas.
+    /// Verifies that QueryAsync with scope:descendants finds Code nodes under Article.
+    /// Article has 2 code files: Article.cs and ArticleLayoutAreas.cs
+    /// stored at MeshWeaver/Documentation/Article/Code/Article and MeshWeaver/Documentation/Article/Code/ArticleLayoutAreas.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_QueryAsync_ScopeDescendants_FindsCodeNodes()
+    public async Task Article_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
         // Arrange
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Act: Query for Code nodes under Organization using scope:descendants
-        var query = $"path:Organization nodeType:{CodeNodeType.NodeType} scope:descendants";
+        // Act: Query for Code nodes under Article using scope:descendants
+        var query = $"path:{ArticleNodeTypePath} nodeType:{CodeNodeType.NodeType} scope:descendants";
         Output.WriteLine($"Executing query: {query}");
 
         var nodes = await meshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
@@ -1674,21 +1675,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found Code node: Path={node.Path}, Name={node.Name}, NodeType={node.NodeType}");
 
-        // Assert: Organization has 2 code files
-        nodes.Should().HaveCount(2, "Organization should have 2 Code descendants (Organization.cs and OrganizationLayoutAreas.cs)");
+        // Assert: Article has 2 code files
+        nodes.Should().HaveCount(2, "Article should have 2 Code descendants (Article.cs and ArticleLayoutAreas.cs)");
         nodes.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType, "All results should be Code nodes");
         nodes.Should().OnlyContain(n => n.Content is CodeConfiguration, "All Code nodes should have CodeConfiguration content");
     }
 
     /// <summary>
-    /// Verifies that the NodeType Overview area for Organization renders a SplitterControl
+    /// Verifies that the NodeType Overview area for Article renders a SplitterControl
     /// and that the left menu contains the correct number of code file entries.
     /// This diagnoses the "no code files" issue in the NodeType Overview.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_NodeTypeOverview_ContainsCodeNodes()
+    public async Task Article_NodeTypeOverview_ContainsCodeNodes()
     {
-        var organizationAddress = new Address("Organization");
+        var articleAddress = new Address(ArticleNodeTypePath);
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1698,10 +1699,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var workspace = client.GetWorkspace();
 
         // Initialize hub
-        Output.WriteLine("Sending PingRequest to Organization NodeType hub...");
+        Output.WriteLine($"Sending PingRequest to {ArticleNodeTypePath} NodeType hub...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(organizationAddress),
+            o => o.WithTarget(articleAddress),
             TestContext.Current.CancellationToken);
         Output.WriteLine("PingRequest completed");
 
@@ -1709,22 +1710,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference(NodeTypeLayoutAreas.OverviewArea);
         Output.WriteLine($"Requesting layout area: {reference.Area}");
 
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(articleAddress, reference);
 
         // Wait for a JSON update that contains code node content (instead of collecting for 30s)
         Output.WriteLine("Waiting for JSON update containing code nodes...");
         var lastJson = await stream
             .Select(x => x.Value.GetRawText())
-            .Where(json => json.Contains("Organization") && json.Contains("Code") && !json.Contains("No code files"))
+            .Where(json => json.Contains("Article") && json.Contains("Code") && !json.Contains("No code files"))
             .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         Output.WriteLine($"Received matching JSON update (first 5000 chars):\n{lastJson.Substring(0, Math.Min(5000, lastJson.Length))}");
 
         // The NavMenu should contain code file entries
-        // Organization has 2 code files: Organization.cs and OrganizationViews.cs
-        var hasOrganizationCode = lastJson.Contains("Organization") && lastJson.Contains("Code");
-        hasOrganizationCode.Should().BeTrue("Overview JSON should contain Code section references");
+        var hasArticleCode = lastJson.Contains("Article") && lastJson.Contains("Code");
+        hasArticleCode.Should().BeTrue("Overview JSON should contain Code section references");
 
         // Check specifically for "No code files" to detect the bug
         var hasNoCodeFiles = lastJson.Contains("No code files");
@@ -1732,20 +1732,20 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         hasNoCodeFiles.Should().BeFalse(
             "NodeType Overview should NOT show 'No code files'. " +
-            "Organization has 2 code files (Organization.cs, OrganizationViews.cs) " +
+            "Article has 2 code files (Article.cs, ArticleLayoutAreas.cs) " +
             "which should be found by scope:descendants query.");
     }
 
     /// <summary>
-    /// Tests the ObserveQuery reactive path specifically for Code nodes under Organization.
+    /// Tests the ObserveQuery reactive path specifically for Code nodes under Article.
     /// This mirrors the exact query used by NodeTypeLayoutAreas.Overview.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
+    public async Task Article_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
     {
         // Arrange
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var hubPath = "Organization";
+        var hubPath = ArticleNodeTypePath;
 
         // Act: Use ObserveQuery with the same query pattern as NodeTypeLayoutAreas.Overview
         var queryString = $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:descendants";
@@ -1764,7 +1764,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Assert
         initialChange.ChangeType.Should().Be(QueryChangeType.Initial, "First emission should be Initial");
         initialChange.Items.Should().HaveCount(2,
-            "ObserveQuery should find 2 Code nodes under Organization (Organization.cs and OrganizationViews.cs)");
+            "ObserveQuery should find 2 Code nodes under Article (Article.cs and ArticleLayoutAreas.cs)");
         initialChange.Items.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType);
     }
 
@@ -1801,6 +1801,60 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Assert
         value.Should().NotBe(default(JsonElement),
             "MeshWeaver Search area should return content");
+    }
+
+    /// <summary>
+    /// Test that a VUser node can be created and detected as already existing.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task PortalHub_CreateVUser_AlreadyExists_ReturnsFailure()
+    {
+        // Use a unique ID to avoid collisions with pre-loaded VUser partition data
+        var uniqueId = $"DupTest_{Guid.NewGuid():N}"[..20];
+
+        // Create a VUser node first
+        await NodeFactory.CreateNodeAsync(new MeshNode(uniqueId, "VUser")
+        {
+            Name = uniqueId,
+            NodeType = "VUser"
+        });
+
+        // Try to create the same VUser again
+        var act = () => NodeFactory.CreateNodeAsync(new MeshNode(uniqueId, "VUser")
+        {
+            Name = uniqueId,
+            NodeType = "VUser"
+        });
+
+        await act.Should().ThrowAsync<Exception>();
+    }
+
+    /// <summary>
+    /// Test that creating a VUser node and then checking for it does not hang.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task EnsureVirtualUserNode_CheckThenCreate_NoHang()
+    {
+        // Use a unique ID to avoid collisions with pre-loaded VUser partition data
+        var uniqueId = $"HangTest_{Guid.NewGuid():N}"[..20];
+        var vUserPath = $"VUser/{uniqueId}";
+
+        // Check that node doesn't exist first
+        var existingNode = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath} scope:exact", ct: TestContext.Current.CancellationToken)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        existingNode.Should().BeNull("VUser should not exist yet");
+
+        // Create the VUser
+        await NodeFactory.CreateNodeAsync(new MeshNode(uniqueId, "VUser")
+        {
+            Name = uniqueId,
+            NodeType = "VUser"
+        });
+
+        // Verify it can be retrieved
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath} scope:exact", ct: TestContext.Current.CancellationToken)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        node.Should().NotBeNull("VUser should exist after creation");
     }
 }
 

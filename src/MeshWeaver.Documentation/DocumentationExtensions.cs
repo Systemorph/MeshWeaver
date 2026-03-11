@@ -27,8 +27,8 @@ public static class DocumentationExtensions
             State = MeshNodeState.Active,
             Content = new PartitionDefinition
             {
-                BasePaths = new HashSet<string> { "Doc" },
-                StorageType = "Static",
+                Namespace = "Doc",
+                DataSource = "static",
                 Description = "Built-in MeshWeaver platform documentation"
             }
         });
