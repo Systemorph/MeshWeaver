@@ -15,6 +15,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
 {
     private readonly IPartitionedStoreFactory _factory;
     private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly IEnumerable<IStaticNodeProvider> _staticNodeProviders;
     private readonly ConcurrentDictionary<string, IStorageService> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
@@ -32,10 +33,14 @@ internal class RoutingPersistenceServiceCore : IStorageService
     /// </summary>
     private readonly ConcurrentDictionary<string, string> _partitionNamespaces = new(StringComparer.OrdinalIgnoreCase);
 
-    public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory, IDataChangeNotifier? changeNotifier = null)
+    public RoutingPersistenceServiceCore(
+        IPartitionedStoreFactory factory,
+        IDataChangeNotifier? changeNotifier = null,
+        IEnumerable<IStaticNodeProvider>? staticNodeProviders = null)
     {
         _factory = factory;
         _changeNotifier = changeNotifier;
+        _staticNodeProviders = staticNodeProviders ?? [];
     }
 
     /// <summary>
@@ -161,11 +166,21 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        // Drain to ensure all partitions are provisioned
+        // 1. Initialize default partitions from static providers (creates schemas/tables for PostgreSQL)
+        var defaultPartitions = _staticNodeProviders
+            .SelectMany(p => p.GetStaticNodes())
+            .Select(n => n.Content)
+            .OfType<PartitionDefinition>()
+            .ToList();
+
+        if (defaultPartitions.Count > 0)
+            await _factory.InitializeDefaultPartitionsAsync(defaultPartitions, ct);
+
+        // 2. Discover all existing partitions (including the ones just created)
         await foreach (var _ in DiscoverNewProvidersAsync(ct))
         { }
 
-        // Load partition metadata from Admin/Partition namespace
+        // 3. Load partition metadata from Admin/Partition namespace
         await LoadPartitionMetadataAsync(ct);
     }
 
@@ -268,7 +283,42 @@ internal class RoutingPersistenceServiceCore : IStorageService
             ?? throw new ArgumentException("Cannot save node with empty path");
 
         var store = await GetOrCreateStoreAsync(segment, ct);
-        return await store.SaveNodeAsync(node, options, ct);
+        var result = await store.SaveNodeAsync(node, options, ct);
+
+        // When a Partition node is saved, initialize the schema for the new partition
+        if (node.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
+            await EnsurePartitionSchemaAsync(def, ct);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Ensures the schema/tables exist for a partition definition.
+    /// Called when a Partition node is created (e.g., organization creation).
+    /// </summary>
+    private async Task EnsurePartitionSchemaAsync(PartitionDefinition def, CancellationToken ct)
+    {
+        // Initialize schema and satellite tables (idempotent)
+        await _factory.InitializeDefaultPartitionsAsync([def], ct);
+
+        // Provision the store for routing if not already present
+        if (!_stores.ContainsKey(def.Namespace))
+        {
+            var partition = await _factory.CreateStoreAsync(def.Namespace, ct);
+            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            if (_stores.TryAdd(def.Namespace, core))
+            {
+                var queryProvider = partition.QueryProvider
+                    ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                _queryProviders[def.Namespace] = queryProvider;
+                if (partition.VersionQuery != null)
+                    _versionQueries[def.Namespace] = partition.VersionQuery;
+            }
+        }
+
+        // Update partition metadata
+        _partitionNamespaces[def.Namespace] = def.Namespace;
+        _basePathToPartition[def.Namespace] = def.Namespace;
     }
 
     public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)

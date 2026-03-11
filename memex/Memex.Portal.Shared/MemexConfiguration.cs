@@ -271,10 +271,17 @@ public static class MemexConfiguration
                 && !string.IsNullOrEmpty(graphStorageConfig.BasePath);
 
             return (TBuilder)builder
-                // Configure persistence from Graph:Storage section
-                .ConfigureServices(services => usePartitioned
-                    ? services.AddPartitionedFileSystemPersistence(graphStorageConfig.BasePath!)
-                    : services.AddPersistence(graphStorageConfig))
+                // Configure persistence from Graph:Storage section.
+                // Skip if IPartitionedStoreFactory already registered (e.g., PostgreSQL from Program.cs)
+                .ConfigureServices(services =>
+                {
+                    if (services.Any(sd => sd.ServiceType == typeof(IPartitionedStoreFactory)))
+                        return services;
+
+                    return usePartitioned
+                        ? services.AddPartitionedFileSystemPersistence(graphStorageConfig.BasePath!)
+                        : services.AddPersistence(graphStorageConfig);
+                })
                 // Enable Row-Level Security for access control
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path

@@ -23,15 +23,16 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
             tableMappings: PartitionDefinition.StandardTableMappings);
 
         yield return CreatePartition("Portal", "portal", "Portal sessions",
-            tableMappings: null);
+            tableMappings: null, versioned: false);
 
         yield return CreatePartition("Kernel", "kernel", "Kernel sessions",
-            tableMappings: null);
+            tableMappings: null, versioned: false);
     }
 
     private static MeshNode CreatePartition(
         string id, string schema, string description,
-        Dictionary<string, string>? tableMappings) =>
+        Dictionary<string, string>? tableMappings,
+        bool versioned = true) =>
         new(id, PartitionNodeType.Namespace)
         {
             NodeType = PartitionNodeType.NodeType,
@@ -44,6 +45,7 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
                 Schema = schema,
                 Table = "mesh_nodes",
                 TableMappings = tableMappings,
+                Versioned = versioned,
                 Description = description,
             }
         };

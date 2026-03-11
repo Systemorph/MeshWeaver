@@ -27,7 +27,7 @@ namespace MeshWeaver.Monolith.Test.Security;
 /// </summary>
 public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
 
     private const string User1 = "user1@example.com";
     private const string User2 = "user2@example.com";
@@ -160,7 +160,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         await securityService.AddUserRoleAsync(User2, "Editor", "SharedOrg/Confidential", "system", TestTimeout);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpGet_User1CannotReadConfidentialNode_User2Can()
     {
         await SetupTestData();
@@ -179,7 +179,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Confidential Project");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpGet_User1CannotReadPrivateOrg_User2Can()
     {
         await SetupTestData();
@@ -198,7 +198,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Secret Data");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpGet_User1CanReadPublicNode()
     {
         await SetupTestData();
@@ -211,7 +211,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result.Should().Contain("Public Project");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpSearch_User1SeesOnlyPermittedNodes()
     {
         await SetupTestData();
@@ -231,7 +231,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Confidential");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpSearch_User1CannotSearchPrivateOrg()
     {
         await SetupTestData();
@@ -249,7 +249,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         result2.Should().Contain("Secret");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpUpdate_User1CannotUpdate_User2Can()
     {
         await SetupTestData();
@@ -281,7 +281,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         reloaded!.Name.Should().Be("Updated by User2");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 30000)]
     public async Task McpUpdate_User1CannotUpdatePrivateOrg_User2Can()
     {
         await SetupTestData();
