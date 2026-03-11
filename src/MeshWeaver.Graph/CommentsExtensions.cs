@@ -100,7 +100,7 @@ public static class CommentsView
         if (meshQuery != null)
         {
             meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{nodePath} nodeType:{CommentNodeType.NodeType}"))
+                    $"namespace:{nodePath}/{CommentsExtensions.CommentPartition} nodeType:{CommentNodeType.NodeType}"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
@@ -307,10 +307,10 @@ public static class CommentsView
             .WithClickAction(async _ =>
             {
                 var commentId = Guid.NewGuid().AsString();
-                var commentPath = $"{nodePath}/{commentId}";
+                var commentPath = $"{nodePath}/{CommentsExtensions.CommentPartition}/{commentId}";
                 var newCommentPathStateId = $"newComment_{nodePath.Replace("/", "_")}";
 
-                var commentNode = new MeshNode(commentId, nodePath)
+                var commentNode = new MeshNode(commentId, $"{nodePath}/{CommentsExtensions.CommentPartition}")
                 {
                     Name = "Comment",
                     NodeType = CommentNodeType.NodeType,

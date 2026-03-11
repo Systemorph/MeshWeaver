@@ -216,6 +216,31 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => _storageAdapter.ExistsAsync(path, ct);
 
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var normalizedPath = NormalizePath(fullPath);
+        if (string.IsNullOrEmpty(normalizedPath))
+            return (null, 0);
+
+        // Delegate to storage adapter (e.g., PostgreSQL with dedicated SQL)
+        var (adapterNode, adapterSegments) = await _storageAdapter.FindBestPrefixMatchAsync(normalizedPath, options, ct);
+        if (adapterNode != null)
+            return (adapterNode, adapterSegments);
+
+        // Fall back to walking up the path hierarchy using cache/adapter reads
+        var segments = normalizedPath.Split('/');
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            var node = await GetNodeAsync(testPath, options, ct);
+            if (node != null)
+                return (node, depth);
+        }
+
+        return (null, 0);
+    }
+
     #region Comments - stored in separate files
 
     public async IAsyncEnumerable<Comment> GetCommentsAsync(string nodePath, JsonSerializerOptions options)
