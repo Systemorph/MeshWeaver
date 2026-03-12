@@ -27,7 +27,8 @@ public class RlsNodeValidator : INodeValidator
         _logger = logger;
         _nodeTypeService = nodeTypeService;
         _accessRules = accessRules
-            .ToDictionary(r => r.NodeType, r => r, StringComparer.OrdinalIgnoreCase);
+            .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>

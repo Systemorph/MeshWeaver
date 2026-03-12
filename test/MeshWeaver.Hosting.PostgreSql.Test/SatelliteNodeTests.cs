@@ -137,9 +137,9 @@ public class SatelliteNodeTests : IAsyncLifetime
     public async Task AccessAssignment_WriteAndRead_RoutesToTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var aaAdapter = AdapterFor("_AccessAssignment", "access_assignments");
+        var aaAdapter = AdapterFor("_Access", "access");
 
-        var aa = new MeshNode("aa-1", "ACME/Projects/Alpha/_AccessAssignment")
+        var aa = new MeshNode("aa-1", "ACME/Projects/Alpha/_Access")
         {
             Name = "Admin role for Bob",
             NodeType = "AccessAssignment",
@@ -149,11 +149,11 @@ public class SatelliteNodeTests : IAsyncLifetime
         await aaAdapter.WriteAsync(aa, _options, ct);
 
         await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM access_assignments WHERE id = 'aa-1'");
+            "SELECT COUNT(*) FROM access WHERE id = 'aa-1'");
         var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
         count.Should().Be(1);
 
-        var read = await aaAdapter.ReadAsync("ACME/Projects/Alpha/_AccessAssignment/aa-1", _options, ct);
+        var read = await aaAdapter.ReadAsync("ACME/Projects/Alpha/_Access/aa-1", _options, ct);
         read.Should().NotBeNull();
         read!.Name.Should().Be("Admin role for Bob");
     }
@@ -162,8 +162,8 @@ public class SatelliteNodeTests : IAsyncLifetime
     public async Task AccessAssignment_MultipleAssignments_ListCorrectly()
     {
         var ct = TestContext.Current.CancellationToken;
-        var aaAdapter = AdapterFor("_AccessAssignment", "access_assignments");
-        var ns = "ACME/Projects/Beta/_AccessAssignment";
+        var aaAdapter = AdapterFor("_Access", "access");
+        var ns = "ACME/Projects/Beta/_Access";
 
         await aaAdapter.WriteAsync(new MeshNode("aa-b1", ns)
         {
@@ -241,9 +241,9 @@ public class SatelliteNodeTests : IAsyncLifetime
     public async Task TrackedChange_WriteAndRead_RoutesToTable()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tcAdapter = AdapterFor("_TrackedChange", "tracked_changes");
+        var tcAdapter = AdapterFor("_Tracking", "tracking");
 
-        var tc = new MeshNode("tc-1", "ACME/Docs/report/_TrackedChange")
+        var tc = new MeshNode("tc-1", "ACME/Docs/report/_Tracking")
         {
             Name = "Section 2 updated",
             NodeType = "TrackedChange",
@@ -253,11 +253,11 @@ public class SatelliteNodeTests : IAsyncLifetime
         await tcAdapter.WriteAsync(tc, _options, ct);
 
         await using var cmd = _schemaDs.CreateCommand(
-            "SELECT COUNT(*) FROM tracked_changes WHERE id = 'tc-1'");
+            "SELECT COUNT(*) FROM tracking WHERE id = 'tc-1'");
         var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
         count.Should().Be(1);
 
-        var read = await tcAdapter.ReadAsync("ACME/Docs/report/_TrackedChange/tc-1", _options, ct);
+        var read = await tcAdapter.ReadAsync("ACME/Docs/report/_Tracking/tc-1", _options, ct);
         read.Should().NotBeNull();
         read!.Name.Should().Be("Section 2 updated");
     }
@@ -426,8 +426,8 @@ public class SatelliteNodeTests : IAsyncLifetime
         def.ResolveTable("User/alice/_Activity/act-1").Should().Be("activities");
         def.ResolveTable("User/alice/_UserActivity/ua-1").Should().Be("user_activities");
         def.ResolveTable("User/alice/_Comment/cmt-1").Should().Be("comments");
-        def.ResolveTable("User/alice/_AccessAssignment/aa-1").Should().Be("access_assignments");
-        def.ResolveTable("User/alice/_TrackedChange/tc-1").Should().Be("tracked_changes");
+        def.ResolveTable("User/alice/_Access/aa-1").Should().Be("access");
+        def.ResolveTable("User/alice/_Tracking/tc-1").Should().Be("tracking");
         def.ResolveTable("User/alice/_Approval/apr-1").Should().Be("approvals");
     }
 

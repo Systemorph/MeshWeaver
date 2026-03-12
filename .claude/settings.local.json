@@ -32,7 +32,6 @@
       "Bash(powershell.exe:*)",
       "Bash(mkdir:*)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:github.com)",
       "WebSearch",
       "Bash(git checkout:*)",
       "Bash(tee:*)",
@@ -111,7 +110,12 @@
       "mcp__aspire__list_apphosts",
       "Bash(az account:*)",
       "Bash(git status:*)",
-      "WebFetch(domain:en.wikipedia.org)"
+      "WebFetch(domain:en.wikipedia.org)",
+      "Bash(docker ps:*)",
+      "Bash(docker exec:*)",
+      "Bash(DOTNET_CLI_UI_LANGUAGE=en dotnet --list-runtimes 2>&1 || echo \"FAILED\")",
+      "Bash(powershell -Command \"dotnet --version\" 2>&1)",
+      "Bash(powershell -Command \"dotnet --list-runtimes\" 2>&1)"
     ],
     "deny": []
   },

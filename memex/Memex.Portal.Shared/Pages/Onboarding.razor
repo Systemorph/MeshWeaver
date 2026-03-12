@@ -178,7 +178,7 @@
                     var securityService = PortalApplication.Hub.ServiceProvider
                         .GetService<ISecurityService>();
                     if (securityService != null)
-                        await securityService.AddUserRoleAsync(username, "PlatformAdmin", null, username);
+                        await securityService.AddUserRoleAsync(username, "PlatformAdmin", "Admin", username);
                 }
             }
 

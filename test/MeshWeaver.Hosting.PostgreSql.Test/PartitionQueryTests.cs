@@ -170,7 +170,7 @@ public class PartitionQueryTests
         def.TableMappings.Should().ContainKey("_Activity");
         def.TableMappings!["_Activity"].Should().Be("activities");
         def.TableMappings.Should().ContainKey("_Thread");
-        def.TableMappings.Should().ContainKey("_AccessAssignment");
+        def.TableMappings.Should().ContainKey("_Access");
     }
 
     [Fact(Timeout = 30000)]
@@ -190,9 +190,9 @@ public class PartitionQueryTests
         def.ResolveTable("User/roland/_UserActivity/xyz").Should().Be("user_activities");
         def.ResolveTable("User/roland/_Thread/mythread").Should().Be("threads");
         def.ResolveTable("User/roland/_Thread/mythread/_ThreadMessage/msg1").Should().Be("threads");
-        def.ResolveTable("User/roland/_TrackedChange/tc1").Should().Be("tracked_changes");
+        def.ResolveTable("User/roland/_Tracking/tc1").Should().Be("tracking");
         def.ResolveTable("User/roland/_Approval/appr1").Should().Be("approvals");
-        def.ResolveTable("User/roland/_AccessAssignment/aa1").Should().Be("access_assignments");
+        def.ResolveTable("User/roland/_Access/aa1").Should().Be("access");
         def.ResolveTable("User/roland/_Comment/c1").Should().Be("comments");
     }
 }

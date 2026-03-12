@@ -23,10 +23,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
     private CancellationToken TestTimeout => new CancellationTokenSource(15.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => ConfigureMeshBase(builder)
-            .AddOrganizationType()
-            .AddRowLevelSecurity()
-            .AddMeshNodes(TestUsers.PublicAdminAccess());
+        => base.ConfigureMesh(builder);
 
     [Fact(Timeout = 15000)]
     public async Task Admin_CanCreateOrganization()

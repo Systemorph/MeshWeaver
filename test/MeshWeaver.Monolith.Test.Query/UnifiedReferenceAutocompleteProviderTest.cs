@@ -48,7 +48,6 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
             .AddUserData()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph()
-            .AddOrganizationType()
             .ConfigureHub(hub => hub.AddMeshNavigation());  // Register the autocomplete provider
     }
 

@@ -1,0 +1,17 @@
+{
+  "id": "Quinn_Access",
+  "namespace": "Cornerstone/_Access",
+  "name": "Quinn Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Quinn",
+    "displayName": "Quinn Johnson",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

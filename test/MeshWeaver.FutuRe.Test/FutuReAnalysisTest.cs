@@ -71,7 +71,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
                 return services;
             })
             .AddGraph()
-            .AddMeshNodes(TestUsers.PublicAdminAccess())
             .ConfigureHub(hub => hub.AddContentCollection(_ => new ContentCollectionConfig
             {
                 SourceType = "FileSystem",

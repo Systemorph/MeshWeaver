@@ -18,8 +18,7 @@ namespace MeshWeaver.Auth.Test;
 public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder)
-            .AddGraph();
+        => base.ConfigureMesh(builder);
 
     private ApiTokenService GetService() =>
         new(

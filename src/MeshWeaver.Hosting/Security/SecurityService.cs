@@ -222,6 +222,13 @@ internal class SecurityService : ISecurityService
             }
         }
 
+        // Check Admin scope for PlatformAdmin assignments (global reach).
+        // PlatformAdmin stored at Admin/{userId}_Access should grant access to ALL paths.
+        if (!scopes.Contains("Admin"))
+        {
+            await CheckPlatformAdminAsync("Admin", userId, roleAssignments, scopes.Count, ct);
+        }
+
         // Resolve permissions from non-denied role assignments
         foreach (var (roleId, (denied, _)) in roleAssignments)
         {
@@ -284,6 +291,46 @@ internal class SecurityService : ISecurityService
         }
 
         return scopes;
+    }
+
+    /// <summary>
+    /// Checks the Admin scope for PlatformAdmin role assignments.
+    /// PlatformAdmin is a global role — even though stored in Admin namespace,
+    /// it grants full access to all paths.
+    /// </summary>
+    private async Task CheckPlatformAdminAsync(
+        string adminScope, string userId,
+        Dictionary<string, (bool Denied, int Depth)> roleAssignments,
+        int depth, CancellationToken ct)
+    {
+        // Check static access assignments at Admin scope
+        if (_staticAccessAssignments.TryGetValue(adminScope, out var staticNodes))
+        {
+            foreach (var staticNode in staticNodes)
+            {
+                var sa = DeserializeAssignment(staticNode);
+                if (sa?.AccessObject != userId) continue;
+                foreach (var ra in sa.Roles)
+                {
+                    if (ra.Role == "PlatformAdmin")
+                        roleAssignments["PlatformAdmin"] = (ra.Denied, depth);
+                }
+            }
+        }
+
+        // Check persisted access assignments at Admin scope
+        await foreach (var node in _persistenceCore.GetChildrenAsync(adminScope, Options).WithCancellation(ct))
+        {
+            if (node.NodeType != "AccessAssignment" || node.Content == null)
+                continue;
+            var assignment = DeserializeAssignment(node);
+            if (assignment?.AccessObject != userId) continue;
+            foreach (var ra in assignment.Roles)
+            {
+                if (ra.Role == "PlatformAdmin")
+                    roleAssignments["PlatformAdmin"] = (ra.Denied, depth);
+            }
+        }
     }
 
     private AccessAssignment? DeserializeAssignment(MeshNode node)

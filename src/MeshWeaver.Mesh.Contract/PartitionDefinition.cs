@@ -60,9 +60,9 @@ public record PartitionDefinition
         ["_Activity"] = "activities",
         ["_UserActivity"] = "user_activities",
         ["_Thread"] = "threads",
-        ["_TrackedChange"] = "tracked_changes",
+        ["_Tracking"] = "tracking",
         ["_Approval"] = "approvals",
-        ["_AccessAssignment"] = "access_assignments",
+        ["_Access"] = "access",
         ["_Comment"] = "comments",
     };
 

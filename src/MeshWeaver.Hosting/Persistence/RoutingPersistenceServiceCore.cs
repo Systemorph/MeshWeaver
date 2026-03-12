@@ -144,13 +144,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        // First check the base-path-to-partition mapping (from Partition nodes)
-        var firstSegment = PathPartition.GetFirstSegment(path);
-        if (firstSegment != null && _basePathToPartition.TryGetValue(firstSegment, out var mappedPartition))
-        {
-            if (_stores.TryGetValue(mappedPartition, out var mappedStore))
-                return mappedStore;
-        }
+        // Use ResolvePartitionKey for consistent routing (root-level → Admin)
+        var resolved = ResolvePartitionKey(path);
+        if (resolved != null && _stores.TryGetValue(resolved, out var resolvedStore))
+            return resolvedStore;
 
         // Fall back to longest-prefix matching on store keys
         var prefix = PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
@@ -163,6 +160,32 @@ internal class RoutingPersistenceServiceCore : IStorageService
     /// </summary>
     internal string? GetPartitionPrefix(string? path)
         => PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
+
+    /// <summary>
+    /// Resolves the partition key for a given path.
+    /// Root-level nodes (no '/' in path, e.g. "roland_Access") that don't match
+    /// a known partition are routed to "Admin" to prevent rogue schema creation.
+    /// </summary>
+    private string? ResolvePartitionKey(string? path)
+    {
+        var firstSegment = PathPartition.GetFirstSegment(path);
+        if (firstSegment == null) return null;
+
+        // If the first segment matches a known partition, use it directly
+        if (_stores.ContainsKey(firstSegment))
+            return firstSegment;
+
+        // Check base-path-to-partition mapping
+        if (_basePathToPartition.TryGetValue(firstSegment, out var mapped))
+            return mapped;
+
+        // Root-level node (path has no '/') that doesn't match any partition → route to Admin
+        if (path != null && !path.Contains('/') && _stores.ContainsKey("Admin"))
+            return "Admin";
+
+        // Multi-segment path with unknown first segment → auto-provision as before
+        return firstSegment;
+    }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -218,14 +241,16 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var segment = PathPartition.GetFirstSegment(path);
+        await EnsureInitializedAsync(ct);
+
+        // Use ResolvePartitionKey so root-level nodes route to Admin
+        var segment = ResolvePartitionKey(path);
         if (segment == null) return null;
 
-        await EnsureInitializedAsync(ct);
-        var store = TryGetStore(path);
-        if (store == null) return null;
+        if (_stores.TryGetValue(segment, out var store))
+            return await store.GetNodeAsync(path, options, ct);
 
-        return await store.GetNodeAsync(path, options, ct);
+        return null;
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(
@@ -279,7 +304,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var segment = PathPartition.GetFirstSegment(node.Path)
+        var segment = ResolvePartitionKey(node.Path)
             ?? throw new ArgumentException("Cannot save node with empty path");
 
         var store = await GetOrCreateStoreAsync(segment, ct);

@@ -1,0 +1,17 @@
+{
+  "id": "Samuel_Access",
+  "namespace": "Type/_Access",
+  "name": "Samuel Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Samuel",
+    "displayName": "Samuel Glauser",
+    "roles": [
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}

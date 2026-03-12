@@ -22,8 +22,6 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddOrganizationType()
-            .AddRowLevelSecurity()
             .AddMeshNodes(
                 new MeshNode("Roland", "User")
                 {

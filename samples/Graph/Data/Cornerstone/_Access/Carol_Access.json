@@ -1,0 +1,17 @@
+{
+  "id": "Carol_Access",
+  "namespace": "Cornerstone/_Access",
+  "name": "Carol Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Carol",
+    "displayName": "Carol Johnson",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

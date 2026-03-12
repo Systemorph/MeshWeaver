@@ -24,6 +24,18 @@ public static class TestUsers
     };
 
     /// <summary>
+    /// Dedicated test user with Admin access.
+    /// Has Roland_Access.json and TestUser_Access.json in all sample data folders.
+    /// </summary>
+    public static readonly AccessContext TestUser = new()
+    {
+        ObjectId = "TestUser",
+        Name = "Test User",
+        Email = "testuser@meshweaver.io",
+        Roles = ["Admin"]
+    };
+
+    /// <summary>
     /// Returns sample user MeshNodes matching samples/Graph/Data/User/*.json.
     /// Requires AddGraph() to register the User and AccessAssignment node types.
     /// </summary>
@@ -60,11 +72,20 @@ public static class TestUsers
             CreateAccessNode("User", assignment),
             CreateAccessNode("Portal", assignment),
             CreateAccessNode("Kernel", assignment),
+            CreateAccessNode("ACME", assignment),
+            CreateAccessNode("FutuRe", assignment),
+            CreateAccessNode("Northwind", assignment),
+            CreateAccessNode("Cornerstone", assignment),
+            CreateAccessNode("MeshWeaver", assignment),
+            CreateAccessNode("Doc", assignment),
+            CreateAccessNode("Systemorph", assignment),
+            CreateAccessNode("Type", assignment),
+            CreateAccessNode("VUser", assignment),
         ];
     }
 
     private static MeshNode CreateAccessNode(string ns, AccessAssignment assignment) =>
-        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_AccessAssignment" : "")
+        new(WellKnownUsers.Public + "_Access", ns.Length > 0 ? ns + "/_Access" : "")
         {
             NodeType = "AccessAssignment",
             Name = "Public Access",
