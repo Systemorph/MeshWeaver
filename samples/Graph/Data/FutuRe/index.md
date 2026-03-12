@@ -46,7 +46,7 @@ Three currencies, two conversion modes, one dropdown. Non-technical users switch
 
 ### 3. Data Where It Belongs
 
-Each business unit owns its data in local CSV files. The group view is assembled virtually — no ETL pipelines, no nightly batch jobs, no stale copies. Changes appear instantly.
+Each business unit owns its data. The group view is assembled virtually — no ETL pipelines, no nightly batch jobs, no stale copies. Changes appear instantly.
 
 [Explore the Data Distribution story →](@FutuRe/DataDistribution)
 
