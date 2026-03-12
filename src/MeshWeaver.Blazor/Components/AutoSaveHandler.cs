@@ -1,7 +1,6 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using MeshWeaver.Layout.DataBinding;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -50,7 +49,7 @@ public class AutoSaveHandler : IDisposable
         _saveAction = saveAction ?? throw new ArgumentNullException(nameof(saveAction));
 
         var observable = _valueSubject
-            .ThrottleImmediate(throttleInterval, scheduler ?? Scheduler.Default);
+            .Throttle(throttleInterval, scheduler ?? Scheduler.Default);
 
         _subscription = observable.Subscribe(OnThrottledValue);
     }

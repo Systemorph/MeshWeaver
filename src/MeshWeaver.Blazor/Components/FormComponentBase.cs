@@ -83,7 +83,7 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         valueUpdateSubject = new();
 
         AddBinding(valueUpdateSubject
-            .Debounce(TimeSpan.FromMilliseconds(DebounceWindow))
+            .ThrottleImmediate(TimeSpan.FromMilliseconds(DebounceWindow))
             .DistinctUntilChanged()
             .Skip(1)
             .Subscribe(x =>

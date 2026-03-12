@@ -113,11 +113,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // When fanning out with default scope (Exact), use descendants to search
-        // the full partition tree (not just direct children of each partition)
-        var fanOutQuery = parsed.Scope == QueryScope.Exact
-            ? (request.Query ?? "") + " scope:descendants"
-            : request.Query;
+        // Build fan-out query: search full partition trees and exclude satellite nodes
+        var fanOutQuery = request.Query ?? "";
+        if (parsed.Scope == QueryScope.Exact)
+            fanOutQuery += " scope:descendants";
+        if (parsed.IsMain != true)
+            fanOutQuery += " is:main";
 
         // Fan out: query accessible partitions in parallel, each scoped to its own namespace
         var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
@@ -285,10 +286,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             return provider.ObserveQuery<T>(request, options);
         }
 
-        // When fanning out with default scope (Exact), use descendants for full partition search
-        var fanOutQuery = parsed.Scope == QueryScope.Exact
-            ? (request.Query ?? "") + " scope:descendants"
-            : request.Query;
+        // Build fan-out query: search full partition trees and exclude satellite nodes
+        var fanOutQuery = request.Query ?? "";
+        if (parsed.Scope == QueryScope.Exact)
+            fanOutQuery += " scope:descendants";
+        if (parsed.IsMain != true)
+            fanOutQuery += " is:main";
 
         // Fan out to all partitions (known + newly discovered), merge observables
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>

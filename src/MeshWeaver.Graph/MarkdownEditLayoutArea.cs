@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
@@ -137,7 +136,7 @@ public static class MarkdownEditLayoutArea
 
         host.RegisterForDisposal($"autosave_{dataId}",
             host.Stream.GetDataStream<object>(dataId)
-                .ThrottleImmediate(TimeSpan.FromMilliseconds(300))
+                .Throttle(TimeSpan.FromMilliseconds(300))
                 .Subscribe(updated =>
                 {
                     if (object.Equals(current, updated))
