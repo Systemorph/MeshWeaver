@@ -29,7 +29,7 @@ public record PartitionTypeSource<T> : TypeSourceWithType<T, PartitionTypeSource
     /// <param name="dataSource">The data source identifier.</param>
     /// <param name="persistenceCore">The persistence core service (unsecured, for internal state loading).</param>
     /// <param name="hubPath">The hub's path (e.g., "Type/Organizations").</param>
-    /// <param name="subPartition">The relative sub-partition name (e.g., "Code"). If null, uses hubPath directly.</param>
+    /// <param name="subPartition">The relative sub-partition name (e.g., "_Source"). If null, uses hubPath directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
     internal PartitionTypeSource(IWorkspace workspace, object dataSource, IStorageService persistenceCore, string hubPath, string? subPartition = null, string? collectionName = null)
         : base(workspace, dataSource)

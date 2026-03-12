@@ -147,7 +147,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// The main test: resolve the Activity layout area on User/TestUser.
     /// This is the area registered by AddUserActivityViews().
-    /// Regression test: compilation of User/Code/Person.cs was overwriting
+    /// Regression test: compilation of User/_Source/Person.cs was overwriting
     /// the built-in HubConfiguration, losing layout areas.
     /// </summary>
     [Fact(Timeout = 10000)]
