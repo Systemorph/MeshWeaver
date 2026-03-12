@@ -44,7 +44,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         => GetHost().ServiceProvider.GetRequiredService<IMeshService>();
 
     private async Task<MeshNode?> GetNodeAsync(string path)
-        => await GetMeshQuery().QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
+        => await GetMeshQuery().QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
 
     private async Task SaveNode(string path, string? name = null, string? nodeType = null, object? content = null)
     {
@@ -78,7 +78,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
         public async IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, [EnumeratorCancellation] CancellationToken ct = default)
         {
             // Minimal query support for test patterns:
-            // "path:X scope:exact" → single node
+            // "path:X" → single node
             // "path:X scope:descendants" → descendants of path (not including the node itself)
             // "namespace:X" → descendants under namespace
             var query = request.Query ?? "";

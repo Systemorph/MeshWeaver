@@ -293,7 +293,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
             // Read back
             var node = await MeshQuery.QueryAsync<MeshNode>(
-                $"path:{threadPath} scope:exact"
+                $"path:{threadPath}"
             ).FirstOrDefaultAsync(TestTimeout);
 
             node.Should().NotBeNull("Owner should be able to read their own thread");
@@ -328,7 +328,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         try
         {
             var node = await MeshQuery.QueryAsync<MeshNode>(
-                $"path:{threadPath} scope:exact"
+                $"path:{threadPath}"
             ).FirstOrDefaultAsync(TestTimeout);
 
             node.Should().BeNull("Other user should NOT see private threads");

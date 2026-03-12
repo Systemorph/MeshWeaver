@@ -132,7 +132,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Created node path: {createdNode.Path}");
 
         // Assert — node should be retrievable by GetNodeAsync
-        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
+        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path}").FirstOrDefaultAsync();
         retrieved.Should().NotBeNull("Comment should be retrievable after creation");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Author.Should().Be("TestAuthor");
@@ -194,7 +194,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.UpdateNodeAsync(updatedNode, ct: TestTimeout);
 
         // Step 3: Verify the text persisted
-        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
+        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path}").FirstOrDefaultAsync();
         retrieved.Should().NotBeNull("Comment should still exist after update");
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().Be("This is my comment text",
@@ -255,7 +255,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             TestTimeout); // BUG: targeting parent instead of comment
 
         // Verify comment text did NOT change (still empty)
-        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path} scope:exact").FirstOrDefaultAsync();
+        var retrieved = await MeshQuery.QueryAsync<MeshNode>($"path:{createdNode.Path}").FirstOrDefaultAsync();
         retrieved.Should().NotBeNull();
         var retrievedComment = retrieved!.Content.Should().BeOfType<Comment>().Subject;
         retrievedComment.Text.Should().BeEmpty(
@@ -390,7 +390,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // 4. "Reload" — query fresh from persistence
         Output.WriteLine("4. Simulating reload — querying from persistence...");
-        var reloaded = await MeshQuery.QueryAsync<MeshNode>($"path:{created.Path} scope:exact").FirstOrDefaultAsync();
+        var reloaded = await MeshQuery.QueryAsync<MeshNode>($"path:{created.Path}").FirstOrDefaultAsync();
         reloaded.Should().NotBeNull("Comment must survive reload");
         var reloadedComment = reloaded!.Content.Should().BeOfType<Comment>().Subject;
         reloadedComment.Text.Should().Be("This is my important feedback about the document.",

@@ -12,7 +12,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.PathResolution.Test;
 
 /// <summary>
 /// Tests for hierarchical browsing of Marketing stories.
@@ -145,7 +145,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Get ClaimsProcessing node
-        var claimsNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing scope:exact").FirstOrDefaultAsync();
+        var claimsNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing").FirstOrDefaultAsync();
         claimsNode.Should().NotBeNull();
 
         // Get direct children
@@ -165,7 +165,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         await SetupMarketingHierarchy();
 
         // Get a sub-story
-        var emailTriageNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing/EmailTriage scope:exact").FirstOrDefaultAsync();
+        var emailTriageNode = await MeshQuery.QueryAsync<MeshNode>("path:Systemorph/Marketing/ClaimsProcessing/EmailTriage").FirstOrDefaultAsync();
         emailTriageNode.Should().NotBeNull();
 
         // Verify parent path
@@ -174,7 +174,7 @@ public class HierarchicalBrowsingTests(ITestOutputHelper output) : MonolithMeshT
         // Get parent
         var parentPath = emailTriageNode.GetParentPath();
         parentPath.Should().NotBeNull();
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{parentPath} scope:exact").FirstOrDefaultAsync();
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{parentPath}").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull();
         parentNode!.Name.Should().Be("Claims Processing");
     }

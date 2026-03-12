@@ -459,7 +459,7 @@ public record Graph
     public async Task GetNodeAsync_TypeGraph_ReturnsNodeTypeDefinition()
     {
         // Act
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:type/graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:type/graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().NotBeNull("type/graph node should exist");
@@ -497,11 +497,11 @@ public record Graph
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var graphType = await MeshQuery.QueryAsync<MeshNode>("path:type/graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var graphType = await MeshQuery.QueryAsync<MeshNode>("path:type/graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         graphType.Should().NotBeNull("type/graph should exist in persistence");
         graphType!.NodeType.Should().Be("NodeType");
 
-        var orgType = await MeshQuery.QueryAsync<MeshNode>("path:type/org scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var orgType = await MeshQuery.QueryAsync<MeshNode>("path:type/org", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         orgType.Should().NotBeNull("type/org should exist in persistence");
         orgType!.NodeType.Should().Be("NodeType");
     }
@@ -528,10 +528,10 @@ public record Graph
         moved!.Path.Should().Be("graph/movetest-renamed");
         moved.Name.Should().Be("Move Test");
 
-        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Original node should be deleted");
 
-        var newNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest-renamed scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest-renamed", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newNode.Should().NotBeNull("Node should exist at new path");
         newNode!.Name.Should().Be("Move Test");
     }
@@ -552,25 +552,25 @@ public record Graph
         await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/parent", "graph/newparent"), o => o, TestContext.Current.CancellationToken);
 
         // Assert - old paths should not exist
-        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child2 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1/grandchild scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child2", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1/grandchild", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
 
         // Assert - new paths should exist with correct data
-        var newParent = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newParent = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newParent.Should().NotBeNull();
         newParent!.Name.Should().Be("Parent");
 
-        var newChild1 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newChild1 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newChild1.Should().NotBeNull();
         newChild1!.Name.Should().Be("Child 1");
 
-        var newChild2 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child2 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newChild2 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child2", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newChild2.Should().NotBeNull();
         newChild2!.Name.Should().Be("Child 2");
 
-        var newGrandchild = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1/grandchild scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var newGrandchild = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1/grandchild", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newGrandchild.Should().NotBeNull();
         newGrandchild!.Name.Should().Be("Grandchild");
     }
@@ -593,10 +593,10 @@ public record Graph
         response.Message.Node.Should().NotBeNull();
         response.Message.Node!.Path.Should().Be("graph/commented-moved");
 
-        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented-moved scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented-moved", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         movedNode.Should().NotBeNull("Node should exist at new path");
 
-        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Node should not remain at old path");
     }
 
@@ -1096,7 +1096,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
@@ -1140,7 +1140,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organizations scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organizations", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
@@ -1293,7 +1293,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Article_GetNodeAsync_FromSamples()
     {
         Output.WriteLine($"Getting node for {ArticleNodeTypePath}...");
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("Article NodeType node should exist in samples");
         Output.WriteLine($"Node: Path={node!.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
@@ -1309,7 +1309,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Article_HubConfiguration_IsSetForNodeType()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("NodeType");
@@ -1544,7 +1544,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Output.WriteLine($"Samples data directory: {TestPaths.SamplesGraphData}");
 
         // First check if MeshWeaver node exists
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         node.Should().NotBeNull("MeshWeaver node should exist in samples");
         Output.WriteLine($"MeshWeaver node: Path={node!.Path}, NodeType={node.NodeType}");
 
@@ -1596,7 +1596,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     public async Task Article_CustomView_CompilesSuccessfully()
     {
         Output.WriteLine($"Getting {ArticleNodeTypePath} node (triggers compilation)...");
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("Article NodeType node should exist");
         node!.NodeType.Should().Be("NodeType");
@@ -1840,7 +1840,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var vUserPath = $"VUser/{uniqueId}";
 
         // Check that node doesn't exist first
-        var existingNode = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath} scope:exact", ct: TestContext.Current.CancellationToken)
+        var existingNode = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath}", ct: TestContext.Current.CancellationToken)
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         existingNode.Should().BeNull("VUser should not exist yet");
 
@@ -1852,7 +1852,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         });
 
         // Verify it can be retrieved
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath} scope:exact", ct: TestContext.Current.CancellationToken)
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath}", ct: TestContext.Current.CancellationToken)
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         node.Should().NotBeNull("VUser should exist after creation");
     }

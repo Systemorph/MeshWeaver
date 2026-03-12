@@ -103,7 +103,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     public async Task PartitionNode_HasCorrectNamespace()
     {
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/TestPartition scope:exact",
+            "path:Admin/Partition/TestPartition",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 
@@ -121,7 +121,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
     public async Task DocumentationPartition_HasDocNamespace()
     {
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/Documentation scope:exact",
+            "path:Admin/Partition/Documentation",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 
@@ -159,7 +159,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Check that a partition node was created
         var partitions = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Admin/Partition/Globex scope:exact",
+            "path:Admin/Partition/Globex",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 

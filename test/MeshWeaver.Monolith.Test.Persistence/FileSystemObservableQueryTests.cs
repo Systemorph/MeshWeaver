@@ -290,7 +290,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
         var subscription = MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:TestOrg scope:exact"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:TestOrg"))
             .Subscribe(change => receivedChanges.Add(change));
 
         await Task.Delay(200);
@@ -303,7 +303,7 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges.Should().HaveCount(2);
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
-        // Act - Create a child (should NOT trigger for scope:exact)
+        // Act - Create a child (should NOT trigger for)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestOrg/Project1") with { Name = "Project 1", NodeType = "Markdown" });
         await Task.Delay(300);
 
@@ -405,12 +405,12 @@ public class FileSystemObservableQueryTests(ITestOutputHelper output) : Monolith
         receivedChanges.Count.Should().BeGreaterThanOrEqualTo(2);
 
         // Verify the node exists at the new path
-        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project1Moved scope:exact").FirstOrDefaultAsync();
+        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project1Moved").FirstOrDefaultAsync();
         movedNode.Should().NotBeNull();
         movedNode!.Name.Should().Be("Project 1");
 
         // Verify the old node doesn't exist
-        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project1 scope:exact").FirstOrDefaultAsync();
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project1").FirstOrDefaultAsync();
         oldNode.Should().BeNull();
 
         subscription.Dispose();

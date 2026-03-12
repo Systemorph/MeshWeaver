@@ -9,6 +9,8 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -19,7 +21,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.NodeOperations.Test;
 
 /// <summary>
 /// Tests for IMeshCatalog.CreateNodeAsync with FileSystem persistence,
@@ -111,7 +113,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         createdComment.Status.Should().Be(CommentStatus.Active);
 
         // Verify round-trip via GetNodeAsync
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath} scope:exact").FirstOrDefaultAsync();
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
         retrievedNode.Should().NotBeNull();
         retrievedNode!.Path.Should().Be(commentPath);
         var retrievedComment = retrievedNode.Content.Should().BeOfType<Comment>().Subject;
@@ -176,7 +178,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
         replyContent.Text.Should().Be("This is a reply");
 
         // Verify reply round-trips via path
-        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{replyPath} scope:exact").FirstOrDefaultAsync();
+        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{replyPath}").FirstOrDefaultAsync();
         retrievedReply.Should().NotBeNull("Reply should be retrievable by path");
         retrievedReply!.Path.Should().StartWith(parentCommentPath);
 

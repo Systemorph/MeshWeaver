@@ -144,7 +144,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 return null;
 
             var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix} scope:exact").FirstOrDefaultAsync();
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix}").FirstOrDefaultAsync();
             return node?.Name ?? node?.Id;
         }
         catch (Exception ex)
@@ -166,7 +166,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (meshQuery == null)
                 return path;
 
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
             if (node != null && node.MainNode != node.Path)
                 return node.MainNode;
         }
@@ -769,7 +769,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             // Update the node name via UpdateNodeRequest
             var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{targetThreadPath} scope:exact").FirstOrDefaultAsync();
+            var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{targetThreadPath}").FirstOrDefaultAsync();
             if (existingNode != null)
             {
                 var updatedNode = existingNode with { Name = name };

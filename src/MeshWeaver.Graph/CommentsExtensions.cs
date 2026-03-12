@@ -279,7 +279,7 @@ public static class CommentsView
                         .Take(1)
                         .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
 
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{commentPath} scope:exact").FirstOrDefaultAsync();
+                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
                     if (node != null)
                     {
                         var comment = node.Content as Comment ?? new Comment();

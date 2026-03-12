@@ -169,7 +169,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         // Step 3: Get existing comment to reply to (c1 = Alice's comment)
         Output.WriteLine("Step 3: Finding parent comment to reply to...");
 
-        var parentComment = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c1 scope:exact").FirstOrDefaultAsync();
+        var parentComment = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c1").FirstOrDefaultAsync();
         parentComment.Should().NotBeNull("c1 comment should exist");
         var parentContent = parentComment!.Content.Should().BeOfType<Comment>().Subject;
         Output.WriteLine($"Parent comment: '{parentContent.Text}' by {parentContent.Author}");
@@ -219,7 +219,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Step 6: Verify the reply persisted with text
         Output.WriteLine("Step 6: Verifying reply persistence...");
-        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{createdReply.Path} scope:exact").FirstOrDefaultAsync();
+        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{createdReply.Path}").FirstOrDefaultAsync();
         retrievedReply.Should().NotBeNull("Reply should be retrievable after save");
         var retrievedContent = retrievedReply!.Content.Should().BeOfType<Comment>().Subject;
         retrievedContent.Author.Should().Be("TestReviewer");
@@ -249,7 +249,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         var docPath = "Doc/DataMesh/CollaborativeEditing";
 
         // Get parent comment c2
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c2 scope:exact").FirstOrDefaultAsync();
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c2").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("c2 comment should exist");
         var parentContent = (Comment)parentNode!.Content!;
 

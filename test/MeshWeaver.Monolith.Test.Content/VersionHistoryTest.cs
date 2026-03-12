@@ -206,7 +206,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Assert - verify the node was rolled back
         var currentNode = await MeshQuery
-            .QueryAsync<MeshNode>("path:test/rollback scope:exact", ct: TestContext.Current.CancellationToken)
+            .QueryAsync<MeshNode>("path:test/rollback", ct: TestContext.Current.CancellationToken)
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         currentNode.Should().NotBeNull("the node should still exist after rollback");

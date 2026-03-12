@@ -613,7 +613,7 @@ public static class MeshNodeLayoutAreas
             {
                 try
                 {
-                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact").FirstOrDefaultAsync();
+                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}").FirstOrDefaultAsync();
                 }
                 catch { }
             }

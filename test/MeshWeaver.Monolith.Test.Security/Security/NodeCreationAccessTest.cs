@@ -108,7 +108,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         createdNode.DesiredId.Should().Be("MyDesiredId", "DesiredId should be preserved");
 
         // Verify node exists via query
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
         fetchedNode.Should().NotBeNull("Node should be retrievable from query");
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 
@@ -168,10 +168,10 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         await NodeFactory.DeleteNodeAsync(transientPath, ct: TestTimeout);
 
         // Verify: Transient should be gone, final should exist
-        var transientAfterDelete = await MeshQuery.QueryAsync<MeshNode>($"path:{transientPath} scope:exact").FirstOrDefaultAsync();
+        var transientAfterDelete = await MeshQuery.QueryAsync<MeshNode>($"path:{transientPath}").FirstOrDefaultAsync();
         transientAfterDelete.Should().BeNull("Transient node should be deleted");
 
-        var finalAfterCreate = await MeshQuery.QueryAsync<MeshNode>($"path:{finalPath} scope:exact").FirstOrDefaultAsync();
+        var finalAfterCreate = await MeshQuery.QueryAsync<MeshNode>($"path:{finalPath}").FirstOrDefaultAsync();
         finalAfterCreate.Should().NotBeNull("Final node should exist");
         finalAfterCreate!.State.Should().Be(MeshNodeState.Active);
 
@@ -213,7 +213,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         createdNode.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after creation");
 
         // Verify it can be retrieved
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
         fetchedNode.Should().NotBeNull();
         fetchedNode!.DesiredId.Should().Be(desiredId, "DesiredId should be preserved after fetch");
 
@@ -267,7 +267,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
         confirmedNode.Path.Should().Be(nodePath, "Path should remain the same");
 
         // Verify persistence
-        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        var fetchedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
         fetchedNode.Should().NotBeNull();
         fetchedNode!.State.Should().Be(MeshNodeState.Active);
 

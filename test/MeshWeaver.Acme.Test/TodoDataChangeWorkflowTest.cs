@@ -135,7 +135,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 15000)]
     public async Task TodoNode_CanBeRetrievedViaPersistence()
     {
-        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona scope:exact").FirstOrDefaultAsync();
+        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
 
         todoNode.Should().NotBeNull("Todo node should exist");
         todoNode!.NodeType.Should().Be("ACME/Project/Todo");
@@ -173,7 +173,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     [Fact(Timeout = 15000)]
     public async Task TodoContent_CanBeDeserializedCorrectly()
     {
-        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona scope:exact").FirstOrDefaultAsync();
+        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
 
         todoNode.Should().NotBeNull();
         todoNode!.Content.Should().NotBeNull();
@@ -200,7 +200,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task DataChangeRequest_CanBeCreatedForTodoUpdate()
     {
         // Get the original todo
-        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona scope:exact").FirstOrDefaultAsync();
+        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
         todoNode.Should().NotBeNull();
 
         // Verify we can create a DataChangeRequest
@@ -321,7 +321,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
 
         // Get the original todo
         var todoAddress = new Address("ACME/ProductLaunch/Todo/DefinePersona");
-        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona scope:exact").FirstOrDefaultAsync();
+        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
         todoNode.Should().NotBeNull();
 
         Output.WriteLine($"Original todo: {todoNode!.Name}");
@@ -350,7 +350,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     public async Task DeleteTodo_ViaDataChangeRequest_PatternIsAvailable()
     {
         // Get an existing todo to verify the pattern
-        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona scope:exact").FirstOrDefaultAsync();
+        var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
         todoNode.Should().NotBeNull();
 
         Output.WriteLine($"Todo exists: {todoNode!.Name}");
@@ -450,7 +450,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get original node
-        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         originalNode.Should().NotBeNull();
 
         // Soft delete a todo to ensure Deleted section has content
@@ -485,7 +485,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
-        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         originalNode.Should().NotBeNull("Todo node should exist");
         Output.WriteLine($"Original state: {originalNode!.State}");
 
@@ -494,7 +494,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.UpdateNodeAsync(deletedNode);
 
         // Verify the state changed
-        var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         updatedNode.Should().NotBeNull("Node should still exist after soft delete");
         updatedNode!.State.Should().Be(MeshNodeState.Deleted, "State should be Deleted after soft delete");
         Output.WriteLine($"Updated state: {updatedNode.State}");
@@ -510,7 +510,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
-        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         originalNode.Should().NotBeNull();
 
         // Soft delete the node
@@ -538,7 +538,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
-        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         originalNode.Should().NotBeNull();
 
         // Soft delete the node
@@ -566,7 +566,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
 
         // Get the original todo
-        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         originalNode.Should().NotBeNull();
 
         // First soft delete
@@ -574,7 +574,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.UpdateNodeAsync(deletedNode);
 
         // Verify it's deleted
-        var deletedCheck = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var deletedCheck = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         deletedCheck!.State.Should().Be(MeshNodeState.Deleted);
         Output.WriteLine("Node is now Deleted");
 
@@ -583,7 +583,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.UpdateNodeAsync(restoredNode);
 
         // Verify it's active again
-        var activeCheck = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath} scope:exact").FirstOrDefaultAsync();
+        var activeCheck = await MeshQuery.QueryAsync<MeshNode>($"path:{todoPath}").FirstOrDefaultAsync();
         activeCheck!.State.Should().Be(MeshNodeState.Active, "State should be Active after restore");
         Output.WriteLine("Node successfully restored to Active state");
         // Note: No restore needed - test uses local copy of data
@@ -612,7 +612,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Created test node at {testPath}");
 
         // Verify it exists
-        var createdNode = await MeshQuery.QueryAsync<MeshNode>($"path:{testPath} scope:exact").FirstOrDefaultAsync();
+        var createdNode = await MeshQuery.QueryAsync<MeshNode>($"path:{testPath}").FirstOrDefaultAsync();
         createdNode.Should().NotBeNull("Test node should exist after creation");
 
         // Permanently delete it
@@ -620,7 +620,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine("Permanently deleted test node");
 
         // Verify it no longer exists
-        var deletedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{testPath} scope:exact").FirstOrDefaultAsync();
+        var deletedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{testPath}").FirstOrDefaultAsync();
         deletedNode.Should().BeNull("Node should not exist after permanent delete");
         Output.WriteLine("Confirmed node no longer exists after permanent delete");
         // Note: No cleanup needed - test uses local copy of data

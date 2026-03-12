@@ -381,7 +381,7 @@ public static class CommentLayoutAreas
 
                     // Save via message — update only the Text property of the Comment
                     var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:exact").FirstOrDefaultAsync();
+                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
                     if (node != null)
                     {
                         var comment = node.Content as Comment ?? new Comment();
@@ -445,7 +445,7 @@ public static class CommentLayoutAreas
                         .Take(1)
                         .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
 
-                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{replyPath} scope:exact").FirstOrDefaultAsync();
+                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{replyPath}").FirstOrDefaultAsync();
                     if (node != null)
                     {
                         var replyComment = node.Content as Comment ?? new Comment();
@@ -512,7 +512,7 @@ public static class CommentLayoutAreas
                 var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
                 // Update comment status to Resolved
-                var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} scope:exact").FirstOrDefaultAsync();
+                var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
                 if (node != null)
                 {
                     var updatedNode = node with { Content = comment with { Status = CommentStatus.Resolved } };

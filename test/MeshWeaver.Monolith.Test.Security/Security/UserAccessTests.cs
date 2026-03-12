@@ -570,8 +570,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // Grant Anonymous Viewer access to CustomType specifically
         await securityService.AddUserRoleAsync(WellKnownUsers.Anonymous, "Viewer", "CustomType", "system", TestTimeout);
 
-        var typeDef = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomType scope:exact", UserId = "" }).FirstOrDefaultAsync();
-        var instance = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomInstance scope:exact", UserId = "" }).FirstOrDefaultAsync();
+        var typeDef = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomType", UserId = "" }).FirstOrDefaultAsync();
+        var instance = await MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "path:CustomInstance", UserId = "" }).FirstOrDefaultAsync();
 
         typeDef.Should().NotBeNull("NodeType definitions are readable with explicit Anonymous Viewer grant");
         typeDef!.Name.Should().Be("CustomType");

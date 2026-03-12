@@ -83,7 +83,7 @@ public static class AccessControlLayoutArea
                         try
                         {
                             var userNode = await meshQuery.QueryAsync<MeshNode>(
-                                $"path:{userPath} scope:exact").FirstOrDefaultAsync();
+                                $"path:{userPath}").FirstOrDefaultAsync();
                             if (userNode != null)
                                 userNodeLookup[userPath] = userNode;
                         }
@@ -344,7 +344,7 @@ public static class AccessControlLayoutArea
                     {
                         try
                         {
-                            existing = await query.QueryAsync<MeshNode>($"path:{path} scope:exact")
+                            existing = await query.QueryAsync<MeshNode>($"path:{path}")
                                 .FirstOrDefaultAsync();
                         }
                         catch { }
@@ -366,7 +366,7 @@ public static class AccessControlLayoutArea
                         {
                             try
                             {
-                                var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject} scope:exact")
+                                var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject}")
                                     .FirstOrDefaultAsync();
                                 subjectIcon = subjectNode?.Icon;
                             }

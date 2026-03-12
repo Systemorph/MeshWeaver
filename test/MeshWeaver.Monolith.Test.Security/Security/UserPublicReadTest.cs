@@ -64,7 +64,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         LoginAsUnprivilegedUser();
 
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:User/Roland scope:exact",
+            "path:User/Roland",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 
@@ -83,7 +83,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         LoginAsUnprivilegedUser();
 
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Acme scope:exact",
+            "path:Acme",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 
@@ -157,7 +157,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         LoginAsUnprivilegedUser();
 
         var results = await MeshQuery.QueryAsync<MeshNode>(
-            "path:Globex scope:exact",
+            "path:Globex",
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 

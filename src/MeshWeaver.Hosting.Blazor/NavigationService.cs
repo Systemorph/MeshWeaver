@@ -237,7 +237,7 @@ internal class NavigationService : INavigationService
         try
         {
             var address = (Address)resolution.Prefix;
-            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{address} scope:exact").FirstOrDefaultAsync();
+            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{address}").FirstOrDefaultAsync();
             if (node == null)
                 return null;
 
@@ -323,7 +323,7 @@ internal class NavigationService : INavigationService
                 var activityPath = $"User/{userId}/_userActivity/{encodedPath}";
 
                 // Query for existing activity node
-                var existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath} scope:exact").FirstOrDefaultAsync();
+                var existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath}").FirstOrDefaultAsync();
 
                 UserActivityRecord record;
                 if (existing?.Content is UserActivityRecord existingRecord)

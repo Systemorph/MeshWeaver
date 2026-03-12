@@ -169,7 +169,7 @@ public class MeshDataSourceThreadManager : IThreadManager
     {
         try
         {
-            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{threadId} scope:exact")
+            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{threadId}")
                 .FirstOrDefaultAsync(ct);
 
             if (node?.Content is ChatThreadMetadata metadata)
@@ -185,7 +185,7 @@ public class MeshDataSourceThreadManager : IThreadManager
 
     public async Task UpdateTitleAsync(string threadId, string title, CancellationToken ct = default)
     {
-        var node = await _meshQuery.QueryAsync<MeshNode>($"path:{threadId} scope:exact")
+        var node = await _meshQuery.QueryAsync<MeshNode>($"path:{threadId}")
             .FirstOrDefaultAsync(ct);
 
         if (node != null)

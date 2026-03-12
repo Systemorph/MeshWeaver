@@ -7,7 +7,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.PathResolution.Test;
 
 /// <summary>
 /// Tests for address resolution via IPathResolver.ResolvePathAsync.
@@ -21,7 +21,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
 
     private async Task EnsureNodesCreated()
     {
-        var existingPricing = await MeshQuery.QueryAsync<MeshNode>("path:pricing scope:exact").FirstOrDefaultAsync();
+        var existingPricing = await MeshQuery.QueryAsync<MeshNode>("path:pricing").FirstOrDefaultAsync();
         if (existingPricing == null)
         {
             await NodeFactory.CreateNodeAsync(MeshNode.FromPath(PricingPath) with
@@ -31,7 +31,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             });
         }
 
-        var existingApp = await MeshQuery.QueryAsync<MeshNode>("path:app scope:exact").FirstOrDefaultAsync();
+        var existingApp = await MeshQuery.QueryAsync<MeshNode>("path:app").FirstOrDefaultAsync();
         if (existingApp == null)
         {
             await NodeFactory.CreateNodeAsync(MeshNode.FromPath(AppPath) with

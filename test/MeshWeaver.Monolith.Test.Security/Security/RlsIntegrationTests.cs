@@ -800,7 +800,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         await securityService.AddUserRoleAsync(userId, "Viewer", "secure/test", "system", TestTimeout);
 
         // Act - query the node (MeshQuery respects security)
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
 
         // Assert
         result.Should().NotBeNull();
@@ -824,7 +824,7 @@ public class SecurePersistenceDecoratorTests(ITestOutputHelper output) : Monolit
         // No permission assigned
 
         // Act - query the node (without any user having permission, the node still exists in persistence)
-        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync();
+        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync();
 
         // Assert - node exists in persistence (no user-scoped filtering via MeshQuery without UserId)
         // The secure filtering happens at the IMeshStorage decorator level when a user context is set

@@ -269,7 +269,7 @@ public static class GroupsLayoutArea
                     {
                         try
                         {
-                            existing = await query.QueryAsync<MeshNode>($"path:{path} scope:exact")
+                            existing = await query.QueryAsync<MeshNode>($"path:{path}")
                                 .FirstOrDefaultAsync();
                         }
                         catch { }
@@ -293,7 +293,7 @@ public static class GroupsLayoutArea
                         {
                             try
                             {
-                                var memberNode = await query.QueryAsync<MeshNode>($"path:{selectedMember} scope:exact")
+                                var memberNode = await query.QueryAsync<MeshNode>($"path:{selectedMember}")
                                     .FirstOrDefaultAsync();
                                 memberIcon = memberNode?.Icon;
                             }

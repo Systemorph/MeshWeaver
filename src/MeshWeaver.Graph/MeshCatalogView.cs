@@ -123,7 +123,7 @@ public static class MeshCatalogView
 
         return Observable.FromAsync(async ct =>
         {
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync(ct);
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync(ct);
 
             // Wrap editor control with a back button
             var stack = Controls.Stack.WithWidth("100%");

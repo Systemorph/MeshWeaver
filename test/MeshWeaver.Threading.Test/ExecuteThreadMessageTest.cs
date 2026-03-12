@@ -21,7 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Threading.Test;
 
 /// <summary>
 /// Tests the full ExecuteThreadMessageRequest handler flow:

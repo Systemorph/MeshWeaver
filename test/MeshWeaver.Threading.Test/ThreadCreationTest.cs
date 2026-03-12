@@ -16,7 +16,7 @@ using MeshWeaver.ShortGuid;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Threading.Test;
 
 /// <summary>
 /// Tests for thread creation via IMeshService.CreateNodeAsync.
@@ -141,7 +141,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var createdNode = await NodeFactory.CreateNodeAsync(node, TestTimeout);
 
         // Act - Retrieve
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync();
 
         // Assert
         retrievedNode.Should().NotBeNull();
@@ -235,7 +235,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.ParentPath.Should().Be(parentPath, "ParentPath should be preserved");
 
         // Verify it can be retrieved with ParentPath intact
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync();
         var retrievedContent = retrievedNode?.Content.Should().BeOfType<MeshThread>().Subject;
         retrievedContent?.ParentPath.Should().Be(parentPath, "ParentPath should be preserved after retrieval");
     }
@@ -330,7 +330,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         content.ParentPath.Should().Be(parentPath, "ParentPath should be preserved for navigation");
 
         // Verify the thread can be retrieved by full path
-        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath} scope:exact").FirstOrDefaultAsync();
+        var retrievedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync();
         retrievedNode.Should().NotBeNull();
         var retrievedContent = retrievedNode?.Content.Should().BeOfType<MeshThread>().Subject;
         retrievedContent?.ParentPath.Should().Be(parentPath);

@@ -31,7 +31,7 @@
             var resolution = await PathResolver.ResolvePathAsync(Path);
             if (resolution != null)
             {
-                var node = await MeshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix} scope:exact").FirstOrDefaultAsync();
+                var node = await MeshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix}").FirstOrDefaultAsync();
                 if (node != null)
                 {
                     Name = node.Name;

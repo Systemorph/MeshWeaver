@@ -22,7 +22,7 @@ public static class WorkspaceNodeExtensions
         var nodePath = workspace.Hub.Address.ToString();
 
         return Observable.FromAsync(async ct =>
-            await meshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact").FirstOrDefaultAsync(ct));
+            await meshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync(ct));
     }
 
     /// <summary>
@@ -42,7 +42,7 @@ public static class WorkspaceNodeExtensions
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         return Observable.FromAsync(async ct =>
-            await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync(ct));
+            await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync(ct));
     }
 
     /// <summary>

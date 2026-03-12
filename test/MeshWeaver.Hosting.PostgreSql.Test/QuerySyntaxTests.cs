@@ -283,7 +283,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:exact select:name,nodeType,path");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 select:name,nodeType,path");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))

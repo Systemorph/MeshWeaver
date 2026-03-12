@@ -146,7 +146,7 @@ public class AgentChatClient : IAgentChat
         try
         {
             var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{threadNodePath} scope:exact")
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{threadNodePath}")
                 .FirstOrDefaultAsync();
             if (node?.Content is not Thread threadContent)
                 return;

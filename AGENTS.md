@@ -38,17 +38,15 @@ Agents: Executor, Navigator, Planner, Research
 
 ## Bash Command Guidelines
 
-**Always chain `cd` with the following command using `&&`** so the user only has to approve once:
+**Stay in the root directory** (`C:\dev\MeshWeaver`) and use relative sub-paths for all build/test commands. Do NOT use `cd ... && ...` chains — they require user confirmation. Issue commands separately or specify paths directly:
 ```bash
-# CORRECT — single approval
+# CORRECT — run from root directory with sub-path
+dotnet build src/MeshWeaver.Graph/MeshWeaver.Graph.csproj
+dotnet test test/MeshWeaver.Graph.Test --no-restore
+
+# WRONG — chained cd requires extra approval
 cd /c/dev/MeshWeaver && dotnet build
-
-# WRONG — requires two separate approvals
-cd /c/dev/MeshWeaver
-dotnet build
 ```
-
-When running build or test commands, prefer absolute paths or `&&`-chained commands to avoid multiple prompts.
 
 ## Development Commands
 
@@ -74,8 +72,7 @@ dotnet restore
 
 #### Memex Portal (Recommended for Development)
 ```bash
-cd memex/Memex.Portal.Monolith
-dotnet run
+dotnet run --project memex/Memex.Portal.Monolith
 # Access at https://localhost:7122
 ```
 
@@ -83,8 +80,7 @@ The Memex Portal uses `AddGraph()` to dynamically load Graph nodes from `samples
 
 #### Microservices Portal (.NET Aspire)
 ```bash
-cd memex/aspire/Memex.AppHost
-dotnet run
+dotnet run --project memex/aspire/Memex.AppHost
 # Access Aspire dashboard for service management
 # Requires Docker for dependencies
 ```
@@ -264,28 +260,30 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 **No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
 
-### Running Tests — Log Once, Read on Failure
+### Running Tests
 
-**ALWAYS redirect test output to a file.** Never run test projects without capturing output. Never re-run a test project just to see its output — read the log file instead.
+Run tests from the root directory using sub-paths. Do NOT write output to `/tmp` or temp directories — test results (.trx) are automatically collected in the project's `bin/` directory.
 
 **CRITICAL: Always use `run_in_background: true`** for test runs. Tests can take minutes — never block the conversation waiting for them. Use `timeout: 180000` (3 min) max for Bash test commands. The xunit.runner.json `methodTimeout` is 60000ms (1 min) per test method.
 
 **Do NOT use `--verbosity minimal`** (or `-v m`) when tests are expected to fail. Minimal verbosity hides error details (stack traces, assertion messages), forcing you to re-run with normal verbosity — wasting time and frustrating the user. Use default verbosity or `--verbosity normal` so failures are visible on the first run. Only use `--verbosity minimal` when you are confident all tests will pass and just need a quick green/red check.
 
 ```bash
-# ALWAYS save output to file — use run_in_background: true
-cd /c/dev/MeshWeaver && dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore 2>&1 > /tmp/monolith-test-results.log; echo "Exit: $?"
+# Run from root directory with sub-path
+dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore
 
-# On failure: read the log file for error details (DO NOT re-run the tests)
-# Use Read tool on /tmp/monolith-test-results.log or grep for failures:
-grep -A 10 "FAIL\|Failed" /tmp/monolith-test-results.log
+# Run a specific test project
+dotnet test test/MeshWeaver.Graph.Test --no-restore
+
+# Filter to specific tests
+dotnet test test/MeshWeaver.Graph.Test --filter "ClassName~AccessAssignment" --no-restore
 ```
 
 **Workflow:**
-1. Run tests **once** in background with output saved to a file
-2. If failures: **read the log file** to understand errors — do NOT re-run
+1. Run tests **once** in background (`run_in_background: true`)
+2. If failures: read the output to understand errors — do NOT re-run
 3. Fix the code
-4. Run tests **once** again to verify fixes (output to file again)
+4. Run tests **once** again to verify fixes
 5. Repeat 2–4 until green
 
 ### DevLogin and Access Control in Tests
