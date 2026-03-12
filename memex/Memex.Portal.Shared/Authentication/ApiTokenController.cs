@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Memex.Portal.Shared.Authentication;
 
@@ -11,8 +12,9 @@ namespace Memex.Portal.Shared.Authentication;
 [ApiController]
 [Route("api/tokens")]
 [Authorize]
-public class ApiTokenController(ApiTokenService tokenService) : ControllerBase
+public class ApiTokenController(IServiceProvider serviceProvider) : ControllerBase
 {
+    private ApiTokenService tokenService => serviceProvider.GetRequiredService<ApiTokenService>();
     /// <summary>
     /// Creates a new API token. Returns the raw token once — it cannot be retrieved again.
     /// </summary>

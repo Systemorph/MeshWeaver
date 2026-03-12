@@ -11,22 +11,34 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// <summary>
 /// PostgreSQL implementation of IStorageAdapter.
 /// Stores MeshNodes in mesh_nodes table and partition objects in partition_objects table.
+/// When a PartitionDefinition with TableMappings is provided, satellite nodes are routed
+/// to their dedicated tables based on path pattern matching.
 /// </summary>
 public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
     private readonly IEmbeddingProvider _embeddingProvider;
+    private readonly PartitionDefinition? _partitionDefinition;
 
     public NpgsqlDataSource DataSource => _dataSource;
 
     public PostgreSqlStorageAdapter(
         NpgsqlDataSource dataSource,
-        IEmbeddingProvider? embeddingProvider = null)
+        IEmbeddingProvider? embeddingProvider = null,
+        PartitionDefinition? partitionDefinition = null)
     {
         _dataSource = dataSource;
         _embeddingProvider = embeddingProvider ?? NullEmbeddingProvider.Instance;
+        _partitionDefinition = partitionDefinition;
     }
+
+    /// <summary>
+    /// Resolves the table name for a given path.
+    /// Returns a satellite table name if the path matches a TableMapping, otherwise "mesh_nodes".
+    /// </summary>
+    private string ResolveTable(string path)
+        => _partitionDefinition?.ResolveTable(path) ?? "mesh_nodes";
 
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
@@ -47,10 +59,11 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var (ns, id) = SplitPath(normalizedPath);
 
+        var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            "SELECT id, namespace, name, node_type, category, icon, display_order, " +
-            "last_modified, version, state, content, desired_id " +
-            "FROM mesh_nodes WHERE namespace = $1 AND id = $2");
+            $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
+            $"last_modified, version, state, content, desired_id, main_node " +
+            $"FROM \"{table}\" WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
@@ -75,11 +88,12 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
             : null;
 
+        var table = ResolveTable(node.Path);
         await using var cmd = _dataSource.CreateCommand(
-            """
-            INSERT INTO mesh_nodes (namespace, id, name, node_type, category, icon, display_order,
-                                    last_modified, version, state, content, desired_id, embedding)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+            $"""
+            INSERT INTO "{table}" (namespace, id, name, node_type, category, icon, display_order,
+                                    last_modified, version, state, content, desired_id, embedding, main_node)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
             ON CONFLICT (namespace, id) DO UPDATE SET
                 name = EXCLUDED.name,
                 node_type = EXCLUDED.node_type,
@@ -91,7 +105,8 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
                 state = EXCLUDED.state,
                 content = EXCLUDED.content,
                 desired_id = EXCLUDED.desired_id,
-                embedding = EXCLUDED.embedding
+                embedding = EXCLUDED.embedding,
+                main_node = EXCLUDED.main_node
             """);
 
         cmd.Parameters.AddWithValue(ns);
@@ -112,6 +127,8 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         else
             cmd.Parameters.AddWithValue(DBNull.Value);
 
+        cmd.Parameters.AddWithValue(node.MainNode);
+
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -123,8 +140,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var (ns, id) = SplitPath(normalizedPath);
 
+        var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            "DELETE FROM mesh_nodes WHERE namespace = $1 AND id = $2");
+            $"DELETE FROM \"{table}\" WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
@@ -137,8 +155,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var normalizedParent = NormalizePath(parentPath);
 
+        var table = ResolveTable(normalizedParent);
         await using var cmd = _dataSource.CreateCommand(
-            "SELECT id, namespace FROM mesh_nodes WHERE namespace = $1");
+            $"SELECT id, namespace FROM \"{table}\" WHERE namespace = $1");
         cmd.Parameters.AddWithValue(normalizedParent);
 
         var paths = new List<string>();
@@ -162,13 +181,41 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var (ns, id) = SplitPath(normalizedPath);
 
+        var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            "SELECT 1 FROM mesh_nodes WHERE namespace = $1 AND id = $2 LIMIT 1");
+            $"SELECT 1 FROM \"{table}\" WHERE namespace = $1 AND id = $2 LIMIT 1");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct);
+    }
+
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var normalizedPath = NormalizePath(fullPath);
+        if (string.IsNullOrEmpty(normalizedPath))
+            return (null, 0);
+
+        // Single SQL query: find the node whose path is the longest prefix of the input.
+        // Matches exact path or any ancestor (input starts with path + '/').
+        // Ordered by path length descending to get the deepest (most specific) match first.
+        var table = ResolveTable(normalizedPath);
+        await using var cmd = _dataSource.CreateCommand(
+            $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
+            $"last_modified, version, state, content, desired_id, main_node " +
+            $"FROM \"{table}\" WHERE $1 = path OR $1 LIKE path || '/%' " +
+            $"ORDER BY LENGTH(path) DESC LIMIT 1");
+        cmd.Parameters.AddWithValue(normalizedPath);
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct))
+            return (null, 0);
+
+        var node = ReadMeshNode(reader, options);
+        var matchedSegments = node.Path.Split('/').Length;
+        return (node, matchedSegments);
     }
 
     #region Partition Storage
@@ -429,7 +476,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             Version = reader.GetInt64(reader.GetOrdinal("version")),
             State = (MeshNodeState)reader.GetInt16(reader.GetOrdinal("state")),
             Content = content,
-            DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id"))
+            DesiredId = reader.IsDBNull(reader.GetOrdinal("desired_id")) ? null : reader.GetString(reader.GetOrdinal("desired_id")),
+            MainNode = reader.IsDBNull(reader.GetOrdinal("main_node"))
+                ? (string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}")
+                : reader.GetString(reader.GetOrdinal("main_node"))
         };
     }
 

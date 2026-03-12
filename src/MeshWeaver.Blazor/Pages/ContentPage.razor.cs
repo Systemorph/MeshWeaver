@@ -75,9 +75,9 @@ public partial class ContentPage : ComponentBase, IDisposable
         else
         {
             // Pattern 2: /content/{address}/{collection}/{path} - address-scoped content
-            // Use IMeshCatalog to resolve the address from the path
-            var meshCatalog = PortalApplication.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-            var resolution = await meshCatalog.ResolvePathAsync(FullPath);
+            // Use IPathResolver to resolve the address from the path
+            var pathResolver = PortalApplication.Hub.ServiceProvider.GetRequiredService<IPathResolver>();
+            var resolution = await pathResolver.ResolvePathAsync(FullPath);
 
             if (resolution == null)
             {

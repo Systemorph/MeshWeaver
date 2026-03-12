@@ -36,6 +36,18 @@ Built-in agent definitions are embedded in src/MeshWeaver.AI/Data/Agent/
 
 Agents: Executor, Navigator, Planner, Research
 
+## Bash Command Guidelines
+
+**Stay in the root directory** (`C:\dev\MeshWeaver`) and use relative sub-paths for all build/test commands. Do NOT use `cd ... && ...` chains — they require user confirmation. Issue commands separately or specify paths directly:
+```bash
+# CORRECT — run from root directory with sub-path
+dotnet build src/MeshWeaver.Graph/MeshWeaver.Graph.csproj
+dotnet test test/MeshWeaver.Graph.Test --no-restore
+
+# WRONG — chained cd requires extra approval
+cd /c/dev/MeshWeaver && dotnet build
+```
+
 ## Development Commands
 
 ### Build and Test
@@ -60,8 +72,7 @@ dotnet restore
 
 #### Memex Portal (Recommended for Development)
 ```bash
-cd memex/Memex.Portal.Monolith
-dotnet run
+dotnet run --project memex/Memex.Portal.Monolith
 # Access at https://localhost:7122
 ```
 
@@ -69,8 +80,7 @@ The Memex Portal uses `AddGraph()` to dynamically load Graph nodes from `samples
 
 #### Microservices Portal (.NET Aspire)
 ```bash
-cd memex/aspire/Memex.AppHost
-dotnet run
+dotnet run --project memex/aspire/Memex.AppHost
 # Access Aspire dashboard for service management
 # Requires Docker for dependencies
 ```
@@ -118,6 +128,35 @@ E.g. `{address}/Details/{itemId}` would render a details view for the item with 
 Layout areas are typically kept on the same address as the underlying data.
 
 **Reactive UI**: All UI state changes flow through the message hub. Controls are immutable records that specify their current state.
+
+## Data Access Patterns
+
+**IMPORTANT:** Application code must never use `IMeshStorage` or `IMeshCatalog` directly — these are internal infrastructure interfaces.
+
+### Reads — Use IMeshService
+```csharp
+var query = hub.ServiceProvider.GetRequiredService<IMeshService>();
+var node = await query.QueryAsync("path:org/Acme", maxResults: 1).FirstOrDefaultAsync(ct);
+```
+
+### Creates/Deletes — Use IMeshNodeFactory
+```csharp
+var factory = hub.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
+await factory.CreateNodeAsync(node, createdBy: userId, ct);
+await factory.DeleteNodeAsync(path, recursive: true, ct);
+```
+
+### Updates/Moves — Use message requests
+```csharp
+hub.Post(new UpdateNodeRequest(updatedNode));
+await hub.AwaitResponse(new MoveNodeRequest(sourcePath, targetPath), ct);
+hub.Post(new DataChangeRequest { Updates = [entity] });
+```
+
+### Service Resolution
+Always use `GetRequiredService<T>()` for core services (`IMeshNodeFactory`, `IMeshService`). Never use `GetService<T>()` + null check for services that must be registered.
+
+For full documentation see `src/MeshWeaver.Documentation/Data/Architecture/DataAccessPatterns.md`.
 
 ## Development Patterns
 
@@ -217,50 +256,115 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 - `parallelizeAssembly: false`
 - `parallelizeTestCollections: false`
 - `maxParallelThreads: 1`
-- `methodTimeout: 30000ms`
+- `methodTimeout: 60000ms` (1 minute per test method)
 
-Use `MeshWeaver.Fixture` for test infrastructure:
+**No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
+
+### Running Tests
+
+Run tests from the root directory using sub-paths. Do NOT write output to `/tmp` or temp directories — test results (.trx) are automatically collected in the project's `bin/` directory.
+
+**CRITICAL: Always use `run_in_background: true`** for test runs. Tests can take minutes — never block the conversation waiting for them. Use `timeout: 180000` (3 min) max for Bash test commands. The xunit.runner.json `methodTimeout` is 60000ms (1 min) per test method.
+
+**Do NOT use `--verbosity minimal`** (or `-v m`) when tests are expected to fail. Minimal verbosity hides error details (stack traces, assertion messages), forcing you to re-run with normal verbosity — wasting time and frustrating the user. Use default verbosity or `--verbosity normal` so failures are visible on the first run. Only use `--verbosity minimal` when you are confident all tests will pass and just need a quick green/red check.
+
+```bash
+# Run from root directory with sub-path
+dotnet test test/MeshWeaver.Hosting.Monolith.Test --no-restore
+
+# Run a specific test project
+dotnet test test/MeshWeaver.Graph.Test --no-restore
+
+# Filter to specific tests
+dotnet test test/MeshWeaver.Graph.Test --filter "ClassName~AccessAssignment" --no-restore
+```
+
+**Workflow:**
+1. Run tests **once** in background (`run_in_background: true`)
+2. If failures: read the output to understand errors — do NOT re-run
+3. Fix the code
+4. Run tests **once** again to verify fixes
+5. Repeat 2–4 until green
+
+### DevLogin and Access Control in Tests
+
+`MonolithMeshTestBase` automatically logs in `rbuergi@systemorph.com` as Admin via `TestUsers.DevLogin(Mesh)` in `InitializeAsync()`. This means all tests start with a logged-in admin user — no manual setup needed for basic CRUD.
+
+**TestUsers** (`MeshWeaver.Hosting.Monolith.TestBase.TestUsers`):
+- `TestUsers.Admin` — default admin AccessContext
+- `TestUsers.SampleUsers()` — MeshNode array of sample users from `samples/Graph/Data/User/`
+- `TestUsers.DevLogin(mesh)` — logs in the admin user (called automatically by base class)
+- `builder.AddSampleUsers()` — extension to pre-seed user MeshNodes in `ConfigureMesh`
+
+When tests with `AddRowLevelSecurity()` need **per-user** access control (e.g., testing that User1 can't see User2's data), use explicit admin setup for data creation:
 
 ```csharp
-public class MyTest : HubTestBase, IAsyncLifetime
+// Before creating test data: set up admin context
+var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+await securityService.AddUserRoleAsync("setup-admin", "Admin", null, "system");
+accessService.SetCircuitContext(new AccessContext { ObjectId = "setup-admin", Name = "Setup Admin" });
+
+// ... create test nodes ...
+
+// After setup: clear admin context so tests start clean
+accessService.SetCircuitContext(null);
+```
+
+### Node Types
+
+Only use **registered** node types in tests. Standard types registered by `AddGraph()`:
+`Markdown`, `Code`, `Agent`, `Group`, `User`, `VUser`, `Role`, `Notification`, `Approval`, `AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `ActivityLog`, `UserActivity`, `Comment`, `Thread`, `ThreadMessage`
+
+Custom types can be registered via `builder.AddMeshNodes(new MeshNode("MyType") { Name = "My Type" })` in `ConfigureMesh`.
+
+### MonolithMeshTestBase (recommended for most tests)
+
+Reference `MeshWeaver.Hosting.Monolith.TestBase` and inherit from `MonolithMeshTestBase`:
+
+```csharp
+public class MyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-
-    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
-    {
-        return base.ConfigureHost(config)
-            .AddNorthwindHub() // Register Northwind hub
-            .WithSomeService(); // Add any required services
-    }
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
-    {
-        return base.ConfigureClient(config)
-            .AddLayoutClient(); // Add any required services
-    }
-
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        await InitializeSomething();
-    }
-
-    public override async ValueTask DisposeAsync()
-    {
-        await DisposeSomething();
-        await base.DisposeAsync;
-    }
+    // Override ConfigureMesh to add services and sample users
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddGraph()
+            .AddSampleUsers()
+            .ConfigureHub(hub => hub.AddMyHub());
 
     [Fact]
     public async Task MyTestMethod()
     {
-        // Arrange
-        var request = new MyRequest("test input");
-        var hub = GetClient();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeFactory>();
 
-        // Act
+        // Create test data
+        await nodeFactory.CreateNodeAsync(new MeshNode("test", "Namespace") { Name = "Test" }, "testuser");
+
+        // Query
+        var result = await meshQuery.QueryAsync<MeshNode>("path:Namespace/test").FirstOrDefaultAsync();
+        result.Should().NotBeNull();
+    }
+}
+```
+
+### HubTestBase (for message routing / layout tests)
+
+```csharp
+public class MyTest : HubTestBase, IAsyncLifetime
+{
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration config)
+        => base.ConfigureHost(config).AddNorthwindHub();
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration config)
+        => base.ConfigureClient(config).AddLayoutClient();
+
+    [Fact]
+    public async Task MyTestMethod()
+    {
+        var hub = GetClient();
         var response = await hub.AwaitResponse<MyResponse>(request, o => o.WithTarget(new HostAddress()));
-        // Assert
         response.Should().NotBeNull();
-        response.Message.Result.Should().Be("expected result");
     }
 }
 ```

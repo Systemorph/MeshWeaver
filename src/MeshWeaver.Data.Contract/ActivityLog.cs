@@ -8,6 +8,7 @@ namespace MeshWeaver.Data;
 public record ActivityLog(string Category)
 {
     public DateTime Start { get; init; } = DateTime.UtcNow;
+    public int StartVersion { get; init; }
     public int Version { get; init; }
 
     [property: Key]
@@ -18,6 +19,12 @@ public record ActivityLog(string Category)
     public UserInfo? User { get; init; }
     public string? HubPath { get; init; }
     public ImmutableList<ActivityLog> SubActivities { get; init; } = [];
+    public ImmutableList<string> AffectedPaths { get; init; } = [];
+
+    /// <summary>
+    /// The primary node path — the hub that generated this activity.
+    /// </summary>
+    public string? PrimaryNodePath => HubPath;
 
     public ActivityLog Fail(string error) =>
         this with

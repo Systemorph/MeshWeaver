@@ -7,10 +7,8 @@
   "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
-    "id": "Paul",
-    "name": "Paul Martinez",
+    "$type": "User",
     "email": "paul.martinez@acme.example.com",
-    "bio": "Risk manager specializing in financial risk assessment and mitigation.",
-    "role": "Risk Manager"
+    "bio": "Risk manager specializing in financial risk assessment and mitigation."
   }
 }

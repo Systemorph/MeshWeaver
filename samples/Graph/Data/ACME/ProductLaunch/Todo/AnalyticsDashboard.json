@@ -13,7 +13,7 @@
     "description": "Set up Mixpanel for product analytics and build launch dashboard tracking signups, activations, feature adoption, and conversion funnel.",
     "category": "Engineering",
     "priority": "Medium",
-    "assignee": "david.kim@example.com",
+    "assignee": "David",
     "dueDateOffsetDays": 22,
     "status": "Pending"
   }

@@ -30,7 +30,8 @@ public static class JsonSynchronizationStream
     internal static ISynchronizationStream CreateExternalClient<TReduced, TReference>(
         this IWorkspace workspace,
         Address owner,
-        TReference reference
+        TReference reference,
+        bool impersonateAsHub = false
     )
     where TReference : WorkspaceReference
     {
@@ -63,7 +64,8 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         hub.Post(e, o => o.WithTarget(reduced.Owner));
-                    })
+                    },
+                    ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
 
         else
@@ -78,18 +80,13 @@ public static class JsonSynchronizationStream
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
                         hub.Post(e, o => o.WithTarget(reduced.Owner));
-                    })
+                    },
+                    ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
 
 
-        var request =
-            reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference), o => o.WithTarget(owner));
-        var task = hub.RegisterCallback(request!, c =>
-        {
-            logger.LogInformation("Retrieved {reference} from {owner}.", reduced.Reference, reduced.Owner);
-            return c;
-        });
-        reduced.BindToTask(task);
+        reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference),
+            o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner));
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>
@@ -156,6 +153,14 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Owner {owner} sending change notification to subscriber {subscriber}", reduced.Owner, request.Subscriber);
                     }
                     hub.Post(e, o => o.WithTarget(request.Subscriber));
+                },
+                ex =>
+                {
+                    logger.LogWarning(ex, "Workspace stream error for subscriber {Subscriber}, propagating DeliveryFailure", request.Subscriber);
+                    hub.Post(new DeliveryFailure(null!, ex.Message)
+                    {
+                        ErrorType = ErrorType.Failed,
+                    }, o => o.WithTarget(request.Subscriber));
                 })
         );
 

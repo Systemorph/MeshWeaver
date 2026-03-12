@@ -1,0 +1,22 @@
+{
+  "$type": "MeshNode",
+  "id": "a1",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping/MappingRules/_Approval",
+  "name": "Approval: Q1 2026 Mapping Rules Review",
+  "nodeType": "Approval",
+  "lastModified": "2026-03-04T10:00:00+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "Approval",
+    "id": "a1",
+    "primaryNodePath": "FutuRe/AmericasIns/TransactionMapping/MappingRules",
+    "requester": "Emma",
+    "approver": "David",
+    "purpose": "Review and approve Q1 2026 Americas insurance transaction mapping rules",
+    "dueDate": "2026-03-15T00:00:00+00:00",
+    "createdAt": "2026-03-04T10:00:00+00:00",
+    "status": "Approved",
+    "approvalDate": "2026-03-04T14:30:00+00:00"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

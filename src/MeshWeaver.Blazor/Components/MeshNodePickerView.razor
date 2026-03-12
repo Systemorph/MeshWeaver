@@ -51,6 +51,20 @@
             }
             else
             {
+                @if (!string.IsNullOrEmpty(ViewModel?.EmptyOptionLabel))
+                {
+                    var isEmptySelected = string.IsNullOrEmpty(Value);
+                    <div class="mesh-node-picker-item @(isEmptySelected ? "mesh-node-picker-item-selected" : "")"
+                         @onclick="ClearSelection">
+                        <div class="mesh-node-picker-avatar" style="background: var(--neutral-stroke-rest); color: var(--neutral-foreground-hint);">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Globe())" />
+                        </div>
+                        <div class="mesh-node-picker-item-info">
+                            <div class="mesh-node-picker-item-name">@ViewModel.EmptyOptionLabel</div>
+                            <div class="mesh-node-picker-item-type">No namespace</div>
+                        </div>
+                    </div>
+                }
                 @foreach (var node in _results)
                 {
                     var isSelected = node.Path == Value;
@@ -94,7 +108,9 @@
         var imageUrl = GetImageUrl(node);
         if (!string.IsNullOrEmpty(imageUrl))
         {
-            return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="@(imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "mesh-node-picker-avatar-icon" : "mesh-node-picker-avatar-img")" />;
+            if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                return @<div style="--icon-url: url('@imageUrl')" class="mesh-node-picker-avatar-icon"></div>;
+            return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-picker-avatar-img" />;
         }
         return @<div class="mesh-node-picker-avatar">@initial</div>;
     }

@@ -7,9 +7,16 @@
 
 <PageTitle>@PageTitle</PageTitle>
 <CascadingValue Value="@Mode" Name="ThemeMode">
-    @if (NavigationService.Context is null && (!IsInteractive || IsLoading))
+    @if (!IsInteractive && PreRenderedHtml is not null)
     {
-        @* Show spinner until interactive rendering is established and loading completes *@
+        @* Prerender: cached HTML from MeshNode for instant display *@
+        <article class="markdown-body" style="background-color: var(--neutral-layer-1)">
+            @((MarkupString)PreRenderedHtml)
+        </article>
+    }
+    else if (!IsInteractive || IsLoading)
+    {
+        @* Pre-render (no cached HTML) or interactive still resolving *@
         <div class="resolving-container">
             <FluentProgressRing style="width: 40px; height: 40px;" />
             <p>Looking up <strong>@Path</strong>...</p>
@@ -17,31 +24,16 @@
     }
     else if (NavigationService.Context is null)
     {
-        @* Only shown after OnAfterRender has fired and all resolution retries exhausted *@
+        @* Interactive phase, resolution exhausted: page not found *@
         <div class="error-container">
             <h2>Page Not Found</h2>
             <p>The path '<strong>@Path</strong>' does not match any registered address pattern.</p>
             <p>Please double-check the url you have entered.</p>
         </div>
     }
-    else if (!IsInteractive && PreRenderedHtml is not null)
-    {
-        @* Phase 1: Prerender with cached markdown HTML *@
-        <article class="markdown-body" style="background-color: var(--neutral-layer-1)">
-            @((MarkupString)PreRenderedHtml)
-        </article>
-    }
-    else if (!IsInteractive)
-    {
-        @* Phase 1: No cached HTML - spinning circle with message *@
-        <div class="resolving-container">
-            <FluentProgressRing style="width: 40px; height: 40px;" />
-            <p>Resolving <strong>@Path</strong>...</p>
-        </div>
-    }
     else
     {
-        @* Phase 2: Interactive - LayoutAreaView with stream subscription *@
+        @* Interactive phase, resolved: LayoutAreaView with stream subscription *@
         <LayoutAreaView ViewModel="@ViewModel" Top="true" />
     }
 </CascadingValue>

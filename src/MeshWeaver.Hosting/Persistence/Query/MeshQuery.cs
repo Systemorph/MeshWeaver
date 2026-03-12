@@ -12,12 +12,14 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// <summary>
 /// Scoped wrapper that automatically injects JsonSerializerOptions from the current IMessageHub
 /// and aggregates results from all registered IMeshQueryProvider instances.
-/// For source:activity queries, providers that support it (e.g. PostgreSQL) handle activity
-/// ordering via SQL JOIN; other providers return normal results.
+/// source:activity implies nodeType:Activity filter; source:accessed JOINs with UserActivity
+/// nodes to order by last-access time. Providers that don't support these sources return normal results.
+/// Identity is resolved from AccessService.Context. Use accessService.ImpersonateAsHub(hub)
+/// to temporarily switch identity for hub-level operations.
 /// </summary>
 public class MeshQuery(
     IEnumerable<IMeshQueryProvider> providers,
-    IMessageHub hub) : IMeshQuery
+    IMessageHub hub)
 {
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
@@ -25,10 +27,10 @@ public class MeshQuery(
         MeshQueryRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Always delegate to providers. For source:activity queries, providers that
-        // support it (e.g. PostgreSQL) will handle activity ordering via SQL JOIN.
-        // Providers that don't understand it will return normal results (source: is
-        // a reserved qualifier stripped by the parser, so it doesn't affect filters).
+
+        // Always delegate to providers. source:activity implies nodeType:Activity;
+        // source:accessed JOINs with UserActivity MeshNodes for last-access ordering.
+        // Providers that don't support these sources return normal results.
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         // Parse query once to extract select: projection (applied uniformly after dedup)
@@ -192,4 +194,5 @@ public class MeshQuery(
             providers.Select(p => p.SelectAsync<T>(path, property, Options, ct)));
         return results.FirstOrDefault(r => r != null);
     }
+
 }

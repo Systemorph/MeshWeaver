@@ -4,6 +4,10 @@
       "type": "stdio",
       "command": "mcp-server-github",
       "args": []
+    },
+    "aspire": {
+      "command": "aspire",
+      "args": ["mcp", "start"]
     }
   }
 }

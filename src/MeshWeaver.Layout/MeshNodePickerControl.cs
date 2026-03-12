@@ -36,6 +36,15 @@ public record MeshNodePickerControl(object Data)
     /// </summary>
     public object[]? Items { get; init; }
 
+    /// <summary>
+    /// When set, adds an option at the top of the dropdown that selects an empty value ("").
+    /// E.g., "Root (top-level)" for namespace pickers.
+    /// </summary>
+    public string? EmptyOptionLabel { get; init; }
+
+    public MeshNodePickerControl WithEmptyOption(string label = "Root (top-level)")
+        => this with { EmptyOptionLabel = label };
+
     public MeshNodePickerControl WithQueries(params string[] queries)
         => this with { Queries = queries };
 

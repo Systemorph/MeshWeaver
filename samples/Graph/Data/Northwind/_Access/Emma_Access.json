@@ -1,0 +1,17 @@
+{
+  "id": "Emma_Access",
+  "namespace": "Northwind/_Access",
+  "name": "Emma Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Emma",
+    "displayName": "Emma Wilson",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

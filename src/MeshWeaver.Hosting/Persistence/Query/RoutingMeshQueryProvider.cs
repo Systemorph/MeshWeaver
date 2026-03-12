@@ -5,23 +5,95 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
 /// Query provider that routes queries to the appropriate partition based on parsed path/namespace.
-/// When no path is specified, fans out to all partitions and merges results.
+/// When no path is specified, fans out to all partitions the user can access and merges results.
 /// Queries already-known partitions immediately while discovering new ones in parallel.
 /// </summary>
-public class RoutingMeshQueryProvider : IMeshQueryProvider
+internal class RoutingMeshQueryProvider : IMeshQueryProvider
 {
     private readonly RoutingPersistenceServiceCore _router;
+    private readonly AccessService? _accessService;
+    private readonly ISecurityService? _securityService;
+    private readonly IDataChangeNotifier? _changeNotifier;
     private readonly QueryParser _parser = new();
+    private readonly MemoryCache _accessCache = new(new MemoryCacheOptions());
+    private static readonly MemoryCacheEntryOptions CacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
 
-    public RoutingMeshQueryProvider(RoutingPersistenceServiceCore router)
+    public RoutingMeshQueryProvider(
+        RoutingPersistenceServiceCore router,
+        AccessService? accessService = null,
+        ISecurityService? securityService = null,
+        IDataChangeNotifier? changeNotifier = null)
     {
         _router = router;
+        _accessService = accessService;
+        _securityService = securityService;
+        _changeNotifier = changeNotifier;
+
+        // Evict access cache when partition access changes
+        _changeNotifier?.Subscribe(notification =>
+        {
+            if (notification.Path.StartsWith("Admin/Partition", StringComparison.OrdinalIgnoreCase) ||
+                notification.Path.Contains("_Access", StringComparison.OrdinalIgnoreCase))
+            {
+                _accessCache.Compact(1.0); // Clear all entries
+            }
+        });
+    }
+
+    /// <summary>
+    /// Returns the set of partition keys the current user can access, or null if no filtering needed.
+    /// </summary>
+    private async Task<HashSet<string>?> GetAccessiblePartitionsAsync(CancellationToken ct)
+    {
+        var userId = _accessService?.Context?.ObjectId;
+        if (string.IsNullOrEmpty(userId) || _securityService == null)
+            return null; // No user context or no security => no filtering
+
+        var cacheKey = $"partition-access:{userId}";
+        if (_accessCache.TryGetValue<HashSet<string>>(cacheKey, out var cached))
+            return cached;
+
+        var accessible = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (partitionKey, _) in _router.QueryProviders)
+        {
+            // Check if user has read permission on the partition's namespace
+            var ns = GetNamespaceForPartition(partitionKey);
+            if (await _securityService.HasPermissionAsync(ns, userId, Permission.Read, ct))
+                accessible.Add(partitionKey);
+        }
+
+        _accessCache.Set(cacheKey, accessible, CacheOptions);
+        return accessible;
+    }
+
+    /// <summary>
+    /// Gets the namespace for a partition. Uses Partition metadata if available,
+    /// otherwise falls back to the partition key itself.
+    /// </summary>
+    private string GetNamespaceForPartition(string partitionKey)
+    {
+        // Check if any partition metadata maps to this store key
+        foreach (var (_, ns) in _router.PartitionNamespaces)
+        {
+            if (_router.BasePathToPartition.TryGetValue(ns, out var storeKey) &&
+                storeKey.Equals(partitionKey, StringComparison.OrdinalIgnoreCase))
+            {
+                return ns;
+            }
+        }
+
+        // Default: the partition key itself is the namespace
+        return partitionKey;
     }
 
     public async IAsyncEnumerable<object> QueryAsync(
@@ -41,7 +113,8 @@ public class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: query known partitions immediately, discover+query new ones in parallel
+        // Fan out: query accessible partitions, discover+query new ones in parallel
+        var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var channel = Channel.CreateUnbounded<object>();
 
@@ -52,9 +125,13 @@ public class RoutingMeshQueryProvider : IMeshQueryProvider
             {
                 var queryTasks = new ConcurrentBag<Task>();
 
-                // Start querying already-known partitions immediately
-                foreach (var p in _router.QueryProviders.Values)
+                // Start querying already-known accessible partitions immediately
+                foreach (var (key, p) in _router.QueryProviders)
+                {
+                    if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
+                        continue;
                     queryTasks.Add(QueryOneAsync(p));
+                }
 
                 // Discover new partitions and start querying each as it becomes available
                 await foreach (var p in _router.DiscoverNewProvidersAsync(ct))

@@ -18,7 +18,7 @@ public class ApprovalAndNotificationTest
     #region Approval Data Model Tests
 
     [Fact]
-    public void Approval_Implements_ISatelliteContent()
+    public void Approval_HasPrimaryNodePath()
     {
         var approval = new Approval
         {
@@ -26,8 +26,7 @@ public class ApprovalAndNotificationTest
             PrimaryNodePath = "docs/readme"
         };
 
-        approval.Should().BeAssignableTo<ISatelliteContent>();
-        ((ISatelliteContent)approval).PrimaryNodePath.Should().Be("docs/readme");
+        approval.PrimaryNodePath.Should().Be("docs/readme");
     }
 
     [Fact]
@@ -139,10 +138,11 @@ public class ApprovalAndNotificationTest
     }
 
     [Fact]
-    public void Notification_DoesNotImplement_ISatelliteContent()
+    public void Notification_IsNotSatelliteContent()
     {
-        var notification = new Notification();
-        notification.Should().NotBeAssignableTo<ISatelliteContent>();
+        // Notification is not satellite content - it lives independently
+        var node = new MeshNode("notif1", "User/user1") { Content = new Notification() };
+        (node.MainNode != node.Path).Should().BeFalse();
     }
 
     [Fact]
@@ -262,12 +262,11 @@ public class ApprovalAndNotificationTest
     #region MeshNode Integration Tests
 
     [Fact]
-    public void MeshNode_WithApprovalContent_GetPrimaryPath_ReturnsPrimaryNodePath()
+    public void MeshNode_WithMainNode_GetPrimaryPath_ReturnsMainNode()
     {
-        var approval = new Approval { PrimaryNodePath = "org/project/doc" };
         var node = new MeshNode("approval1", "org/project/doc/_approvals")
         {
-            Content = approval,
+            MainNode = "org/project/doc",
             NodeType = ApprovalNodeType.NodeType
         };
 
@@ -275,10 +274,9 @@ public class ApprovalAndNotificationTest
     }
 
     [Fact]
-    public void MeshNode_WithApprovalContent_EmptyPrimaryPath_FallsBackToNodePath()
+    public void MeshNode_WithNullMainNode_GetPrimaryPath_ReturnsNodePath()
     {
-        var approval = new Approval { PrimaryNodePath = "" };
-        var node = new MeshNode("approval1", "some/path") { Content = approval };
+        var node = new MeshNode("approval1", "some/path");
 
         node.GetPrimaryPath().Should().Be("some/path/approval1");
     }
@@ -289,7 +287,7 @@ public class ApprovalAndNotificationTest
         var notification = new Notification { Title = "Test" };
         var node = new MeshNode("notif1", "User/user1") { Content = notification };
 
-        // Notification is not ISatelliteContent, so GetPrimaryPath returns node's own path
+        // Notification is not satellite content, so GetPrimaryPath returns node's own path
         node.GetPrimaryPath().Should().Be("User/user1/notif1");
     }
 
@@ -345,9 +343,8 @@ public class ApprovalAndNotificationTest
     [Fact]
     public void AccessObject_IsVirtual_CanBeSetTrue()
     {
-        var obj = new AccessObject { IsVirtual = true, Name = "Guest" };
+        var obj = new AccessObject { IsVirtual = true };
         obj.IsVirtual.Should().BeTrue();
-        obj.Name.Should().Be("Guest");
     }
 
     [Fact]

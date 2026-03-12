@@ -64,7 +64,7 @@
 
     private async Task<IEnumerable<QuerySuggestion>> OnSearchAsync(string searchText)
     {
-        var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
         {
             return Enumerable.Empty<QuerySuggestion>();

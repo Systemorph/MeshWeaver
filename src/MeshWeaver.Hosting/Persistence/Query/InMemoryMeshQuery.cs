@@ -7,19 +7,22 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
 /// <summary>
-/// In-memory implementation of IMeshQuery.
+/// In-memory implementation of IMeshService.
 /// Extracts query functionality from InMemoryPersistenceService for use as a standalone service.
 /// </summary>
-public class InMemoryMeshQuery(
-    IPersistenceServiceCore persistence,
+internal class InMemoryMeshQuery(
+    IStorageService persistence,
     ISecurityService? securityService = null,
     AccessService? accessService = null,
     IDataChangeNotifier? changeNotifier = null,
-    MeshConfiguration? meshConfiguration = null)
+    MeshConfiguration? meshConfiguration = null,
+    IEnumerable<INodeValidator>? nodeValidators = null,
+    ILogger<InMemoryMeshQuery>? logger = null)
     : IMeshQueryProvider
 {
     private readonly QueryParser _parser = new();
@@ -58,6 +61,13 @@ public class InMemoryMeshQuery(
         if (request.Limit.HasValue)
         {
             parsedQuery = parsedQuery with { Limit = request.Limit };
+        }
+
+        // Both source:activity and source:accessed restrict to main nodes only (main_node = path).
+        // In-memory doesn't support the JOIN — returns main nodes without activity ordering.
+        if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
+        {
+            parsedQuery = parsedQuery with { IsMain = true };
         }
 
         // If no path is specified, use the default path from request or default to root
@@ -105,8 +115,16 @@ public class InMemoryMeshQuery(
                 continue;
             }
 
-            // Apply access control filtering if security service is available
-            if (securityService != null)
+            // Apply access control filtering.
+            // For MeshNode items, rely solely on INodeValidator (which handles custom access
+            // rules, self-access, and standard RLS). For non-MeshNode items (partition objects),
+            // use inline permission check since validators only apply to MeshNodes.
+            if (node is MeshNode meshNode)
+            {
+                if (!await ValidateReadAsync(meshNode, userId, ct))
+                    continue;
+            }
+            else if (securityService != null)
             {
                 var itemPath = GetItemPath(node);
                 if (!string.IsNullOrEmpty(itemPath))
@@ -151,7 +169,8 @@ public class InMemoryMeshQuery(
         {
             var node = await persistence.GetNodeSecureAsync(searchPath, userId, options, ct);
             if (node != null && _evaluator.Matches(node, parsedQuery)
-                && !IsExcludedByContext(node, context))
+                && !IsExcludedByContext(node, context)
+                && !IsExcludedByIsMain(node, parsedQuery))
             {
                 yield return node;
             }
@@ -163,15 +182,15 @@ public class InMemoryMeshQuery(
             await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options)
                 .WithCancellation(ct))
             {
-                if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context))
+                if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context)
+                    && !IsExcludedByIsMain(child, parsedQuery))
                     yield return child;
             }
         }
 
-        // Ancestor children (AncestorsAndSelf, Hierarchy, Ancestors)
+        // Ancestor children (AncestorsAndSelf, Hierarchy — NOT plain Ancestors which only returns exact ancestor nodes)
         if (effectiveScope == QueryScope.AncestorsAndSelf
-            || effectiveScope == QueryScope.Hierarchy
-            || effectiveScope == QueryScope.Ancestors)
+            || effectiveScope == QueryScope.Hierarchy)
         {
             var pathsToSearchChildren = effectiveScope == QueryScope.Ancestors
                 ? GetPathsForScope(basePath, QueryScope.Ancestors)
@@ -183,7 +202,8 @@ public class InMemoryMeshQuery(
                     ancestorPath, userId, options).WithCancellation(ct))
                 {
                     if (_evaluator.Matches(child, parsedQuery)
-                        && !IsExcludedByContext(child, context))
+                        && !IsExcludedByContext(child, context)
+                        && !IsExcludedByIsMain(child, parsedQuery))
                         yield return child;
                 }
             }
@@ -198,7 +218,8 @@ public class InMemoryMeshQuery(
                 basePath, userId, options).WithCancellation(ct))
             {
                 if (_evaluator.Matches(descendant, parsedQuery)
-                    && !IsExcludedByContext(descendant, context))
+                    && !IsExcludedByContext(descendant, context)
+                    && !IsExcludedByIsMain(descendant, parsedQuery))
                     yield return descendant;
             }
         }
@@ -218,6 +239,47 @@ public class InMemoryMeshQuery(
             return pathProp.GetValue(item) as string;
 
         return null;
+    }
+
+    /// <summary>
+    /// Validates a node read operation using INodeValidator instances from DI.
+    /// Mirrors MeshCatalog.ValidateReadAsync logic.
+    /// </summary>
+    private async Task<bool> ValidateReadAsync(MeshNode node, string userId, CancellationToken ct = default)
+    {
+        if (nodeValidators == null)
+            return true;
+
+        // Always use the effective userId for the validation context.
+        // The query's explicit UserId takes precedence over session AccessContext
+        // to prevent admin context from leaking into public queries.
+        var accessContext = !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous
+            ? new AccessContext { ObjectId = userId }
+            : accessService?.Context;
+
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Read,
+            Node = node,
+            AccessContext = accessContext
+        };
+
+        foreach (var validator in nodeValidators)
+        {
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Read))
+                continue;
+
+            var result = await validator.ValidateAsync(context, ct);
+            if (!result.IsValid)
+            {
+                logger?.LogDebug("Validator {Validator} rejected read on node {Path}: {Error}",
+                    validator.GetType().Name, node.Path, result.ErrorMessage);
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <inheritdoc />
@@ -547,13 +609,14 @@ public class InMemoryMeshQuery(
             }
         }
 
-        // Detect added and updated items
+        // Detect added and updated items (DistinctUntilChanged: only emit if value actually differs)
         foreach (var (path, item) in newItems)
         {
             if (currentItems.TryGetValue(path, out var existingItem))
             {
-                // Item existed before - check if it changed
-                if (changesByPath.ContainsKey(path))
+                // Item existed before - only emit Updated if the serializable content changed
+                // (skip Func<> fields like HubConfiguration that break record Equals)
+                if (!ItemEquals(existingItem, item))
                 {
                     updatedItems.Add(item);
                 }
@@ -620,6 +683,22 @@ public class InMemoryMeshQuery(
     }
 
     /// <summary>
+    /// Compares two items for equality in the context of DistinctUntilChanged.
+    /// For MeshNode, strips non-serializable fields (HubConfiguration, GlobalServiceConfigurations)
+    /// before comparison to avoid false negatives from Func&lt;&gt; reference inequality.
+    /// </summary>
+    private static bool ItemEquals<T>(T a, T b)
+    {
+        if (a is MeshNode nodeA && b is MeshNode nodeB)
+        {
+            // Compare content-relevant fields only, stripping volatile/non-serializable fields
+            return nodeA with { HubConfiguration = null, GlobalServiceConfigurations = [], LastModified = default, Version = 0 }
+                == nodeB with { HubConfiguration = null, GlobalServiceConfigurations = [], LastModified = default, Version = 0 };
+        }
+        return Equals(a, b);
+    }
+
+    /// <summary>
     /// Checks whether a node should be excluded based on context.
     /// Checks both type-level exclusion (from MeshConfiguration) and node-level exclusion.
     /// </summary>
@@ -631,5 +710,15 @@ public class InMemoryMeshQuery(
         if (node.ExcludeFromContext?.Contains(context) == true)
             return true;
         return false;
+    }
+
+    /// <summary>
+    /// Checks whether a node should be excluded by the is:main filter.
+    /// Excludes satellite nodes (MainNode != null and MainNode != Path).
+    /// </summary>
+    private static bool IsExcludedByIsMain(MeshNode node, ParsedQuery query)
+    {
+        if (query.IsMain != true) return false;
+        return node.MainNode != node.Path;
     }
 }

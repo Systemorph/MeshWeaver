@@ -44,9 +44,9 @@
 }
 
 .collab-md-sidebar {
-    flex: 0 0 300px;
-    min-width: 260px;
-    max-width: 340px;
+    flex: 0 0 380px;
+    min-width: 320px;
+    max-width: 420px;
     display: flex;
     flex-direction: column;
     gap: 6px;

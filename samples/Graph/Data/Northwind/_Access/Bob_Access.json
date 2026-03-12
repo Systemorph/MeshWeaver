@@ -1,0 +1,17 @@
+{
+  "id": "Bob_Access",
+  "namespace": "Northwind/_Access",
+  "name": "Bob Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Bob",
+    "displayName": "Bob Smith",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

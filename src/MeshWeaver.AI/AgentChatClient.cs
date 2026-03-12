@@ -21,7 +21,7 @@ public class AgentChatClient : IAgentChat
     private readonly IMessageHub hub;
     private readonly ILogger<AgentChatClient> logger;
     private readonly IChatPersistenceService persistenceService;
-    private readonly IMeshQuery? meshQuery;
+    private readonly IMeshService? meshQuery;
     private readonly IReadOnlyList<IChatClientFactory> chatClientFactories;
     private readonly Dictionary<string, ChatClientAgent> agents = new();
     private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
@@ -48,7 +48,7 @@ public class AgentChatClient : IAgentChat
         hub = serviceProvider.GetRequiredService<IMessageHub>();
         logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
-        meshQuery = serviceProvider.GetService<IMeshQuery>();
+        meshQuery = serviceProvider.GetService<IMeshService>();
         chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToList();
     }
 
@@ -145,11 +145,9 @@ public class AgentChatClient : IAgentChat
     {
         try
         {
-            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-            if (meshCatalog == null)
-                return;
-
-            var node = await meshCatalog.GetNodeAsync(new Messaging.Address(threadNodePath));
+            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{threadNodePath}")
+                .FirstOrDefaultAsync();
             if (node?.Content is not Thread threadContent)
                 return;
 
@@ -712,7 +710,7 @@ public class AgentChatClient : IAgentChat
         try
         {
             var pathQuery = string.IsNullOrEmpty(contextPath)
-                ? "nodeType:Agent scope:children"  // Root level: get direct children agents
+                ? "namespace: nodeType:Agent"  // Root level: get direct children agents
                 : $"path:{contextPath} nodeType:Agent scope:AncestorsAndSelf";
 
             await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))

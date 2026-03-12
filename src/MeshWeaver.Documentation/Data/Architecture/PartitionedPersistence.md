@@ -15,7 +15,7 @@ In a multi-tenant or multi-domain mesh, data from different organizations or bus
 - **Cosmos DB**: separate container pairs (`acme-nodes`, `contoso-nodes`)
 - **File System**: same directory tree with logical routing and isolated caches
 
-This isolation is transparent to callers. The `IPersistenceService` and `IMeshQuery` interfaces remain unchanged.
+This isolation is transparent to callers. The `IMeshStorage` and `IMeshQuery` interfaces remain unchanged.
 
 # Architecture
 
@@ -24,8 +24,8 @@ This isolation is transparent to callers. The `IPersistenceService` and `IMeshQu
 ```
 PersistenceService (scoped, unchanged)
   +-> RoutingPersistenceServiceCore (singleton)
-        +-> "ACME" -> per-partition IPersistenceServiceCore
-        +-> "Contoso" -> per-partition IPersistenceServiceCore
+        +-> "ACME" -> per-partition IStorageService
+        +-> "Contoso" -> per-partition IStorageService
         +-> ... (auto-provisioned on first access)
 
 MeshQuery (scoped, unchanged)
@@ -80,6 +80,95 @@ await persistence.SaveNodeAsync(
 
 On startup, `InitializeAsync` discovers existing partitions and restores routing tables.
 
+# Satellite Tables and Sub-Namespaces
+
+## PartitionDefinition
+
+Each partition is defined by a `PartitionDefinition` that specifies its namespace, data source, schema, and table mappings. Organization partitions use `StandardTableMappings` to route satellite node types to dedicated tables.
+
+## Satellite Sub-Namespaces
+
+Satellite entities are stored in dedicated sub-namespaces within the node hierarchy. Each satellite type has a reserved prefix:
+
+| Sub-Namespace | PostgreSQL Table | Node Types | Description |
+|---------------|-----------------|------------|-------------|
+| `_Activity` | `activities` | Activity | Node lifecycle events |
+| `_UserActivity` | `user_activities` | UserActivity | Per-user access tracking |
+| `_Thread` | `threads` | Thread, ThreadMessage | Chat/discussion threads |
+| `_Tracking` | `tracking` | TrackedChange | Suggested edits (track changes) |
+| `_Approval` | `approvals` | Approval | Approval workflow records |
+| `_Access` | `access` | AccessAssignment | Permission grants/denials |
+| `_Comment` | `comments` | Comment | Document comments |
+| `_Source` | (file system only) | Code | Source code files (.cs) |
+| `_Test` | (file system only) | Code | Test code files (.cs) |
+
+## File System Layout
+
+On disk, satellite nodes live in `_SubNamespace/` directories within their parent:
+
+```
+ACME/
+  index.md                          ← Main ACME node
+  _Access/
+    Public_Access.json              ← Access assignments
+    Alice_Access.json
+  Projects/
+    Alpha/
+      index.md                      ← Main Alpha node
+      _Source/
+        Alpha.cs                    ← Source code
+        AlphaLayoutAreas.cs         ← Layout area definitions
+      _Comment/
+        c1.json                     ← Comment on Alpha
+        c1/
+          reply1.json               ← Reply to comment c1
+      _Approval/
+        a1.json                     ← Approval record
+      _Thread/
+        abc123.json                 ← Discussion thread
+      _Access/
+        Bob_Access.json             ← Bob's access to Alpha
+```
+
+## PostgreSQL Table Routing
+
+In PostgreSQL, `PartitionDefinition.ResolveTable(path)` determines the target table by matching the path against `TableMappings`:
+
+```csharp
+var def = new PartitionDefinition
+{
+    Namespace = "ACME",
+    Schema = "acme",
+    TableMappings = PartitionDefinition.StandardTableMappings
+};
+
+def.ResolveTable("ACME/Projects/Alpha")                 // → "mesh_nodes"
+def.ResolveTable("ACME/Projects/Alpha/_Comment/c1")      // → "comments"
+def.ResolveTable("ACME/Projects/Alpha/_Access/Bob")       // → "access"
+def.ResolveTable("ACME/Projects/Alpha/_Thread/abc123")    // → "threads"
+```
+
+Satellite tables have the same schema as `mesh_nodes` (including `main_node` for back-reference to the parent entity) and are indexed on `main_node` for efficient queries.
+
+## StandardTableMappings
+
+`PartitionDefinition.StandardTableMappings` defines the default satellite routing for content partitions:
+
+```csharp
+public static Dictionary<string, string> StandardTableMappings => new()
+{
+    ["_Activity"] = "activities",
+    ["_UserActivity"] = "user_activities",
+    ["_Thread"] = "threads",
+    ["_Tracking"] = "tracking",
+    ["_Approval"] = "approvals",
+    ["_Access"] = "access",
+    ["_Comment"] = "comments",
+};
+```
+
+System partitions (Admin, Portal, Kernel) typically have no `TableMappings` and store all nodes in `mesh_nodes`.
+
 # Backend Implementations
 
 ## IPartitionedStoreFactory
@@ -96,7 +185,7 @@ public interface IPartitionedStoreFactory
 }
 
 public record PartitionedStore(
-    IPersistenceServiceCore PersistenceCore,
+    IStorageService PersistenceCore,
     IMeshQueryProvider? QueryProvider);
 ```
 
@@ -112,14 +201,37 @@ Each partition gets its own PostgreSQL schema. A per-schema `NpgsqlDataSource` i
 
 ```
 Database
-+-- schema "acme"
++-- schema "acme"                    ← Organization partition (with satellite tables)
+|   +-- mesh_nodes                   ← Primary entities
+|   +-- activities                   ← _Activity satellite nodes
+|   +-- user_activities              ← _UserActivity satellite nodes
+|   +-- threads                      ← _Thread satellite nodes
+|   +-- tracking                     ← _Tracking satellite nodes (track changes)
+|   +-- approvals                    ← _Approval satellite nodes
+|   +-- access                       ← _Access satellite nodes (permissions)
+|   +-- comments                     ← _Comment satellite nodes
+|   +-- node_type_permissions        ← Public-read node type flags
++-- schema "acme_versions"           ← History tracking
 |   +-- mesh_nodes
-|   +-- partition_objects
+|   +-- activities
 |   +-- ...
-+-- schema "contoso"
++-- schema "admin"                   ← System partition (no satellite tables)
+|   +-- mesh_nodes
+|   +-- node_type_permissions
++-- schema "user"                    ← User partition (with satellite tables)
+|   +-- mesh_nodes
+|   +-- activities
+|   +-- user_activities
+|   +-- threads
+|   +-- tracking
+|   +-- approvals
+|   +-- access
+|   +-- comments
+|   +-- node_type_permissions
++-- schema "portal"                  ← Portal sessions (no satellite tables)
+|   +-- mesh_nodes
++-- schema "kernel"                  ← Kernel sessions (no satellite tables)
     +-- mesh_nodes
-    +-- partition_objects
-    +-- ...
 ```
 
 Schema names are sanitized: lowercased, non-alphanumeric replaced with underscore, digit-leading names prefixed with underscore.
@@ -155,7 +267,7 @@ services.AddPartitionedCosmosPersistence(cosmosClient, databaseName);
 ```
 
 Each registration method calls `AddPartitionedCoreAndWrapperServices()` which registers:
-- `RoutingPersistenceServiceCore` as `IPersistenceServiceCore`
+- `RoutingPersistenceServiceCore` as `IStorageService`
 - `RoutingMeshQueryProvider` as `IMeshQueryProvider`
 - `StaticNodeQueryProvider` for static node providers
 - Scoped `PersistenceService` and `MeshQuery` wrappers

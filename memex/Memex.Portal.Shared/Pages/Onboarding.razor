@@ -7,7 +7,8 @@
 @using MeshWeaver.Messaging
 @using Microsoft.Extensions.DependencyInjection
 @inject AccessService AccessService
-@inject IMeshCatalog MeshCatalog
+@inject IMeshService NodeFactory
+@inject IMeshService MeshQuery
 @inject PortalApplication PortalApplication
 @inject NavigationManager Navigation
 
@@ -32,17 +33,22 @@
             <DataAnnotationsValidator />
 
             <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
-                <FluentTextField Label="Name"
+                <FluentTextField Label="Full Name"
                                  Required="true"
-                                 @bind-Value="model.Name"
+                                 @bind-Value="model.FullName"
                                  Placeholder="Your full name"
                                  Style="width: 100%;" />
 
-                <FluentTextField Label="Email"
+                <FluentTextField Label="Username"
                                  Required="true"
-                                 @bind-Value="model.Email"
-                                 Placeholder="you@example.com"
+                                 @bind-Value="model.Username"
+                                 Placeholder="Pick a username"
                                  Style="width: 100%;" />
+
+                <FluentTextField Label="Email"
+                                 ReadOnly="true"
+                                 @bind-Value="model.Email"
+                                 Style="width: 100%; opacity: 0.7;" />
 
                 <FluentTextArea Label="Bio"
                                 @bind-Value="model.Bio"
@@ -82,16 +88,23 @@
         var context = AccessService?.Context;
         if (context != null)
         {
-            model.Name = context.Name ?? "";
             model.Email = context.Email ?? "";
+
+            // Pre-populate full name from OAuth claims
+            if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
+                model.FullName = context.Name;
+
+            // Suggest username from email prefix (lowercase)
+            if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
+                model.Username = context.Email.Split('@')[0].ToLowerInvariant();
         }
     }
 
     private async Task HandleSubmit()
     {
-        if (string.IsNullOrWhiteSpace(model.Name) || string.IsNullOrWhiteSpace(model.Email))
+        if (string.IsNullOrWhiteSpace(model.Username))
         {
-            errorMessage = "Name and Email are required.";
+            errorMessage = "Username is required.";
             return;
         }
 
@@ -107,47 +120,86 @@
                 return;
             }
 
-            var content = new Dictionary<string, object?>
+            var username = model.Username.Trim().ToLowerInvariant();
+            var fullName = model.FullName?.Trim();
+            var userContent = new User
             {
-                ["name"] = model.Name.Trim(),
-                ["email"] = model.Email.Trim(),
+                FullName = string.IsNullOrWhiteSpace(fullName) ? null : fullName,
+                Email = model.Email.Trim(),
+                Bio = string.IsNullOrWhiteSpace(model.Bio) ? null : model.Bio.Trim(),
+                Role = string.IsNullOrWhiteSpace(model.Role) ? null : model.Role.Trim(),
             };
 
-            if (!string.IsNullOrWhiteSpace(model.Bio))
-                content["bio"] = model.Bio.Trim();
-            if (!string.IsNullOrWhiteSpace(model.Role))
-                content["role"] = model.Role.Trim();
-            if (!string.IsNullOrWhiteSpace(model.AvatarUrl))
-                content["avatar"] = model.AvatarUrl.Trim();
-
-            // Check if this is the first user (no existing User nodes = platform admin)
-            var isFirstUser = true;
-            await foreach (var _ in MeshCatalog.QueryAsync("User", maxResults: 1))
+            // Use ImpersonateAsHub so the portal hub identity is recognized
+            // by the portal create access rule (portal namespace = create/read/update User nodes)
+            using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
             {
-                isFirstUser = false;
-                break;
+                // Check if this is the first user (no existing User nodes = platform admin)
+                var isFirstUser = true;
+                await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 }))
+                {
+                    isFirstUser = false;
+                    break;
+                }
+
+                // Check that the username is not already taken
+                var existingNode = await MeshQuery.QueryAsync<MeshNode>(
+                    $"path:User/{username} scope:self").FirstOrDefaultAsync();
+                if (existingNode != null)
+                {
+                    errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
+                    return;
+                }
+
+                // Check that the email is not already assigned to another user
+                var emailValue = model.Email.Trim();
+                var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
+                    $"nodeType:User content.email:{emailValue}").FirstOrDefaultAsync();
+                if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
+                {
+                    errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";
+                    return;
+                }
+
+                var node = new MeshNode(username, "User")
+                {
+                    Name = string.IsNullOrWhiteSpace(fullName) ? username : fullName,
+                    NodeType = "User",
+                    State = MeshNodeState.Active,
+                    Icon = string.IsNullOrWhiteSpace(model.AvatarUrl) ? null : model.AvatarUrl.Trim(),
+                    Content = userContent
+                };
+
+                await NodeFactory.CreateNodeAsync(node);
+
+                // First user becomes PlatformAdmin
+                if (isFirstUser)
+                {
+                    var securityService = PortalApplication.Hub.ServiceProvider
+                        .GetService<ISecurityService>();
+                    if (securityService != null)
+                        await securityService.AddUserRoleAsync(username, "PlatformAdmin", "Admin", username);
+                }
             }
 
-            var node = new MeshNode(userId, "User")
+            // Update circuit context so the OnboardingMiddleware on the next request
+            // recognizes this user as already onboarded (the query for newly created
+            // nodes may not return results immediately due to routing/caching).
+            var updatedContext = (AccessService.Context ?? new AccessContext()) with
             {
-                Name = model.Name.Trim(),
-                NodeType = "User",
-                State = MeshNodeState.Active,
-                Content = content
+                ObjectId = username,
+                Name = username,
+                Email = model.Email.Trim()
             };
-
-            await MeshCatalog.CreateNodeAsync(node, userId);
-
-            // First user becomes PlatformAdmin
-            if (isFirstUser)
-            {
-                var securityService = PortalApplication.Hub.ServiceProvider
-                    .GetService<ISecurityService>();
-                if (securityService != null)
-                    await securityService.AddUserRoleAsync(userId, "PlatformAdmin", null, userId);
-            }
+            AccessService.SetContext(updatedContext);
+            AccessService.SetCircuitContext(updatedContext);
 
             Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+            // NavigateTo with forceLoad throws NavigationException — let it propagate
+            throw;
         }
         catch (Exception ex)
         {
@@ -161,7 +213,8 @@
 
     private class OnboardingModel
     {
-        public string Name { get; set; } = "";
+        public string? FullName { get; set; }
+        public string Username { get; set; } = "";
         public string Email { get; set; } = "";
         public string? Bio { get; set; }
         public string? Role { get; set; }

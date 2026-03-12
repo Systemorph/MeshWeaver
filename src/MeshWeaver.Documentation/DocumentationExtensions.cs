@@ -19,6 +19,20 @@ public static class DocumentationExtensions
             return services;
         });
 
+        // Register Documentation as a Partition node so it appears in Global Settings
+        builder.AddMeshNodes(new MeshNode("Documentation", "Admin/Partition")
+        {
+            NodeType = "Partition",
+            Name = "MeshWeaver Documentation",
+            State = MeshNodeState.Active,
+            Content = new PartitionDefinition
+            {
+                Namespace = "Doc",
+                DataSource = "static",
+                Description = "Built-in MeshWeaver platform documentation"
+            }
+        });
+
         builder.ConfigureHub(config => config
             .AddEmbeddedResourceContentCollection(
                 "DocContent",

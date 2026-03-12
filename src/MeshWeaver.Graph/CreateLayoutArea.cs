@@ -9,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
@@ -52,6 +53,22 @@ public static class CreateLayoutArea
 
             // Permission gate: check Create permission on current path
             var canCreate = await PermissionHelper.CanCreateAsync(host.Hub, currentPath);
+            if (!canCreate)
+            {
+                // Fallback: in cross-hub layout rendering, ISecurityService may not have
+                // the real user's context (ImpersonateAsHub sets hub identity instead).
+                // Check if a DI-registered INodeTypeAccessRule supports Create for this type;
+                // if so, show the form and let the backend (RlsNodeValidator) enforce actual security.
+                var nodeType = currentNode?.NodeType;
+                if (!string.IsNullOrEmpty(nodeType))
+                {
+                    var accessRules = host.Hub.ServiceProvider.GetServices<INodeTypeAccessRule>();
+                    var rule = accessRules.FirstOrDefault(r =>
+                        r.NodeType.Equals(nodeType, StringComparison.OrdinalIgnoreCase));
+                    if (rule != null && rule.SupportedOperations.Contains(NodeOperation.Create))
+                        canCreate = true;
+                }
+            }
             if (!canCreate)
             {
                 return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
@@ -99,7 +116,7 @@ public static class CreateLayoutArea
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
             ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
             : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
         // Set up metadata data binding for Name field
@@ -152,7 +169,7 @@ public static class CreateLayoutArea
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
                     {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
                         ctx.NavigateTo(cancelUrl);
                     }))
                 .WithView(Controls.Button("Create")
@@ -219,7 +236,7 @@ public static class CreateLayoutArea
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
                     {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
                         ctx.NavigateTo(cancelUrl);
                     }))
                 .WithView(Controls.Button("Create")
@@ -253,9 +270,7 @@ public static class CreateLayoutArea
         }
         else
         {
-            // Fallback: basic properties form for nodes without ContentType
-            stack = stack.WithView(BuildBasicPropertiesForm(host, node));
-
+            // No content type editor — the metadata Name field above is sufficient.
             // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
@@ -265,7 +280,7 @@ public static class CreateLayoutArea
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
                     {
-                        try { await meshCatalog.DeleteNodeAsync(nodePath); } catch { }
+                        try { await nodeFactory.DeleteNodeAsync(nodePath); } catch { }
                         ctx.NavigateTo(cancelUrl);
                     }))
                 .WithView(Controls.Button("Create")
@@ -325,8 +340,8 @@ public static class CreateLayoutArea
         logger?.LogInformation("Confirming transient node at {NodePath} with content type {ContentType}",
             nodePath, contentType?.Name ?? "none");
 
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        meshCatalog.CreateNodeAsync(updatedNode)
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        nodeFactory.CreateNodeAsync(updatedNode)
             .ContinueWith(task =>
             {
                 if (task.IsCompletedSuccessfully)
@@ -350,7 +365,7 @@ public static class CreateLayoutArea
     private static void HandleIdChangeCreate(
         UiActionContext ctx,
         LayoutAreaHost host,
-        IMeshCatalog meshCatalog,
+        IMeshService nodeFactory,
         ILogger? logger,
         MeshNode transientNode,
         string? currentName,
@@ -376,7 +391,7 @@ public static class CreateLayoutArea
         logger?.LogInformation("Creating new node at {NewPath} (Id changed from transient {TransientPath})",
             newPath, transientPath);
 
-        meshCatalog.CreateNodeAsync(newNode)
+        nodeFactory.CreateNodeAsync(newNode)
             .ContinueWith(task =>
             {
                 if (task.IsCompletedSuccessfully)
@@ -388,7 +403,7 @@ public static class CreateLayoutArea
                     {
                         try
                         {
-                            await meshCatalog.DeleteNodeAsync(transientPath);
+                            await nodeFactory.DeleteNodeAsync(transientPath);
                             logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
                         }
                         catch (Exception ex)
@@ -420,37 +435,6 @@ public static class CreateLayoutArea
     }
 
     /// <summary>
-    /// Builds basic properties form for nodes without ContentType.
-    /// </summary>
-    private static UiControl BuildBasicPropertiesForm(LayoutAreaHost host, MeshNode node)
-    {
-        var dataId = $"create_{node.Path.Replace("/", "_")}";
-        var formData = new Dictionary<string, object?>
-        {
-            ["name"] = node.Name ?? "",
-            ["category"] = node.Category ?? "",
-            ["icon"] = node.Icon ?? ""
-        };
-        host.UpdateData(dataId, formData);
-
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
-
-        // Name field
-        stack = stack.WithView(Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("margin-bottom: 8px;")
-            .WithView(Controls.Body("Name").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-            .WithView(new TextFieldControl(new JsonPointerReference("name"))
-            {
-                Placeholder = "Display name",
-                Immediate = true,
-                DataContext = LayoutAreaReference.GetDataPointer(dataId)
-            }.WithStyle("width: 100%;")));
-
-        return stack;
-    }
-
-    /// <summary>
     /// Builds the unified "Create New" form:
     /// Namespace (MeshNodePicker), Type (MeshNodePicker with Items), Name, Id, Create/Cancel.
     /// Synchronous — defaults are resolved from the already-available nodes array.
@@ -468,9 +452,8 @@ public static class CreateLayoutArea
         // 1. Resolve defaults from the current node
         var currentNode = nodes.FirstOrDefault(n => n.Path == parentPath);
 
-        var defaultNamespace = currentNode?.Content is ISatelliteContent sat
-            && !string.IsNullOrEmpty(sat.PrimaryNodePath)
-            ? sat.PrimaryNodePath
+        var defaultNamespace = currentNode != null && currentNode.MainNode != currentNode.Path
+            ? currentNode.MainNode
             : parentPath;
 
         var defaultType = currentNode?.NodeType == MeshNode.NodeTypePath
@@ -534,47 +517,52 @@ public static class CreateLayoutArea
         });
         var dataContext = LayoutAreaReference.GetDataPointer(formId);
 
-        // 4. Namespace picker (or readonly label if restricted to single value)
-        if (restrictedNamespaces is { Length: 1 })
+        // 4. Name field (required)
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
         {
-            // Single namespace restriction — show readonly info
-            var nsLabel = string.IsNullOrEmpty(restrictedNamespaces[0]) ? "Root (top-level)" : restrictedNamespaces[0];
-            stack = stack.WithView(Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("margin-bottom: 16px;")
-                .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
-                .WithView(Controls.Body(nsLabel).WithStyle("color: var(--neutral-foreground-rest);")));
-        }
-        else if (restrictedNamespaces is { Length: > 1 })
-        {
-            // Multiple namespace restriction — filtered picker with synthetic root node
-            var nsItems = restrictedNamespaces.Select(ns =>
-                string.IsNullOrEmpty(ns)
-                    ? new MeshNode("") { Name = "Root (top-level)", NodeType = "Namespace" }
-                    : new MeshNode(ns) { Name = ns, NodeType = "Namespace" }
-            ).ToArray();
-            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
-            {
-                Label = "Namespace",
-                Placeholder = "Select namespace...",
-                DataContext = dataContext
-            }.WithItems(nsItems)
-             .WithMaxResults(15)
-             .WithStyle("width: 100%; margin-bottom: 16px;"));
-        }
-        else
-        {
-            // No restriction — full picker
-            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
-            {
-                Label = "Namespace",
-                Placeholder = "Root (leave empty for top-level)...",
-                DataContext = dataContext
-            }.WithQueries("context:create").WithMaxResults(15)
-             .WithStyle("width: 100%; margin-bottom: 16px;"));
-        }
+            Label = "Name *",
+            Placeholder = "Enter a name...",
+            Required = true,
+            Immediate = true,
+            DataContext = dataContext
+        }.WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 5. Type picker (or readonly label if restricted to single value)
+        // 5. Id field with auto-generation from Name
+        var lastAutoId = "";
+        var isAutoUpdating = false;
+        host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
+            .Subscribe(data =>
+            {
+                if (isAutoUpdating || data == null) return;
+                var name = data.GetValueOrDefault("name")?.ToString() ?? "";
+                var currentId = data.GetValueOrDefault("id")?.ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(name)) return;
+
+                var generatedId = GenerateIdFromName(name);
+                if (string.IsNullOrEmpty(generatedId)) return;
+
+                // Auto-update if id is empty or matches the last auto-generated value
+                if (currentId != generatedId && (string.IsNullOrEmpty(currentId) || currentId == lastAutoId))
+                {
+                    lastAutoId = generatedId;
+                    isAutoUpdating = true;
+                    var updated = new Dictionary<string, object?>(data) { ["id"] = generatedId };
+                    host.UpdateData(formId, updated);
+                    isAutoUpdating = false;
+                }
+            });
+
+        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
+        {
+            Label = "Id",
+            Placeholder = "Auto-generated from name...",
+            Immediate = true,
+            DataContext = dataContext
+        }.WithStyle("width: 100%; margin-bottom: 4px;"));
+        stack = stack.WithView(Controls.Body("This will be used as the node's identifier in the path")
+            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
+
+        // 6. Type picker (or readonly label if restricted to single value)
         if (restrictedTypes is { Length: 1 })
         {
             // Single type restriction — show readonly info
@@ -617,48 +605,46 @@ public static class CreateLayoutArea
              .WithStyle("width: 100%; margin-bottom: 16px;"));
         }
 
-        // 6. Name field (required)
-        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("name"))
+        // 7. Namespace picker (or readonly label if restricted to single value)
+        if (restrictedNamespaces is { Length: 1 })
         {
-            Label = "Name *",
-            Placeholder = "Enter a name...",
-            Required = true,
-            Immediate = true,
-            DataContext = dataContext
-        }.WithStyle("width: 100%; margin-bottom: 16px;"));
-
-        // 7. Id field with auto-generation from Name
-        var lastAutoId = "";
-        var isAutoUpdating = false;
-        host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-            .Subscribe(data =>
+            // Single namespace restriction — show readonly info
+            var nsLabel = string.IsNullOrEmpty(restrictedNamespaces[0]) ? "Root (top-level)" : restrictedNamespaces[0];
+            stack = stack.WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-bottom: 16px;")
+                .WithView(Controls.Body("Namespace").WithStyle("font-weight: 600; margin-bottom: 4px;"))
+                .WithView(Controls.Body(nsLabel).WithStyle("color: var(--neutral-foreground-rest);")));
+        }
+        else if (restrictedNamespaces is { Length: > 1 })
+        {
+            // Multiple namespace restriction — filtered picker with synthetic root node
+            var nsItems = restrictedNamespaces.Select(ns =>
+                string.IsNullOrEmpty(ns)
+                    ? new MeshNode("") { Name = "Root (top-level)", NodeType = "Namespace" }
+                    : new MeshNode(ns) { Name = ns, NodeType = "Namespace" }
+            ).ToArray();
+            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
             {
-                if (isAutoUpdating || data == null) return;
-                var name = data.GetValueOrDefault("name")?.ToString() ?? "";
-                var currentId = data.GetValueOrDefault("id")?.ToString() ?? "";
-                if (string.IsNullOrEmpty(name)) return;
-
-                var generatedId = GenerateIdFromName(name);
-                // Auto-update if id is empty or matches the last auto-generated value
-                if (currentId != generatedId && (string.IsNullOrEmpty(currentId) || currentId == lastAutoId))
-                {
-                    lastAutoId = generatedId;
-                    isAutoUpdating = true;
-                    data["id"] = generatedId;
-                    host.UpdateData(formId, data);
-                    isAutoUpdating = false;
-                }
-            });
-
-        stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
+                Label = "Namespace",
+                Placeholder = "Select namespace...",
+                DataContext = dataContext
+            }.WithItems(nsItems)
+             .WithMaxResults(15)
+             .WithStyle("width: 100%; margin-bottom: 16px;"));
+        }
+        else
         {
-            Label = "Id",
-            Placeholder = "Auto-generated from name...",
-            Immediate = true,
-            DataContext = dataContext
-        }.WithStyle("width: 100%; margin-bottom: 4px;"));
-        stack = stack.WithView(Controls.Body("This will be used as the node's identifier in the path")
-            .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
+            // No restriction — full picker with root option
+            stack = stack.WithView(new MeshNodePickerControl(new JsonPointerReference("namespace"))
+            {
+                Label = "Namespace",
+                Placeholder = "Root (leave empty for top-level)...",
+                DataContext = dataContext
+            }.WithQueries("context:create").WithMaxResults(15)
+             .WithEmptyOption("Root (top-level)")
+             .WithStyle("width: 100%; margin-bottom: 16px;"));
+        }
 
         // 8. Button row: Cancel on left, Create on right
         var cancelUrl = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);
@@ -697,13 +683,31 @@ public static class CreateLayoutArea
                 if (string.IsNullOrWhiteSpace(id))
                     id = GenerateIdFromName(name);
 
-                var nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+                // For satellite types, inject _TypeName segment (e.g. MyProject/_Thread/MyThread)
+                string nodePath;
+                if (meshConfiguration.IsSatelliteNodeType(selectedType))
+                {
+                    var typeSegment = $"_{selectedType}";
+                    nodePath = string.IsNullOrEmpty(ns) ? $"{typeSegment}/{id}" : $"{ns}/{typeSegment}/{id}";
+                }
+                else
+                {
+                    nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+                }
 
                 try
                 {
-                    var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
-                    var existingNode = await meshCatalog.GetNodeAsync(new Address(nodePath));
+                    var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+                    MeshNode? existingNode = null;
+                    if (meshQuery != null)
+                    {
+                        await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{nodePath}"))
+                        {
+                            existingNode = n;
+                            break;
+                        }
+                    }
                     if (existingNode != null && existingNode.State != MeshNodeState.Transient)
                     {
                         ShowErrorDialog(actx, "Node Already Exists",
@@ -720,7 +724,7 @@ public static class CreateLayoutArea
                     };
 
                     logger?.LogInformation("Creating transient node at {NodePath} with type {NodeType}", nodePath, selectedType);
-                    await meshCatalog.CreateTransientAsync(newNode, CancellationToken.None);
+                    await nodeFactory.CreateTransientAsync(newNode, CancellationToken.None);
                     logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
                     var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
@@ -746,7 +750,7 @@ public static class CreateLayoutArea
     private static string GenerateIdFromName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
-            return Guid.NewGuid().AsString();
+            return "";
 
         // Split by spaces and other separators
         var words = Regex.Split(name, @"[\s\-_]+")
@@ -758,11 +762,7 @@ public static class CreateLayoutArea
         // Remove any remaining non-alphanumeric characters
         pascalCase = Regex.Replace(pascalCase, @"[^a-zA-Z0-9]", "");
 
-        // If empty after processing, use a GUID
-        if (string.IsNullOrEmpty(pascalCase))
-            return Guid.NewGuid().AsString();
-
-        return pascalCase;
+        return pascalCase ?? "";
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Security;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -175,16 +176,19 @@ public class PostgreSqlAccessControl
             ? $"jsonb_build_object({string.Join(", ", contentParts)})"
             : "'{}'::jsonb";
 
+        var mainNode = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
         await using var cmd = _dataSource.CreateCommand(
             $"""
-            INSERT INTO mesh_nodes (namespace, id, name, node_type, content)
-            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild})
+            INSERT INTO mesh_nodes (namespace, id, name, node_type, content, main_node)
+            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, $2)
             ON CONFLICT (namespace, id) DO UPDATE
             SET content = {jsonBuild},
                 node_type = 'PartitionAccessPolicy',
-                name = 'Access Policy'
+                name = 'Access Policy',
+                main_node = EXCLUDED.main_node
             """);
         cmd.Parameters.AddWithValue(ns);
+        cmd.Parameters.AddWithValue(mainNode);
         await cmd.ExecuteNonQueryAsync(ct);
 
         await RebuildDenormalizedTableAsync(ct);
@@ -205,5 +209,28 @@ public class PostgreSqlAccessControl
         await cmd.ExecuteNonQueryAsync(ct);
 
         await RebuildDenormalizedTableAsync(ct);
+    }
+
+    /// <summary>
+    /// Syncs DI-registered NodeTypePermission records to the node_type_permissions table.
+    /// Called at startup to populate the DB with module-declared permissions.
+    /// Uses INSERT ON CONFLICT to be idempotent.
+    /// </summary>
+    public async Task SyncNodeTypePermissionsAsync(
+        IEnumerable<NodeTypePermission> permissions,
+        CancellationToken ct = default)
+    {
+        foreach (var p in permissions)
+        {
+            await using var cmd = _dataSource.CreateCommand(
+                """
+                INSERT INTO node_type_permissions (node_type, public_read)
+                VALUES ($1, $2)
+                ON CONFLICT (node_type) DO UPDATE SET public_read = EXCLUDED.public_read
+                """);
+            cmd.Parameters.AddWithValue(p.NodeType);
+            cmd.Parameters.AddWithValue(p.PublicRead);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
     }
 }

@@ -30,7 +30,9 @@ public class PostgreSqlSqlGenerator
         ["state"] = "n.state",
         ["id"] = "n.id",
         ["namespace"] = "n.namespace",
-        ["path"] = "n.path"
+        ["path"] = "n.path",
+        ["mainNode"] = "n.main_node",
+        ["main_node"] = "n.main_node"
     };
 
     /// <summary>
@@ -123,6 +125,11 @@ public class PostgreSqlSqlGenerator
             clauses.Add(acClause);
         }
 
+        if (query.IsMain == true)
+        {
+            clauses.Add("n.main_node = n.path");
+        }
+
         var whereClause = clauses.Count > 0
             ? "WHERE " + string.Join(" AND ", clauses)
             : "";
@@ -135,24 +142,49 @@ public class PostgreSqlSqlGenerator
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId);
 
-        var isActivityQuery = query.Source == QuerySource.Activity && !string.IsNullOrEmpty(activityUserId);
+        var isAccessedQuery = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
+        var isActivityQuery = query.Source == QuerySource.Activity;
 
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            "n.desired_id FROM mesh_nodes n");
+            "n.desired_id, n.main_node FROM mesh_nodes n");
 
-        if (isActivityQuery)
+        if (isAccessedQuery)
         {
-            parameters["@actUserId"] = activityUserId!;
-            sql.Append(" LEFT JOIN user_activity ua ON n.path = ua.node_path AND ua.user_id = @actUserId");
+            // JOIN with UserActivity MeshNodes stored at User/{userId}/_userActivity/{encodedPath}
+            // where encodedPath = node.path with / replaced by _
+            parameters["@actUserNs"] = $"User/{activityUserId}/_userActivity";
+            sql.Append(" INNER JOIN mesh_nodes ua ON ua.namespace = @actUserNs" +
+                        " AND ua.node_type = 'UserActivity'" +
+                        " AND REPLACE(n.path, '/', '_') = ua.id");
+        }
+        else if (isActivityQuery)
+        {
+            // JOIN with Activity satellites to find main nodes with recent activity
+            sql.Append(" INNER JOIN mesh_nodes act ON act.main_node = n.path" +
+                        " AND act.node_type = 'Activity'");
+        }
+
+        // Both source queries restrict to main content nodes only (main_node = path)
+        if (isActivityQuery || isAccessedQuery)
+        {
+            var mainNodeFilter = "n.main_node = n.path";
+            whereClause = string.IsNullOrEmpty(whereClause)
+                ? $"WHERE {mainNodeFilter}"
+                : $"{whereClause} AND {mainNodeFilter}";
         }
 
         if (!string.IsNullOrEmpty(whereClause))
             sql.Append($" {whereClause}");
 
-        if (isActivityQuery)
+        if (isAccessedQuery)
         {
-            sql.Append(" ORDER BY ua.last_accessed DESC NULLS LAST");
+            sql.Append(" ORDER BY ua.last_modified DESC NULLS LAST");
+        }
+        else if (isActivityQuery && query.OrderBy == null)
+        {
+            // Default ordering: most recent activity first
+            sql.Append(" ORDER BY act.content->>'Start' DESC NULLS LAST");
         }
         else if (query.OrderBy != null)
         {
@@ -505,18 +537,30 @@ public class PostgreSqlSqlGenerator
         // Anonymous users only get their own permissions (no Public inheritance).
         // All other users also inherit Public permissions as a baseline floor.
         // NodeType definitions (node_type = 'NodeType') are always publicly readable.
+        // Node types marked as public_read in node_type_permissions are visible to authenticated users.
         var userList = userId == WellKnownUsers.Anonymous
             ? $"{paramName}"
             : $"{paramName}, 'Public'";
+
+        // Public-read node types (e.g. User, Organization) are visible to authenticated users
+        var publicReadClause = userId == WellKnownUsers.Anonymous
+            ? ""
+            : """
+
+                            OR EXISTS (SELECT 1 FROM node_type_permissions ntp
+                                       WHERE ntp.node_type = n.node_type AND ntp.public_read = true)
+            """;
+
         return $"""
             (
                 n.node_type = 'NodeType'
+                OR n.main_node = {paramName}{publicReadClause}
                 OR
                 (SELECT uep.is_allow
                  FROM user_effective_permissions uep
                  WHERE uep.user_id IN ({userList})
                    AND uep.permission = 'Read'
-                   AND n.path LIKE uep.node_path_prefix || '%'
+                   AND n.main_node LIKE uep.node_path_prefix || '%'
                  ORDER BY LENGTH(uep.node_path_prefix) DESC,
                           CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
                  LIMIT 1) = true

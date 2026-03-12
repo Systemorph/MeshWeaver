@@ -56,6 +56,7 @@ public static class ThreadNodeType
     {
         Name = "Thread",
         Icon = "/static/NodeTypeIcons/chat.svg",
+        IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
         HubConfiguration = hubConfiguration

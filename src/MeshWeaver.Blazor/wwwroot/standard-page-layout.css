@@ -200,6 +200,7 @@ code {
     --code-block-border-color: #444c56 !important; /* GitHub dark theme border color */
     --code-block-background-color: #2d333b !important; /* GitHub dark theme background color */
 }
+
 /* Monaco editor autocomplete widget - ensure it can overflow containers */
 .monaco-editor .suggest-widget,
 .monaco-editor .monaco-hover,
@@ -253,6 +254,21 @@ fluent-header,
 .header-gutters,
 .header-gutters > * {
     overflow: visible !important;
+}
+
+/* Global SVG icon mask — any element with --icon-url renders the SVG as a mask */
+[style*="--icon-url"] {
+    -webkit-mask-image: var(--icon-url);
+    mask-image: var(--icon-url);
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-mode: alpha;
+    mask-mode: alpha;
+    background-color: currentColor;
 }
 
 @media (max-width: 600px) {

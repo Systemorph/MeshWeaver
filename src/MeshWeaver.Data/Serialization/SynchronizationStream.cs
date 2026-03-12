@@ -162,7 +162,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void OnError(Exception error)
     {
         if (!Store.IsDisposed)
-            Store.OnError(error);
+        {
+            logger.LogWarning(error, "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner})", StreamId, Reference, Owner);
+            try
+            {
+                Store.OnError(error);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "[SYNC_STREAM] Exception from Store.OnError propagation for {StreamId}", StreamId);
+            }
+            // Always fault startup and open gate, even if Store.OnError throws
+            Hub.FailStartup(error);
+            Hub.OpenGate(SynchronizationGate);
+        }
+        else
+        {
+            logger.LogWarning("[SYNC_STREAM] OnError skipped for {StreamId} - Store is disposed", StreamId);
+        }
     }
 
     public void RegisterForDisposal(IDisposable disposable) => Hub
@@ -233,6 +250,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     hub.GetWorkspace().RequestChange(delivery.Message, null, delivery);
                     return delivery.Processed();
                 }
+            ).WithHandler<GetDataResponse>((_, delivery) =>
+                {
+                    var response = delivery.Message;
+                    if (response.Error is { } error)
+                    {
+                        logger.LogWarning("Stream {StreamId} subscription rejected: {Error}", StreamId, error);
+                        OnError(new UnauthorizedAccessException(
+                            $"Subscription to {StreamIdentity.Owner} for {Reference} failed: {error}"));
+                    }
+                    return delivery.Processed();
+                }
+            ).WithHandler<DeliveryFailure>((_, delivery) =>
+                {
+                    var failure = delivery.Message;
+                    logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
+                    OnError(new DeliveryFailureException(failure));
+                    return delivery.Processed();
+                }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
             {
                 hub.Dispose();
@@ -272,7 +307,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)

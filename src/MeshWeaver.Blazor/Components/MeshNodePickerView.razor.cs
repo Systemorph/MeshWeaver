@@ -12,7 +12,7 @@ namespace MeshWeaver.Blazor.Components;
 public partial class MeshNodePickerView : FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
 {
     [Inject]
-    private IMeshQuery MeshQuery { get; set; } = default!;
+    private IMeshService MeshQuery { get; set; } = default!;
 
     private MeshNode? _selectedNode;
     private bool _isSearchOpen;

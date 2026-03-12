@@ -3,9 +3,11 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -24,9 +26,11 @@ public static class GraphConfigurationExtensions
         {
             builder
                 .AddNodeTypeType()
+                .AddOrganizationType()
                 .AddAgentType()
                 .AddCodeType()
                 .AddMarkdownType()
+                .AddHtmlType()
                 .AddThreadType(config => config
                     .AddThreadViews()
                     .AddMeshDataSource(source => source
@@ -34,6 +38,7 @@ public static class GraphConfigurationExtensions
                         .WithType<ThreadMessage>(ThreadMessageNodeType.NodeType)))
                 .AddThreadMessageType()
                 .AddCommentType()
+                .AddTrackedChangeType()
                 .AddAccessAssignmentType()
                 .AddPartitionAccessPolicyType()
                 .AddUserType()
@@ -42,7 +47,15 @@ public static class GraphConfigurationExtensions
                 .AddRoleType()
                 .AddGroupMembershipType()
                 .AddApprovalType()
-                .AddNotificationType();
+                .AddNotificationType()
+                .AddActivityType()
+                .AddUserActivityType()
+                .AddKernelType()
+                .AddPortalType()
+                .AddApiTokenType()
+                .AddMeshDataSourceType()
+                .AddPartitionType()
+                .AddGlobalSettingsType();
 
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
@@ -105,21 +118,15 @@ public static class GraphConfigurationExtensions
 
         try
         {
-            var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
-            {
-                hub.Post(new GetDataResponse(null, 0) { Error = "IPersistenceService not available" },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
+            var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();
 
-            // Get CodeConfiguration from child MeshNodes under the Code path
+            // Get CodeConfiguration from child MeshNodes under the _Source path
             CodeConfiguration? codeFile = null;
-            var codeParentPath = $"{nodeTypePath}/Code";
-            await foreach (var child in persistence.GetChildrenAsync(codeParentPath).WithCancellation(ct))
+            var codeParentPath = $"{nodeTypePath}/_Source";
+            await foreach (var child in meshQuery.QueryAsync<MeshNode>($"namespace:{codeParentPath} scope:subtree").WithCancellation(ct))
             {
                 if (child.Content is CodeConfiguration cf)
                 {

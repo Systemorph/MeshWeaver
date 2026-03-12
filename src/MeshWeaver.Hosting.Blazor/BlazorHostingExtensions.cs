@@ -149,8 +149,8 @@ public static class BlazorHostingExtensions
 
                 // Pattern 2: /static/{address}/{collection}/{filePath}
                 // Resolve address from path using score-based matching
-                var meshCatalog = mainHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                var resolution = await meshCatalog.ResolvePathAsync(path);
+                var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
+                var resolution = await pathResolver.ResolvePathAsync(path);
 
                 if (resolution == null)
                 {

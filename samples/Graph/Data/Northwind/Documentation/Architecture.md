@@ -34,7 +34,7 @@ Northwind/                           # Root namespace
 │   ├── regions.csv                  # Geographic regions
 │   ├── territories.csv              # Sales territories
 │   └── shippers.csv                 # Shipping companies
-└── AnalyticsCatalog/Code/            # View implementations
+└── AnalyticsCatalog/_Source/            # View implementations
     ├── Order.cs                     # Order entity
     ├── OrderDetails.cs              # OrderDetails entity
     ├── Product.cs                   # Product entity

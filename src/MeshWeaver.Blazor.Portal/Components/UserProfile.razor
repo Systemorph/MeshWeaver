@@ -13,11 +13,14 @@
                     <FluentStack VerticalAlignment="VerticalAlignment.Center">
                         <FluentLabel>Logged in as:</FluentLabel>
                         <FluentSpacer />
+                        <FluentButton Appearance="Appearance.Stealth" OnClick="@(() => Navigation.NavigateTo("/_settings"))">
+                            Settings
+                        </FluentButton>
                         <FluentButton Appearance="Appearance.Stealth" OnClick="Logout">Sign out</FluentButton>
                     </FluentStack>
                 </HeaderTemplate>
                 <ChildContent>
-                    <FluentStack class="inner-persona-container">
+                    <FluentStack class="inner-persona-container" @onclick="NavigateToUserNode" Style="cursor: pointer;">
                         <FluentPersona Initials="@initials" ImageSize="@ImageSize" Class="inner-persona">
                             <div class="full-name">@name</div>
                             <div class="user-id">@username</div>

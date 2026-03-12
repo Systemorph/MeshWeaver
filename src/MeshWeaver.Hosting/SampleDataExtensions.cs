@@ -28,10 +28,6 @@ public static class SampleDataExtensions
     public static TBuilder AddCornerstone<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Cornerstone");
 
-    /// <summary>Includes the Organization sample data.</summary>
-    public static TBuilder AddOrganization<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("Organization");
-
     /// <summary>Includes the Systemorph sample data.</summary>
     public static TBuilder AddSystemorph<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder.IncludePartition("Systemorph");
@@ -76,15 +72,7 @@ public static class SampleDataExtensions
 
     /// <summary>Includes the activity tracking partition.</summary>
     public static TBuilder AddActivity<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("_activity");
-
-    /// <summary>Includes the user activity tracking partition.</summary>
-    public static TBuilder AddUserActivity<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("_useractivity");
-
-    /// <summary>Includes the activity logs partition (system-wide edit/approval logs).</summary>
-    public static TBuilder AddActivityLogs<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("_activitylogs");
+        => builder.IncludePartition("_Activity");
 
     // === Convenience bundles ===
 
@@ -98,7 +86,6 @@ public static class SampleDataExtensions
             .AddFutuRe()
             .AddAcme()
             .AddCornerstone()
-            .AddOrganization()
             .AddSystemorph()
             .AddMeshWeaverDocs()
             .AddDoc()
@@ -109,7 +96,5 @@ public static class SampleDataExtensions
             .AddUserData()
             .AddVUser()
             .AddKernelData()
-            .AddActivity()
-            .AddUserActivity()
-            .AddActivityLogs();
+            .AddActivity();
 }

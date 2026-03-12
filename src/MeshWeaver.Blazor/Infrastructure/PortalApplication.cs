@@ -1,4 +1,4 @@
-﻿using MeshWeaver.ContentCollections;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
@@ -8,15 +8,25 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Blazor.Infrastructure;
 
-public class PortalApplication(IMessageHub hub, IRoutingService routingService, INavigationService navigationService) : IDisposable
+/// <summary>
+/// Manages the portal hub for a Blazor circuit (one per browser tab).
+/// The portal hub is a local sub-hub — no MeshNode in the catalog needed.
+/// Lifetime: Scoped (created when circuit starts, disposed when tab closes).
+/// </summary>
+public class PortalApplication : IDisposable
 {
-    public IMessageHub Hub { get; } = hub.GetHostedHub(AddressExtensions.CreatePortalAddress(),
-        c =>
-            hub.ServiceProvider.GetRequiredService<ILayoutClient>()
-                .Configuration
-                .PortalConfiguration
-                .Aggregate(DefaultPortalConfig(c, routingService, navigationService),
-                    (cc, ccc) => ccc.Invoke(cc)))!;
+    public IMessageHub Hub { get; }
+
+    public PortalApplication(IMessageHub hub, IRoutingService routingService, INavigationService navigationService)
+    {
+        Hub = hub.GetHostedHub(AddressExtensions.CreatePortalAddress(),
+            c =>
+                hub.ServiceProvider.GetRequiredService<ILayoutClient>()
+                    .Configuration
+                    .PortalConfiguration
+                    .Aggregate(DefaultPortalConfig(c, routingService, navigationService),
+                        (cc, ccc) => ccc.Invoke(cc)))!;
+    }
 
     public static MessageHubConfiguration DefaultPortalConfig(MessageHubConfiguration config,
         IRoutingService routingService, INavigationService navigationService)
@@ -31,7 +41,6 @@ public class PortalApplication(IMessageHub hub, IRoutingService routingService, 
                 navigationService.NavigateTo(delivery.Message.Uri, delivery.Message.ForceLoad, delivery.Message.Replace);
                 return delivery.Processed();
             });
-
 
     public void Dispose()
     {

@@ -67,7 +67,9 @@ public static class ThreadLayoutAreas
         LayoutAreaHost host, RenderingContext ctx)
     {
         await Task.CompletedTask;
-        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12);
+        var hubPath = host.Hub.Address.ToString();
+        yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
+            Href: MeshNodeLayoutAreas.BuildContentUrl(hubPath, ThreadNodeType.HistoryArea));
     }
 
     private static string GetContextDisplayName(string path)
@@ -86,8 +88,17 @@ public static class ThreadLayoutAreas
 
         return Observable.FromAsync(async () =>
         {
-            var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-            var existingNode = await meshCatalog.GetNodeAsync(new Address(currentPath));
+            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+            MeshNode? existingNode = null;
+            if (meshQuery != null)
+            {
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{currentPath}"))
+                {
+                    existingNode = n;
+                    break;
+                }
+            }
 
             if (existingNode == null)
             {
@@ -111,7 +122,7 @@ public static class ThreadLayoutAreas
 
             try
             {
-                var createdNode = await meshCatalog.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
+                var createdNode = await nodeFactory.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
                 return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ThreadArea));
             }
             catch (Exception ex)
@@ -141,7 +152,7 @@ public static class ThreadLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"path:{hubPath} scope:children nodeType:{ThreadNodeType.NodeType}")
+                .WithHiddenQuery($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}")
                 .WithPlaceholder("Search threads...")
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithMaxColumns(3));
@@ -155,7 +166,7 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         // Node stream — drives the observable title and chat control context
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
@@ -207,7 +218,7 @@ public static class ThreadLayoutAreas
     /// Builds a reactive stream of message cells by observing child ThreadMessage nodes.
     /// Uses Scan to accumulate changes into a running list, then maps to LayoutAreaControls.
     /// </summary>
-    private static IObservable<ImmutableList<LayoutAreaControl>> BuildCellsStream(IMeshQuery? meshQuery, string threadPath)
+    private static IObservable<ImmutableList<LayoutAreaControl>> BuildCellsStream(IMeshService? meshQuery, string threadPath)
     {
         if (meshQuery == null)
             return Observable.Return(ImmutableList<LayoutAreaControl>.Empty);
@@ -244,7 +255,7 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> HistoryView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
         {
@@ -260,7 +271,7 @@ public static class ThreadLayoutAreas
         {
             try
             {
-                return await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:{ThreadNodeType.NodeType} scope:children").ToListAsync() as IReadOnlyList<MeshNode>;
+                return await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:{ThreadNodeType.NodeType}").ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
             {
@@ -275,7 +286,7 @@ public static class ThreadLayoutAreas
         });
     }
 
-    private static UiControl BuildHistoryView(LayoutAreaHost host, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
+    private static UiControl BuildHistoryView(LayoutAreaHost _, MeshNode? node, string threadPath, IReadOnlyList<MeshNode> delegations)
     {
         var container = Controls.Stack
             .WithWidth("100%")
@@ -348,7 +359,7 @@ public static class ThreadLayoutAreas
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
@@ -362,7 +373,7 @@ public static class ThreadLayoutAreas
             try
             {
                 return await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children sort:Timestamp-asc"
+                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Timestamp-asc"
                 ).ToListAsync() as IReadOnlyList<MeshNode>;
             }
             catch
@@ -433,12 +444,12 @@ public static class ThreadLayoutAreas
     /// </summary>
     private static async Task<int> ComputeNextMessageNumberAsync(IMessageHub hub, string threadPath)
     {
-        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
             return 1;
 
         var messageNodes = await meshQuery.QueryAsync<MeshNode>(
-            $"path:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} scope:children"
+            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
         ).ToListAsync();
 
         if (messageNodes.Count == 0)
@@ -458,7 +469,7 @@ public static class ThreadLayoutAreas
     private static async Task<string> CreateMessageNodeAsync(
         IMessageHub hub, string threadPath, int messageNumber, ThreadMessage message)
     {
-        var meshCatalog = hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var nodeFactory = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var messagePath = $"{threadPath}/{messageNumber}";
 
         var messageNode = new MeshNode(messagePath)
@@ -470,7 +481,7 @@ public static class ThreadLayoutAreas
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var userId = accessService?.Context?.ObjectId;
-        await meshCatalog.CreateNodeAsync(messageNode, userId);
+        await nodeFactory.CreateNodeAsync(messageNode);
         return messagePath;
     }
 
@@ -478,8 +489,16 @@ public static class ThreadLayoutAreas
     /// Handles ExecuteThreadMessageRequest by creating both user and response nodes,
     /// running the agent on the hub side, and streaming updates to the response node.
     /// This decouples agent execution from the GUI component lifecycle.
+    ///
+    /// IMPORTANT: The async work runs on a background task (Task.Run) to avoid deadlock.
+    /// The hub's execution block processes messages sequentially. If we await
+    /// nodeFactory.CreateNodeAsync() (which uses hub.AwaitResponse internally) from
+    /// within a handler, the response callback can't be processed because the execution
+    /// block is occupied by the waiting handler — classic deadlock.
+    /// By returning delivery.Processed() immediately and running the work on a background
+    /// task, the execution block is freed to process response callbacks.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleExecuteThreadMessage(
+    private static Task<IMessageDelivery> HandleExecuteThreadMessage(
         IMessageHub hub,
         IMessageDelivery<ExecuteThreadMessageRequest> delivery,
         CancellationToken ct)
@@ -487,6 +506,23 @@ public static class ThreadLayoutAreas
         var request = delivery.Message;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
 
+        // Schedule the async work on a background task to avoid deadlocking the execution block.
+        _ = Task.Run(() => ExecuteThreadMessageAsync(hub, delivery, request, logger, ct), ct);
+
+        return Task.FromResult<IMessageDelivery>(delivery.Processed());
+    }
+
+    /// <summary>
+    /// Executes the thread message processing on a background task.
+    /// Creates user + response nodes, runs the agent, and streams updates.
+    /// </summary>
+    private static async Task ExecuteThreadMessageAsync(
+        IMessageHub hub,
+        IMessageDelivery<ExecuteThreadMessageRequest> delivery,
+        ExecuteThreadMessageRequest request,
+        ILogger logger,
+        CancellationToken ct)
+    {
         try
         {
             // 1. Compute next message number from existing children
@@ -526,10 +562,15 @@ public static class ThreadLayoutAreas
                 chatClient.SetAttachments(request.Attachments);
 
             // 5. Load persistent thread ID from thread content if present
-            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-            if (meshCatalog != null)
+            var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
+            if (meshQuery != null)
             {
-                var threadNode = await meshCatalog.GetNodeAsync(new Address(request.ThreadPath));
+                MeshNode? threadNode = null;
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{request.ThreadPath}"))
+                {
+                    threadNode = n;
+                    break;
+                }
                 if (threadNode?.Content is MeshThread threadContent
                     && !string.IsNullOrEmpty(threadContent.PersistentThreadId))
                 {
@@ -570,8 +611,6 @@ public static class ThreadLayoutAreas
             hub.Post(new ExecuteThreadMessageResponse { Success = false, Error = ex.Message },
                 o => o.ResponseFor(delivery));
         }
-
-        return delivery.Processed();
     }
 
     private static void UpdateResponseNode(IMessageHub hub, string responsePath, string text, string? agentName = null, string? modelName = null)
@@ -601,10 +640,16 @@ public static class ThreadLayoutAreas
     {
         try
         {
-            var meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-            var existingNode = meshCatalog != null
-                ? await meshCatalog.GetNodeAsync(new Address(threadPath))
-                : null;
+            var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
+            MeshNode? existingNode = null;
+            if (meshQuery != null)
+            {
+                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{threadPath}"))
+                {
+                    existingNode = n;
+                    break;
+                }
+            }
 
             if (existingNode != null)
             {

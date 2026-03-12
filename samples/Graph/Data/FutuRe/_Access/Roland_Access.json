@@ -1,0 +1,20 @@
+{
+  "id": "Roland_Access",
+  "namespace": "FutuRe/_Access",
+  "name": "Roland Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Roland",
+    "displayName": "Roland Buergi",
+    "roles": [
+      {
+        "role": "Editor"
+      },
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}

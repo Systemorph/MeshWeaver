@@ -19,7 +19,7 @@
     "description": "Deploy demo.meshflow.io with pre-configured workflows, sample integrations, and realistic data. Ensure 99.9% uptime during launch period.",
     "category": "Engineering",
     "priority": "Critical",
-    "assignee": "carol.martinez@example.com",
+    "assignee": "Carol",
     "dueDate": "2026-01-24T00:00:00+01:00",
     "dueDateOffsetDays": 5,
     "status": "InProgress",

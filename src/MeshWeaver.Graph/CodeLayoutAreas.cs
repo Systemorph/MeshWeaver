@@ -113,7 +113,7 @@ public static class CodeLayoutAreas
     {
         var hubAddress = host.Hub.Address;
         var hubPath = hubAddress.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         // Derive the parent NodeType path by stripping the last two segments (Code/{id})
         var segments = hubPath.Split('/');

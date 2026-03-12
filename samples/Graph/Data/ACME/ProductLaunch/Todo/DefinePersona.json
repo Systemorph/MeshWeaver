@@ -17,7 +17,7 @@
     "description": "Research and document the ideal customer profile (ICP) for TaskFlow. Focus on operations managers and process owners at companies with 200-2000 employees who struggle with manual workflows.",
     "category": "Research",
     "priority": "High",
-    "assignee": "alice.chen@example.com",
+    "assignee": "Alice",
     "dueDateOffsetDays": -10,
     "status": "Completed",
     "completedAt": "2025-01-18T14:30:00Z"

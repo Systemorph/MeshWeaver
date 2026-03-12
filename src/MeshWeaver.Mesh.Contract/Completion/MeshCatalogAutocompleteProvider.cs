@@ -1,6 +1,7 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Mesh.Completion;
 
@@ -9,9 +10,15 @@ namespace MeshWeaver.Mesh.Completion;
 /// Returns items like "@app/", "@pricing/" based on registered MeshNodes
 /// plus reserved prefixes (agent, model).
 /// </summary>
-public class MeshCatalogAutocompleteProvider(IMeshCatalog? meshCatalog) : IAutocompleteProvider
+public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
 {
+    private readonly IMeshCatalog? meshCatalog;
     private const int PrefixCategoryPriority = 1800;
+
+    public MeshCatalogAutocompleteProvider(IServiceProvider serviceProvider)
+    {
+        meshCatalog = serviceProvider.GetService<IMeshCatalog>();
+    }
 
     /// <inheritdoc />
     public async IAsyncEnumerable<AutocompleteItem> GetItemsAsync(

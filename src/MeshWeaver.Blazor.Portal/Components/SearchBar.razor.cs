@@ -17,7 +17,7 @@ public partial class SearchBar : IAsyncDisposable
     public required IKeyCodeService KeyCodeService { get; set; }
 
     [Inject]
-    public IMeshQuery? MeshQuery { get; set; }
+    public IMeshService? MeshQuery { get; set; }
 
     [Inject]
     public INavigationService? NavigationService { get; set; }

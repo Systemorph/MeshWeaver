@@ -7,10 +7,8 @@
   "icon": "/static/NodeTypeIcons/person.svg",
   "isPersistent": true,
   "content": {
-    "id": "Oliver",
-    "name": "Oliver Chen",
+    "$type": "User",
     "email": "oliver.chen@acme.example.com",
-    "bio": "Compliance officer ensuring regulatory adherence and risk management.",
-    "role": "Compliance Officer"
+    "bio": "Compliance officer ensuring regulatory adherence and risk management."
   }
 }

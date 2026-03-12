@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Reflection;
 using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Mesh;
@@ -15,7 +15,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 {
 
     private ModulesAssemblyLoadContext? loadContext;
-    private readonly IMeshCatalog meshCatalog = meshHub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+    private readonly IMeshStorage persistence = meshHub.ServiceProvider.GetRequiredService<IMeshStorage>();
     private IMessageHub? Hub { get; set; }
 
 
@@ -25,9 +25,17 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var streamId = this.GetPrimaryKeyString();
 
         var address = meshHub.GetAddress(streamId);
-        var node = await meshCatalog.GetNodeAsync(address);
+        // Use unprotected read — the grain needs its own node to activate,
+        // and it's not the correct hub identity for security checks.
+        var node = await persistence.GetNodeAsync(address.ToString(), cancellationToken);
 
-        if(node is null)
+        // Fallback to static node providers (e.g., DocumentationNodeProvider)
+        // for nodes that are never persisted but served as embedded resources.
+        node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, address.ToString(), StringComparison.OrdinalIgnoreCase));
+
+        if (node is null)
             throw new MeshException(
                 $"Cannot instantiate Node {streamId}. No {nameof(MeshNode.HubConfiguration)} is specified.");
 
@@ -39,9 +47,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
 
         Hub = await InstantiateFromHubConfiguration(address, node);
-
-        //var route = await routingService.RegisterStreamAsync(Hub.Address, Hub.DeliverMessage);
-        //Hub.RegisterForDisposal(async (_, _) => await route.DisposeAsync());
     }
 
     private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
@@ -51,7 +56,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Assembly location is not configured for node {node.Path}."
             );
         var assembly = Assembly.LoadFrom(node.AssemblyLocation);
-        if(assembly is null)
+        if (assembly is null)
             throw new ArgumentException(
                 $"Could not load assembly {node.AssemblyLocation}."
             );

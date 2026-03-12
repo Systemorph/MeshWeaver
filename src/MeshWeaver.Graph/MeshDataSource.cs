@@ -72,15 +72,15 @@ public static class MeshDataSourceExtensions
             return request; // Let default handler process it
 
         var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
-        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+        var persistenceCore = hub.ServiceProvider.GetService<IStorageService>();
         var hubPath = hub.Address.ToString();
 
-        if (nodeTypeService == null || persistence == null)
+        if (nodeTypeService == null || persistenceCore == null)
             return request; // Let default handler process it
 
         try
         {
-            var node = await persistence.GetNodeAsync(hubPath, ct);
+            var node = await persistenceCore.GetNodeAsync(hubPath, hub.JsonSerializerOptions, ct);
 
             // Only handle NodeType nodes
             if (node?.NodeType != MeshNode.NodeTypePath)
@@ -137,7 +137,7 @@ public static class MeshDataSourceExtensions
 /// </summary>
 public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 {
-    private readonly IPersistenceService? _persistence;
+    private readonly IStorageService? _persistenceCore;
     private readonly string _hubPath;
     private readonly ILogger? _logger;
 
@@ -149,7 +149,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
-        _persistence = workspace.Hub.ServiceProvider.GetService<IPersistenceService>();
+        _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageService>();
         _hubPath = workspace.Hub.Address.ToString();
         _logger = workspace.Hub.ServiceProvider.GetService<ILogger<MeshDataSource>>();
     }
@@ -190,14 +190,14 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
                 .WithInitialData([staticNode]));
         }
 
-        if (_persistence == null)
+        if (_persistenceCore == null)
         {
-            _logger?.LogWarning("MeshDataSource: No persistence service, using basic MeshNode type source");
+            _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
             return WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
         }
 
         return WithTypeSource(typeof(MeshNode),
-            new MeshNodeTypeSource(Workspace, Id, _persistence, _hubPath)
+            new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
                 .WithKey(n => n.Path));
     }
 
@@ -234,13 +234,13 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// Adds a type source that loads objects from a sub-partition of the hub.
     /// </summary>
     /// <typeparam name="T">The type to load from the partition.</typeparam>
-    /// <param name="subPartition">The sub-partition path relative to the hub (e.g., "Code"). If null, uses hub path directly.</param>
+    /// <param name="subPartition">The sub-partition path relative to the hub (e.g., "_Source"). If null, uses hub path directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
     public MeshDataSource WithType<T>(string? subPartition, string? collectionName = null) where T : class
     {
-        if (_persistence == null)
+        if (_persistenceCore == null)
         {
-            _logger?.LogWarning("MeshDataSource: No persistence service, using basic type source for {Type}", typeof(T).Name);
+            _logger?.LogWarning("MeshDataSource: No persistence core, using basic type source for {Type}", typeof(T).Name);
             return WithType<T>(null);
         }
 
@@ -251,7 +251,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             Workspace.Hub.TypeRegistry.WithType(typeof(T), effectiveCollectionName);
         }
 
-        var partitionTypeSource = new PartitionTypeSource<T>(Workspace, Id, _persistence, _hubPath, subPartition, collectionName);
+        var partitionTypeSource = new PartitionTypeSource<T>(Workspace, Id, _persistenceCore, _hubPath, subPartition, collectionName);
         return WithTypeSource(typeof(T), partitionTypeSource);
     }
 

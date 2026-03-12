@@ -46,7 +46,6 @@
     height: 36px;
     border-radius: 6px;
     flex-shrink: 0;
-    object-fit: contain;
 }
 
 .mesh-node-collection-info {

@@ -67,17 +67,19 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
         // Provider nodes (roles, agents, etc.) — included when:
         // 1. There's an explicit field filter (e.g., nodeType:Role) — global match, no path check
-        // 2. There's a path constraint (e.g., path:Agent scope:children) — path-scoped match
+        // 2. There's a path constraint (e.g., namespace:Agent) — path-scoped match
         if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
         {
             foreach (var node in _providerNodes)
             {
-                // When included via path constraint (not field filter), apply path matching
-                if (!HasFieldFilter(parsed) && !MatchesPath(node, parsed))
+                // Always apply path matching when a path constraint is present
+                if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed))
                     continue;
                 if (!_evaluator.Matches(node, parsed))
                     continue;
                 if (IsExcludedByContext(node, context))
+                    continue;
+                if (parsed.IsMain == true && node.MainNode != node.Path)
                     continue;
                 yield return node;
             }
@@ -93,6 +95,8 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
                 if (!_evaluator.Matches(node, parsed))
                     continue;
                 if (IsExcludedByContext(node, context))
+                    continue;
+                if (parsed.IsMain == true && node.MainNode != node.Path)
                     continue;
                 yield return node;
             }

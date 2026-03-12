@@ -113,7 +113,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("-nodeType:Story path:ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("-nodeType:Story namespace:ACME/Project");
 
         var results = await CollectResults(query, request);
 
@@ -172,7 +172,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("points:>5 path:ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("points:>5 namespace:ACME/Project");
 
         var results = await CollectResults(query, request);
 
@@ -186,7 +186,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("points:<=3 path:ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("points:<=3 namespace:ACME/Project");
 
         var results = await CollectResults(query, request);
 
@@ -283,7 +283,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:exact select:name,nodeType,path");
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 select:name,nodeType,path");
 
         var results = new List<object>();
         await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
@@ -315,7 +315,7 @@ public class QuerySyntaxTests
         var meshConfig = new MeshConfiguration(typeNodes);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, meshConfiguration: meshConfig);
-        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children context:search");
+        var request = MeshQueryRequest.FromQuery("namespace:ACME/Project context:search");
 
         var results = await CollectResults(query, request);
 
@@ -337,7 +337,7 @@ public class QuerySyntaxTests
         var meshConfig = new MeshConfiguration(typeNodes);
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, meshConfiguration: meshConfig);
-        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
 
         var results = await CollectResults(query, request);
 
@@ -359,7 +359,7 @@ public class QuerySyntaxTests
 
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter, meshConfiguration: meshConfig);
         // Use "create" context — Bug is only excluded from "search", not "create"
-        var request = MeshQueryRequest.FromQuery("path:ACME/Project scope:children context:create");
+        var request = MeshQueryRequest.FromQuery("namespace:ACME/Project context:create");
 
         var results = await CollectResults(query, request);
 
@@ -425,7 +425,7 @@ public class QuerySyntaxTests
     {
         await SeedTestDataAsync();
         var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
-        var request = MeshQueryRequest.FromQuery("status:Open path:ACME/Project scope:children");
+        var request = MeshQueryRequest.FromQuery("status:Open namespace:ACME/Project");
 
         var results = await CollectResults(query, request);
 

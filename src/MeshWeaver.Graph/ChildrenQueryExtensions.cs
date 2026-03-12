@@ -6,16 +6,16 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Extension methods for querying children using IMeshQuery.
+/// Extension methods for querying children using IMeshService.
 /// </summary>
 public static class ChildrenQueryExtensions
 {
     /// <summary>
-    /// Queries for child nodes using the specified query pattern via IMeshQuery.
-    /// Supports query patterns like "nodeType:ACME/Project/Todo scope:children".
+    /// Queries for child nodes using the specified query pattern via IMeshService.
+    /// Supports query patterns like "nodeType:ACME/Project/Todo".
     /// </summary>
     /// <param name="host">The layout area host</param>
-    /// <param name="childrenQuery">The query pattern (e.g., "nodeType:ACME/Project/Todo scope:children")</param>
+    /// <param name="childrenQuery">The query pattern (e.g., "nodeType:ACME/Project/Todo")</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Matching MeshNode results</returns>
     public static async IAsyncEnumerable<MeshNode> QueryChildrenAsync(
@@ -23,7 +23,7 @@ public static class ChildrenQueryExtensions
         string childrenQuery,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
             yield break;
 
@@ -33,10 +33,10 @@ public static class ChildrenQueryExtensions
         // The childrenQuery may contain placeholders like {path}
         var query = childrenQuery.Replace("{path}", hubPath);
 
-        // If the query doesn't already have a path filter, add it
-        if (!query.Contains("path:"))
+        // If the query doesn't already have a namespace filter, add it
+        if (!query.Contains("namespace:"))
         {
-            query = $"path:{hubPath} {query}";
+            query = $"namespace:{hubPath} {query}";
         }
 
         await foreach (var item in meshQuery.QueryAsync<MeshNode>(query, ct: ct))
@@ -46,8 +46,8 @@ public static class ChildrenQueryExtensions
     }
 
     /// <summary>
-    /// Queries for child nodes of a specific nodeType via IMeshQuery.
-    /// This is a convenience method for the common pattern "nodeType:{nodeType} scope:children".
+    /// Queries for child nodes of a specific nodeType via IMeshService.
+    /// This is a convenience method for the common pattern "nodeType:{nodeType}".
     /// </summary>
     /// <param name="host">The layout area host</param>
     /// <param name="nodeType">The nodeType to filter by (e.g., "ACME/Project/Todo")</param>
@@ -58,7 +58,7 @@ public static class ChildrenQueryExtensions
         string nodeType,
         CancellationToken ct = default)
     {
-        return host.QueryChildrenAsync($"nodeType:{nodeType} scope:children", ct);
+        return host.QueryChildrenAsync($"nodeType:{nodeType}", ct);
     }
 
     /// <summary>

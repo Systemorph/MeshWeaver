@@ -22,11 +22,11 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class AgentSelectionTest
 {
-    private readonly IMeshQuery _meshQuery;
+    private readonly IMeshService _meshQuery;
 
     public AgentSelectionTest()
     {
-        _meshQuery = Substitute.For<IMeshQuery>();
+        _meshQuery = Substitute.For<IMeshService>();
     }
 
     /// <summary>

@@ -99,7 +99,7 @@ Searches the mesh using a GitHub-style query syntax. Returns a JSON array of mat
 ### Common Patterns
 
 - `Search('nodeType:Agent')` — Find all agents
-- `Search('path:ACME scope:children')` — List direct children of ACME
+- `Search('namespace:ACME')` — List direct children of ACME
 - `Search('path:ACME scope:descendants')` — All descendants under ACME recursively
 - `Search('namespace:Doc scope:descendants')` — Browse all documentation
 - `Search('name:*sales* nodeType:Organization sort:name')` — Complex filtered query
@@ -136,8 +136,6 @@ namespace:Systemorph scope:descendants  # All items under Systemorph (recursive)
 
 **scope** — Controls search scope relative to namespace or path:
 ```
-scope:exact           # Only the exact path (default for path:)
-scope:children        # Immediate children only (excludes self)
 scope:descendants     # All descendants recursively (excludes self)
 scope:ancestors       # Parent hierarchy upward (excludes self)
 scope:hierarchy       # Ancestors + self + descendants
@@ -148,7 +146,7 @@ scope:ancestorsandself # Self + all ancestors
 **path** — Sets the base path for search (default scope is `exact`):
 ```
 path:Systemorph                # The exact Systemorph node
-path:Systemorph scope:children # Immediate children of Systemorph
+namespace:Systemorph           # Immediate children of Systemorph
 ```
 
 **sort** — Specifies sort order: `sort:name`, `sort:name-desc`, `sort:lastModified-desc`

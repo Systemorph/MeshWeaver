@@ -13,7 +13,7 @@ public class AzureFoundryEmbeddingProvider : IEmbeddingProvider
     private readonly int _dimensions;
 
     public AzureFoundryEmbeddingProvider(string endpoint, string apiKey,
-        string model = "cohere-embed-v-4-0", int dimensions = 1024)
+        string model = "cohere-embed-v-4-0", int dimensions = 1536)
     {
         _client = new EmbeddingsClient(new Uri(endpoint), new AzureKeyCredential(apiKey));
         _model = model;

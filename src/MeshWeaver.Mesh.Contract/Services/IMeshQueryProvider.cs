@@ -5,10 +5,10 @@ namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Core query service for searching MeshNodes and partition objects.
-/// Separated from IPersistenceServiceCore to allow swappable implementations
+/// Separated from IStorageService to allow swappable implementations
 /// (InMemory, ElasticSearch, Cosmos with vector search, etc.)
 /// This is the internal interface that accepts JsonSerializerOptions per method.
-/// Use IMeshQuery for the scoped wrapper that injects options automatically.
+/// Use IMeshService for the scoped wrapper that injects options automatically.
 /// </summary>
 public interface IMeshQueryProvider
 {

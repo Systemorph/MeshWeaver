@@ -1,6 +1,8 @@
 using System.Text.Json;
+using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -147,6 +149,18 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Adds an existing in-memory persistence service instance.
+    /// Useful for tests that need to seed data before the hub is initialized.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="instance">The pre-created persistence service instance</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddInMemoryPersistence(this IServiceCollection services, InMemoryPersistenceService instance)
+    {
+        return services.AddPersistence(instance);
+    }
+
+    /// <summary>
     /// Adds file system persistence that reads directly from disk.
     /// Uses the hub's JsonSerializerOptions for proper type polymorphism.
     /// </summary>
@@ -163,6 +177,58 @@ public static class PersistenceExtensions
 
         // Register common services and wrapper services
         return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+    }
+
+    /// <summary>
+    /// Adds cached file system persistence that pre-loads all files into memory at startup.
+    /// All reads are served from the in-memory cache with zero disk I/O.
+    /// Designed for test scenarios where repeated disk I/O is a bottleneck.
+    /// </summary>
+    public static TBuilder AddCachedFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
+            return services.AddCoreAndWrapperServices<FileSystemPersistenceService>();
+        });
+        return builder;
+    }
+
+    /// <summary>
+    /// Adds cached partitioned file system persistence that pre-loads all files into memory.
+    /// </summary>
+    public static TBuilder AddCachedPartitionedFileSystemPersistence<TBuilder>(
+        this TBuilder builder,
+        string baseDirectory,
+        Func<JsonSerializerOptions, JsonSerializerOptions>? writeOptionsModifier = null)
+        where TBuilder : MeshBuilder
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+            services.TryAddSingleton<IStorageAdapter>(new CachingStorageAdapter(baseDirectory, writeOptionsModifier));
+
+            services.AddSingleton<IPartitionedStoreFactory>(sp =>
+            {
+                var inclusions = sp.GetServices<PartitionInclusion>().ToList();
+                var filter = inclusions.Count > 0
+                    ? new PartitionFilter(inclusions.Select(i => i.Name))
+                    : null;
+
+                return new CachingPartitionedStoreFactory(
+                    baseDirectory,
+                    writeOptionsModifier,
+                    sp.GetService<IDataChangeNotifier>(),
+                    filter);
+            });
+
+            return services.AddPartitionedCoreAndWrapperServices();
+        });
+        return builder;
     }
 
     /// <summary>
@@ -185,7 +251,7 @@ public static class PersistenceExtensions
     /// <param name="services">The service collection</param>
     /// <param name="persistenceServiceCore">The custom persistence core service</param>
     /// <returns>The service collection for chaining</returns>
-    public static IServiceCollection AddPersistence(this IServiceCollection services, IPersistenceServiceCore persistenceServiceCore)
+    internal static IServiceCollection AddPersistence(this IServiceCollection services, IStorageService persistenceServiceCore)
     {
         // Register the data change notifier as singleton
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
@@ -200,9 +266,16 @@ public static class PersistenceExtensions
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
 
+        // Register MeshCatalog and its interfaces
+        services.AddMeshCatalog();
+
         // Wrapper services are scoped (per hub)
-        services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQuery>();
+        services.AddScoped<IMeshStorage, PersistenceService>();
+        services.AddScoped<IMeshService>(sp =>
+            new MeshService(
+                sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
@@ -289,13 +362,30 @@ public static class PersistenceExtensions
 
         // Register the routing persistence core
         services.AddSingleton<RoutingPersistenceServiceCore>(sp =>
-            new RoutingPersistenceServiceCore(sp.GetRequiredService<IPartitionedStoreFactory>()));
-        services.AddSingleton<IPersistenceServiceCore>(sp =>
+            new RoutingPersistenceServiceCore(
+                sp.GetRequiredService<IPartitionedStoreFactory>(),
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetServices<IStaticNodeProvider>()));
+        services.AddSingleton<IStorageService>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
-        // Register the routing query provider
+        // Register the routing query provider with access filtering
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new RoutingMeshQueryProvider(sp.GetRequiredService<RoutingPersistenceServiceCore>()));
+            new RoutingMeshQueryProvider(
+                sp.GetRequiredService<RoutingPersistenceServiceCore>(),
+                sp.GetService<AccessService>(),
+                sp.GetService<ISecurityService>(),
+                sp.GetService<IDataChangeNotifier>()));
+
+        // Register the routing version query
+        services.AddSingleton<IVersionQuery>(sp =>
+        {
+            var routingCore = sp.GetRequiredService<RoutingPersistenceServiceCore>();
+            var routingVersionQuery = new RoutingVersionQuery();
+            foreach (var (partition, vq) in routingCore.VersionQueries)
+                routingVersionQuery.Register(partition, vq);
+            return routingVersionQuery;
+        });
 
         // Always add static node provider
         services.AddSingleton<IMeshQueryProvider>(sp =>
@@ -303,9 +393,16 @@ public static class PersistenceExtensions
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
 
+        // Register MeshCatalog and its interfaces
+        services.AddMeshCatalog();
+
         // Wrapper services are scoped (per hub)
-        services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQuery>();
+        services.AddScoped<IMeshStorage, PersistenceService>();
+        services.AddScoped<IMeshService>(sp =>
+            new MeshService(
+                sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
 
         return services;
     }
@@ -314,13 +411,15 @@ public static class PersistenceExtensions
     /// Helper method to register common services and wrapper services.
     /// </summary>
     private static IServiceCollection AddCoreAndWrapperServices<TPersistenceCore>(this IServiceCollection services)
-        where TPersistenceCore : class, IPersistenceServiceCore
+        where TPersistenceCore : class, IStorageService
     {
         // Register the data change notifier as singleton (use TryAdd to avoid duplicates)
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
+        // Register in-memory activity store as default (PostgreSQL overrides with its own)
+
         // Core services remain singletons (for shared caches)
-        services.AddSingleton<IPersistenceServiceCore, TPersistenceCore>();
+        services.AddSingleton<IStorageService, TPersistenceCore>();
         services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
@@ -329,10 +428,37 @@ public static class PersistenceExtensions
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
 
-        // Wrapper services are scoped (per hub)
-        services.AddScoped<IPersistenceService, PersistenceService>();
-        services.AddScoped<IMeshQuery, MeshQuery>();
+        // Register IVersionQuery for non-partitioned mode (uses FileSystemVersionStore if available)
+        services.TryAddSingleton<IVersionQuery>(sp =>
+        {
+            var adapter = sp.GetService<IStorageAdapter>();
+            if (adapter is FileSystemStorageAdapter fsAdapter)
+                return new FileSystemVersionStore(fsAdapter.BaseDirectory);
+            return new NoOpVersionQuery();
+        });
 
+        // Register MeshCatalog and its interfaces
+        services.AddMeshCatalog();
+
+        // Wrapper services are scoped (per hub)
+        services.AddScoped<IMeshStorage, PersistenceService>();
+        services.AddScoped<IMeshService>(sp =>
+            new MeshService(
+                sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetRequiredService<MeshCatalog>()));
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers the MeshCatalog and its public interfaces (IMeshCatalog, IPathResolver).
+    /// </summary>
+    public static IServiceCollection AddMeshCatalog(this IServiceCollection services)
+    {
+        services.TryAddSingleton<MeshCatalog>();
+        services.TryAddSingleton<IMeshCatalog>(sp => sp.GetRequiredService<MeshCatalog>());
+        services.TryAddSingleton<IPathResolver>(sp => sp.GetRequiredService<MeshCatalog>());
         return services;
     }
 }

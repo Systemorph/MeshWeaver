@@ -23,6 +23,9 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     [Inject]
     private INavigationService NavigationService { get; set; } = null!;
 
+    [Inject]
+    private IMeshService MeshService { get; set; } = null!;
+
     /// <summary>
     /// Catch-all path parameter - the entire URL path is matched against registered namespace patterns.
     /// </summary>
@@ -48,9 +51,14 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     /// <summary>
     /// True while the component is still waiting for address resolution.
-    /// Starts true and becomes false only after InitializeAsync completes in the interactive phase.
     /// </summary>
     private bool IsLoading { get; set; } = true;
+
+    /// <summary>
+    /// Tracks the Path value that was last initialized, so we can detect
+    /// parameter changes after the interactive phase has started.
+    /// </summary>
+    private string? _lastInitializedPath;
 
     protected override void OnInitialized()
     {
@@ -60,6 +68,34 @@ public partial class ApplicationPage : ComponentBase, IDisposable
 
     protected override async Task OnParametersSetAsync()
     {
+        if (!IsInteractive)
+        {
+            // Prerender: one-shot attempt to get cached HTML directly from the MeshNode.
+            // No path resolution, no stream subscriptions, no PortalApplication.
+            if (!string.IsNullOrEmpty(Path))
+                PreRenderedHtml = await MeshService.GetPreRenderedHtmlAsync(Path);
+            return;
+        }
+
+        // Interactive phase: re-initialize if the path changed (page navigation within circuit)
+        if (Path != _lastInitializedPath)
+            await InitializeForCurrentPath();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // Transition from prerender to interactive — start everything now.
+            IsInteractive = true;
+            await InitializeForCurrentPath();
+            StateHasChanged();
+        }
+    }
+
+    private async Task InitializeForCurrentPath()
+    {
+        _lastInitializedPath = Path;
         IsLoading = true;
         await NavigationService.InitializeAsync();
         IsLoading = NavigationService.IsResolving;
@@ -87,8 +123,8 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             return;
         }
 
-        // Get pre-rendered HTML from the resolved node
-        PreRenderedHtml = context.Node?.PreRenderedHtml;
+        // Clear prerender HTML now that we have the interactive view
+        PreRenderedHtml = null;
 
         // Decode area and id, append query string
         var area = context.Area != null ? (string)WorkspaceReference.Decode(context.Area) : null;
@@ -115,21 +151,8 @@ public partial class ApplicationPage : ComponentBase, IDisposable
             ?? context.Address.Type;
     }
 
-    protected override void OnAfterRender(bool firstRender)
-    {
-        base.OnAfterRender(firstRender);
-        if (firstRender)
-        {
-            IsInteractive = true;
-            StateHasChanged();
-        }
-    }
-
     private string? GetDisplayNameFromId()
     {
-        // TODO V10: This is very hand woven.
-        // We need some configurability for how to create DisplayArea, PageTitle, etc.  (14.08.2024, Roland Bürgi)
-
         if (Reference.Id is null)
             return null!;
 

@@ -14,11 +14,21 @@ public class RlsNodeValidator : INodeValidator
 {
     private readonly ISecurityService _securityService;
     private readonly ILogger<RlsNodeValidator> _logger;
+    private readonly IReadOnlyDictionary<string, INodeTypeAccessRule> _accessRules;
+    private readonly INodeTypeService? _nodeTypeService;
 
-    public RlsNodeValidator(ISecurityService securityService, ILogger<RlsNodeValidator> logger)
+    public RlsNodeValidator(
+        ISecurityService securityService,
+        ILogger<RlsNodeValidator> logger,
+        IEnumerable<INodeTypeAccessRule> accessRules,
+        INodeTypeService? nodeTypeService = null)
     {
         _securityService = securityService;
         _logger = logger;
+        _nodeTypeService = nodeTypeService;
+        _accessRules = accessRules
+            .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -31,6 +41,30 @@ public class RlsNodeValidator : INodeValidator
 
     public async Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
+        // Self-access: hubs always have full control of their own nodes
+        var userId = GetUserId(context);
+        if (!string.IsNullOrEmpty(userId))
+        {
+            // Check MainNode match (original check)
+            if (!string.IsNullOrEmpty(context.Node.MainNode)
+                && string.Equals(context.Node.MainNode, userId, StringComparison.OrdinalIgnoreCase))
+            {
+                return NodeValidationResult.Valid();
+            }
+
+            // Check if node is under the user's own User scope (User/{userId} and descendants)
+            var nodePath = context.Node.Path;
+            if (!string.IsNullOrEmpty(nodePath))
+            {
+                var userScopePath = $"User/{userId}";
+                if (nodePath.Equals(userScopePath, StringComparison.OrdinalIgnoreCase)
+                    || nodePath.StartsWith(userScopePath + "/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return NodeValidationResult.Valid();
+                }
+            }
+        }
+
         // Map operation to required permission
         var requiredPermission = context.Operation switch
         {
@@ -45,8 +79,46 @@ public class RlsNodeValidator : INodeValidator
         if (requiredPermission == Permission.None)
             return NodeValidationResult.Valid();
 
-        // Get the user ID from AccessContext or from the request
-        var userId = GetUserId(context);
+        // Check hub-config access rules (from NodeTypeService) — grant-only, fall through on no match
+        if (!string.IsNullOrEmpty(context.Node.NodeType))
+        {
+            var hubRule = _nodeTypeService?.GetAccessRule(context.Node.NodeType);
+            if (hubRule != null &&
+                (hubRule.SupportedOperations.Count == 0 ||
+                 hubRule.SupportedOperations.Contains(context.Operation)))
+            {
+                var hasHubAccess = await hubRule.HasAccessAsync(context, userId, ct);
+                if (hasHubAccess)
+                {
+                    _logger.LogTrace(
+                        "RLS: Hub-config rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
+                        userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
+                    return NodeValidationResult.Valid();
+                }
+            }
+        }
+
+        // Check DI-registered custom access rules for this node type
+        if (!string.IsNullOrEmpty(context.Node.NodeType) &&
+            _accessRules.TryGetValue(context.Node.NodeType, out var accessRule) &&
+            (accessRule.SupportedOperations.Count == 0 ||
+             accessRule.SupportedOperations.Contains(context.Operation)))
+        {
+            var hasCustomAccess = await accessRule.HasAccessAsync(context, userId, ct);
+            if (hasCustomAccess)
+            {
+                _logger.LogTrace(
+                    "RLS: Custom access rule granted {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
+                    userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
+                return NodeValidationResult.Valid();
+            }
+
+            _logger.LogDebug(
+                "RLS: Custom access rule denied {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
+                userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
+            return NodeValidationResult.Unauthorized(
+                $"Access denied: {context.Operation} permission required for node '{context.Node.Path}'");
+        }
 
         // For Create operations, check permission on parent path
         // (user needs Create permission on the parent to create a child)
@@ -77,7 +149,7 @@ public class RlsNodeValidator : INodeValidator
         }
         else
         {
-            // Fallback to context-based check (uses AccessService internally)
+            // Fallback to context-based check for Read operations
             hasPermission = await _securityService.HasPermissionAsync(
                 pathToCheck,
                 requiredPermission,
@@ -121,21 +193,26 @@ public class RlsNodeValidator : INodeValidator
 
     /// <summary>
     /// Extracts the user ID from the validation context.
-    /// Prioritizes AccessContext, then falls back to request-specific properties.
+    /// First checks explicit request identity (CreatedBy/UpdatedBy/DeletedBy),
+    /// then falls back to AccessContext (the logged-in user).
     /// </summary>
     private static string? GetUserId(NodeValidationContext context)
     {
-        // First try AccessContext (set during authenticated requests)
-        if (!string.IsNullOrEmpty(context.AccessContext?.ObjectId))
-            return context.AccessContext.ObjectId;
-
-        // Fall back to request-specific user properties
-        return context.Request switch
+        // Check explicit request identity first
+        var requestUserId = context.Request switch
         {
             CreateNodeRequest createReq => createReq.CreatedBy,
             UpdateNodeRequest updateReq => updateReq.UpdatedBy,
             DeleteNodeRequest deleteReq => deleteReq.DeletedBy,
             _ => null
         };
+        if (!string.IsNullOrEmpty(requestUserId))
+            return requestUserId;
+
+        // Fall back to AccessContext (authenticated session user)
+        if (!string.IsNullOrEmpty(context.AccessContext?.ObjectId))
+            return context.AccessContext.ObjectId;
+
+        return null;
     }
 }

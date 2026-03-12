@@ -37,6 +37,16 @@ public interface IWorkspace : IAsyncDisposable
     )
         where TReference : WorkspaceReference;
 
+    /// <summary>
+    /// Gets a remote stream with hub impersonation. Used by HubDataSource and
+    /// PartitionedHubDataSource for hub-to-hub subscriptions where the subscribing
+    /// hub's address should be the identity (not any ambient user context).
+    /// </summary>
+    ISynchronizationStream<EntityStore> GetRemoteStreamAsHub(
+        Address owner,
+        WorkspaceReference<EntityStore> reference
+    );
+
 
 
     internal void SubscribeToClient(

@@ -83,7 +83,7 @@ Each NodeType node contains:
 ```
 Type/
   Claim/
-    Code/
+    _Source/
       dataModel.json    <- Field definitions (claimNumber, lossDate, status, etc.)
       views.json        <- UI layouts (ClaimDetail, ClaimSummary, ClaimEdit)
 ```

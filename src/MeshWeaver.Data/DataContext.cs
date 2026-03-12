@@ -34,6 +34,12 @@ public sealed record DataContext : IDisposable
 
     private readonly ILogger<DataContext> logger;
 
+    /// <summary>
+    /// When set, the DataContext is in a failed state and all future SubscribeRequests
+    /// should immediately return DeliveryFailure with this error.
+    /// </summary>
+    public Exception? InitializationError { get; private set; }
+
     private Dictionary<Type, ITypeSource> TypeSourcesByType { get; set; } = new();
 
     public IEnumerable<IDataSource> DataSources => DataSourcesById.Values;
@@ -185,7 +191,28 @@ public sealed record DataContext : IDisposable
             {
                 if (task.IsFaulted)
                 {
-                    logger.LogError(task.Exception, "DataContext initialization failed for {Address}", Hub.Address);
+                    var initException = new InvalidOperationException(
+                        $"Hub '{Hub.Address}' initialization failed", task.Exception);
+                    InitializationError = initException;
+                    logger.LogError(task.Exception, "DataContext initialization failed for {Address}. Hub is now in FAILED state.", Hub.Address);
+
+                    // Register a global rejection handler for all data requests.
+                    // Any subsequent request to this hub will get an immediate DeliveryFailure.
+                    RegisterInitializationFailureHandler(initException);
+
+                    // Also propagate to existing data source streams
+                    foreach (var ds in DataSources)
+                    {
+                        try
+                        {
+                            var stream = ds.GetStreamForPartition(null);
+                            stream?.OnError(initException);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogDebug(ex, "Error propagating init failure to data source {Id}", ds.Id);
+                        }
+                    }
                 }
                 else if (task.IsCanceled)
                 {
@@ -193,10 +220,40 @@ public sealed record DataContext : IDisposable
                 }
                 else
                 {
-                    Hub.OpenGate(InitializationGateName);
                     logger.LogDebug("Finished initialization of DataContext for {Address}", Hub.Address);
                 }
+
+                // Always open the gate so the hub can process messages.
+                // On failure/cancellation, streams already have errors propagated;
+                // keeping the gate closed would hang the hub forever.
+                logger.LogDebug("DataContext: Opening {GateName} gate for {Address} (IsFaulted={IsFaulted}, IsCanceled={IsCanceled})",
+                    InitializationGateName, Hub.Address, task.IsFaulted, task.IsCanceled);
+                Hub.OpenGate(InitializationGateName);
             }, TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Registers a global handler on the hub that rejects all incoming requests
+    /// with a DeliveryFailure when initialization has failed.
+    /// Skips DeliveryFailure messages themselves to avoid loops.
+    /// </summary>
+    private void RegisterInitializationFailureHandler(Exception initException)
+    {
+        var errorMessage = $"Hub '{Hub.Address}' initialization failed: {initException.Message}";
+        Hub.Register(delivery =>
+        {
+            if (delivery.Message is DeliveryFailure)
+                return delivery;
+
+            logger.LogWarning("Hub {Hub} is in FAILED state. Rejecting {MessageType} from {Sender}: {Error}",
+                Hub.Address, delivery.Message.GetType().Name, delivery.Sender, errorMessage);
+            Hub.Post(new DeliveryFailure(delivery)
+            {
+                ErrorType = ErrorType.Failed,
+                Message = errorMessage
+            }, o => o.ResponseFor(delivery));
+            return delivery.Processed();
+        });
     }
 
     public IEnumerable<Type> MappedTypes => DataSourcesByType.Keys;

@@ -146,7 +146,7 @@ public record MeshBuilder
                         ? config => defaultNodeHubConfigs.Aggregate(config, (c, f) => f(c))
                         : null;
                 return new MeshConfiguration(
-                    MeshNodes.ToDictionary(x => x.Path),
+                    MeshNodes.GroupBy(x => x.Path).ToDictionary(g => g.Key, g => g.Last()),
                     combinedDefaultConfig,
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null);
             })

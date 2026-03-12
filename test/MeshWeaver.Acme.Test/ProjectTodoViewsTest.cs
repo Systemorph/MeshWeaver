@@ -77,14 +77,14 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     #region Query Tests
 
     /// <summary>
-    /// Test that IMeshQuery can find Todo nodes by nodeType.
+    /// Test that IMeshService can find Todo nodes by nodeType.
     /// This is a prerequisite for the views to work correctly.
     /// Uses the same query pattern as ProjectViews: path:{project}/Todo scope:subtree
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task MeshQuery_ShouldFindTodosByNodeType()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Query for all Todo items under ACME/ProductLaunch/Todo (same pattern used by ProjectViews)
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
@@ -104,12 +104,12 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Test that IMeshQuery can find all 21 Todo nodes.
+    /// Test that IMeshService can find all 21 Todo nodes.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task MeshQuery_ShouldFindAll21TodoNodes()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Query for all Todo items - we have 21 sample Todo items
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
@@ -129,12 +129,12 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     }
 
     /// <summary>
-    /// Test that IMeshQuery filters by nodeType correctly.
+    /// Test that IMeshService filters by nodeType correctly.
     /// </summary>
     [Fact(Timeout = 15000)]
     public async Task MeshQuery_ShouldFilterByNodeType()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Query without nodeType filter
         var queryWithoutFilter = "path:ACME/ProductLaunch/Todo scope:subtree";
@@ -351,7 +351,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     [Fact(Timeout = 15000)]
     public async Task TodaysFocus_ShouldHaveExactlyThreeOverdueItems()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         // Query for all Todo items
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
@@ -451,7 +451,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     public async Task MyTasks_RolandShouldHaveTwoTasks()
     {
         // Arrange: Query all Todo items to verify test data
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         var query = "path:ACME/ProductLaunch/Todo nodeType:ACME/Project/Todo scope:subtree";
 
         var results = await meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query), null, TestContext.Current.CancellationToken)
@@ -475,7 +475,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             var assignee = root.TryGetProperty("assignee", out var assigneeProp) ? assigneeProp.GetString() : null;
             var status = root.TryGetProperty("status", out var statusProp) ? statusProp.GetString() : "unknown";
 
-            if (assignee == "rbuergi@systemorph.com" && status != "Completed")
+            if (assignee == "Roland" && status != "Completed")
             {
                 rolandsTasks.Add(id ?? "unknown");
             }

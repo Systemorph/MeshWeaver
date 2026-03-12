@@ -143,7 +143,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         result.Length.Should().BeGreaterThan(text.Length,
             "the @@ reference should be replaced with the document content");
         // Should contain actual document content
-        result.Should().Contain("scope:children", "expanded content should include child document text");
+        result.Should().Contain("namespace:", "expanded content should include child document text");
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         var result = await InlineReferenceResolver.ResolveAsync(text, Mesh, mockChat);
 
         // The result should contain content from ChildDoc (nested reference)
-        result.Should().Contain("scope:children", "nested ChildDoc reference should be expanded");
+        result.Should().Contain("namespace:", "nested ChildDoc reference should be expanded");
     }
 
     [Fact]

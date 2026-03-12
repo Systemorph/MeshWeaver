@@ -369,7 +369,7 @@ public static class ContentCollectionsExtensions
             : content;
 
         // Return MarkdownElement - do not try to deserialize YAML as Article
-        // Markdown files should be loaded as MeshNodes via IPersistenceService
+        // Markdown files should be loaded as MeshNodes via IMeshStorage
         return new MarkdownElement
         {
             Name = name,

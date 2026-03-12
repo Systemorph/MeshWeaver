@@ -89,9 +89,7 @@ public static class DataExtensions
                     return new Workspace(hub, loggerFactory.CreateLogger<Workspace>());
                 })
                 .AddScoped<IAutocompleteProvider, DataAutocompleteProvider>()
-                .AddScoped<IDataValidator, RlsDataValidator>()
-                .AddScoped<ActivityLogBundler>())
-            .WithServices(sc => { sc.TryAddSingleton<IActivityLogStore, InMemoryActivityLogStore>(); return sc; })
+                .AddScoped<IDataValidator, RlsDataValidator>())
             .WithSerialization(serialization =>
                 serialization.WithOptions(options =>
                 {
@@ -156,7 +154,7 @@ public static class DataExtensions
             .WithType(typeof(Address), nameof(Address))
             .WithType(typeof(ActivityLog), nameof(ActivityLog))
             .RegisterDataEvents()
-            .WithInitializationGate(DataContext.InitializationGateName);
+            .WithInitializationGate(DataContext.InitializationGateName, d => d.Message is PingRequest);
     }
 
     private static Task<IMessageDelivery> RouteStreamMessage(IMessageHub hub, IMessageDelivery request)
@@ -469,17 +467,63 @@ public static class DataExtensions
 
     private static async Task<IMessageDelivery> HandleSubscribeRequest(IMessageHub hub, IMessageDelivery<SubscribeRequest> request, CancellationToken ct)
     {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.SubscribeHandler");
+
+        var accessContext = request.AccessContext;
+        logger?.LogDebug("HandleSubscribeRequest: Hub={Hub}, Sender={Sender}, AccessContext.ObjectId={ObjectId}, Reference={Ref}",
+            hub.Address, request.Sender, accessContext?.ObjectId, request.Message.Reference);
+
         // Run read validators before subscribing
         var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
         if (!validationResult.IsValid)
         {
-            hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
+            logger?.LogWarning("HandleSubscribeRequest: Access denied by validator for {Sender} at {Hub}: {Error}",
+                request.Sender, hub.Address, validationResult.ErrorMessage);
+            hub.Post(new DeliveryFailure(request)
+                {
+                    ErrorType = ErrorType.Unauthorized,
+                    Message = $"Access denied: {validationResult.ErrorMessage}"
+                },
                 o => o.ResponseFor(request));
             return request.Processed();
         }
 
+        // Check hub-level read permission via ISubscriptionAccessChecker (registered by AddRowLevelSecurity)
+        var accessChecker = hub.ServiceProvider.GetService<ISubscriptionAccessChecker>();
+        if (accessChecker != null)
+        {
+            var hubPath = hub.Address.ToString();
+            var (allowed, errorMessage) = await accessChecker.CheckReadAccessAsync(hubPath, ct);
+            if (!allowed)
+            {
+                logger?.LogWarning("HandleSubscribeRequest: Read access denied at hub {Hub}: {Error}",
+                    hubPath, errorMessage);
+                hub.Post(new DeliveryFailure(request)
+                    {
+                        ErrorType = ErrorType.Unauthorized,
+                        Message = $"Access denied: {errorMessage}"
+                    },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+        }
+
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
+        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
+            request.Sender, hub.Address);
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Checks if a DataChangeRequest only contains satellite content changes.
+    /// Satellite content (ActivityLog, Comment, Thread) should not trigger activity tracking.
+    /// A type is considered satellite if it has a PrimaryNodePath property (convention-based).
+    /// </summary>
+    private static bool IsSatelliteContentChange(DataChangeRequest request)
+    {
+        var allEntities = request.Creations.Concat(request.Updates).Concat(request.Deletions);
+        return allEntities.Any() && allEntities.All(e =>
+            e.GetType().GetProperty("PrimaryNodePath") != null);
     }
 
     private static async Task<IMessageDelivery> HandleDataChangeRequest(IMessageHub hub,
@@ -499,14 +543,24 @@ public static class DataExtensions
 
         // Record change in the bundler for debounced persistent logging.
         // The Activity is still used for validation error reporting in the response.
+        // Skip activity tracking for activity hubs and for satellite content changes.
         var isActivityHub = hub.Address.Type == AddressExtensions.ActivityType;
-        if (!isActivityHub)
+        if (!isActivityHub && !IsSatelliteContentChange(changeRequest))
         {
             var bundler = hub.ServiceProvider.GetService<ActivityLogBundler>();
             bundler?.RecordChange(changeRequest, ActivityCategory.DataUpdate);
         }
 
         var activity = isActivityHub ? null : new Activity(ActivityCategory.DataUpdate, hub);
+
+        // Capture affected entity paths for undo support (exclude satellite content)
+        if (activity != null && !IsSatelliteContentChange(changeRequest))
+        {
+            var hubPath = hub.Address.ToString();
+            if (!string.IsNullOrEmpty(hubPath))
+                activity.RecordAffectedPaths([hubPath]);
+        }
+
         hub.GetWorkspace().RequestChange(changeRequest with { ChangedBy = changeRequest.ChangedBy }, activity, request);
         if (activity is null)
             hub.Post(new DataChangeResponse(hub.Version, new(ActivityCategory.DataUpdate) { Status = ActivityStatus.Succeeded }),

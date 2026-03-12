@@ -1,17 +1,29 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Scoped wrapper around IPersistenceServiceCore that automatically injects
+/// Scoped wrapper around IStorageService that automatically injects
 /// JsonSerializerOptions from the current IMessageHub.
+/// When ISecurityService is available, secure methods filter results by user permissions.
 /// </summary>
-public class PersistenceService(IPersistenceServiceCore core, IMessageHub hub) : IPersistenceService
+internal class PersistenceService(
+    IStorageService core,
+    IMessageHub hub,
+    ISecurityService? securityService = null,
+    ILogger<PersistenceService>? logger = null,
+    IEnumerable<INodeTypeAccessRule>? nodeTypeAccessRules = null) : IMeshStorage
 {
+    private readonly Dictionary<string, INodeTypeAccessRule> _nodeTypeAccessRules =
+        (nodeTypeAccessRules ?? [])
+            .Where(r => r.SupportedOperations.Contains(NodeOperation.Read))
+            .ToDictionary(r => r.NodeType, StringComparer.OrdinalIgnoreCase);
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
     public Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)
@@ -37,6 +49,10 @@ public class PersistenceService(IPersistenceServiceCore core, IMessageHub hub) :
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => core.ExistsAsync(path, ct);
+
+    public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, CancellationToken ct = default)
+        => core.FindBestPrefixMatchAsync(fullPath, Options, ct);
 
     public Task InitializeAsync(CancellationToken ct = default)
         => core.InitializeAsync(ct);
@@ -75,14 +91,79 @@ public class PersistenceService(IPersistenceServiceCore core, IMessageHub hub) :
 
     #region Secure Operations
 
-    public Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
-        => core.GetNodeSecureAsync(path, userId, Options, ct);
+    /// <summary>
+    /// NodeType definitions are always publicly readable.
+    /// </summary>
+    private static bool IsPubliclyReadable(MeshNode node)
+        => node.NodeType == MeshNode.NodeTypePath;
 
-    public IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
-        => core.GetChildrenSecureAsync(parentPath, userId, Options);
+    /// <summary>
+    /// Users can always read their own User/VUser profile nodes,
+    /// and hubs can always access their own nodes (MainNode == userId).
+    /// </summary>
+    private static bool IsSelfAccess(MeshNode node, string? userId)
+        => !string.IsNullOrEmpty(userId)
+           && (((node.Namespace == "User" || node.Namespace == "VUser")
+                && string.Equals(node.Id, userId, StringComparison.OrdinalIgnoreCase))
+               || string.Equals(node.MainNode, userId, StringComparison.OrdinalIgnoreCase));
 
-    public IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
-        => core.GetDescendantsSecureAsync(parentPath, userId, Options);
+    /// <summary>
+    /// Checks if a user has read access to a node.
+    /// Checks: publicly readable → self-access → INodeTypeAccessRule → ISecurityService.
+    /// </summary>
+    private async Task<bool> HasReadAccessAsync(MeshNode node, string? userId, CancellationToken ct = default)
+    {
+        if (securityService == null || IsPubliclyReadable(node) || IsSelfAccess(node, userId))
+            return true;
+
+        // Check INodeTypeAccessRule (e.g., User, VUser, Organization with WithPublicRead)
+        if (!string.IsNullOrEmpty(node.NodeType)
+            && _nodeTypeAccessRules.TryGetValue(node.NodeType, out var rule))
+        {
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node
+            };
+            if (await rule.HasAccessAsync(context, userId, ct))
+                return true;
+        }
+
+        return string.IsNullOrEmpty(userId)
+            ? await securityService.HasPermissionAsync(node.Path, Permission.Read, ct)
+            : await securityService.HasPermissionAsync(node.Path, userId, Permission.Read, ct);
+    }
+
+    public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, CancellationToken ct = default)
+    {
+        var node = await core.GetNodeAsync(path, Options, ct);
+        if (node == null || securityService == null)
+            return node;
+
+        if (await HasReadAccessAsync(node, userId, ct))
+            return node;
+
+        logger?.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+        return null;
+    }
+
+    public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId)
+    {
+        await foreach (var node in core.GetChildrenAsync(parentPath, Options))
+        {
+            if (securityService == null || await HasReadAccessAsync(node, userId))
+                yield return node;
+        }
+    }
+
+    public async IAsyncEnumerable<MeshNode> GetDescendantsSecureAsync(string? parentPath, string? userId)
+    {
+        await foreach (var node in core.GetDescendantsAsync(parentPath, Options))
+        {
+            if (securityService == null || await HasReadAccessAsync(node, userId))
+                yield return node;
+        }
+    }
 
     #endregion
 }

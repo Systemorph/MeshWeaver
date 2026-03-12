@@ -1,8 +1,9 @@
-using MeshWeaver.Data;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh.Activity;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -87,20 +88,6 @@ public static class PostgreSqlExtensions
             return new PostgreSqlMeshQuery(adapter, changeNotifier, accessService);
         });
 
-        // Register PostgreSqlActivityStore for activity tracking
-        services.TryAddSingleton<IActivityStore>(sp =>
-        {
-            var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
-            return new PostgreSqlActivityStore(dataSource);
-        });
-
-        // Register PostgreSqlActivityLogStore for bundled activity logs
-        services.TryAddSingleton<IActivityLogStore>(sp =>
-        {
-            var dataSource = sp.GetRequiredService<NpgsqlDataSource>();
-            return new PostgreSqlActivityLogStore(dataSource);
-        });
-
         return services;
     }
 
@@ -128,7 +115,7 @@ public static class PostgreSqlExtensions
 
         services.AddPersistence(storageAdapter);
 
-        // Register access control
+        // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
 
         return services;
@@ -152,25 +139,18 @@ public static class PostgreSqlExtensions
         var embeddingProvider = services.BuildServiceProvider().GetService<IEmbeddingProvider>();
         var storageAdapter = new PostgreSqlStorageAdapter(dataSource, embeddingProvider);
 
-        // Register the data change notifier
-        services.AddSingleton<IDataChangeNotifier, DataChangeNotifier>();
-
-        // Register the storage adapter
-        services.AddSingleton<IStorageAdapter>(storageAdapter);
+        // Register concrete adapter type for change listener
         services.AddSingleton(storageAdapter);
 
-        // Register persistence service
-        services.AddSingleton<IPersistenceServiceCore>(sp =>
-            new InMemoryPersistenceService(
-                storageAdapter,
-                sp.GetService<IDataChangeNotifier>()));
-
-        // Register PostgreSqlMeshQuery with change notifier
+        // Register PostgreSqlMeshQuery BEFORE AddPersistence so TryAddSingleton doesn't override it
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new PostgreSqlMeshQuery(
                 storageAdapter,
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<AccessService>()));
+
+        // Register core persistence services (IStorageAdapter, IStorageService, etc.)
+        services.AddPersistence(storageAdapter);
 
         // Register the Change Listener
         services.AddSingleton(sp =>
@@ -180,7 +160,7 @@ public static class PostgreSqlExtensions
             return new PostgreSqlChangeListener(dataSource, notifier, logger);
         });
 
-        // Register access control
+        // Register access control and activity store
         services.TryAddSingleton(new PostgreSqlAccessControl(dataSource));
 
         return services;
@@ -204,6 +184,15 @@ public static class PostgreSqlExtensions
             ?? new PostgreSqlStorageOptions();
 
         await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
+
+        // Sync DI-registered NodeTypePermission records to the database
+        var nodeTypePermissions = serviceProvider.GetServices<NodeTypePermission>();
+        if (nodeTypePermissions.Any())
+        {
+            var ac = serviceProvider.GetService<PostgreSqlAccessControl>()
+                ?? new PostgreSqlAccessControl(dataSource);
+            await ac.SyncNodeTypePermissionsAsync(nodeTypePermissions, ct);
+        }
     }
 
     /// <summary>
@@ -235,7 +224,49 @@ public static class PostgreSqlExtensions
                 opts,
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<IEmbeddingProvider>(),
-                sp.GetService<AccessService>()));
+                sp.GetService<AccessService>(),
+                sp.GetServices<NodeTypePermission>()));
+
+        services.AddPartitionedCoreAndWrapperServices();
+
+        return services;
+    }
+
+    /// <summary>
+    /// Adds partitioned PostgreSQL persistence using an Aspire-injected NpgsqlDataSource from DI.
+    /// Each top-level path segment gets its own PostgreSQL schema with isolated tables.
+    /// Resolves the connection string from IConfiguration (Aspire convention) because
+    /// NpgsqlDataSource.ConnectionString strips the password by default.
+    /// </summary>
+    /// <param name="services">The service collection</param>
+    /// <param name="configure">Optional configuration for PostgreSqlStorageOptions</param>
+    /// <returns>The service collection for chaining</returns>
+    public static IServiceCollection AddPartitionedPostgreSqlPersistence(
+        this IServiceCollection services,
+        Action<PostgreSqlStorageOptions>? configure = null)
+    {
+        services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
+
+        services.AddSingleton<IPartitionedStoreFactory>(sp =>
+        {
+            var baseDataSource = sp.GetRequiredService<NpgsqlDataSource>();
+            // Resolve connection string from IConfiguration (Aspire-injected) rather than
+            // NpgsqlDataSource.ConnectionString which strips the password (PersistSecurityInfo=false).
+            var config = sp.GetService<IConfiguration>();
+            var connectionString = config?.GetConnectionString("memex")
+                                   ?? baseDataSource.ConnectionString;
+            var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
+            configure?.Invoke(opts);
+
+            return new PostgreSqlPartitionedStoreFactory(
+                baseDataSource,
+                connectionString,
+                opts,
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<IEmbeddingProvider>(),
+                sp.GetService<AccessService>(),
+                sp.GetServices<NodeTypePermission>());
+        });
 
         services.AddPartitionedCoreAndWrapperServices();
 

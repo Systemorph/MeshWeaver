@@ -16,15 +16,13 @@ public class MeshOperations
 {
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
-    private readonly IMeshQuery? meshQuery;
-    private readonly IMeshCatalog? meshCatalog;
+    private readonly IMeshService mesh;
 
     public MeshOperations(IMessageHub hub)
     {
         this.hub = hub;
         this.logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshOperations>>();
-        this.meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
-        this.meshCatalog = hub.ServiceProvider.GetService<IMeshCatalog>();
+        this.mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
     }
 
     /// <summary>
@@ -45,16 +43,13 @@ public class MeshOperations
 
         try
         {
-            if (meshQuery == null)
-                return "Query service not available.";
-
             // Handle children query (path/*)
             if (resolvedPath.EndsWith("/*"))
             {
                 var parentPath = resolvedPath[..^2];
                 var result = new List<object>();
-                var query = $"path:{parentPath} scope:children";
-                await foreach (var node in meshQuery.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
+                var query = $"namespace:{parentPath}";
+                await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
                 {
                     result.Add(new
                     {
@@ -73,7 +68,7 @@ public class MeshOperations
                 return unifiedResult;
 
             // Get single node via query (reads from persistence, not cached)
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(
+            await foreach (var node in mesh.QueryAsync<MeshNode>(
                 MeshQueryRequest.FromQuery($"path:{resolvedPath}")))
             {
                 return JsonSerializer.Serialize(node, hub.JsonSerializerOptions);
@@ -127,16 +122,24 @@ public class MeshOperations
     {
         logger.LogInformation("Search called with query={Query}, basePath={BasePath}", query, basePath);
 
-        if (meshQuery == null)
-            return "Query service not available.";
-
         var resolvedBase = basePath != null ? ResolvePath(basePath) : null;
-        var fullQuery = string.IsNullOrEmpty(resolvedBase) ? query : $"path:{resolvedBase} {query}";
+        string fullQuery;
+        if (string.IsNullOrEmpty(resolvedBase))
+        {
+            fullQuery = query;
+        }
+        else
+        {
+            // Remove empty namespace: placeholder — basePath provides the namespace context.
+            // Use namespace: (not path:) so scope defaults to Children (search within, not exact).
+            var cleanQuery = query.Replace("namespace:", "").Trim();
+            fullQuery = $"namespace:{resolvedBase} {cleanQuery}".Trim();
+        }
 
         try
         {
             var results = new List<object>();
-            await foreach (var item in meshQuery.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
+            await foreach (var item in mesh.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
             {
                 if (item is MeshNode node)
                 {
@@ -166,16 +169,13 @@ public class MeshOperations
     {
         logger.LogInformation("Create called");
 
-        if (meshCatalog == null)
-            return "Mesh catalog service not available.";
-
         try
         {
             var meshNode = JsonSerializer.Deserialize<MeshNode>(node, hub.JsonSerializerOptions);
             if (meshNode == null)
                 return "Invalid node: deserialized to null.";
 
-            var created = await meshCatalog.CreateNodeAsync(meshNode);
+            var created = await mesh.CreateNodeAsync(meshNode);
             return $"Created: {created.Path}";
         }
         catch (JsonException ex)
@@ -202,19 +202,8 @@ public class MeshOperations
             var results = new List<string>();
             foreach (var meshNode in nodeList)
             {
-                var tcs = new TaskCompletionSource<UpdateNodeResponse>();
-                var delivery = hub.Post(
-                    new UpdateNodeRequest(meshNode),
-                    o => o.WithTarget(hub.Address));
-                hub.RegisterCallback<UpdateNodeResponse>(delivery, response =>
-                {
-                    tcs.TrySetResult(response.Message);
-                    return response;
-                });
-                var updateResponse = await tcs.Task;
-                if (!updateResponse.Success)
-                    throw new InvalidOperationException(updateResponse.Error ?? "Update failed");
-                results.Add($"Updated: {updateResponse.Node!.Path}");
+                var updated = await mesh.UpdateNodeAsync(meshNode);
+                results.Add($"Updated: {updated.Path}");
             }
 
             return string.Join("\n", results);
@@ -244,18 +233,7 @@ public class MeshOperations
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                var tcs = new TaskCompletionSource<DeleteNodeResponse>();
-                var delivery = hub.Post(
-                    new DeleteNodeRequest(resolvedPath),
-                    o => o.WithTarget(hub.Address));
-                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
-                {
-                    tcs.TrySetResult(response.Message);
-                    return response;
-                });
-                var deleteResponse = await tcs.Task;
-                if (!deleteResponse.Success)
-                    throw new InvalidOperationException(deleteResponse.Error ?? "Delete failed");
+                await mesh.DeleteNodeAsync(resolvedPath);
                 results.Add($"Deleted: {resolvedPath}");
             }
 

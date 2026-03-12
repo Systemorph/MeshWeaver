@@ -133,7 +133,7 @@ public static class ApprovalsView
             dueDate = parsed;
 
         var approvalId = Guid.NewGuid().AsString();
-        var approvalPath = $"{nodePath}/{approvalId}";
+        var approvalPath = $"{nodePath}/{ApprovalExtensions.ApprovalPartition}/{approvalId}";
 
         var approval = new Approval
         {
@@ -147,9 +147,9 @@ public static class ApprovalsView
             Status = ApprovalStatus.Pending
         };
 
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var approvalNode = new MeshNode(approvalId, nodePath)
+        var approvalNode = new MeshNode(approvalId, $"{nodePath}/{ApprovalExtensions.ApprovalPartition}")
         {
             Name = $"Approval: {purpose}",
             NodeType = ApprovalNodeType.NodeType,
@@ -157,11 +157,11 @@ public static class ApprovalsView
             Content = approval
         };
 
-        await meshCatalog.CreateNodeAsync(approvalNode, currentUser);
+        await nodeFactory.CreateNodeAsync(approvalNode);
 
         // Create notification for the approver
         await NotificationService.CreateNotificationAsync(
-            meshCatalog,
+            nodeFactory,
             approver,
             "Approval Requested",
             $"{currentUser} requested your approval for \"{purpose}\".",
@@ -180,7 +180,7 @@ public static class ApprovalsView
     public static IObservable<UiControl?> InlineApprovals(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
             return Observable.Return<UiControl?>(null);
@@ -189,7 +189,7 @@ public static class ApprovalsView
         host.UpdateData(approvalsDataId, Array.Empty<LayoutAreaControl>());
 
         meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                $"path:{nodePath} nodeType:{ApprovalNodeType.NodeType} scope:children"))
+                $"namespace:{nodePath}/{ApprovalExtensions.ApprovalPartition} nodeType:{ApprovalNodeType.NodeType}"))
             .Scan(new List<MeshNode>(), (list, change) =>
             {
                 if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)

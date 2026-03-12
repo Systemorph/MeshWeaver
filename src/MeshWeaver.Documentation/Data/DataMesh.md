@@ -19,6 +19,7 @@ The Data Mesh operational guides provide hands-on documentation for:
 - **Node Type Configuration** - Defining and customizing mesh node types
 - **Query Syntax** - Filtering and retrieving data from the mesh
 - **Unified Path** - Working with Unified Path links and references
+- **Satellite Entities** - How comments, access, approvals, and other satellites attach to primary nodes
 - **Interactive Markdown** - Creating dynamic, data-driven documents
 - **Collaborative Editing** - Enabling real-time collaboration features
 
@@ -53,6 +54,13 @@ Understand how Unified Path links work and how to create references between cont
 Create dynamic documents with embedded data and interactive components.
 
 [Read Guide](Doc/DataMesh/InteractiveMarkdown)
+
+---
+
+## Satellite Entities
+Understand how comments, access assignments, approvals, threads, and other satellite entities attach to primary nodes via sub-namespaces.
+
+[Read Guide](Doc/DataMesh/SatelliteEntities)
 
 ---
 

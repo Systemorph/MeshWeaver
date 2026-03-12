@@ -38,7 +38,7 @@ public static class MeshCatalogView
     /// </summary>
     public static IObservable<UiControl> Nodes(LayoutAreaHost host, RenderingContext ctx)
     {
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var parentPath = host.Hub.Address.ToString();
 
         if (meshQuery == null)
@@ -57,8 +57,8 @@ public static class MeshCatalogView
         {
             // Build query with optional nodeType filter
             var query = string.IsNullOrEmpty(nodeTypeFilter)
-                ? $"path:{parentPath} scope:children"
-                : $"path:{parentPath} nodeType:{nodeTypeFilter} scope:children";
+                ? $"namespace:{parentPath}"
+                : $"namespace:{parentPath} nodeType:{nodeTypeFilter}";
 
             IReadOnlyList<MeshNode> children;
             try
@@ -119,11 +119,11 @@ public static class MeshCatalogView
     public static IObservable<UiControl> Editor(LayoutAreaHost host, RenderingContext ctx)
     {
         var nodePath = host.Hub.Address.ToString();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         return Observable.FromAsync(async ct =>
         {
-            var node = await persistence?.GetNodeAsync(nodePath, ct)!;
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{nodePath}").FirstOrDefaultAsync(ct);
 
             // Wrap editor control with a back button
             var stack = Controls.Stack.WithWidth("100%");

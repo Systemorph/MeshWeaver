@@ -1,6 +1,6 @@
 @using MeshWeaver.Layout
 @using MeshWeaver.Mesh.Services
-@inject IMeshCatalog MeshCatalog
+@inject IPathResolver PathResolver
 
 @* Uses the Thumbnail layout area from MeshNodeView - same as catalog *@
 @if (IsLoading)
@@ -36,7 +36,7 @@ else
 
         try
         {
-            var resolution = await MeshCatalog.ResolvePathAsync(Path);
+            var resolution = await PathResolver.ResolvePathAsync(Path);
             if (resolution != null)
             {
                 // Use the Thumbnail layout area - same control as catalog

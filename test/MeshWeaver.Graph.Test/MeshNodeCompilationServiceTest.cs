@@ -13,6 +13,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Namotion.Reflection;
@@ -68,13 +69,31 @@ public class MeshNodeCompilationServiceTest : IDisposable
         }
     }
 
-    private MeshNodeCompilationService CreateService(IPersistenceServiceCore persistenceCore)
+    private MeshNodeCompilationService CreateService(InMemoryPersistenceService persistence)
     {
-        var meshQueryProvider = new MeshWeaver.Hosting.Persistence.Query.InMemoryMeshQuery(persistenceCore);
-        var meshQuery = new MeshWeaver.Hosting.Persistence.Query.MeshQuery([meshQueryProvider], _mockHub);
-        var serviceProvider = Substitute.For<IServiceProvider>();
-        serviceProvider.GetService(typeof(IMeshQuery)).Returns(meshQuery);
-        _mockHub.ServiceProvider.Returns(serviceProvider);
+        IServiceCollection services = new ServiceCollection();
+        // Register all persistence services via the public API with the test instance
+        services.AddInMemoryPersistence(persistence);
+        // Register the mock hub so scoped MeshQuery can resolve it
+        services.AddScoped<IMessageHub>(_ => _mockHub);
+        // Register MeshConfiguration and logging (required by MeshCatalog)
+        services.AddSingleton(new MeshConfiguration(new Dictionary<string, MeshNode>()));
+        services.AddLogging();
+
+        // Set up mock hub's ServiceProvider BEFORE building the DI container,
+        // because MeshCatalog constructor resolves ILogger from hub.ServiceProvider.
+        // Use a lazy approach: build provider first, then wire up the mock.
+        var sp = services.BuildServiceProvider();
+        var hubSp = Substitute.For<IServiceProvider>();
+        hubSp.GetService(Arg.Any<Type>()).Returns(ci => sp.GetService(ci.Arg<Type>()));
+        _mockHub.ServiceProvider.Returns(hubSp);
+
+        // Resolve IMeshService from a scope (IMeshService is registered as scoped)
+        var scope = sp.CreateScope();
+        var meshQuery = scope.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // Update to use the real scope service provider for subsequent calls
+        hubSp.GetService(typeof(IMeshService)).Returns(meshQuery);
         return new(_cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
     }
 
@@ -91,7 +110,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
         if (codeFile != null)
         {
             // Code is stored as a child MeshNode under the Code path
-            var codeNode = new MeshNode(codeFile.Id ?? "code", $"type/{nodeType}/Code")
+            var codeNode = new MeshNode(codeFile.Id ?? "code", $"type/{nodeType}/_Source")
             {
                 NodeType = "Code",
                 Name = codeFile.DisplayName ?? codeFile.Id ?? "Code",
@@ -444,7 +463,7 @@ public record RecordType
         await SetupNodeType(persistence, "Organization", orgDefinition, displayName: "Organization");
 
         // Store Code as child MeshNode (NOT partition object)
-        var codeNode = new MeshNode("Organization", "type/Organization/Code")
+        var codeNode = new MeshNode("Organization", "type/Organization/_Source")
         {
             NodeType = "Code",
             Name = "Organization Data Model",
@@ -490,7 +509,7 @@ public record Organization
         await SetupNodeType(persistence, "Project", definition, displayName: "Project");
 
         // First code file: data model
-        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/Code")
+        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/_Source")
         {
             NodeType = "Code",
             Name = "Project Data Model",
@@ -510,7 +529,7 @@ public record Project
         await persistence.SaveNodeAsync(dataModelNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         // Second code file: enum
-        var enumNode = new MeshNode("ProjectStatus", "type/Project/Code")
+        var enumNode = new MeshNode("ProjectStatus", "type/Project/_Source")
         {
             NodeType = "Code",
             Name = "Project Status Enum",

@@ -98,14 +98,13 @@ public static class NotificationLayoutAreas
             .WithAppearance(Appearance.Neutral)
             .WithClickAction(async ctx =>
             {
-                var persistence = ctx.Host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                if (persistence != null && node != null)
+                if (node != null)
                 {
                     var updated = node with
                     {
                         Content = notification with { IsRead = !notification.IsRead }
                     };
-                    await persistence.SaveNodeAsync(updated);
+                    ctx.Host.Hub.Post(new UpdateNodeRequest(updated));
                 }
             }));
 

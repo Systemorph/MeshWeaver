@@ -13,23 +13,23 @@ namespace MeshWeaver.Data;
 /// - First change: create bundle, start timer
 /// - Subsequent same (user, category): increment count, reset timer
 /// - Different user or category: flush current bundle, start new
-/// - Timer expires: flush bundle to IActivityLogStore
+/// - Timer expires: flush bundle via onFlush callback
 /// - Hub dispose: flush all via FlushOnDispose
 /// </summary>
 public class ActivityLogBundler : IDisposable
 {
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(300);
 
-    private readonly IActivityLogStore _store;
+    private readonly Func<ActivityLog, Task> _onFlush;
     private readonly string _hubPath;
     private readonly ILogger<ActivityLogBundler>? _logger;
 
     private readonly ConcurrentDictionary<BundleKey, ActiveBundle> _activeBundles = new();
     private bool _disposed;
 
-    public ActivityLogBundler(IMessageHub hub, IActivityLogStore store, ILogger<ActivityLogBundler>? logger = null)
+    public ActivityLogBundler(IMessageHub hub, Func<ActivityLog, Task> onFlush, ILogger<ActivityLogBundler>? logger = null)
     {
-        _store = store;
+        _onFlush = onFlush;
         _hubPath = hub.Address.ToString();
         _logger = logger;
         hub.RegisterForDisposal(new FlushOnDispose(this));
@@ -88,11 +88,19 @@ public class ActivityLogBundler : IDisposable
             bundle.Timer = null;
         }
 
-        var log = bundle.ToActivityLog();
+        var log = bundle.ToActivityLog() with { HubPath = _hubPath };
 
+        // Fire-and-forget: avoid blocking the timer/threadpool thread.
+        // Blocking here with .GetAwaiter().GetResult() can cause stack overflow
+        // or thread pool starvation when _onFlush posts messages back into the hub.
+        _ = FlushBundleAsync(log);
+    }
+
+    private async Task FlushBundleAsync(ActivityLog log)
+    {
         try
         {
-            _store.SaveActivityLogAsync(_hubPath, log).GetAwaiter().GetResult();
+            await _onFlush(log);
         }
         catch (Exception ex)
         {

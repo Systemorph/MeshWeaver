@@ -29,7 +29,7 @@ public class PartitionedSchemaTests
             new PostgreSqlStorageOptions());
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task CreateStore_CreatesSchemaTables()
     {
         var factory = CreateFactory();
@@ -52,7 +52,7 @@ public class PartitionedSchemaTests
         table.Should().NotBeNull("mesh_nodes table should exist in testdomain schema");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task SaveAndRead_AcrossSchemas_DataIsolated()
     {
         var factory = CreateFactory();
@@ -62,28 +62,28 @@ public class PartitionedSchemaTests
 
         // Save to Alpha partition
         var nodeA = MeshNode.FromPath("Alpha/Reports") with { Name = "Alpha Reports" };
-        await storeA.PersistenceCore.SaveNodeAsync(nodeA, _options, TestContext.Current.CancellationToken);
+        await storeA.StorageAdapter.WriteAsync(nodeA, _options, TestContext.Current.CancellationToken);
 
         // Save to Beta partition
         var nodeB = MeshNode.FromPath("Beta/Reports") with { Name = "Beta Reports" };
-        await storeB.PersistenceCore.SaveNodeAsync(nodeB, _options, TestContext.Current.CancellationToken);
+        await storeB.StorageAdapter.WriteAsync(nodeB, _options, TestContext.Current.CancellationToken);
 
         // Read back from Alpha — should only find Alpha data
-        var readA = await storeA.PersistenceCore.GetNodeAsync("Alpha/Reports", _options, TestContext.Current.CancellationToken);
+        var readA = await storeA.StorageAdapter.ReadAsync("Alpha/Reports", _options, TestContext.Current.CancellationToken);
         readA.Should().NotBeNull();
         readA!.Name.Should().Be("Alpha Reports");
 
         // Alpha should not have Beta data
-        var readB = await storeA.PersistenceCore.GetNodeAsync("Beta/Reports", _options, TestContext.Current.CancellationToken);
+        var readB = await storeA.StorageAdapter.ReadAsync("Beta/Reports", _options, TestContext.Current.CancellationToken);
         readB.Should().BeNull("Beta data should not be in Alpha schema");
 
         // Read back from Beta
-        var readBeta = await storeB.PersistenceCore.GetNodeAsync("Beta/Reports", _options, TestContext.Current.CancellationToken);
+        var readBeta = await storeB.StorageAdapter.ReadAsync("Beta/Reports", _options, TestContext.Current.CancellationToken);
         readBeta.Should().NotBeNull();
         readBeta!.Name.Should().Be("Beta Reports");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task RoutingCore_SaveRoutes_ByFirstSegment()
     {
         var factory = CreateFactory();
@@ -105,7 +105,7 @@ public class PartitionedSchemaTests
         readB!.Name.Should().Be("Delta Doc");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task RoutingCore_GetChildren_RootLevel_ReturnsFromAllPartitions()
     {
         var factory = CreateFactory();
@@ -125,7 +125,7 @@ public class PartitionedSchemaTests
         children.Should().Contain(n => n.Path == "Zeta");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task DiscoverPartitions_FindsExistingSchemas()
     {
         var factory = CreateFactory();
@@ -142,7 +142,7 @@ public class PartitionedSchemaTests
         partitions.Should().Contain("discover2");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task SanitizeSchemaName_VariousInputs()
     {
         PostgreSqlPartitionedStoreFactory.SanitizeSchemaName("ACME")
@@ -158,7 +158,7 @@ public class PartitionedSchemaTests
             .Should().Be("valid_name_99");
     }
 
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task Delete_InOnePartition_DoesNotAffectOther()
     {
         var factory = CreateFactory();

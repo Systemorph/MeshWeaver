@@ -67,9 +67,8 @@ public partial class MeshNodeCollectionView : BlazorView<MeshNodeCollectionContr
 
     private async Task DeleteItem(string nodePath)
     {
-        var catalog = Hub?.ServiceProvider.GetService<IMeshCatalog>();
-        if (catalog != null)
-            await catalog.DeleteNodeAsync(nodePath);
+        var nodeFactory = Hub!.ServiceProvider.GetRequiredService<IMeshService>();
+        await nodeFactory.DeleteNodeAsync(nodePath);
         await LoadItemsAsync();
     }
 

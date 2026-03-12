@@ -38,7 +38,12 @@ public enum Permission
     Comment = 16,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment).
+    /// Permission to execute code (e.g., launch interactive kernels).
     /// </summary>
-    All = Read | Create | Update | Delete | Comment
+    Execute = 32,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment, Execute).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment | Execute
 }

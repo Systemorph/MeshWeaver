@@ -22,7 +22,6 @@ using MeshWeaver.Documentation;
 using MeshWeaver.GoogleMaps;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
-using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Activity;
 using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
@@ -267,24 +266,34 @@ public static class MemexConfiguration
                 }
             }
 
+            // Use partitioned persistence for FileSystem to support per-org partitions
+            var usePartitioned = string.Equals(graphStorageConfig.Type, "FileSystem", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(graphStorageConfig.BasePath);
+
             return (TBuilder)builder
-                // Configure persistence from Graph:Storage section
-                .ConfigureServices(services => services.AddPersistence(graphStorageConfig))
+                // Configure persistence from Graph:Storage section.
+                // Skip if IPartitionedStoreFactory already registered (e.g., PostgreSQL from Program.cs)
+                .ConfigureServices(services =>
+                {
+                    if (services.Any(sd => sd.ServiceType == typeof(IPartitionedStoreFactory)))
+                        return services;
+
+                    return usePartitioned
+                        ? services.AddPartitionedFileSystemPersistence(graphStorageConfig.BasePath!)
+                        : services.AddPersistence(graphStorageConfig);
+                })
                 // Enable Row-Level Security for access control
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                .AddSelfRegistry()
                 .AddDocumentation()
                 // Add kernel for interactive markdown code execution
                 .AddKernel()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
-                // Register the mesh catalog
-                .ConfigureServices(services =>
-                {
-                    services.AddSingleton<IMeshCatalog, MeshCatalog>();
-                    return services;
-                })
+                // Register the mesh catalog and its public interfaces
+                .ConfigureServices(services => services.AddMeshCatalog())
                 // Add content collections at mesh level with storage config
                 // The storage collection is registered as a source for node hub mappings
                 .ConfigureHub(hub =>
@@ -310,8 +319,7 @@ public static class MemexConfiguration
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })
-                // Add activity tracking to record user access patterns
-                // Uses PersistenceActivityStore when persistence is available, InMemory fallback otherwise
+                // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();
         }
 

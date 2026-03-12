@@ -64,7 +64,7 @@
     ::deep.layout>header {
         grid-area: head;
         position: relative;
-        z-index: 50;
+        z-index: 200;
     }
 
     ::deep.layout>.fluent-appbar {
@@ -83,6 +83,8 @@
         min-height: 0; /* Allow flex shrinking */
         height: 100%;
         width: 100%;
+        position: relative;
+        z-index: 1;
     }
 
     ::deep.layout>.messagebar-container {
@@ -260,7 +262,7 @@
     ::deep.layout>header {
         grid-area: head;
         position: relative;
-        z-index: 50;
+        z-index: 200;
     }
 
     ::deep.layout>.fluent-appbar {

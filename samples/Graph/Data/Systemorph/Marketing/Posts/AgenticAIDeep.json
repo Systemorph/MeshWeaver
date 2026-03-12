@@ -12,7 +12,7 @@
     "text": "Traditional AI: You ask, it answers.\nAgentic AI: You describe a goal, it figures out how to achieve it.\n\nThe difference is profound. In MeshWeaver, we've built an architecture where AI agents can:\n\n1. Plan multi-step workflows\n2. Use tools and APIs autonomously\n3. Collaborate with other agents\n4. Learn from feedback\n\nThis isn't just chatbots with more steps - it's a fundamental shift in how we build software.\n\nRead our technical deep dive: [link]\n\n#AgenticAI #SoftwareArchitecture #AI",
     "imageLink": "/static/marketing/agentic-ai-diagram.png",
     "publishDate": "2025-02-08T10:00:00Z",
-    "author": "rbuergi@systemorph.com",
+    "author": "Roland",
     "platforms": ["LinkedIn"],
     "status": "Draft"
   }

@@ -7,21 +7,40 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// Routing persistence core that maintains per-partition IPersistenceServiceCore instances.
+/// Routing persistence core that maintains per-partition IStorageService instances.
 /// Routes operations based on the first segment of the path.
 /// Auto-provisions new partitions on first access via IPartitionedStoreFactory.
 /// </summary>
-public class RoutingPersistenceServiceCore : IPersistenceServiceCore
+internal class RoutingPersistenceServiceCore : IStorageService
 {
     private readonly IPartitionedStoreFactory _factory;
-    private readonly ConcurrentDictionary<string, IPersistenceServiceCore> _stores = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly IEnumerable<IStaticNodeProvider> _staticNodeProviders;
+    private readonly ConcurrentDictionary<string, IStorageService> _stores = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, IMeshQueryProvider> _queryProviders = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IVersionQuery> _versionQueries = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
 
-    public RoutingPersistenceServiceCore(IPartitionedStoreFactory factory)
+    /// <summary>
+    /// Maps base path prefixes to partition names (e.g., "Doc" -> "Admin" for Documentation).
+    /// Populated from Partition nodes in Admin/Partition namespace.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _basePathToPartition = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Partition metadata keyed by partition node ID (e.g., "Documentation" -> set of base paths).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _partitionNamespaces = new(StringComparer.OrdinalIgnoreCase);
+
+    public RoutingPersistenceServiceCore(
+        IPartitionedStoreFactory factory,
+        IDataChangeNotifier? changeNotifier = null,
+        IEnumerable<IStaticNodeProvider>? staticNodeProviders = null)
     {
         _factory = factory;
+        _changeNotifier = changeNotifier;
+        _staticNodeProviders = staticNodeProviders ?? [];
     }
 
     /// <summary>
@@ -48,11 +67,22 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
     /// Gets all registered query providers (for use by RoutingMeshQueryProvider).
     /// </summary>
     internal IReadOnlyDictionary<string, IMeshQueryProvider> QueryProviders => _queryProviders;
+    internal IReadOnlyDictionary<string, IVersionQuery> VersionQueries => _versionQueries;
 
     /// <summary>
     /// Gets all registered partition names.
     /// </summary>
     internal IEnumerable<string> PartitionNames => _stores.Keys;
+
+    /// <summary>
+    /// Gets the base-path-to-partition mapping for partition access filtering.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> BasePathToPartition => _basePathToPartition;
+
+    /// <summary>
+    /// Gets the partition metadata (partition ID -> namespace).
+    /// </summary>
+    internal IReadOnlyDictionary<string, string> PartitionNamespaces => _partitionNamespaces;
 
     /// <summary>
     /// Discovers partitions not yet provisioned, provisions each, and yields its query provider.
@@ -69,18 +99,20 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
                 continue;
 
             var partition = await _factory.CreateStoreAsync(segment, ct);
-            if (_stores.TryAdd(segment, partition.PersistenceCore))
+            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            if (_stores.TryAdd(segment, core))
             {
-                if (partition.QueryProvider != null)
-                {
-                    _queryProviders[segment] = partition.QueryProvider;
-                    yield return partition.QueryProvider;
-                }
+                var queryProvider = partition.QueryProvider
+                    ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                _queryProviders[segment] = queryProvider;
+                if (partition.VersionQuery != null)
+                    _versionQueries[segment] = partition.VersionQuery;
+                yield return queryProvider;
             }
         }
     }
 
-    private async Task<IPersistenceServiceCore> GetOrCreateStoreAsync(string firstSegment, CancellationToken ct)
+    private async Task<IStorageService> GetOrCreateStoreAsync(string firstSegment, CancellationToken ct)
     {
         if (_stores.TryGetValue(firstSegment, out var existing))
             return existing;
@@ -92,10 +124,14 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
                 return existing;
 
             var partition = await _factory.CreateStoreAsync(firstSegment, ct);
-            _stores[firstSegment] = partition.PersistenceCore;
-            if (partition.QueryProvider != null)
-                _queryProviders[firstSegment] = partition.QueryProvider;
-            return partition.PersistenceCore;
+            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            _stores[firstSegment] = core;
+            var queryProvider = partition.QueryProvider
+                ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+            _queryProviders[firstSegment] = queryProvider;
+            if (partition.VersionQuery != null)
+                _versionQueries[firstSegment] = partition.VersionQuery;
+            return core;
         }
         finally
         {
@@ -103,32 +139,118 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
         }
     }
 
-    private IPersistenceServiceCore? TryGetStore(string? path)
+    private IStorageService? TryGetStore(string? path)
     {
-        var segment = PathPartition.GetFirstSegment(path);
-        if (segment == null) return null;
-        return _stores.TryGetValue(segment, out var store) ? store : null;
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        // Use ResolvePartitionKey for consistent routing (root-level → Admin)
+        var resolved = ResolvePartitionKey(path);
+        if (resolved != null && _stores.TryGetValue(resolved, out var resolvedStore))
+            return resolvedStore;
+
+        // Fall back to longest-prefix matching on store keys
+        var prefix = PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
+        if (prefix == null) return null;
+        return _stores.TryGetValue(prefix, out var store) ? store : null;
+    }
+
+    /// <summary>
+    /// Gets the partition prefix for a given path (longest matching registered prefix).
+    /// </summary>
+    internal string? GetPartitionPrefix(string? path)
+        => PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
+
+    /// <summary>
+    /// Resolves the partition key for a given path.
+    /// Root-level nodes (no '/' in path, e.g. "roland_Access") that don't match
+    /// a known partition are routed to "Admin" to prevent rogue schema creation.
+    /// </summary>
+    private string? ResolvePartitionKey(string? path)
+    {
+        var firstSegment = PathPartition.GetFirstSegment(path);
+        if (firstSegment == null) return null;
+
+        // If the first segment matches a known partition, use it directly
+        if (_stores.ContainsKey(firstSegment))
+            return firstSegment;
+
+        // Check base-path-to-partition mapping
+        if (_basePathToPartition.TryGetValue(firstSegment, out var mapped))
+            return mapped;
+
+        // Root-level node (path has no '/') that doesn't match any partition → route to Admin
+        if (path != null && !path.Contains('/') && _stores.ContainsKey("Admin"))
+            return "Admin";
+
+        // Multi-segment path with unknown first segment → auto-provision as before
+        return firstSegment;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        // Drain to ensure all partitions are provisioned
+        // 1. Initialize default partitions from static providers (creates schemas/tables for PostgreSQL)
+        var defaultPartitions = _staticNodeProviders
+            .SelectMany(p => p.GetStaticNodes())
+            .Select(n => n.Content)
+            .OfType<PartitionDefinition>()
+            .ToList();
+
+        if (defaultPartitions.Count > 0)
+            await _factory.InitializeDefaultPartitionsAsync(defaultPartitions, ct);
+
+        // 2. Discover all existing partitions (including the ones just created)
         await foreach (var _ in DiscoverNewProvidersAsync(ct))
         { }
+
+        // 3. Load partition metadata from Admin/Partition namespace
+        await LoadPartitionMetadataAsync(ct);
+    }
+
+    /// <summary>
+    /// Loads Partition nodes from the "Admin" store to populate base-path-to-partition mapping.
+    /// Each Partition node's Content (PartitionDefinition) declares which base paths it serves.
+    /// </summary>
+    private async Task LoadPartitionMetadataAsync(CancellationToken ct = default)
+    {
+        if (!_stores.TryGetValue("Admin", out var adminStore))
+            return;
+
+        // Use default JsonSerializerOptions for reading — this is internal bootstrap
+        var options = new JsonSerializerOptions();
+
+        await foreach (var child in adminStore.GetChildrenAsync("Admin/Partition", options))
+        {
+            if (ct.IsCancellationRequested) break;
+
+            if (child.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
+            {
+                _partitionNamespaces[child.Id] = def.Namespace;
+
+                // Map namespace to the partition that actually stores it.
+                var storeKey = _stores.ContainsKey(def.Namespace) ? def.Namespace
+                    : _stores.ContainsKey(child.Id) ? child.Id
+                    : PathPartition.GetFirstSegment(def.Namespace);
+                if (storeKey != null)
+                    _basePathToPartition[def.Namespace] = storeKey;
+            }
+        }
     }
 
     #region Node Operations
 
     public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var segment = PathPartition.GetFirstSegment(path);
+        await EnsureInitializedAsync(ct);
+
+        // Use ResolvePartitionKey so root-level nodes route to Admin
+        var segment = ResolvePartitionKey(path);
         if (segment == null) return null;
 
-        await EnsureInitializedAsync(ct);
-        var store = TryGetStore(path);
-        if (store == null) return null;
+        if (_stores.TryGetValue(segment, out var store))
+            return await store.GetNodeAsync(path, options, ct);
 
-        return await store.GetNodeAsync(path, options, ct);
+        return null;
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(
@@ -182,11 +304,46 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var segment = PathPartition.GetFirstSegment(node.Path)
+        var segment = ResolvePartitionKey(node.Path)
             ?? throw new ArgumentException("Cannot save node with empty path");
 
         var store = await GetOrCreateStoreAsync(segment, ct);
-        return await store.SaveNodeAsync(node, options, ct);
+        var result = await store.SaveNodeAsync(node, options, ct);
+
+        // When a Partition node is saved, initialize the schema for the new partition
+        if (node.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
+            await EnsurePartitionSchemaAsync(def, ct);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Ensures the schema/tables exist for a partition definition.
+    /// Called when a Partition node is created (e.g., organization creation).
+    /// </summary>
+    private async Task EnsurePartitionSchemaAsync(PartitionDefinition def, CancellationToken ct)
+    {
+        // Initialize schema and satellite tables (idempotent)
+        await _factory.InitializeDefaultPartitionsAsync([def], ct);
+
+        // Provision the store for routing if not already present
+        if (!_stores.ContainsKey(def.Namespace))
+        {
+            var partition = await _factory.CreateStoreAsync(def.Namespace, ct);
+            var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
+            if (_stores.TryAdd(def.Namespace, core))
+            {
+                var queryProvider = partition.QueryProvider
+                    ?? new Query.InMemoryMeshQuery(core, changeNotifier: _changeNotifier);
+                _queryProviders[def.Namespace] = queryProvider;
+                if (partition.VersionQuery != null)
+                    _versionQueries[def.Namespace] = partition.VersionQuery;
+            }
+        }
+
+        // Update partition metadata
+        _partitionNamespaces[def.Namespace] = def.Namespace;
+        _basePathToPartition[def.Namespace] = def.Namespace;
     }
 
     public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
@@ -272,6 +429,19 @@ public class RoutingPersistenceServiceCore : IPersistenceServiceCore
         var store = TryGetStore(path);
         if (store == null) return false;
         return await store.ExistsAsync(path, ct);
+    }
+
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var segment = PathPartition.GetFirstSegment(fullPath);
+        if (segment == null) return (null, 0);
+
+        await EnsureInitializedAsync(ct);
+        var store = TryGetStore(fullPath);
+        if (store == null) return (null, 0);
+
+        return await store.FindBestPrefixMatchAsync(fullPath, options, ct);
     }
 
     #endregion

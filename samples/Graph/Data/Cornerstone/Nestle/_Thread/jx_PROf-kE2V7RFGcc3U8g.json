@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "jx_PROf-kE2V7RFGcc3U8g",
+  "namespace": "Cornerstone/Nestle/_Thread",
+  "path": "Cornerstone/Nestle/_Thread/jx_PROf-kE2V7RFGcc3U8g",
+  "name": "Can you set up a new pricing for Nestle at https:/...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-02-19T20:15:15.707311+00:00",
+  "version": 2,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "Cornerstone/Nestle",
+    "primaryNodePath": "Cornerstone/Nestle"
+  }
+}

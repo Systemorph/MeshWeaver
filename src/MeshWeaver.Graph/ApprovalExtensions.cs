@@ -56,10 +56,10 @@ public static class ApprovalExtensions
     private static async IAsyncEnumerable<NodeMenuItemDefinition> ApprovalMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(
-            host.Hub, host.Hub.Address.ToString());
+        var hubPath = host.Hub.Address.ToString();
+        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
         if (perms.HasFlag(Permission.Update))
             yield return new NodeMenuItemDefinition("Request Approval", "RequestApproval",
-                Order: 30);
+                Order: 30, Href: MeshNodeLayoutAreas.BuildContentUrl(hubPath, "RequestApproval"));
     }
 }

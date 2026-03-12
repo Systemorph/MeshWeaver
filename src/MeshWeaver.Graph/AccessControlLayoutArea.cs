@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Layout area for managing access control on a mesh node.
-/// Inherited assignments are loaded via IMeshQuery from ancestor nodes (merged per person).
+/// Inherited assignments are loaded via IMeshService from ancestor nodes (merged per person).
 /// Local assignments are rendered via MeshSearchControl with Thumbnail areas.
 /// </summary>
 public static class AccessControlLayoutArea
@@ -40,7 +40,7 @@ public static class AccessControlLayoutArea
             );
         }
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
             ?? Observable.Return<MeshNode[]>([]);
 
@@ -50,7 +50,7 @@ public static class AccessControlLayoutArea
                 var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
                 var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
 
-                // Load inherited assignments from ancestor nodes via IMeshQuery (one-shot, rarely changes)
+                // Load inherited assignments from ancestor nodes via IMeshService (one-shot, rarely changes)
                 var inherited = new List<(AccessAssignment Assignment, string SourcePath, MeshNode Node)>();
                 if (meshQuery != null)
                 {
@@ -83,7 +83,7 @@ public static class AccessControlLayoutArea
                         try
                         {
                             var userNode = await meshQuery.QueryAsync<MeshNode>(
-                                $"path:{userPath} scope:exact").FirstOrDefaultAsync();
+                                $"path:{userPath}").FirstOrDefaultAsync();
                             if (userNode != null)
                                 userNodeLookup[userPath] = userNode;
                         }
@@ -247,21 +247,18 @@ public static class AccessControlLayoutArea
     /// </summary>
     internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog != null)
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        try
         {
-            try
-            {
-                await meshCatalog.DeleteNodeAsync(nodePath);
-            }
-            catch (Exception ex)
-            {
-                var dialog = Controls.Dialog(
-                    Controls.Markdown($"Failed to delete: {ex.Message}"),
-                    "Error"
-                ).WithSize("S").WithClosable(true);
-                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-            }
+            await nodeFactory.DeleteNodeAsync(nodePath);
+        }
+        catch (Exception ex)
+        {
+            var dialog = Controls.Dialog(
+                Controls.Markdown($"Failed to delete: {ex.Message}"),
+                "Error"
+            ).WithSize("S").WithClosable(true);
+            ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
         }
     }
 
@@ -342,12 +339,12 @@ public static class AccessControlLayoutArea
 
                     // Check if an assignment already exists for this subject
                     MeshNode? existing = null;
-                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshService>();
                     if (query != null)
                     {
                         try
                         {
-                            existing = await query.QueryAsync<MeshNode>($"path:{path} scope:exact")
+                            existing = await query.QueryAsync<MeshNode>($"path:{path}")
                                 .FirstOrDefaultAsync();
                         }
                         catch { }
@@ -363,40 +360,36 @@ public static class AccessControlLayoutArea
                     else
                     {
                         // Create the node directly with the role already set
-                        var catalog = saveCtx.Hub.ServiceProvider.GetService<IMeshCatalog>();
-                        if (catalog != null)
+                        // Look up the subject node to copy their icon
+                        string? subjectIcon = null;
+                        if (query != null)
                         {
-                            // Look up the subject node to copy their icon
-                            string? subjectIcon = null;
-                            if (query != null)
+                            try
                             {
-                                try
-                                {
-                                    var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject} scope:exact")
-                                        .FirstOrDefaultAsync();
-                                    subjectIcon = subjectNode?.Icon;
-                                }
-                                catch { }
+                                var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject}")
+                                    .FirstOrDefaultAsync();
+                                subjectIcon = subjectNode?.Icon;
                             }
-
-                            var newNode = new MeshNode(nodeId, nodePath)
-                            {
-                                NodeType = Configuration.AccessAssignmentNodeType.NodeType,
-                                Name = $"{subjectName} Access",
-                                Icon = subjectIcon,
-                                Content = new AccessAssignment
-                                {
-                                    AccessObject = selectedSubject,
-                                    DisplayName = subjectName,
-                                    Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
-                                }
-                            };
-
-                            // Save directly — no transient/Create view needed
-                            saveCtx.Hub.Post(
-                                new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
-                                o => o.WithTarget(saveCtx.Hub.Address));
+                            catch { }
                         }
+
+                        var newNode = new MeshNode(nodeId, nodePath)
+                        {
+                            NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+                            Name = $"{subjectName} Access",
+                            Icon = subjectIcon,
+                            Content = new AccessAssignment
+                            {
+                                AccessObject = selectedSubject,
+                                DisplayName = subjectName,
+                                Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
+                            }
+                        };
+
+                        // Save directly — no transient/Create view needed
+                        saveCtx.Hub.Post(
+                            new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
+                            o => o.WithTarget(saveCtx.Hub.Address));
                     }
                 }));
 

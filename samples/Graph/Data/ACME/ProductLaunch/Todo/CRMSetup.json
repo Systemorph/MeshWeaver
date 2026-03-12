@@ -13,7 +13,7 @@
     "description": "Configure Salesforce pipeline for TaskFlow leads: Demo Request → Qualified → Demo Scheduled → Proposal → Negotiation → Closed Won/Lost.",
     "category": "Sales",
     "priority": "Medium",
-    "assignee": "bob.wilson@example.com",
+    "assignee": "Bob",
     "dueDateOffsetDays": 38,
     "status": "Pending"
   }

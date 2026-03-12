@@ -58,7 +58,6 @@
     min-width: 28px;
     border-radius: 50%;
     flex-shrink: 0;
-    object-fit: contain;
 }
 
 .mesh-node-picker-info {

@@ -1,4 +1,5 @@
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -10,18 +11,20 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NavigationContext = MeshWeaver.Mesh.Services.NavigationContext;
 
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor.Test")]
+
 namespace MeshWeaver.Hosting.Blazor;
 
 /// <summary>
 /// Provides the current navigation path and namespace context from NavigationManager.
 /// Automatically subscribes to location changes and manages path resolution and creatable types.
 /// </summary>
-public class NavigationService : INavigationService
+internal class NavigationService : INavigationService
 {
     private readonly NavigationManager _navigationManager;
-    private readonly IMeshCatalog _meshCatalog;
+    private readonly IPathResolver _pathResolver;
+    private readonly IMeshService _meshQuery;
     private readonly IMessageHub _hub;
-    private readonly IActivityStore? _activityStore;
     private readonly ILogger<NavigationService>? _logger;
 
     private NavigationContext? _context;
@@ -33,14 +36,14 @@ public class NavigationService : INavigationService
 
     public NavigationService(
         NavigationManager navigationManager,
-        IMeshCatalog meshCatalog,
-        IMessageHub hub,
-        IActivityStore? activityStore = null)
+        IPathResolver pathResolver,
+        IMeshService meshQuery,
+        IMessageHub hub)
     {
         _navigationManager = navigationManager;
-        _meshCatalog = meshCatalog;
+        _pathResolver = pathResolver;
+        _meshQuery = meshQuery;
         _hub = hub;
-        _activityStore = activityStore;
         _logger = hub.ServiceProvider.GetService<ILogger<NavigationService>>();
     }
 
@@ -138,15 +141,17 @@ public class NavigationService : INavigationService
     private async Task ProcessLocationChangeAsync(string path)
     {
         IsResolving = true;
-        OnNavigationContextChanged?.Invoke(_context);
 
         // Resolve the path using pattern matching
-        var resolution = await _meshCatalog.ResolvePathAsync(path);
+        var resolution = await _pathResolver.ResolvePathAsync(path);
 
         if (resolution is null)
         {
-            // Catalog may still be initializing — retry in background with backoff.
-            // IsResolving stays true so the UI shows a spinner instead of "Page Not Found".
+            // Clear context immediately so callers see null for unresolvable paths.
+            // Then retry in background (catalog may still be initializing).
+            _context = null;
+            CurrentNamespace = null;
+            OnNavigationContextChanged?.Invoke(null);
             _ = RetryResolutionAsync(path);
             return;
         }
@@ -207,7 +212,7 @@ public class NavigationService : INavigationService
             if (CurrentPath != path)
                 return;
 
-            var resolution = await _meshCatalog.ResolvePathAsync(path);
+            var resolution = await _pathResolver.ResolvePathAsync(path);
             if (resolution is not null)
             {
                 // Success — process the result
@@ -232,7 +237,7 @@ public class NavigationService : INavigationService
         try
         {
             var address = (Address)resolution.Prefix;
-            var node = await _meshCatalog.GetNodeAsync(address);
+            var node = await _meshQuery.QueryAsync<MeshNode>($"path:{address}").FirstOrDefaultAsync();
             if (node == null)
                 return null;
 
@@ -252,13 +257,11 @@ public class NavigationService : INavigationService
                     node = node with { PreRenderedHtml = html };
 
                     // Fire-and-forget: persist the generated PreRenderedHtml back
-                    _ = Task.Run(async () =>
+                    _ = Task.Run(() =>
                     {
                         try
                         {
-                            var persistence = _hub.ServiceProvider.GetService<IPersistenceService>();
-                            if (persistence != null)
-                                await persistence.SaveNodeAsync(node);
+                            _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address));
                         }
                         catch (Exception ex)
                         {
@@ -280,73 +283,88 @@ public class NavigationService : INavigationService
 
     /// <summary>
     /// Node types excluded from activity tracking.
-    /// Satellite content (ISatelliteContent) is also excluded automatically.
+    /// Satellite content (MainNode != Path) is also excluded automatically.
     /// </summary>
     private static readonly HashSet<string> ExcludedNodeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "User",
         "Role",
         "Group",
+        "AccessAssignment",
     };
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
+    /// Stores as MeshNode at User/{userId}/_userActivity/{encodedPath}.
     /// Fire-and-forget: failures are logged but don't affect navigation.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        if (_activityStore == null)
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: no IActivityStore registered", node.Path);
-            return;
-        }
         if (accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: no user context (AccessService.Context.ObjectId is null/empty)", node.Path);
             return;
-        }
 
         // Skip system/internal paths
         if (string.IsNullOrEmpty(node.Path) || node.Path.StartsWith('_'))
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: system/internal path", node.Path);
             return;
-        }
 
-        // Skip satellite content (Threads, AccessAssignments, etc.) and excluded node types
-        if (node.Content is ISatelliteContent)
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: satellite content", node.Path);
+        // Skip satellite content and excluded node types
+        if (node.MainNode != node.Path)
             return;
-        }
         if (node.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
-        {
-            _logger?.LogDebug("Activity tracking skipped for {Path}: excluded node type {NodeType}", node.Path, node.NodeType);
             return;
-        }
 
-        var now = DateTimeOffset.UtcNow;
-        var record = new UserActivityRecord
-        {
-            Id = node.Path.Replace("/", "_"),
-            NodePath = node.Path,
-            UserId = userId,
-            ActivityType = ActivityType.Read,
-            FirstAccessedAt = now,
-            LastAccessedAt = now,
-            AccessCount = 1,
-            NodeName = node.Name,
-            NodeType = node.NodeType,
-            Namespace = node.Namespace
-        };
-
-        _logger?.LogDebug("Recording activity: user={UserId} path={Path} type={NodeType}", userId, node.Path, node.NodeType);
         _ = Task.Run(async () =>
         {
             try
             {
-                await _activityStore.SaveActivitiesAsync(userId, [record]);
+                var now = DateTimeOffset.UtcNow;
+                var encodedPath = node.Path.Replace("/", "_");
+                var activityPath = $"User/{userId}/_userActivity/{encodedPath}";
+
+                // Query for existing activity node
+                var existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath}").FirstOrDefaultAsync();
+
+                UserActivityRecord record;
+                if (existing?.Content is UserActivityRecord existingRecord)
+                {
+                    record = existingRecord with
+                    {
+                        ActivityType = ActivityType.Read,
+                        LastAccessedAt = now,
+                        AccessCount = existingRecord.AccessCount + 1,
+                        NodeName = node.Name ?? existingRecord.NodeName,
+                        NodeType = node.NodeType ?? existingRecord.NodeType,
+                        Namespace = node.Namespace ?? existingRecord.Namespace,
+                    };
+
+                    await _meshQuery.UpdateNodeAsync(existing with { Content = record });
+                }
+                else
+                {
+                    record = new UserActivityRecord
+                    {
+                        Id = encodedPath,
+                        NodePath = node.Path,
+                        UserId = userId,
+                        ActivityType = ActivityType.Read,
+                        FirstAccessedAt = now,
+                        LastAccessedAt = now,
+                        AccessCount = 1,
+                        NodeName = node.Name,
+                        NodeType = node.NodeType,
+                        Namespace = node.Namespace
+                    };
+
+                    await _meshQuery.CreateNodeAsync(MeshNode.FromPath(activityPath) with
+                    {
+                        NodeType = "UserActivity",
+                        Name = node.Name ?? encodedPath,
+                        MainNode = $"User/{userId}",
+                        State = MeshNodeState.Active,
+                        Content = record
+                    });
+                }
             }
             catch (Exception ex)
             {

@@ -3,6 +3,7 @@
 
 using System.Security.Claims;
 using MeshWeaver.Blazor.Portal.Authentication;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,9 @@ public partial class UserProfile : ComponentBase
     [Inject]
     public required IAuthenticationNavigationService AuthNavigation { get; init; }
 
+    [Inject]
+    public required AccessService AccessService { get; init; }
+
     [CascadingParameter]
     public required Task<AuthenticationState> AuthenticationState { get; set; }
 
@@ -32,6 +36,7 @@ public partial class UserProfile : ComponentBase
     private string? name;
     private string? username;
     private string? initials;
+    private bool isPlatformAdmin;
     private string NameClaimType { get; } = "name";
     public string UsernameClaimType { get; } = "preferred_username";
 
@@ -43,10 +48,17 @@ public partial class UserProfile : ComponentBase
 
         if (claimsIdentity?.IsAuthenticated == true)
         {
-            name = claimsIdentity.FindFirst(NameClaimType)?.Value!;
+            // Prefer username from AccessContext (set by OnboardingMiddleware from user node)
+            var accessName = AccessService.Context?.Name;
+            name = !string.IsNullOrEmpty(accessName)
+                ? accessName
+                : claimsIdentity.FindFirst(NameClaimType)?.Value!;
 
-            username = claimsIdentity.FindFirst(UsernameClaimType)?.Value;
+            username = name;
             initials = GetInitials(name);
+
+            // Check if the user has PlatformAdmin role
+            isPlatformAdmin = AccessService.Context?.Roles?.Contains("PlatformAdmin") == true;
         }
 
     }
@@ -78,6 +90,15 @@ public partial class UserProfile : ComponentBase
         var returnUrl = Navigation.Uri;
         var loginUrl = AuthNavigation.GetLoginUrl(returnUrl);
         Navigation.NavigateTo(loginUrl, forceLoad: true);
+    }
+
+    private void NavigateToUserNode()
+    {
+        var userId = AccessService.Context?.ObjectId;
+        if (!string.IsNullOrEmpty(userId))
+        {
+            Navigation.NavigateTo($"/User/{userId}");
+        }
     }
 
     private void Logout()

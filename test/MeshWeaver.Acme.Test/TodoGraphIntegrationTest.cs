@@ -167,9 +167,9 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task ProductLaunch_HasTaskChildren()
     {
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var children = await meshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo scope:children", null, TestContext.Current.CancellationToken)
+        var children = await meshQuery.QueryAsync<MeshNode>("namespace:ACME/ProductLaunch/Todo", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         children.Should().NotBeEmpty("ProductLaunch should have task children");
@@ -183,9 +183,7 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact(Timeout = 60000)]
     public async Task Task_Instances_HaveCorrectNodeType()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        var task = await persistence.GetNodeAsync("ACME/ProductLaunch/Todo/DefinePersona", TestContext.Current.CancellationToken);
+        var task = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
 
         task.Should().NotBeNull();
         task!.NodeType.Should().Be("ACME/Project/Todo");

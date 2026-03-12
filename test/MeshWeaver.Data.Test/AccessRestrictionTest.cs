@@ -404,14 +404,17 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
             .AddData(data =>
                 data
                     // Global restriction: no anonymous deletes - validation runs on client
+                    // Note: The framework's PostPipeline always provides a non-null AccessContext
+                    // (using the hub address as fallback), so we check for explicit user roles
+                    // rather than null to distinguish authenticated vs anonymous users.
                     .WithAccessRestriction(
                         (action, ctx, accessCtx) =>
                         {
                             // Allow everything except anonymous deletes
                             if (action != AccessAction.Delete)
                                 return true;
-                            // For Delete, require authenticated user
-                            return accessCtx.UserContext != null;
+                            // For Delete, require authenticated user (must have roles)
+                            return accessCtx.UserContext?.Roles?.Count > 0;
                         },
                         "NoAnonymousDeletes")
                     .AddHubSource(CreateHostAddress(), dataSource =>
@@ -425,7 +428,7 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
 
-        // Set no user context (anonymous)
+        // Set no user context (anonymous - no roles)
         accessService.SetContext(null);
 
         var entityToDelete = new SimpleEntity("1", "Simple Item 1");
@@ -458,11 +461,12 @@ public class GlobalAccessRestrictionTest(ITestOutputHelper output) : HubTestBase
         var client = GetClient();
         var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
 
-        // Set authenticated user context
+        // Set authenticated user context with roles
         accessService.SetContext(new AccessContext
         {
             ObjectId = "authuser",
-            Name = "Authenticated User"
+            Name = "Authenticated User",
+            Roles = ["User"]
         });
 
         var entityToDelete = new SimpleEntity("2", "Simple Item 2");
@@ -542,12 +546,15 @@ public class CombinedAccessRestrictionTest(ITestOutputHelper output) : HubTestBa
             .AddData(data =>
                 data
                     // Global restriction: require authentication for all write operations
+                    // Note: The framework's PostPipeline always provides a non-null AccessContext
+                    // (using the hub address as fallback), so we check for explicit user roles
+                    // rather than null to distinguish authenticated vs anonymous users.
                     .WithAccessRestriction(
                         (action, ctx, accessCtx) =>
                         {
                             if (action == AccessAction.Read)
                                 return true;
-                            return accessCtx.UserContext != null;
+                            return accessCtx.UserContext?.Roles?.Count > 0;
                         },
                         "RequireAuthentication")
                     .AddHubSource(CreateHostAddress(), dataSource =>

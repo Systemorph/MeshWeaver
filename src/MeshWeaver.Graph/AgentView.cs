@@ -56,7 +56,7 @@ public static class AgentView
             .WithView(
                 (h, c) => Observable.FromAsync(async () =>
                 {
-                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+                    var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
                     if (meshQuery == null)
                         return RenderError("Query service not available.");
 

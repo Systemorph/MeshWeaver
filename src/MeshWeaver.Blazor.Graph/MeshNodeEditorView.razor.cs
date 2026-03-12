@@ -44,16 +44,16 @@ public partial class MeshNodeEditorView
 
         try
         {
-            var persistence = Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
+            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
+            if (meshQuery == null)
             {
-                Logger.LogError("IPersistenceService not available");
+                Logger.LogError("IMeshService not available");
                 return;
             }
 
             var path = ViewModel.NodePath;
             _originalPath = path;
-            _node = await persistence.GetNodeAsync(path);
+            _node = await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:self").FirstOrDefaultAsync();
 
             if (_node != null)
             {
@@ -125,14 +125,6 @@ public partial class MeshNodeEditorView
 
         try
         {
-            var persistence = Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
-            {
-                _metadataMessage = "Persistence service not available";
-                _metadataSuccess = false;
-                return;
-            }
-
             // Calculate new path
             var newPath = string.IsNullOrEmpty(_parentPath)
                 ? _lastSegment
@@ -145,7 +137,13 @@ public partial class MeshNodeEditorView
             {
                 // Move the node to new path
                 Logger.LogInformation("Moving node from {OldPath} to {NewPath}", _originalPath, newPath);
-                _node = await persistence.MoveNodeAsync(_originalPath, newPath);
+                var moveResponse = await Hub.AwaitResponse(
+                    new MoveNodeRequest(_originalPath, newPath),
+                    o => o.WithTarget(Hub.Address));
+                if (!moveResponse.Message.Success)
+                    throw new InvalidOperationException(moveResponse.Message.Error);
+                _node = moveResponse.Message.Node
+                    ?? throw new InvalidOperationException("Move succeeded but returned no node");
                 _originalPath = newPath;
             }
 
@@ -162,7 +160,12 @@ public partial class MeshNodeEditorView
                 GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
-            _node = await persistence.SaveNodeAsync(updatedNode);
+            var updateResponse = await Hub.AwaitResponse(
+                new UpdateNodeRequest(updatedNode),
+                o => o.WithTarget(Hub.Address));
+            if (!updateResponse.Message.Success)
+                throw new InvalidOperationException(updateResponse.Message.Error);
+            _node = updateResponse.Message.Node;
 
             _metadataMessage = pathChanged
                 ? $"Metadata saved. Node moved to {newPath}"
@@ -192,14 +195,6 @@ public partial class MeshNodeEditorView
 
         try
         {
-            var persistence = Hub.ServiceProvider.GetService<IPersistenceService>();
-            if (persistence == null)
-            {
-                _contentMessage = "Persistence service not available";
-                _contentSuccess = false;
-                return;
-            }
-
             // Update content based on node type
             object? newContent = _node.Content;
 
@@ -235,7 +230,12 @@ public partial class MeshNodeEditorView
                 GlobalServiceConfigurations = _node.GlobalServiceConfigurations
             };
 
-            _node = await persistence.SaveNodeAsync(updatedNode);
+            var updateResponse = await Hub.AwaitResponse(
+                new UpdateNodeRequest(updatedNode),
+                o => o.WithTarget(Hub.Address));
+            if (!updateResponse.Message.Success)
+                throw new InvalidOperationException(updateResponse.Message.Error);
+            _node = updateResponse.Message.Node;
 
             _contentMessage = "Content saved successfully";
             _contentSuccess = true;

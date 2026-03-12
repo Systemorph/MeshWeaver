@@ -27,7 +27,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 {
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
-    [Inject] private IMeshQuery MeshQuery { get; set; } = null!;
+    [Inject] private IMeshService MeshQuery { get; set; } = null!;
 
     private bool _isDisposed;
     private IDisposable? agentSubscription;
@@ -135,11 +135,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
-            if (meshQuery == null)
+            var pathResolver = Hub.ServiceProvider.GetService<IPathResolver>();
+            if (pathResolver == null)
                 return null;
 
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
+            var resolution = await pathResolver.ResolvePathAsync(path);
+            if (resolution == null)
+                return null;
+
+            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix}").FirstOrDefaultAsync();
             return node?.Name ?? node?.Id;
         }
         catch (Exception ex)
@@ -153,9 +158,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Resolves a path to its primary context path, handling satellite nodes.
     /// If the node at the path is a satellite, returns its PrimaryNodePath instead.
     /// </summary>
-    private Task<string> ResolvePrimaryContextPathAsync(string path)
+    private async Task<string> ResolvePrimaryContextPathAsync(string path)
     {
-        return Task.FromResult(path);
+        try
+        {
+            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
+            if (meshQuery == null)
+                return path;
+
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+            if (node != null && node.MainNode != node.Path)
+                return node.MainNode;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error resolving primary context path for: {Path}", path);
+        }
+
+        return path;
     }
 
     protected override void BindData()
@@ -610,7 +630,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             isLoadingRecentThreads = true;
             StateHasChanged();
 
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshQuery>();
+            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
             if (meshQuery == null)
             {
                 recentThreads = [];
@@ -690,15 +710,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             Name = name,
             NodeType = ThreadNodeType.NodeType,
-            Content = threadContent
+            Content = threadContent,
+            MainNode = string.IsNullOrEmpty(ns) ? null : ns
         };
 
         try
         {
-            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IPersistenceService>();
+            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshService>();
             var accessService = Hub.ServiceProvider.GetService<AccessService>();
             var userId = accessService?.Context?.ObjectId;
-            var createdNode = await nodeFactory.SaveNodeAsync(newNode);
+            var createdNode = await nodeFactory.CreateNodeAsync(newNode);
             threadPath = createdNode.Path;
             SidePanelState.SetContentPath(threadPath);
             UpdateSidePanelTitle();
@@ -747,8 +768,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 _instanceId, name, targetThreadPath);
 
             // Update the node name via UpdateNodeRequest
-            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
-            var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{targetThreadPath} scope:exact").FirstOrDefaultAsync();
+            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{targetThreadPath}").FirstOrDefaultAsync();
             if (existingNode != null)
             {
                 var updatedNode = existingNode with { Name = name };

@@ -52,7 +52,7 @@
     public string? DataContext { get; set; }
 
     [Inject]
-    public IMeshQuery? MeshQuery { get; set; }
+    public IMeshService? MeshQuery { get; set; }
 
     private string BoundValue => ViewModel?.Value?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search... (use @ for references)";
@@ -96,7 +96,7 @@
             if (query.StartsWith("@"))
             {
                 var reference = query[1..]; // Strip @ prefix
-                // Results come pre-ordered by relevance from IMeshQuery.AutocompleteAsync
+                // Results come pre-ordered by relevance from IMeshService.AutocompleteAsync
                 // (path length first, then score, then name)
                 var suggestions = await MeshQuery.AutocompleteAsync(
                     BoundNamespace,

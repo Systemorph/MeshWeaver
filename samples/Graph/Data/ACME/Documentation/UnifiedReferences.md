@@ -147,7 +147,7 @@ Dimensions are shared across all projects using the same NodeType.
 
 ## Status Dimension
 
-Defined in `ACME/Project/Code/Status.cs`:
+Defined in `ACME/Project/_Source/Status.cs`:
 
 | Status | Description | Emoji |
 |--------|-------------|-------|
@@ -159,7 +159,7 @@ Defined in `ACME/Project/Code/Status.cs`:
 
 ## Priority Dimension
 
-Defined in `ACME/Project/Todo/Code/Priority.cs`:
+Defined in `ACME/Project/Todo/_Source/Priority.cs`:
 
 | Priority | Order | Color |
 |----------|-------|-------|
@@ -171,7 +171,7 @@ Defined in `ACME/Project/Todo/Code/Priority.cs`:
 
 ## Category Dimension
 
-Defined in `ACME/Project/Todo/Code/Category.cs`:
+Defined in `ACME/Project/Todo/_Source/Category.cs`:
 
 | Category | Icon |
 |----------|------|

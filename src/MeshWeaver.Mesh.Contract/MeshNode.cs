@@ -2,6 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
+using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -86,10 +87,19 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     public string Path => string.IsNullOrEmpty(Namespace) ? (Id) : $"{Namespace}/{Id}";
 
     /// <summary>
+    /// Path of the main/primary node. For main nodes, MainNode == Path.
+    /// For satellite nodes (comments, threads, approvals), this points to the primary node they belong to.
+    /// </summary>
+    [Editable(false)]
+    public string MainNode { get; init; } = string.IsNullOrEmpty(Namespace) ? Id : $"{Namespace}/{Id}";
+
+    /// <summary>
     /// Single segments as used for matching and addressing.
+    /// Must be a computed property (not a readonly field) so that it reflects
+    /// updated Namespace/Id after record copy via 'with {}'.
     /// </summary>
     [JsonIgnore, NotMapped]
-    public readonly IReadOnlyList<string> Segments =
+    public IReadOnlyList<string> Segments =>
         string.IsNullOrEmpty(Namespace)
             ? (string.IsNullOrEmpty(Id) ? Array.Empty<string>() : Id.Split('/'))
             : Namespace.Split('/').Append(Id).ToArray();
@@ -152,6 +162,7 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// <summary>
     /// Icon URL or identifier for display in UI.
     /// </summary>
+    [ContentItem]
     public string? Icon { get; init; }
 
     /// <summary>
@@ -218,6 +229,13 @@ public record MeshNode([property: Key] string Id, [property: Editable(false)] st
     /// when transient node path uses GUID but user wants specific Id.
     /// </summary>
     public string? DesiredId { get; init; }
+
+    /// <summary>
+    /// When set on a NodeType definition node, marks all instances of this type as satellite nodes.
+    /// Satellite nodes' MainNode is set to their primary node path at creation time.
+    /// </summary>
+    [Editable(false)]
+    public bool IsSatelliteType { get; init; }
 
     /// <summary>
     /// Contexts from which this node (or nodes of this type) should be excluded.

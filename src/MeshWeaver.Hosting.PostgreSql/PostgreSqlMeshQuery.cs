@@ -78,8 +78,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         // Context-based exclusion
         var context = request.Context ?? parsedQuery.Context;
 
-        // Determine activity user ID for source:activity queries
-        var activityUserId = parsedQuery.Source == QuerySource.Activity
+        // Determine activity user ID for source:accessed queries (JOIN with UserActivity nodes)
+        var activityUserId = parsedQuery.Source == QuerySource.Accessed
             ? GetEffectiveUserId(request)
             : null;
 
