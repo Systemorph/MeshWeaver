@@ -113,7 +113,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: query accessible partitions, discover+query new ones in parallel
+        // Fan out: query accessible partitions in parallel, each scoped to its own namespace
         var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var channel = Channel.CreateUnbounded<object>();
@@ -130,12 +130,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 {
                     if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
                         continue;
-                    queryTasks.Add(QueryOneAsync(p));
+                    queryTasks.Add(QueryOneAsync(key, p));
                 }
 
                 // Discover new partitions and start querying each as it becomes available
-                await foreach (var p in _router.DiscoverNewProvidersAsync(ct))
-                    queryTasks.Add(QueryOneAsync(p));
+                await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
+                    queryTasks.Add(QueryOneAsync(key, p));
 
                 // All providers discovered — wait for ongoing queries to finish
                 await Task.WhenAll(queryTasks);
@@ -147,9 +147,15 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             }
             channel.Writer.Complete();
 
-            async Task QueryOneAsync(IMeshQueryProvider p)
+            async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
             {
-                await foreach (var item in p.QueryAsync(request, options, ct))
+                // Scope the request to the partition's namespace so each partition
+                // only searches its own data (not all data via a shared adapter)
+                var scopedRequest = string.IsNullOrEmpty(effectivePath)
+                    ? request with { DefaultPath = partitionKey }
+                    : request;
+
+                await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
                 {
                     if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
                         continue;
@@ -182,20 +188,21 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
-        foreach (var p in _router.QueryProviders.Values)
-            tasks.Add(AutocompleteOneAsync(p));
+        foreach (var (key, p) in _router.QueryProviders)
+            tasks.Add(AutocompleteOneAsync(key, p));
 
-        await foreach (var p in _router.DiscoverNewProvidersAsync(ct))
-            tasks.Add(AutocompleteOneAsync(p));
+        await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
+            tasks.Add(AutocompleteOneAsync(key, p));
 
         await Task.WhenAll(tasks);
 
         foreach (var s in all.OrderBy(s => s.Path.Length).ThenByDescending(s => s.Score).ThenBy(s => s.Name).Take(limit))
             yield return s;
 
-        async Task AutocompleteOneAsync(IMeshQueryProvider p)
+        async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            await foreach (var s in p.AutocompleteAsync(basePath, prefix, options, limit, ct))
+            var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+            await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, ct))
                 all.Add(s);
         }
     }
@@ -223,11 +230,11 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
-        foreach (var p in _router.QueryProviders.Values)
-            tasks.Add(AutocompleteOneAsync(p));
+        foreach (var (key, p) in _router.QueryProviders)
+            tasks.Add(AutocompleteOneAsync(key, p));
 
-        await foreach (var p in _router.DiscoverNewProvidersAsync(ct))
-            tasks.Add(AutocompleteOneAsync(p));
+        await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
+            tasks.Add(AutocompleteOneAsync(key, p));
 
         await Task.WhenAll(tasks);
 
@@ -246,9 +253,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         foreach (var s in ordered.Take(limit))
             yield return s;
 
-        async Task AutocompleteOneAsync(IMeshQueryProvider p)
+        async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            await foreach (var s in p.AutocompleteAsync(basePath, prefix, options, mode, limit, contextPath, context, ct))
+            var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+            await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, ct))
                 all.Add(s);
         }
     }
@@ -267,10 +275,11 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // Fan out to all partitions (known + newly discovered), merge observables
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
         {
-            // Collect all providers: already-known + newly discovered
-            var allProviders = new List<IMeshQueryProvider>(_router.QueryProviders.Values);
-            await foreach (var p in _router.DiscoverNewProvidersAsync(ct))
-                allProviders.Add(p);
+            // Collect all providers with their keys: already-known + newly discovered
+            var allProviders = new List<(string Key, IMeshQueryProvider Provider)>(
+                _router.QueryProviders.Select(kvp => (kvp.Key, kvp.Value)));
+            await foreach (var entry in _router.DiscoverNewProvidersAsync(ct))
+                allProviders.Add(entry);
 
             if (allProviders.Count == 0)
             {
@@ -280,11 +289,21 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
             if (allProviders.Count == 1)
             {
-                return allProviders[0].ObserveQuery<T>(request, options).Subscribe(observer);
+                var (key, prov) = allProviders[0];
+                var scopedReq = string.IsNullOrEmpty(effectivePath)
+                    ? request with { DefaultPath = key }
+                    : request;
+                return prov.ObserveQuery<T>(scopedReq, options).Subscribe(observer);
             }
 
             var observables = allProviders
-                .Select(p => p.ObserveQuery<T>(request, options))
+                .Select(entry =>
+                {
+                    var scopedReq = string.IsNullOrEmpty(effectivePath)
+                        ? request with { DefaultPath = entry.Key }
+                        : request;
+                    return entry.Provider.ObserveQuery<T>(scopedReq, options);
+                })
                 .ToList();
 
             var initialItems = new List<T>();
@@ -338,10 +357,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // Fan out: known partitions + newly discovered, all in parallel
         var tasks = new ConcurrentBag<Task<T?>>();
 
-        foreach (var p in _router.QueryProviders.Values)
+        foreach (var (_, p) in _router.QueryProviders)
             tasks.Add(p.SelectAsync<T>(path, property, options, ct));
 
-        await foreach (var p in _router.DiscoverNewProvidersAsync(ct))
+        await foreach (var (_, p) in _router.DiscoverNewProvidersAsync(ct))
             tasks.Add(p.SelectAsync<T>(path, property, options, ct));
 
         var results = await Task.WhenAll(tasks);

@@ -15,7 +15,7 @@ internal static class ThreadPoolSetup
     [ModuleInitializer]
     internal static void Initialize()
     {
-        ThreadPool.SetMinThreads(50, 50);
+        ThreadPool.SetMinThreads(100, 100);
     }
 }
 
