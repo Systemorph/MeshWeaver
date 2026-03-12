@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reactive.Linq;
-using MeshWeaver.Layout.DataBinding;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -506,7 +505,7 @@ public static class SettingsLayoutArea
 
         host.RegisterForDisposal($"autosave_{dataId}",
             host.Stream.GetDataStream<object>(dataId)
-                .ThrottleImmediate(TimeSpan.FromMilliseconds(300))
+                .Throttle(TimeSpan.FromMilliseconds(300))
                 .Subscribe(updated =>
                 {
                     if (object.Equals(current, updated))
