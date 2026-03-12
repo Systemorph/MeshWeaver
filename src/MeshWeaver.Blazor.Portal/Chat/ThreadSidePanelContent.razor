@@ -1,0 +1,58 @@
+@namespace MeshWeaver.Blazor.Portal.Chat
+
+@using MeshWeaver.Layout
+
+<ChatSidePanel OnCloseRequested="@OnCloseRequested">
+    <ToolbarContent>
+        <FluentButton BackgroundColor="transparent" OnClick="StartNewConversationAsync" Title="New Chat">
+            <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />
+        </FluentButton>
+        <FluentButton BackgroundColor="transparent" OnClick="ToggleChatHistory" Title="Chat History">
+            <FluentIcon Value="@(new Icons.Regular.Size20.History())" Color="Color.Neutral" />
+        </FluentButton>
+        @if (!string.IsNullOrEmpty(selectedThreadPath))
+        {
+            <FluentButton BackgroundColor="transparent" OnClick="OpenThreadFullScreen" Title="Open Full Screen">
+                <FluentIcon Value="@(new Icons.Regular.Size20.ArrowMaximize())" Color="Color.Neutral" />
+            </FluentButton>
+        }
+        <FluentButton BackgroundColor="transparent" Title="Chat Position" @onclick="@(() => positionMenuVisible = !positionMenuVisible)" Id="position-menu-anchor">
+            <FluentIcon Value="@(new Icons.Regular.Size20.WindowLocationTarget())" Color="Color.Neutral" />
+        </FluentButton>
+        <FluentMenu @bind-Open="positionMenuVisible" Anchor="position-menu-anchor">
+            <FluentMenuItem OnClick="@(() => ChangeChatPosition(SidePanelPosition.Right))">
+                <FluentIcon Value="@(new Icons.Regular.Size16.PanelRight())" />
+                Right
+                @if (SidePanelState.Position == SidePanelPosition.Right)
+                {
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                }
+            </FluentMenuItem>
+            <FluentMenuItem OnClick="@(() => ChangeChatPosition(SidePanelPosition.Bottom))">
+                <FluentIcon Value="@(new Icons.Regular.Size16.ArrowDown())" />
+                Bottom
+                @if (SidePanelState.Position == SidePanelPosition.Bottom)
+                {
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Style="margin-left: auto;" />
+                }
+            </FluentMenuItem>
+        </FluentMenu>
+    </ToolbarContent>
+    <ChildContent>
+        @if (showChatHistory)
+        {
+            <div class="chat-history-fullscreen">
+                <ChatHistorySelector SelectedConversationId="@selectedThreadPath"
+                    SelectedConversationIdChanged="OnThreadSelected"
+                    OnNewConversation="StartNewConversationAsync"
+                    OnClose="CloseChatHistory"
+                    @ref="chatHistorySelector"
+                    IsRightPanel="true" />
+            </div>
+        }
+        else
+        {
+            <ThreadChatView @key="@threadChatKey" ViewModel="@GetThreadChatControl()" />
+        }
+    </ChildContent>
+</ChatSidePanel>

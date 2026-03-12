@@ -8,8 +8,6 @@ Tags:
   - "Data Distribution"
 ---
 
-# Data Where It Belongs
-
 In most insurance groups, consolidation means copying data from subsidiaries into a central warehouse — nightly ETL jobs, staging tables, transformation scripts, and stale snapshots. MeshWeaver takes a different approach: **data stays where it is**. The group view is assembled virtually through reactive stream composition.
 
 ---

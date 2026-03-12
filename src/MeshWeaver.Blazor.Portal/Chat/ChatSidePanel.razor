@@ -1,0 +1,16 @@
+@namespace MeshWeaver.Blazor.Portal.Chat
+
+<div class="chat-side-panel">
+    <div class="chat-header">
+        <h3 class="chat-title">AI Chat</h3>
+        <div class="chat-actions">
+            @ToolbarContent
+            <FluentButton BackgroundColor="transparent" OnClick="CloseChatAsync" Title="Close">
+                <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
+            </FluentButton>
+        </div>
+    </div>
+    <div class="chat-content">
+        @ChildContent
+    </div>
+</div>
