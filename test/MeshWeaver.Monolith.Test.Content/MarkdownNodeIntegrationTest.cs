@@ -11,6 +11,7 @@ using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Documentation;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -72,6 +73,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddMeshWeaverDocs()
+            .AddDoc()
+            .AddDocumentation()
             .AddSystemorph()
             .AddKernelData()
             .AddKernel()  // Required for interactive markdown code execution
@@ -102,10 +105,10 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task CollaborativeEditing_NodeExists_InMeshWeaverNamespace()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull("CollaborativeEditing node should exist");
-        node!.Path.Should().Be("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        node!.Path.Should().Be("Doc/DataMesh/CollaborativeEditing");
         node.NodeType.Should().Be("Markdown");
         node.Name.Should().Be("Collaborative Editing");
     }
@@ -116,7 +119,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task CollaborativeEditing_HasMarkdownDocumentContent()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
         node!.Content.Should().NotBeNull("Node should have content");
@@ -136,7 +139,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task CollaborativeEditing_ContentContainsDocumentation()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
 
@@ -489,8 +492,8 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task MeshWeaver_MarkdownNodes_HaveCorrectNodeType()
     {
-        var collaborativeEditing = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
-        var nodeTypeConfig = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/NodeTypeConfiguration scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var collaborativeEditing = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/CollaborativeEditing scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var nodeTypeConfig = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/NodeTypeConfiguration scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         collaborativeEditing.Should().NotBeNull();
         collaborativeEditing!.NodeType.Should().Be("Markdown");
@@ -510,7 +513,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task CollaborativeEditing_ReturnsDefaultLayoutView()
     {
-        var nodeAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -559,13 +562,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public void DataSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/CollaborativeEditing/data:";
+        var markdown = "@@Doc/DataMesh/CollaborativeEditing/data:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new Markdig.MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        layoutArea.Address.Should().Be("Doc/DataMesh/CollaborativeEditing");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutArea.Id.Should().BeNull("Empty path after data: means self-reference");
         layoutArea.IsInline.Should().BeTrue();
@@ -632,13 +635,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public void KeywordWithoutColon_Schema_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema";
+        var markdown = "@@Doc/DataMesh/UnifiedPath/schema";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
         layoutArea.Id.Should().BeNull();
         layoutArea.IsInline.Should().BeTrue();
@@ -669,7 +672,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task DataSelfReference_ReturnsLayoutView()
     {
-        var nodeAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -680,7 +683,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.DataArea); // "$Data"
 
-        Output.WriteLine($"Getting {MeshNodeLayoutAreas.DataArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.DataArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -703,7 +706,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task SchemaSelfReference_ReturnsLayoutView()
     {
-        var nodeAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -714,7 +717,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.SchemaArea); // "$Schema"
 
-        Output.WriteLine($"Getting {MeshNodeLayoutAreas.SchemaArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.SchemaArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -737,7 +740,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task ModelSelfReference_ReturnsLayoutView()
     {
-        var nodeAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -748,7 +751,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ModelArea); // "$Model"
 
-        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ModelArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ModelArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -771,7 +774,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task ContentSelfReference_ReturnsNodeIcon()
     {
-        var nodeAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        var nodeAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -782,7 +785,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(MeshNodeLayoutAreas.ContentArea); // "$Content"
 
-        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ContentArea} layout for MeshWeaver/Documentation/DataMesh/CollaborativeEditing...");
+        Output.WriteLine($"Getting {MeshNodeLayoutAreas.ContentArea} layout for Doc/DataMesh/CollaborativeEditing...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(nodeAddress, reference);
 
         var changeItem = await stream.Timeout(30.Seconds()).FirstAsync();
@@ -806,13 +809,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public void DataColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/data:";
+        var markdown = "@@Doc/DataMesh/UnifiedPath/data:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.DataAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -825,13 +828,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public void SchemaColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema:";
+        var markdown = "@@Doc/DataMesh/UnifiedPath/schema:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.SchemaAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -844,13 +847,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public void ContentColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:";
+        var markdown = "@@Doc/DataMesh/UnifiedPath/content:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ContentAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -863,13 +866,13 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public void ModelColonSelfReference_ParsesCorrectly()
     {
-        var markdown = "@@MeshWeaver/Documentation/DataMesh/UnifiedPath/model:";
+        var markdown = "@@Doc/DataMesh/UnifiedPath/model:";
         var extension = new LayoutAreaMarkdownExtension();
         var pipeline = new MarkdownPipelineBuilder().Use(extension).Build();
         var document = Markdig.Markdown.Parse(markdown, pipeline);
 
         var layoutArea = document.Descendants<LayoutAreaComponentInfo>().Single();
-        layoutArea.Address.Should().Be("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        layoutArea.Address.Should().Be("Doc/DataMesh/UnifiedPath");
         layoutArea.Area.Should().Be(LayoutAreaMarkdownParser.ModelAreaName);
         layoutArea.Id.Should().BeNull("Self-reference (empty path) should have null Id");
         layoutArea.IsInline.Should().BeTrue();
@@ -885,10 +888,10 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task InteractiveMarkdown_NodeExists_WithExecutableCodeBlocks()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-        node.Should().NotBeNull("InteractiveMarkdown node should exist at MeshWeaver/Documentation/DataMesh/InteractiveMarkdown");
-        node!.Path.Should().Be("MeshWeaver/Documentation/DataMesh/InteractiveMarkdown");
+        node.Should().NotBeNull("InteractiveMarkdown node should exist at Doc/DataMesh/InteractiveMarkdown");
+        node!.Path.Should().Be("Doc/DataMesh/InteractiveMarkdown");
         node.NodeType.Should().Be("Markdown");
     }
 
@@ -898,7 +901,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task InteractiveMarkdown_ContentContainsRenderFlags()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
 
@@ -918,7 +921,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task InteractiveMarkdown_ParsesExecutableCodeBlocks()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -980,7 +983,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 10000)]
     public async Task InteractiveMarkdown_PrerenderedHtml_ContainsKernelPlaceholder()
     {
-        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver/Documentation/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Doc/DataMesh/InteractiveMarkdown scope:exact").FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         node.Should().NotBeNull();
 
         // Extract markdown content from node
@@ -1299,7 +1302,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             .WithType<MarkdownContent>("MarkdownContent"));
 
         // Use existing CollaborativeEditing node which has proper routing
-        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
 
         Output.WriteLine($"Step 1: Setting up streams for node at {nodePath}");
@@ -1437,7 +1440,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             .WithType<MarkdownContent>("MarkdownContent"));
 
         // Use existing CollaborativeEditing node which has proper routing
-        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
 
         // Step 1: Get original node state
@@ -1546,7 +1549,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             .WithType<MarkdownContent>("MarkdownContent"));
 
         // Use existing CollaborativeEditing node
-        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
 
         // Step 1: Resolve path (like PathBasedLayoutArea does on initial load)
@@ -1660,7 +1663,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
             .WithType<MarkdownContent>("MarkdownContent"));
 
         // Use existing CollaborativeEditing node which has proper routing
-        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
 
         // Get original state for cleanup

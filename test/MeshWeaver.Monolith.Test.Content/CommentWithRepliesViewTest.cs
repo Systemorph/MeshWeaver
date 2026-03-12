@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -34,7 +35,7 @@ namespace MeshWeaver.Monolith.Test.Content;
 [Collection("SamplesGraphData")]
 public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string DocPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+    private const string DocPath = "Doc/DataMesh/CollaborativeEditing";
     private const string CommentC1Path = DocPath + "/c1";
     private const string ReplyPath = CommentC1Path + "/reply1";
 
@@ -61,6 +62,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddMeshWeaverDocs()
+            .AddDoc()
+            .AddDocumentation()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

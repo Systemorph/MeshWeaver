@@ -55,7 +55,10 @@ public static class OrganizationNodeType
             services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule>(sp =>
                 new OrganizationAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
-            services.AddSingleton<INodePostCreationHandler, OrganizationCreatorAdminHandler>();
+            services.AddSingleton<INodePostCreationHandler>(sp =>
+                new OrganizationCreatorAdminHandler(
+                    sp.GetService<ISecurityService>() ?? new NullSecurityService(),
+                    sp.GetRequiredService<ILogger<OrganizationCreatorAdminHandler>>()));
             services.AddSingleton(new NodeTypePermission(NodeType, PublicRead: true));
             return services;
         });

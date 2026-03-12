@@ -22,8 +22,8 @@ namespace MeshWeaver.Monolith.Test.Content;
 [Collection("CommentNodeLoading")]
 public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string DocPartitionCommentPath = "Doc/DataMesh/CollaborativeEditing/c1";
-    private const string DocPartitionNamespace = "Doc/DataMesh/CollaborativeEditing";
+    private const string DocPartitionCommentPath = "Doc/DataMesh/CollaborativeEditing/_Comment/c1";
+    private const string DocPartitionNamespace = "Doc/DataMesh/CollaborativeEditing/_Comment";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -70,7 +70,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
 
         var comment = (Comment)node.Content!;
         comment.Id.Should().Be("c1");
-        comment.PrimaryNodePath.Should().Be(DocPartitionNamespace);
+        comment.PrimaryNodePath.Should().Be("Doc/DataMesh/CollaborativeEditing");
         comment.Author.Should().NotBeNullOrEmpty();
         comment.Text.Should().NotBeNullOrEmpty();
         comment.Status.Should().Be(CommentStatus.Active);

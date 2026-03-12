@@ -17,6 +17,7 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Documentation;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -60,6 +61,8 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddMeshWeaverDocs()
+            .AddDoc()
+            .AddDocumentation()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -88,7 +91,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     public async Task ReadView_ShouldRenderWithCommentData()
     {
         var client = GetClient();
-        var docAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
+        var docAddress = new Address("Doc/DataMesh/CollaborativeEditing");
 
         Output.WriteLine("Initializing hub...");
         await client.AwaitResponse(
@@ -115,7 +118,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         // Verify comment children are queryable
         var comments = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:MeshWeaver/Documentation/DataMesh/CollaborativeEditing nodeType:{CommentNodeType.NodeType}"
+            $"namespace:Doc/DataMesh/CollaborativeEditing nodeType:{CommentNodeType.NodeType}"
         ).ToListAsync();
 
         Output.WriteLine($"Found {comments.Count} comment children");
@@ -140,8 +143,8 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     public async Task Reply_FullFlow_CreateAndVerify()
     {
         var client = GetClient();
-        var docAddress = new Address("MeshWeaver/Documentation/DataMesh/CollaborativeEditing");
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docAddress = new Address("Doc/DataMesh/CollaborativeEditing");
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
 
         // Step 1: Initialize hub (same as when user opens the document)
         Output.WriteLine("Step 1: Initializing document hub...");
@@ -166,7 +169,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         // Step 3: Get existing comment to reply to (c1 = Alice's comment)
         Output.WriteLine("Step 3: Finding parent comment to reply to...");
 
-        var parentComment = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/c1 scope:exact").FirstOrDefaultAsync();
+        var parentComment = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c1 scope:exact").FirstOrDefaultAsync();
         parentComment.Should().NotBeNull("c1 comment should exist");
         var parentContent = parentComment!.Content.Should().BeOfType<Comment>().Subject;
         Output.WriteLine($"Parent comment: '{parentContent.Text}' by {parentContent.Author}");
@@ -243,10 +246,10 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     [Fact(Timeout = 10000)]
     public async Task MultipleReplies_ShouldAllLinkToParent()
     {
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
 
         // Get parent comment c2
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/c2 scope:exact").FirstOrDefaultAsync();
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c2 scope:exact").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("c2 comment should exist");
         var parentContent = (Comment)parentNode!.Content!;
 

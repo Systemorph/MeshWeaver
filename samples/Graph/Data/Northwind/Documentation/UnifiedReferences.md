@@ -28,7 +28,7 @@ Northwind/                           # Root namespace
 ├── Data/
 │   ├── orders.csv                   # Order data
 │   └── orders_details.csv           # Order details
-└── AnalyticsCatalog/Code/            # View implementations
+└── AnalyticsCatalog/_Source/            # View implementations
     ├── Order.cs
     ├── OrderDetails.cs
     ├── Product.cs

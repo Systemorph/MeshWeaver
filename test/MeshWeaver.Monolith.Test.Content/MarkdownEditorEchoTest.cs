@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -56,6 +57,8 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddMeshWeaverDocs()
+            .AddDoc()
+            .AddDocumentation()
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IConfiguration>(configuration);
@@ -85,7 +88,7 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
     [Fact(Timeout = 10000)]
     public async Task OwnAutoSave_DoesNotEcho_ExternalChange_DoesEcho()
     {
-        var nodePath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var nodePath = "Doc/DataMesh/CollaborativeEditing";
         var nodeAddress = new Address(nodePath);
 
         var client = GetClient();

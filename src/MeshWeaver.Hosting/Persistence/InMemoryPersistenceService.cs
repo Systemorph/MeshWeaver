@@ -440,6 +440,20 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
             return (match, segments);
         }
 
+        // Walk up the path hierarchy using storage adapter (lazy loading)
+        // This handles nodes not yet loaded into _nodes (e.g., _Source/*.cs files)
+        if (_storageAdapter != null)
+        {
+            var segments = normalizedPath.Split('/');
+            for (int depth = segments.Length; depth >= 1; depth--)
+            {
+                var testPath = string.Join("/", segments.Take(depth));
+                var node = await GetNodeAsync(testPath, options, ct);
+                if (node != null)
+                    return (node, depth);
+            }
+        }
+
         return (null, 0);
     }
 

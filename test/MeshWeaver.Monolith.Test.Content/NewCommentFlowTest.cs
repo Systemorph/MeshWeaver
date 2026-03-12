@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -63,6 +64,8 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddMeshWeaverDocs()
+            .AddDoc()
+            .AddDocumentation()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -94,7 +97,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task NewComment_TwoArgConstructor_ShouldPersistAndBeQueryable()
     {
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
 
         var commentId = Guid.NewGuid().AsString();
         var markerId = Guid.NewGuid().AsString();
@@ -160,7 +163,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task NewComment_DoneButton_ShouldPersistTextViaPersistenceService()
     {
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
 
         // Step 1: Create empty comment (same as BuildNewCommentForm "Comment" click)
         var commentId = Guid.NewGuid().AsString();
@@ -213,7 +216,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task NewComment_DataChangeToWrongAddress_ShouldNotUpdateComment()
     {
         var client = GetClient();
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
         await client.AwaitResponse(
@@ -272,7 +275,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task ReadView_WithNewComment_ShouldShowCommentInSidebar()
     {
         var client = GetClient();
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
         // Initialize and wait for Read view
@@ -339,7 +342,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task FullFlow_CreateComment_EditText_Reload_ShouldPersist()
     {
         var client = GetClient();
-        var docPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
         var docAddress = new Address(docPath);
 
         // 1. Initialize hub
