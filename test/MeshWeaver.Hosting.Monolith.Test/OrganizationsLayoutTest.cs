@@ -77,7 +77,8 @@ namespace MeshWeaver.Hosting.Monolith.Test
                     ChildrenQuery = "$source=activity;nodeType==Organization;$orderBy=lastAccessedAt:desc;$limit=20"
                 }
             };
-            await nodeFactory.CreateNodeAsync(organizationTypeNode);
+            // Use Update in case OrganizationNodeProvider already provides a static Organization node
+            await nodeFactory.UpdateNodeAsync(organizationTypeNode);
 
             // 2. Create some Organization instances that will be found by ChildrenQuery
             var acme = new MeshNode("Acme")

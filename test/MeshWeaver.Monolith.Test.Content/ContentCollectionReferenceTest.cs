@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Documentation;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -65,6 +66,8 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddUserData()
             .AddMeshWeaverDocs()
+            .AddDoc()
+            .AddDocumentation()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory);
@@ -445,7 +448,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 10000)]
     public async Task ContentCollection_ForMarkdownNode_ResolvesCorrectly()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize the UCR node hub
@@ -471,19 +474,19 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         var contentConfig = configs!.First();
         contentConfig.Name.Should().Be("content");
         contentConfig.SourceType.Should().Be("FileSystem");
-        // BasePath should contain content/MeshWeaver/Documentation/DataMesh/UnifiedPath
+        // BasePath should contain content/Doc/DataMesh/UnifiedPath
         contentConfig.BasePath.Should().Contain("content");
-        contentConfig.BasePath.Should().EndWith("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        contentConfig.BasePath.Should().EndWith("Doc/DataMesh/UnifiedPath");
     }
 
     /// <summary>
     /// Tests that content files can be retrieved from the "content" collection.
-    /// The icon.svg file at samples/Graph/content/MeshWeaver/Documentation/DataMesh/UnifiedPath/icon.svg should be accessible.
+    /// The icon.svg file at samples/Graph/content/Doc/DataMesh/UnifiedPath/icon.svg should be accessible.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ContentCollection_RetrieveFile_ReturnsContent()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c.AddContentCollections());
 
         // Initialize the UCR node hub
@@ -510,12 +513,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Tests that $Content layout area for icon.svg returns content without hanging.
-    /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:icon.svg is rendered.
+    /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/content:icon.svg is rendered.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ContentLayoutArea_IconSvg_ReturnsWithoutHanging()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
@@ -530,7 +533,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         Output.WriteLine("Hub initialized");
 
         // Request the $Content area with icon.svg as the id
-        // This is what @@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:icon.svg does
+        // This is what @@Doc/DataMesh/UnifiedPath/content:icon.svg does
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference("$Content") { Id = "icon.svg" };
 
@@ -551,12 +554,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Tests that $Content layout area for sample.md returns content without hanging.
-    /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/content:sample.md is rendered.
+    /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/content:sample.md is rendered.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task ContentLayoutArea_SampleMd_ReturnsWithoutHanging()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
@@ -595,7 +598,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 10000)]
     public async Task ContentLayoutArea_NonExistentFile_ReturnsErrorMessage()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
@@ -630,12 +633,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Tests that $Schema layout area returns schema without hanging.
-    /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/schema: is rendered.
+    /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/schema: is rendered.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task SchemaLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
@@ -670,12 +673,12 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
 
     /// <summary>
     /// Tests that $Data layout area returns data without hanging.
-    /// This simulates what happens when @@MeshWeaver/Documentation/DataMesh/UnifiedPath/data: is rendered.
+    /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/data: is rendered.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task DataLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());
@@ -716,7 +719,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     [Fact(Timeout = 10000)]
     public async Task MarkdownNode_DefaultArea_IsContentNotCatalog()
     {
-        var ucrAddress = new Address("MeshWeaver/Documentation/DataMesh/UnifiedPath");
+        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
         var client = GetClient(c => c
             .AddLayoutClient(cc => cc)
             .AddContentCollections());

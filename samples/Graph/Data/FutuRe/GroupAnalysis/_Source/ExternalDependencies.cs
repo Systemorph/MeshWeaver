@@ -3,10 +3,10 @@
 // DisplayName: External Dependencies
 // </meshweaver>
 
-@@FutuRe/AmountType/Code/AmountType
-@@FutuRe/Currency/Code/Currency
-@@FutuRe/Country/Code/Country
-@@FutuRe/TransactionMapping/Code/TransactionMapping
-@@FutuRe/LineOfBusiness/Code/LineOfBusiness
-@@FutuRe/ExchangeRate/Code/ExchangeRate
-@@FutuRe/BusinessUnit/Code/BusinessUnit
+@@FutuRe/AmountType/_Source/AmountType
+@@FutuRe/Currency/_Source/Currency
+@@FutuRe/Country/_Source/Country
+@@FutuRe/TransactionMapping/_Source/TransactionMapping
+@@FutuRe/LineOfBusiness/_Source/LineOfBusiness
+@@FutuRe/ExchangeRate/_Source/ExchangeRate
+@@FutuRe/BusinessUnit/_Source/BusinessUnit

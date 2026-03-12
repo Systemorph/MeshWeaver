@@ -52,7 +52,12 @@ public record PartitionDefinition
 
     /// <summary>
     /// Standard satellite table mappings shared by all content partitions (User, org partitions).
-    /// Each satellite type gets its own dedicated table within the same schema.
+    /// Activity and UserActivity get dedicated tables for high-volume, time-series queries.
+    /// Thread and ThreadMessage share a dedicated "threads" table.
+    /// Access gets its own table (used by permission rebuild functions).
+    /// Source and Test code share a dedicated "code" table.
+    /// All other satellite types (comments, approvals, tracking)
+    /// share the "annotations" table to simplify schema maintenance.
     /// The main mesh_nodes table only contains primary entities (MainNode == Path).
     /// </summary>
     public static Dictionary<string, string> StandardTableMappings => new()
@@ -60,10 +65,13 @@ public record PartitionDefinition
         ["_Activity"] = "activities",
         ["_UserActivity"] = "user_activities",
         ["_Thread"] = "threads",
-        ["_Tracking"] = "tracking",
-        ["_Approval"] = "approvals",
+        ["_ThreadMessage"] = "threads",
         ["_Access"] = "access",
-        ["_Comment"] = "comments",
+        ["_Tracking"] = "annotations",
+        ["_Approval"] = "annotations",
+        ["_Comment"] = "annotations",
+        ["_Source"] = "code",
+        ["_Test"] = "code",
     };
 
     /// <summary>

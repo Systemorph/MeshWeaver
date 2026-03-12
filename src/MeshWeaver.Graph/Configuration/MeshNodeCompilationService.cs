@@ -231,7 +231,7 @@ internal class MeshNodeCompilationService(
             : $"{node.NodeType}/_Source"; // Instance node - use NodeType's _Source path
         if (meshQuery != null)
         {
-            var codeQuery = $"namespace:{codeParentPath}";
+            var codeQuery = $"namespace:{codeParentPath} scope:subtree";
             await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
             {
                 if (codeNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
