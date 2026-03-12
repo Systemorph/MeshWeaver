@@ -85,47 +85,9 @@ public static class TodoLayoutAreas
     /// </summary>
     public static IObservable<UiControl?> Details(LayoutAreaHost host, RenderingContext _)
     {
-        var todoPath = host.Hub.Address.ToString();
-
-        // Try MeshNode stream first (works with workspace/test infrastructure)
-        var meshNodeStream = host.Workspace.GetStream<MeshNode>();
-        if (meshNodeStream != null)
-        {
-            return meshNodeStream
-                .Select(nodes => nodes?.FirstOrDefault())
-                .Select(node =>
-                {
-                    System.Console.WriteLine($"[TodoLayoutAreas.Details] MeshNode stream: {node?.Path}, Content type: {node?.Content?.GetType().Name ?? "null"}");
-                    var todo = ExtractTodo(node);
-                    System.Console.WriteLine($"[TodoLayoutAreas.Details] Extracted Todo: {todo?.Title ?? "null"}");
-                    return BuildTodoDetails(host, todo);
-                });
-        }
-
-        // Fallback: try Todo stream directly
-        var todoStream = host.Workspace.GetStream<Todo>();
-        if (todoStream != null)
-        {
-            return todoStream
-                .Select(todos => todos?.FirstOrDefault())
-                .Select(todo =>
-                {
-                    System.Console.WriteLine($"[TodoLayoutAreas.Details] Todo stream: {todo?.Title ?? "null"}");
-                    return BuildTodoDetails(host, todo);
-                });
-        }
-
-        // Last resort: load directly from IMeshCatalog
-        System.Console.WriteLine($"[TodoLayoutAreas.Details] No stream available, loading from IMeshCatalog: {todoPath}");
-        return Observable.FromAsync(async () =>
-        {
-            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-            if (meshCatalog == null)
-                return BuildTodoDetails(host, null);
-
-            var node = await meshCatalog.GetNodeAsync(new Address(todoPath));
-            return BuildTodoDetails(host, ExtractTodo(node));
-        });
+        return host.Workspace.GetStream<MeshNode>()
+            .Select(nodes => nodes?.FirstOrDefault())
+            .Select(node => BuildTodoDetails(host, ExtractTodo(node)));
     }
 
     private static UiControl BuildTodoDetails(LayoutAreaHost host, Todo? todo)
@@ -329,16 +291,20 @@ public static class TodoLayoutAreas
 
     private static async System.Threading.Tasks.Task SoftDeleteTodo(LayoutAreaHost host)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshCatalog>();
-        var persistence = host.Hub.ServiceProvider.GetService<MeshWeaver.Mesh.Services.IMeshStorage>();
-        if (meshCatalog == null || persistence == null) return;
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService == null) return;
 
-        var todoPath = host.Hub.Address.ToString();
-        var existingNode = await meshCatalog.GetNodeAsync(host.Hub.Address);
-        if (existingNode == null) return;
+        // Get current node from workspace stream (already loaded via AddMeshDataSource)
+        var meshNodeStream = host.Workspace.GetStream<MeshNode>();
+        if (meshNodeStream == null) return;
 
-        var deletedNode = existingNode with { State = MeshWeaver.Mesh.MeshNodeState.Deleted };
-        await persistence.SaveNodeAsync(deletedNode);
+        var node = await meshNodeStream
+            .Select(nodes => nodes?.FirstOrDefault())
+            .FirstOrDefaultAsync();
+        if (node == null) return;
+
+        var deletedNode = node with { State = MeshWeaver.Mesh.MeshNodeState.Deleted };
+        await meshService.UpdateNodeAsync(deletedNode);
     }
 
     private static UiControl BuildStatusPromotionMenu(LayoutAreaHost host, Todo todo)
@@ -413,34 +379,9 @@ public static class TodoLayoutAreas
     {
         var todoPath = host.Hub.Address.ToString();
 
-        // Try MeshNode stream first (works with workspace/test infrastructure)
-        var meshNodeStream = host.Workspace.GetStream<MeshNode>();
-        if (meshNodeStream != null)
-        {
-            return meshNodeStream
-                .Select(nodes => nodes?.FirstOrDefault())
-                .Select(node => BuildThumbnail(host, node, todoPath));
-        }
-
-        // Fallback: try Todo stream directly
-        var todoStream = host.Workspace.GetStream<Todo>();
-        if (todoStream != null)
-        {
-            return todoStream
-                .Select(todos => todos?.FirstOrDefault())
-                .Select(todo => BuildThumbnail(host, null, todo, todoPath));
-        }
-
-        // Last resort: load directly from IMeshCatalog
-        return Observable.FromAsync(async () =>
-        {
-            var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-            if (meshCatalog == null)
-                return BuildThumbnail(host, null, null, todoPath);
-
-            var node = await meshCatalog.GetNodeAsync(new Address(todoPath));
-            return BuildThumbnail(host, node, todoPath);
-        });
+        return host.Workspace.GetStream<MeshNode>()
+            .Select(nodes => nodes?.FirstOrDefault())
+            .Select(node => BuildThumbnail(host, node, todoPath));
     }
 
     private static UiControl BuildThumbnail(LayoutAreaHost host, MeshNode? node, string hubPath)
