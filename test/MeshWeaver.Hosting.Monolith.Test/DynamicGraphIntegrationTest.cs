@@ -65,7 +65,7 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
 
     private static async Task SaveCodeAsChildNodeAsync(IMeshService nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
     {
-        var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/Code")
+        var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/_Source")
         {
             NodeType = "Code",
             Name = codeConfig.DisplayName ?? codeConfig.Id ?? "Code",
@@ -796,13 +796,13 @@ public record Graph
 
     /// <summary>
     /// Verifies the parent path derivation logic used by CodeLayoutAreas.Overview.
-    /// For a code node at "type/story/Code/code", the parent NodeType path should be "type/story".
+    /// For a code node at "type/story/_Source/code", the parent NodeType path should be "type/story".
     /// </summary>
     [Theory]
-    [InlineData("type/story/Code/code", "type/story")]
-    [InlineData("type/org/Code/orgCode", "type/org")]
-    [InlineData("Organization/Code/Organization", "Organization")]
-    [InlineData("a/b/Code/c", "a/b")]
+    [InlineData("type/story/_Source/code", "type/story")]
+    [InlineData("type/org/_Source/orgCode", "type/org")]
+    [InlineData("Organization/_Source/Organization", "Organization")]
+    [InlineData("a/b/_Source/c", "a/b")]
     public void CodeNode_ParentPathParsing_StripsTwoSegments(string codePath, string expectedParent)
     {
         var segments = codePath.Split('/');
@@ -816,7 +816,7 @@ public record Graph
 
     /// <summary>
     /// Verifies that IMeshService with scope:descendants finds Code nodes that are 2 levels deep.
-    /// Code nodes at "type/story/Code/code" are NOT immediate children of "type/story" (they're
+    /// Code nodes at "type/story/_Source/code" are NOT immediate children of "type/story" (they're
     /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
     [Fact(Timeout = 10000)]
@@ -869,7 +869,7 @@ public record Graph
         foreach (var node in nodes)
             Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (type/story/Code/id)
+        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (type/story/_Source/id)
         nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 
@@ -970,15 +970,15 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/Code/codeConfiguration.json - Code as child MeshNode
+        // 2. Create Type/Organizations/_Source/codeConfiguration.json - Code as child MeshNode
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
-        var codeDir = Path.Combine(organizationsTypeDir, "Code");
+        var codeDir = Path.Combine(organizationsTypeDir, "_Source");
         Directory.CreateDirectory(codeDir);
 
         var codeConfigJson = """
         {
           "id": "codeConfiguration",
-          "namespace": "Type/Organizations/Code",
+          "namespace": "Type/Organizations/_Source",
           "name": "Code",
           "nodeType": "Code",
           "content": {
@@ -1037,13 +1037,13 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
 
-        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "Code");
+        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "_Source");
         Directory.CreateDirectory(graphCodeDir);
 
         var graphCodeConfigJson = """
         {
           "id": "codeConfiguration",
-          "namespace": "type/graph/Code",
+          "namespace": "type/graph/_Source",
           "name": "Code",
           "nodeType": "Code",
           "content": {
@@ -1119,7 +1119,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         // Act - get children of the Code path
-        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/Code", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/_Source", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
@@ -1181,7 +1181,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
     // Article NodeType is at MeshWeaver/Documentation/Article with 2 code files
     private const string ArticleNodeTypePath = "MeshWeaver/Documentation/Article";
-    private const string ArticleCodeNamespace = "MeshWeaver/Documentation/Article/Code";
+    private const string ArticleCodeNamespace = "MeshWeaver/Documentation/Article/_Source";
 
     public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
     {
@@ -1266,9 +1266,9 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         File.Exists(articleJsonPath).Should().BeTrue(
             $"Article.json should exist at {articleJsonPath}");
 
-        var codeConfigPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "Code", "Article.cs");
+        var codeConfigPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "_Source", "Article.cs");
         File.Exists(codeConfigPath).Should().BeTrue(
-            $"Article/Code/Article.cs should exist at {codeConfigPath}");
+            $"Article/_Source/Article.cs should exist at {codeConfigPath}");
     }
 
     /// <summary>
@@ -1382,7 +1382,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
     /// <summary>
     /// Test that CodeConfiguration can be loaded from child MeshNodes via persistence.
-    /// Code is stored as child MeshNodes with nodeType="Code" under the Article/Code path.
+    /// Code is stored as child MeshNodes with nodeType="Code" under the Article/_Source path.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task Article_CodeConfiguration_LoadedFromChildMeshNodes()
@@ -1581,11 +1581,11 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     [Fact]
     public void Article_ViewsCs_Exists()
     {
-        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "Code", "ArticleLayoutAreas.cs");
+        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "_Source", "ArticleLayoutAreas.cs");
         Output.WriteLine($"Checking for ArticleLayoutAreas.cs at: {viewsCsPath}");
 
         File.Exists(viewsCsPath).Should().BeTrue(
-            $"Article/Code/ArticleLayoutAreas.cs should exist at {viewsCsPath} for custom view configuration");
+            $"Article/_Source/ArticleLayoutAreas.cs should exist at {viewsCsPath} for custom view configuration");
     }
 
     /// <summary>
@@ -1657,7 +1657,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Verifies that QueryAsync with scope:descendants finds Code nodes under Article.
     /// Article has 2 code files: Article.cs and ArticleLayoutAreas.cs
-    /// stored at MeshWeaver/Documentation/Article/Code/Article and MeshWeaver/Documentation/Article/Code/ArticleLayoutAreas.
+    /// stored at MeshWeaver/Documentation/Article/_Source/Article and MeshWeaver/Documentation/Article/_Source/ArticleLayoutAreas.
     /// </summary>
     [Fact(Timeout = 10000)]
     public async Task Article_QueryAsync_ScopeDescendants_FindsCodeNodes()

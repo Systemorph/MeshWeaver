@@ -101,7 +101,7 @@ public class MeshNodeCompilationServiceTest : IDisposable
         if (codeFile != null)
         {
             // Code is stored as a child MeshNode under the Code path
-            var codeNode = new MeshNode(codeFile.Id ?? "code", $"type/{nodeType}/Code")
+            var codeNode = new MeshNode(codeFile.Id ?? "code", $"type/{nodeType}/_Source")
             {
                 NodeType = "Code",
                 Name = codeFile.DisplayName ?? codeFile.Id ?? "Code",
@@ -454,7 +454,7 @@ public record RecordType
         await SetupNodeType(persistence, "Organization", orgDefinition, displayName: "Organization");
 
         // Store Code as child MeshNode (NOT partition object)
-        var codeNode = new MeshNode("Organization", "type/Organization/Code")
+        var codeNode = new MeshNode("Organization", "type/Organization/_Source")
         {
             NodeType = "Code",
             Name = "Organization Data Model",
@@ -500,7 +500,7 @@ public record Organization
         await SetupNodeType(persistence, "Project", definition, displayName: "Project");
 
         // First code file: data model
-        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/Code")
+        var dataModelNode = new MeshNode("ProjectDataModel", "type/Project/_Source")
         {
             NodeType = "Code",
             Name = "Project Data Model",
@@ -520,7 +520,7 @@ public record Project
         await persistence.SaveNodeAsync(dataModelNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         // Second code file: enum
-        var enumNode = new MeshNode("ProjectStatus", "type/Project/Code")
+        var enumNode = new MeshNode("ProjectStatus", "type/Project/_Source")
         {
             NodeType = "Code",
             Name = "Project Status Enum",

@@ -67,7 +67,7 @@ public interface IStorageAdapter
     /// </summary>
     /// <param name="nodePath">The node path</param>
     /// <param name="ct">Cancellation token</param>
-    /// <returns>Sub-path names (e.g., "Code", "layoutAreas")</returns>
+    /// <returns>Sub-path names (e.g., "_Source", "layoutAreas")</returns>
     Task<IEnumerable<string>> ListPartitionSubPathsAsync(string nodePath, CancellationToken ct = default)
         => Task.FromResult<IEnumerable<string>>(Enumerable.Empty<string>());
 

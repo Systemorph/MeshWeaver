@@ -123,7 +123,7 @@ namespace MeshWeaver.Hosting.Monolith.Test
             {
                 Code = "public record Graph { }"
             };
-            var graphCodeNode = new MeshNode("Graph", "type/graph/Code")
+            var graphCodeNode = new MeshNode("Graph", "type/graph/_Source")
             {
                 NodeType = "Code",
                 Name = "Graph",

@@ -234,7 +234,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// Adds a type source that loads objects from a sub-partition of the hub.
     /// </summary>
     /// <typeparam name="T">The type to load from the partition.</typeparam>
-    /// <param name="subPartition">The sub-partition path relative to the hub (e.g., "Code"). If null, uses hub path directly.</param>
+    /// <param name="subPartition">The sub-partition path relative to the hub (e.g., "_Source"). If null, uses hub path directly.</param>
     /// <param name="collectionName">The collection name to use. If null, uses subPartition or type name.</param>
     public MeshDataSource WithType<T>(string? subPartition, string? collectionName = null) where T : class
     {
