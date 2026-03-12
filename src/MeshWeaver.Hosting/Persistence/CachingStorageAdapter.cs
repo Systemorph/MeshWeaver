@@ -288,8 +288,8 @@ public class CachingStorageAdapter : IStorageAdapter
             ? nodePath.Trim('/')
             : nodePath.Trim('/') + "/" + subPath.Trim('/');
 
-        var isCodePartition = string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase)
-            || nodePath.EndsWith("/Code", StringComparison.OrdinalIgnoreCase);
+        var isCodePartition = IsCodeSubNamespace(subPath)
+            || IsCodeSubNamespace(Path.GetFileName(nodePath));
 
         // Find JSON files in this partition directory
         var prefix = partitionDir + "/";
@@ -500,6 +500,10 @@ public class CachingStorageAdapter : IStorageAdapter
             _snapshot.Files[relativePath] = File.ReadAllBytes(file);
         }
     }
+
+    private static bool IsCodeSubNamespace(string? name) =>
+        string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
 
     #endregion
 }

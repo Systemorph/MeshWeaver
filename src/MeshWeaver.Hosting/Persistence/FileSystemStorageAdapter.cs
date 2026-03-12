@@ -341,10 +341,9 @@ public class FileSystemStorageAdapter : IStorageAdapter
         if (!Directory.Exists(partitionDir))
             yield break;
 
-        // Check if this is a Code partition (subPath == "Code" OR nodePath ends with "/Code")
-        var isCodePartition = string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase)
-            || nodePath.EndsWith("/Code", StringComparison.OrdinalIgnoreCase)
-            || nodePath.EndsWith("\\Code", StringComparison.OrdinalIgnoreCase);
+        // Check if this is a code partition (_Source or _Test sub-namespaces)
+        var isCodePartition = IsCodeSubNamespace(subPath)
+            || IsCodeSubNamespace(Path.GetFileName(nodePath));
 
         // Process JSON files
         foreach (var file in Directory.GetFiles(partitionDir, "*.json"))
@@ -450,7 +449,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
     {
         var partitionDir = GetPartitionDirectory(nodePath, subPath);
         Directory.CreateDirectory(partitionDir);
-        var isCodePartition = string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase);
+        var isCodePartition = IsCodeSubNamespace(subPath);
 
         foreach (var obj in objects)
         {
@@ -486,8 +485,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
                 File.Delete(file);
             }
 
-            // Delete C# files in Code partitions
-            if (string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase))
+            // Delete C# files in code partitions (_Source, _Test)
+            if (IsCodeSubNamespace(subPath))
             {
                 foreach (var file in Directory.GetFiles(partitionDir, "*.cs"))
                 {
@@ -547,8 +546,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
         var files = Directory.GetFiles(partitionDir, "*.json").ToList();
 
-        // Include C# files in Code partitions
-        if (string.Equals(subPath, "Code", StringComparison.OrdinalIgnoreCase))
+        // Include C# files in code partitions (_Source, _Test)
+        if (IsCodeSubNamespace(subPath))
         {
             files.AddRange(Directory.GetFiles(partitionDir, "*.cs"));
         }
@@ -594,6 +593,13 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
         return _writeOptionsModifier(options);
     }
+
+    /// <summary>
+    /// Checks if a sub-namespace name is a code sub-namespace (_Source or _Test).
+    /// </summary>
+    private static bool IsCodeSubNamespace(string? name) =>
+        string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
 
     #endregion
 

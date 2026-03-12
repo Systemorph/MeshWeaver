@@ -36,6 +36,8 @@ Each satellite type has a reserved sub-namespace prefix:
 | `_Thread` | Thread | Chat and discussion threads |
 | `_Activity` | Activity | Node lifecycle events (created, updated, deleted) |
 | `_UserActivity` | UserActivity | Per-user access tracking and history |
+| `_Source` | Code | Source code files (.cs) attached to node types |
+| `_Test` | Code | Test code files (.cs) for node type testing |
 
 # File System Layout
 
@@ -50,6 +52,9 @@ ACME/
   Projects/
     Alpha/
       index.md                          ← Alpha project node
+      _Source/
+        Alpha.cs                        ← Source code for Alpha
+        AlphaLayoutAreas.cs             ← Layout area definitions
       _Comment/
         c1.json                         ← Comment on Alpha
         c1/
@@ -64,6 +69,7 @@ ACME/
 ```
 
 Replies to comments are nested as children of the comment node (e.g., `_Comment/c1/reply1.json`).
+Source code files (`.cs`) live in `_Source/` directories and test code in `_Test/` directories.
 
 # PostgreSQL Table Routing
 

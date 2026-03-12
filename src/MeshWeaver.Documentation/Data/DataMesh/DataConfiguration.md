@@ -61,7 +61,7 @@ Use `AddSource` to configure local data sources. The `WithInitialData` method se
 
 ### Example: Status Data Model
 
-First, define the data model in your `Code/Status.cs` file:
+First, define the data model in your `_Source/Status.cs` file:
 
 ```csharp
 public record Status
