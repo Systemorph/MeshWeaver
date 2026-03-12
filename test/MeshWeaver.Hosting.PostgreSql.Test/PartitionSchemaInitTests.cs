@@ -254,7 +254,7 @@ public class PartitionSchemaInitTests
 
         // Verify satellite tables
         foreach (var table in new[] { "activities", "user_activities", "threads",
-            "tracking", "approvals", "access", "comments" })
+            "access", "annotations", "code" })
         {
             await using var cmd = _fixture.DataSource.CreateCommand(
                 $"SELECT 1 FROM information_schema.tables WHERE table_schema = 'globexcorp' AND table_name = '{table}'");

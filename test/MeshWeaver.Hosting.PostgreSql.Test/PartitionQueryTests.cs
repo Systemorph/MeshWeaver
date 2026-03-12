@@ -190,9 +190,9 @@ public class PartitionQueryTests
         def.ResolveTable("User/roland/_UserActivity/xyz").Should().Be("user_activities");
         def.ResolveTable("User/roland/_Thread/mythread").Should().Be("threads");
         def.ResolveTable("User/roland/_Thread/mythread/_ThreadMessage/msg1").Should().Be("threads");
-        def.ResolveTable("User/roland/_Tracking/tc1").Should().Be("tracking");
-        def.ResolveTable("User/roland/_Approval/appr1").Should().Be("approvals");
+        def.ResolveTable("User/roland/_Tracking/tc1").Should().Be("annotations");
+        def.ResolveTable("User/roland/_Approval/appr1").Should().Be("annotations");
         def.ResolveTable("User/roland/_Access/aa1").Should().Be("access");
-        def.ResolveTable("User/roland/_Comment/c1").Should().Be("comments");
+        def.ResolveTable("User/roland/_Comment/c1").Should().Be("annotations");
     }
 }
