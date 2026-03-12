@@ -368,9 +368,11 @@ public static class MeshNodePropertyEditor
 
                 try
                 {
-                    await ctx.Host.Hub.AwaitResponse<DataChangeResponse>(
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                    var delivery = ctx.Host.Hub.Post(
                         new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
-                        o => o.WithTarget(targetAddress));
+                        o => o.WithTarget(targetAddress))!;
+                    await ctx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
                 }
                 catch { }
 

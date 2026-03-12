@@ -1,0 +1,8 @@
+[xUnit.net 00:00:21.98]     MeshWeaver.Graph.Test.MeshNodeCompilationServiceTest.GetAssemblyLocationAsync_ReturnsNull_WhenNodeTypeIsNull [FAIL]
+[xUnit.net 00:00:29.85]     MeshWeaver.Graph.Test.NodeCopyHelperTest.CopySingleNode_ToNewNamespace [FAIL]
+[xUnit.net 00:00:29.86]     MeshWeaver.Graph.Test.NodeCopyHelperTest.CopyNodeTree_WithDescendants [FAIL]
+[xUnit.net 00:00:29.89]     MeshWeaver.Graph.Test.NodeCopyHelperTest.CopyNodeTree_ToEmptyNamespace [FAIL]
+[xUnit.net 00:00:29.91]     MeshWeaver.Graph.Test.NodeCopyHelperTest.CopyNodeTree_PreservesContent [FAIL]
+[xUnit.net 00:00:29.93]     MeshWeaver.Graph.Test.NodeCopyHelperTest.CopyRootLevelNode_ToNamespace [FAIL]
+[xUnit.net 00:00:29.94]     MeshWeaver.Graph.Test.NodeCopyHelperTest.CopyNodeTree_SkipsExistingWhenNotForced [FAIL]
+Failed!  - Failed:     7, Passed:   224, Skipped:     0, Total:   231, Duration: 30 s - MeshWeaver.Graph.Test.dll (net10.0)
