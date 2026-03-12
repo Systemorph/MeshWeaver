@@ -24,8 +24,10 @@ public partial class NamedAreaView
     {
         subscription?.Dispose();
         subscription = null;
-        RootControl = null;
-        AreaToBeRendered = ViewModel.Area?.ToString() ?? string.Empty;
+        var newArea = ViewModel.Area?.ToString() ?? string.Empty;
+        if (newArea != AreaToBeRendered)
+            RootControl = null; // Only clear when the area actually changed
+        AreaToBeRendered = newArea;
         base.BindData();
         DataBind(ViewModel.ProgressMessage, x => x.ProgressMessage);
         DataBind(ViewModel.ShowProgress, x => x.ShowProgress);

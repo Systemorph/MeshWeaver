@@ -60,6 +60,13 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     /// </summary>
     private string? _lastInitializedPath;
 
+    /// <summary>
+    /// Tracks whether NavigationService.InitializeAsync() has been called.
+    /// Subsequent navigations rely on OnNavigationContextChanged instead
+    /// of reading potentially stale NavigationService state.
+    /// </summary>
+    private bool _navigationServiceInitialized;
+
     protected override void OnInitialized()
     {
         base.OnInitialized();
@@ -97,9 +104,18 @@ public partial class ApplicationPage : ComponentBase, IDisposable
     {
         _lastInitializedPath = Path;
         IsLoading = true;
-        await NavigationService.InitializeAsync();
-        IsLoading = NavigationService.IsResolving;
-        UpdateFromContext();
+        PreRenderedHtml = null;
+
+        if (!_navigationServiceInitialized)
+        {
+            _navigationServiceInitialized = true;
+            await NavigationService.InitializeAsync();
+            // First init: safe to read state since InitializeAsync awaited resolution
+            IsLoading = NavigationService.IsResolving;
+            UpdateFromContext();
+        }
+        // Subsequent navigations: stay in loading state until OnNavigationContextChanged fires
+        // to avoid showing stale content from a previous path
     }
 
     private void OnNavigationContextChanged(NavigationContext? context)

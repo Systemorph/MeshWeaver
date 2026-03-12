@@ -113,6 +113,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
+        // When fanning out with default scope (Exact), use descendants to search
+        // the full partition tree (not just direct children of each partition)
+        var fanOutQuery = parsed.Scope == QueryScope.Exact
+            ? (request.Query ?? "") + " scope:descendants"
+            : request.Query;
+
         // Fan out: query accessible partitions in parallel, each scoped to its own namespace
         var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
@@ -152,7 +158,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 // Scope the request to the partition's namespace so each partition
                 // only searches its own data (not all data via a shared adapter)
                 var scopedRequest = string.IsNullOrEmpty(effectivePath)
-                    ? request with { DefaultPath = partitionKey }
+                    ? request with { DefaultPath = partitionKey, Query = fanOutQuery }
                     : request;
 
                 await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
@@ -164,8 +170,15 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             }
         }
 
+        // Enforce global limit across all partitions
+        var globalLimit = request.Limit ?? parsed.Limit;
+        int count = 0;
         await foreach (var item in channel.Reader.ReadAllAsync(ct))
+        {
             yield return item;
+            if (globalLimit.HasValue && ++count >= globalLimit.Value)
+                yield break;
+        }
     }
 
     public async IAsyncEnumerable<QuerySuggestion> AutocompleteAsync(
@@ -272,6 +285,11 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             return provider.ObserveQuery<T>(request, options);
         }
 
+        // When fanning out with default scope (Exact), use descendants for full partition search
+        var fanOutQuery = parsed.Scope == QueryScope.Exact
+            ? (request.Query ?? "") + " scope:descendants"
+            : request.Query;
+
         // Fan out to all partitions (known + newly discovered), merge observables
         return Observable.Create<QueryResultChange<T>>(async (observer, ct) =>
         {
@@ -291,7 +309,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             {
                 var (key, prov) = allProviders[0];
                 var scopedReq = string.IsNullOrEmpty(effectivePath)
-                    ? request with { DefaultPath = key }
+                    ? request with { DefaultPath = key, Query = fanOutQuery }
                     : request;
                 return prov.ObserveQuery<T>(scopedReq, options).Subscribe(observer);
             }
@@ -300,7 +318,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 .Select(entry =>
                 {
                     var scopedReq = string.IsNullOrEmpty(effectivePath)
-                        ? request with { DefaultPath = entry.Key }
+                        ? request with { DefaultPath = entry.Key, Query = fanOutQuery }
                         : request;
                     return entry.Provider.ObserveQuery<T>(scopedReq, options);
                 })

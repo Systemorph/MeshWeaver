@@ -28,6 +28,7 @@ public partial class SearchBar : IAsyncDisposable
     private bool showDropdown;
     private int highlightedIndex = -1;
     private bool isLoading;
+    private bool _isFirstKeystroke = true;
     private CancellationTokenSource? debounceCts;
 
     protected override void OnInitialized()
@@ -55,11 +56,12 @@ public partial class SearchBar : IAsyncDisposable
             suggestions = [];
             showDropdown = false;
             isLoading = false;
+            _isFirstKeystroke = true;
             debounceCts?.Cancel();
             return;
         }
 
-        // Debounce: cancel previous pending search
+        // Cancel previous pending search
         debounceCts?.Cancel();
         debounceCts = new CancellationTokenSource();
         var ct = debounceCts.Token;
@@ -69,8 +71,13 @@ public partial class SearchBar : IAsyncDisposable
 
         try
         {
-            await Task.Delay(300, ct);
-            if (ct.IsCancellationRequested) return;
+            // Leading-edge: fire immediately on first keystroke, throttle subsequent ones
+            if (!_isFirstKeystroke)
+            {
+                await Task.Delay(300, ct);
+                if (ct.IsCancellationRequested) return;
+            }
+            _isFirstKeystroke = false;
 
             await AutocompleteAsync(value.Trim(), ct);
         }
