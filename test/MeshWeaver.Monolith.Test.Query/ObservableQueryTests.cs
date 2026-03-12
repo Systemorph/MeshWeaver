@@ -254,7 +254,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         var receivedChanges = new List<QueryResultChange<MeshNode>>();
 
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:TestOrg scope:exact"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:TestOrg"))
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
@@ -269,7 +269,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         receivedChanges.Should().HaveCount(2);
         receivedChanges[1].ChangeType.Should().Be(QueryChangeType.Updated);
 
-        // Act - Add a child (should NOT trigger notification for scope:exact)
+        // Act - Add a child (should NOT trigger notification for)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestOrg/Project") with { Name = "Project", NodeType = "Markdown" });
         await Task.Delay(300);
 

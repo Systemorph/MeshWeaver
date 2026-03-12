@@ -440,7 +440,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         using (accessService.ImpersonateAsHub(hub))
         {
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            node = await meshService.QueryAsync<MeshNode>("path:TestHub scope:exact").FirstOrDefaultAsync();
+            node = await meshService.QueryAsync<MeshNode>("path:TestHub").FirstOrDefaultAsync();
         }
 
         node.Should().NotBeNull("hub should always be able to see its own node");
@@ -463,7 +463,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
         try
         {
             var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-            var node = await meshService.QueryAsync<MeshNode>("path:TestHub scope:exact").FirstOrDefaultAsync();
+            var node = await meshService.QueryAsync<MeshNode>("path:TestHub").FirstOrDefaultAsync();
             node.Should().BeNull("unauthorized user should not see the hub's node without permissions");
         }
         finally

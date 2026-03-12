@@ -250,7 +250,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
         // Load parent comment
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:exact").FirstOrDefaultAsync();
+        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
         parentNode.Namespace.Should().Be(DocPath);
@@ -260,7 +260,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Parent: Id={parentNode.Id}, Path={parentNode.Path}, Author={parentComment!.Author}");
 
         // Load reply — verify Id is the local name, not the full path
-        var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath} scope:exact").FirstOrDefaultAsync();
+        var replyNode = await MeshQuery.QueryAsync<MeshNode>($"path:{ReplyPath}").FirstOrDefaultAsync();
         replyNode.Should().NotBeNull("Reply node should exist");
         replyNode!.Id.Should().Be("reply1", "Reply Id should be the local file name, not the full path");
         replyNode.Namespace.Should().Be(CommentC1Path);

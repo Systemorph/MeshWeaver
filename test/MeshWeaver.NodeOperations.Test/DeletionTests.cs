@@ -12,7 +12,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.NodeOperations.Test;
 
 /// <summary>
 /// Tests for the recursive deletion pattern:
@@ -39,7 +39,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.DeleteNodeAsync("del/leaf");
 
         // Assert — node should be gone
-        var result = await MeshQuery.QueryAsync<MeshNode>("path:del/leaf scope:exact")
+        var result = await MeshQuery.QueryAsync<MeshNode>("path:del/leaf")
             .FirstOrDefaultAsync(TestTimeout);
         result.Should().BeNull("leaf node should be deleted");
     }
@@ -59,7 +59,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.DeleteNodeAsync("del2/parent");
 
         // Assert — parent and both children should be gone
-        var parent = await MeshQuery.QueryAsync<MeshNode>("path:del2/parent scope:exact")
+        var parent = await MeshQuery.QueryAsync<MeshNode>("path:del2/parent")
             .FirstOrDefaultAsync(TestTimeout);
         parent.Should().BeNull("parent should be deleted");
 
@@ -112,7 +112,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         await NodeFactory.DeleteNodeAsync("del4/parent/delete");
 
         // Assert — the kept sibling should still exist
-        var kept = await MeshQuery.QueryAsync<MeshNode>("path:del4/parent/keep scope:exact")
+        var kept = await MeshQuery.QueryAsync<MeshNode>("path:del4/parent/keep")
             .FirstOrDefaultAsync(TestTimeout);
         kept.Should().NotBeNull("sibling node should not be affected");
 
@@ -139,7 +139,7 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         // Assert
         response.Message.Success.Should().BeTrue("deletion via client should succeed");
 
-        var result = await MeshQuery.QueryAsync<MeshNode>("path:del5/target scope:exact")
+        var result = await MeshQuery.QueryAsync<MeshNode>("path:del5/target")
             .FirstOrDefaultAsync(TestTimeout);
         result.Should().BeNull("node should be deleted");
     }

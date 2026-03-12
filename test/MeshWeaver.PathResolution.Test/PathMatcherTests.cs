@@ -3,7 +3,7 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.PathResolution.Test;
 
 public class PathMatcherTests
 {

@@ -118,6 +118,7 @@
     <Project Path="test/MeshWeaver.Json.Assertions/MeshWeaver.Json.Assertions.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
+    <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
@@ -133,13 +134,17 @@
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
+    <Project Path="test/MeshWeaver.AccessControl.Test/MeshWeaver.AccessControl.Test.csproj" />
     <Project Path="test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj" />
     <Project Path="test/MeshWeaver.Hierarchies.Test/MeshWeaver.Hierarchies.Test.csproj" />
+    <Project Path="test/MeshWeaver.Threading.Test/MeshWeaver.Threading.Test.csproj" />
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
     <Project Path="test/MeshWeaver.Monolith.Test.Content/MeshWeaver.Monolith.Test.Content.csproj" />
     <Project Path="test/MeshWeaver.Monolith.Test.Persistence/MeshWeaver.Monolith.Test.Persistence.csproj" />
     <Project Path="test/MeshWeaver.Monolith.Test.Query/MeshWeaver.Monolith.Test.Query.csproj" />
     <Project Path="test/MeshWeaver.Monolith.Test.Security/MeshWeaver.Monolith.Test.Security.csproj" />
+    <Project Path="test/MeshWeaver.PathResolution.Test/MeshWeaver.PathResolution.Test.csproj" />
+    <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />

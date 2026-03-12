@@ -68,7 +68,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var hashPrefix = hash[..12];
         var path = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        var node = await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:exact").FirstOrDefaultAsync();
+        var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
         var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
         if (apiToken == null)
             return null;
@@ -108,7 +108,7 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
     public async Task<bool> RevokeTokenAsync(string tokenNodePath)
     {
-        var node = await meshQuery.QueryAsync<MeshNode>($"path:{tokenNodePath} scope:exact").FirstOrDefaultAsync();
+        var node = await meshQuery.QueryAsync<MeshNode>($"path:{tokenNodePath}").FirstOrDefaultAsync();
         if (node == null)
             return false;
 

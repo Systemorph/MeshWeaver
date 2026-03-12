@@ -258,7 +258,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Query node as User2 (Editor on SharedOrg) — has read access
         await LoginWithToken(_tokenUser2!);
-        var publicNode = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public scope:exact").FirstOrDefaultAsync();
+        var publicNode = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public").FirstOrDefaultAsync();
         publicNode.Should().NotBeNull();
 
         // User1 (Viewer on SharedOrg) should NOT be able to update the Public node
@@ -277,7 +277,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
         updateResult2.Should().Contain("Updated");
 
         // Verify the update persisted
-        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public scope:exact").FirstOrDefaultAsync();
+        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:SharedOrg/Public").FirstOrDefaultAsync();
         reloaded!.Name.Should().Be("Updated by User2");
     }
 
@@ -290,7 +290,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Query node as User2 (Admin on PrivateOrg) — has read access
         await LoginWithToken(_tokenUser2!);
-        var secretNode = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret scope:exact").FirstOrDefaultAsync();
+        var secretNode = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret").FirstOrDefaultAsync();
         secretNode.Should().NotBeNull();
 
         // User1 should NOT be able to update Secret node (no permissions at all)
@@ -303,7 +303,7 @@ public class McpAccessControlTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // Verify name was NOT changed (check as User2 who has access)
         await LoginWithToken(_tokenUser2!);
-        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret scope:exact").FirstOrDefaultAsync();
+        var reloaded = await MeshQuery.QueryAsync<MeshNode>("path:PrivateOrg/Secret").FirstOrDefaultAsync();
         reloaded!.Name.Should().Be("Secret Data");
     }
 }

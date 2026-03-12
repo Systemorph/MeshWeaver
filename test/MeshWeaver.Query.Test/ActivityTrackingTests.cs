@@ -11,7 +11,7 @@ using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.Query.Test;
 
 public class CatalogFallbackTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

@@ -519,15 +519,15 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
     public async Task ProductLaunch_CreatableTypes_VerifyFullAlgorithm()
     {
         // Arrange - Verify the data setup is correct
-        var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var productLaunchNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         productLaunchNode.Should().NotBeNull("ProductLaunch node should exist");
         productLaunchNode!.NodeType.Should().Be("ACME/Project", "ProductLaunch should be of NodeType ACME/Project");
 
-        var projectTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var projectTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         projectTypeNode.Should().NotBeNull("ACME/Project NodeType should exist");
         projectTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project should be a NodeType");
 
-        var todoTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project/Todo scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var todoTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project/Todo", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         todoTypeNode.Should().NotBeNull("ACME/Project/Todo NodeType should exist");
         todoTypeNode!.NodeType.Should().Be("NodeType", "ACME/Project/Todo should be a NodeType");
 
@@ -561,7 +561,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(newTodoNode, ct: TestContext.Current.CancellationToken);
 
         // Assert - Verify the node was created
-        var createdNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/my-todo scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var createdNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/my-todo", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         createdNode.Should().NotBeNull();
         createdNode!.Name.Should().Be("My Todo");
         createdNode.NodeType.Should().Be("ACME/Project/Todo");
@@ -658,7 +658,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 2: Verify node exists in persistence
         Output.WriteLine($"Step 2: Verifying node exists in persistence");
-        var persistedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull($"Node {nodePath} should exist after CreateNodeAsync");
         Output.WriteLine($"Node exists: Name={persistedNode!.Name}, NodeType={persistedNode.NodeType}");
 
@@ -803,7 +803,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 2: Verify node exists with Transient state
         Output.WriteLine($"Step 2: Verifying transient node exists");
-        var persistedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact", ct: ct).FirstOrDefaultAsync(ct);
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: ct).FirstOrDefaultAsync(ct);
         persistedNode.Should().NotBeNull($"Transient node {nodePath} should exist");
         persistedNode!.State.Should().Be(MeshNodeState.Transient, "Persisted node should be Transient");
         Output.WriteLine($"Node found: State={persistedNode.State}, Name={persistedNode.Name}");
@@ -844,7 +844,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Step 3: Get node via query (verifying it exists and has correct state)
         Output.WriteLine($"Step 3: Getting node via MeshQuery");
-        var catalogNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact", ct: ct).FirstOrDefaultAsync(ct);
+        var catalogNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: ct).FirstOrDefaultAsync(ct);
         catalogNode.Should().NotBeNull($"Query should return the transient node");
 
         // Step 4: Request Edit view (simulates redirect)
@@ -947,7 +947,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
             Output.WriteLine("TIMEOUT: Edit view request timed out");
 
             // Check if node exists
-            var catalogNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath} scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+            var catalogNode = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
             Output.WriteLine($"MeshQuery result: {(catalogNode != null ? $"Found: {catalogNode.Path}" : "NULL")}");
 
             // Check persistence (same query)
@@ -1025,15 +1025,15 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
         // No InitializeAsync needed - FileSystemPersistenceService uses lazy loading
 
         // Verify expected nodes exist
-        var acmeProject = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var acmeProject = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         acmeProject.Should().NotBeNull("ACME/Project should exist in sample data");
         Output.WriteLine($"ACME/Project: NodeType={acmeProject?.NodeType}, Content={acmeProject?.Content?.GetType().Name}");
 
-        var acmeProjectTodo = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project/Todo scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var acmeProjectTodo = await MeshQuery.QueryAsync<MeshNode>("path:ACME/Project/Todo", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         acmeProjectTodo.Should().NotBeNull("ACME/Project/Todo should exist in sample data");
         Output.WriteLine($"ACME/Project/Todo: NodeType={acmeProjectTodo?.NodeType}, Content={acmeProjectTodo?.Content?.GetType().Name}");
 
-        var productLaunch = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var productLaunch = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         productLaunch.Should().NotBeNull("ACME/ProductLaunch should exist in sample data");
         Output.WriteLine($"ACME/ProductLaunch: NodeType={productLaunch?.NodeType}, Content={productLaunch?.Content?.GetType().Name}");
     }

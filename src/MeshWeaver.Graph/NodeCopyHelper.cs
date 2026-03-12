@@ -24,7 +24,7 @@ public static class NodeCopyHelper
         ILogger? logger = null,
         CancellationToken ct = default)
     {
-        var sourceNode = await meshQuery.QueryAsync<MeshNode>($"path:{sourcePath} scope:exact").FirstOrDefaultAsync(ct);
+        var sourceNode = await meshQuery.QueryAsync<MeshNode>($"path:{sourcePath}").FirstOrDefaultAsync(ct);
         if (sourceNode == null)
             throw new InvalidOperationException($"Source node not found: {sourcePath}");
 
@@ -45,7 +45,7 @@ public static class NodeCopyHelper
 
             if (!force)
             {
-                var existing = await meshQuery.QueryAsync<MeshNode>($"path:{newPath} scope:exact").FirstOrDefaultAsync(ct);
+                var existing = await meshQuery.QueryAsync<MeshNode>($"path:{newPath}").FirstOrDefaultAsync(ct);
                 if (existing != null)
                 {
                     logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);

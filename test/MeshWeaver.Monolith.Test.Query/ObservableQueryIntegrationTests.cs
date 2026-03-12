@@ -81,7 +81,7 @@ public class ObservableQueryIntegrationTests(ITestOutputHelper output) : Monolit
         var changes = new List<QueryResultChange<MeshNode>>();
 
         var subscription = Query
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ExactOrg scope:exact"))
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:ExactOrg"))
             .Subscribe(change => changes.Add(change));
 
         await Task.Delay(200);

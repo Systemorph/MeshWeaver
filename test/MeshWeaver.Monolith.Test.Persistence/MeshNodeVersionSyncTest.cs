@@ -158,7 +158,7 @@ public record Graph
     public async Task MeshNode_InitialVersion_IsZero()
     {
         // Arrange - check initial version via query before hub starts
-        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert - Version property exists and is initialized to 0
         initialNode.Should().NotBeNull("graph node should exist in persistence");
@@ -180,7 +180,7 @@ public record Graph
         await NodeFactory.CreateNodeAsync(nodeWithVersion, ct: TestContext.Current.CancellationToken);
 
         // Assert - version is preserved when reading back
-        var savedNode = await MeshQuery.QueryAsync<MeshNode>("path:test/versioned scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var savedNode = await MeshQuery.QueryAsync<MeshNode>("path:test/versioned", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         savedNode.Should().NotBeNull();
         savedNode!.Version.Should().Be(42, "version should be preserved in persistence");
     }

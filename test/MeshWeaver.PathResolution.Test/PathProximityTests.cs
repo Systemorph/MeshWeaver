@@ -2,7 +2,7 @@ using FluentAssertions;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.PathResolution.Test;
 
 public class PathProximityTests
 {

@@ -13,7 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.NodeOperations.Test;
 
 /// <summary>
 /// Tests that an admin user can create Organization nodes.
@@ -50,7 +50,7 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
         Output.WriteLine($"Organization created at: {created.Path}");
 
         // Verify retrievable
-        var fetched = await MeshQuery.QueryAsync<MeshNode>($"path:{orgPath} scope:exact").FirstOrDefaultAsync();
+        var fetched = await MeshQuery.QueryAsync<MeshNode>($"path:{orgPath}").FirstOrDefaultAsync();
         fetched.Should().NotBeNull("Created organization should be queryable");
         fetched!.NodeType.Should().Be("Organization");
 

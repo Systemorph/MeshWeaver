@@ -190,7 +190,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
 
         // Verify graph node exists in persistence with correct NodeType
         // (Name comes from persistence, NodeType references type/graph definition)
-        var graphNode = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var graphNode = await MeshQuery.QueryAsync<MeshNode>("path:graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         graphNode.Should().NotBeNull("Graph node should exist in persistence");
         graphNode!.NodeType.Should().Be("type/graph");
     }
@@ -202,7 +202,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // and can be loaded back from the persistence service
 
         // Get story node from persistence (directly, without routing)
-        var storyNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var storyNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert - content should be available
         storyNode.Should().NotBeNull("Story node should exist in persistence");
@@ -266,7 +266,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(newStory, ct: TestContext.Current.CancellationToken);
 
         // Assert - verify the node with content is persisted
-        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story3 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story3", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull("New story should be persisted");
         persistedNode!.Name.Should().Be("Story 3");
         persistedNode.NodeType.Should().Be("type/story");
@@ -288,7 +288,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         // registered on the mesh hub in this minimal test setup.
 
         // Verify initial data exists
-        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var initialNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         initialNode.Should().NotBeNull();
         var initialContent = initialNode!.Content as TestStory;
         initialContent!.Points.Should().Be(5);
@@ -307,7 +307,7 @@ public class DataContextIntegrationTest : MonolithMeshTestBase
         await _persistence!.SaveNodeAsync(updatedNode, SetupJsonOptions, TestContext.Current.CancellationToken);
 
         // Assert - get updated data from persistence
-        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1 scope:exact", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        var persistedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/story1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         persistedNode.Should().NotBeNull();
         var content = persistedNode!.Content as TestStory;
         content.Should().NotBeNull();

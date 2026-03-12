@@ -14,7 +14,7 @@ using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
-namespace MeshWeaver.Hosting.Monolith.Test;
+namespace MeshWeaver.NodeOperations.Test;
 
 /// <summary>
 /// Tests for creating nodes by sending CreateNodeRequest via IMeshService.
@@ -67,7 +67,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
 
         // Verify node exists in persistence
         var fetched = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{nodePath} scope:exact")
+            .QueryAsync<MeshNode>($"path:{nodePath}")
             .FirstOrDefaultAsync(TestTimeout);
         fetched.Should().NotBeNull("node should be retrievable from persistence");
 
@@ -105,7 +105,7 @@ public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTest
 
             // Verify node does NOT exist
             var fetched = await MeshQuery
-                .QueryAsync<MeshNode>($"path:{nodePath} scope:exact")
+                .QueryAsync<MeshNode>($"path:{nodePath}")
                 .FirstOrDefaultAsync(TestTimeout);
             fetched.Should().BeNull("rejected node should not exist");
         }
