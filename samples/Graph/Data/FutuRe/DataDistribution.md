@@ -14,22 +14,22 @@ In most insurance groups, consolidation means copying data from subsidiaries int
 
 ## Data Mesh Architecture
 
-Each business unit owns its data in simple CSV files. The group hub doesn't store copies — it reads from each BU's data domain through virtual streams and applies mapping rules on the fly.
+Each business unit owns its data. The group hub doesn't store copies — it reads from each BU's data domain through virtual streams and applies mapping rules on the fly.
 
 ```mermaid
 graph LR
     subgraph EuropeRe Domain
-        EU_CSV[datacube.csv EUR amounts]
+        EU_CSV[Datacube EUR amounts]
         EU_SVC[IContentService]
     end
 
     subgraph AmericasIns Domain
-        AM_CSV[datacube.csv USD amounts]
+        AM_CSV[Datacube USD amounts]
         AM_SVC[IContentService]
     end
 
     subgraph AsiaRe Domain
-        AS_CSV[datacube.csv JPY amounts]
+        AS_CSV[Datacube JPY amounts]
         AS_SVC[IContentService]
     end
 
@@ -73,7 +73,7 @@ graph TD
     end
 
     subgraph MeshWeaver Approach
-        M_SRC[BU CSV Files] -->|Stream| M_HUB[Virtual Hub]
+        M_SRC[BU Data] -->|Stream| M_HUB[Virtual Hub]
         M_HUB -->|Compose| M_REPORT[Live Reports]
     end
 
@@ -99,9 +99,9 @@ Here's what actually happens when the group dashboard loads. No manual orchestra
 
 ```mermaid
 graph TD
-    CSV[BU CSV Files]
+    CSV[BU Data]
     CONTENT[IContentService reads raw bytes]
-    PARSE[LoadLocalDataCube parses CSV rows]
+    PARSE[LoadLocalDataCube parses data]
     ENRICH[CombineLatest enriches with LoB names]
 
     CSV --> CONTENT --> PARSE --> ENRICH
@@ -134,7 +134,7 @@ graph TD
 
 ## Key Design Decisions
 
-**Domain ownership** — each BU manages its own CSV. EuropeRe's actuary updates `datacube.csv` directly; the group never touches it.
+**Domain ownership** — each BU manages its own data. EuropeRe's actuary updates their data directly; the group never touches it.
 
 **Stream composition over data copying** — `PartitionedHubDataSource` reads from BU hubs as live `IObservable` streams. When EuropeRe's data changes, the group view updates automatically — no rebuild, no re-import.
 
@@ -148,7 +148,7 @@ graph TD
 )
 ```
 
-**No intermediate state** — there are no staging tables, no materialized views, no cache invalidation problems. The only persistent storage is the BU's own CSV files and the mapping rule definitions.
+**No intermediate state** — there are no staging tables, no materialized views, no cache invalidation problems. The only persistent storage is the BU's own data and the mapping rule definitions.
 
 ---
 
@@ -158,7 +158,7 @@ graph TD
 - Traditional ETL approaches create **stale copies** that diverge from the source, require reconciliation, and multiply storage costs
 - MeshWeaver's virtual approach means changes to local data **appear instantly** in group views — no waiting for nightly batches
 - The same architecture scales from 3 BUs to 30 — each new partition is one address, not a new pipeline
-- Auditability is preserved: every group-level number can be traced back through the stream pipeline to a specific CSV row, mapping rule, and exchange rate
+- Auditability is preserved: every group-level number can be traced back through the stream pipeline to a specific data set, mapping rule, and exchange rate
 
 ---
 
