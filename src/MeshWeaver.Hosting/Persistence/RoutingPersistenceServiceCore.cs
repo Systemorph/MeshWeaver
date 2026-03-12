@@ -85,10 +85,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
     internal IReadOnlyDictionary<string, string> PartitionNamespaces => _partitionNamespaces;
 
     /// <summary>
-    /// Discovers partitions not yet provisioned, provisions each, and yields its query provider.
+    /// Discovers partitions not yet provisioned, provisions each, and yields its key and query provider.
     /// Already-provisioned partitions are skipped. Safe to call concurrently.
     /// </summary>
-    internal async IAsyncEnumerable<IMeshQueryProvider> DiscoverNewProvidersAsync(
+    internal async IAsyncEnumerable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProvidersAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
         var partitions = await _factory.DiscoverPartitionsAsync(ct);
@@ -107,7 +107,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 _queryProviders[segment] = queryProvider;
                 if (partition.VersionQuery != null)
                     _versionQueries[segment] = partition.VersionQuery;
-                yield return queryProvider;
+                yield return (segment, queryProvider);
             }
         }
     }
@@ -200,7 +200,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             await _factory.InitializeDefaultPartitionsAsync(defaultPartitions, ct);
 
         // 2. Discover all existing partitions (including the ones just created)
-        await foreach (var _ in DiscoverNewProvidersAsync(ct))
+        await foreach (var (_, _) in DiscoverNewProvidersAsync(ct))
         { }
 
         // 3. Load partition metadata from Admin/Partition namespace
