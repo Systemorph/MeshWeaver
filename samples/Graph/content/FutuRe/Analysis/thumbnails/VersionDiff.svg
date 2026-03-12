@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #f0f6ff; }
+    .nf { fill: #616161; }
+    .af { fill: #1B6EC2; }
+  </style>
+  <rect class="bg" width="140" height="79" rx="8"/>
+  <!-- Diff frame -->
+  <rect class="nf" x="9" y="7" width="122" height="64" rx="5"/>
+  <rect class="bg" x="11" y="9" width="118" height="60" rx="3"/>
+  <!-- Center divider -->
+  <rect class="nf" x="69" y="9" width="1" height="60" opacity="0.15"/>
+  <!-- Left column header (Before) -->
+  <rect class="af" x="11" y="9" width="58" height="9" rx="3" opacity="0.12"/>
+  <rect class="af" x="18" y="12" width="20" height="3" rx="1" opacity="0.6"/>
+  <!-- Right column header (After) -->
+  <rect class="af" x="70" y="9" width="59" height="9" rx="3" opacity="0.12"/>
+  <rect class="af" x="78" y="12" width="20" height="3" rx="1" opacity="0.6"/>
+  <!-- Row 1 — unchanged -->
+  <rect class="nf" x="16" y="24" width="40" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="76" y="24" width="40" height="2" rx="1" opacity="0.3"/>
+  <!-- Row 2 — deletion (left red) / addition (right green) -->
+  <rect x="14" y="30" width="52" height="6" rx="1" fill="#d32f2f" opacity="0.12"/>
+  <rect x="16" y="32" width="36" height="2" rx="1" fill="#d32f2f" opacity="0.6"/>
+  <rect x="74" y="30" width="52" height="6" rx="1" fill="#2e7d32" opacity="0.12"/>
+  <rect x="76" y="32" width="44" height="2" rx="1" fill="#2e7d32" opacity="0.6"/>
+  <!-- Row 3 — unchanged -->
+  <rect class="nf" x="16" y="42" width="32" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="76" y="42" width="32" height="2" rx="1" opacity="0.3"/>
+  <!-- Row 4 — deletion / addition -->
+  <rect x="14" y="48" width="52" height="6" rx="1" fill="#d32f2f" opacity="0.12"/>
+  <rect x="16" y="50" width="28" height="2" rx="1" fill="#d32f2f" opacity="0.6"/>
+  <rect x="74" y="48" width="52" height="6" rx="1" fill="#2e7d32" opacity="0.12"/>
+  <rect x="76" y="50" width="38" height="2" rx="1" fill="#2e7d32" opacity="0.6"/>
+  <!-- Row 5 — unchanged -->
+  <rect class="nf" x="16" y="60" width="44" height="2" rx="1" opacity="0.3"/>
+  <rect class="nf" x="76" y="60" width="44" height="2" rx="1" opacity="0.3"/>
+</svg>
