@@ -28,10 +28,21 @@ public static class CodeNodeType
     /// Creates a MeshNode definition for the Code node type.
     /// This provides HubConfiguration for nodes with nodeType="Code".
     /// </summary>
+    /// <summary>
+    /// The sub-namespace for source code files.
+    /// </summary>
+    public const string SourceSubNamespace = "_Source";
+
+    /// <summary>
+    /// The sub-namespace for test code files.
+    /// </summary>
+    public const string TestSubNamespace = "_Test";
+
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Code",
         Icon = "/static/NodeTypeIcons/code.svg",
+        IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(CodeNodeType).Assembly.Location,
         HubConfiguration = config => config

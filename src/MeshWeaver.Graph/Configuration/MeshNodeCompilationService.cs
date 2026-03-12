@@ -89,7 +89,7 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
-    /// For example, @@FutuRe/LineOfBusiness/Code/LineOfBusiness resolves to that node's code content.
+    /// For example, @@FutuRe/LineOfBusiness/_Source/LineOfBusiness resolves to that node's code content.
     /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
@@ -220,15 +220,15 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeConfiguration from child MeshNodes under the Code path
+        // Get CodeConfiguration from child MeshNodes under the _Source path
         // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
-        // For instance nodes, use the NodeType's path (e.g., "Person/Code" for Alice with NodeType="Person")
+        // For instance nodes, use the NodeType's path (e.g., "Person/_Source" for Alice with NodeType="Person")
         // Collect ALL CodeConfiguration files and combine them
         var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
         var codeFiles = new List<CodeConfiguration>();
         var codeParentPath = node.Content is NodeTypeDefinition
-            ? $"{node.Path}/Code"    // NodeType node - use its own Code path
-            : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code path
+            ? $"{node.Path}/_Source"    // NodeType node - use its own _Source path
+            : $"{node.NodeType}/_Source"; // Instance node - use NodeType's _Source path
         if (meshQuery != null)
         {
             var codeQuery = $"namespace:{codeParentPath}";
@@ -241,7 +241,7 @@ internal class MeshNodeCompilationService(
             }
         }
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Code/LineOfBusiness)
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
         if (meshQuery != null)
         {
             for (int i = 0; i < codeFiles.Count; i++)

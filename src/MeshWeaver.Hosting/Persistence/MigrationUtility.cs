@@ -80,8 +80,10 @@ public partial class MigrationUtility
 
         // Check if it's a CodeConfiguration (in Code directory)
         var relativePath = Path.GetRelativePath(_dataDirectory, jsonFile);
-        var isCodeFile = relativePath.Contains($"{Path.DirectorySeparatorChar}Code{Path.DirectorySeparatorChar}") ||
-                        relativePath.Contains("/Code/");
+        var isCodeFile = relativePath.Contains($"{Path.DirectorySeparatorChar}_Source{Path.DirectorySeparatorChar}") ||
+                        relativePath.Contains("/_Source/") ||
+                        relativePath.Contains($"{Path.DirectorySeparatorChar}_Test{Path.DirectorySeparatorChar}") ||
+                        relativePath.Contains("/_Test/");
 
         if (isCodeFile && json.Contains("\"$type\"") && json.Contains("CodeConfiguration"))
         {

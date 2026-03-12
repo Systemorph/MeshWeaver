@@ -564,9 +564,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Get CodeConfigurations from child MeshNodes under /Code path directly
+        // Get CodeConfigurations from child MeshNodes under /_Source path directly
         var codeFiles = new List<string>();
-        await foreach (var codeNode in meshStorage.GetChildrenAsync($"{nodeTypePath}/Code"))
+        await foreach (var codeNode in meshStorage.GetChildrenAsync($"{nodeTypePath}/_Source"))
         {
             if (codeNode.Content is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
             {
@@ -574,7 +574,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             }
         }
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Code/LineOfBusiness)
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
         if (compilationService != null)
         {
             for (int i = 0; i < codeFiles.Count; i++)

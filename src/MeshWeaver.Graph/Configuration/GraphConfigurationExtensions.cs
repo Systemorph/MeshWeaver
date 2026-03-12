@@ -123,9 +123,9 @@ public static class GraphConfigurationExtensions
             // The node type path is the hub address (e.g., "type/Person")
             var nodeTypePath = hub.Address.ToString();
 
-            // Get CodeConfiguration from child MeshNodes under the Code path
+            // Get CodeConfiguration from child MeshNodes under the _Source path
             CodeConfiguration? codeFile = null;
-            var codeParentPath = $"{nodeTypePath}/Code";
+            var codeParentPath = $"{nodeTypePath}/_Source";
             await foreach (var child in meshQuery.QueryAsync<MeshNode>($"namespace:{codeParentPath}").WithCancellation(ct))
             {
                 if (child.Content is CodeConfiguration cf)
