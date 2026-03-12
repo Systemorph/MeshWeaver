@@ -1,2 +1,0 @@
-[xUnit.net 00:00:21.06]     MeshWeaver.Acme.Test.TodoViewsTest.Thumbnail_ShouldRenderTodoItem [FAIL]
-Failed!  - Failed:     1, Passed:    58, Skipped:     0, Total:    59, Duration: 1 m - MeshWeaver.Acme.Test.dll (net10.0)

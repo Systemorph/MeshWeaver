@@ -559,12 +559,12 @@ public class QueryParserTests
     }
 
     [Fact]
-    public void Parse_NamespaceWithExactScope_UsesExact()
+    public void Parse_NamespaceOnly_DefaultsToChildren()
     {
         var result = _parser.Parse("namespace:MeshWeaver");
 
         result.Path.Should().Be("MeshWeaver");
-        result.Scope.Should().Be(QueryScope.Exact);
+        result.Scope.Should().Be(QueryScope.Children);
     }
 
     [Fact]

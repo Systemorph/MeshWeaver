@@ -1,1 +1,0 @@
-Passed!  - Failed:     0, Passed:    21, Skipped:     0, Total:    21, Duration: 39 s - MeshWeaver.Auth.Test.dll (net10.0)
