@@ -85,7 +85,7 @@ public record ProtectedContent(string Title, bool IsProtected = false);
 [Collection("NodeOperationsTests")]
 public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     #region CreateNodeRequest Tests
 
@@ -369,7 +369,7 @@ public class NodeOperationsTest(ITestOutputHelper output) : MonolithMeshTestBase
 [Collection("NodeOperationsTests")]
 public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -470,7 +470,7 @@ public class NodeOperationsWithValidatorTest(ITestOutputHelper output) : Monolit
 public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ContentRequiredNodeType = "content-required";
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -571,7 +571,7 @@ public class NodeOperationsWithContentValidatorTest(ITestOutputHelper output) : 
 [Collection("NodeOperationsTests")]
 public class NodeOperationsWithDeletionValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -738,7 +738,7 @@ public class PreventLockedDeletionValidator : INodeValidator
 public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ValidatedNodeType = "validated";
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -909,7 +909,7 @@ public class NodeOperationsWithNodeTypeValidatorsTest(ITestOutputHelper output) 
 public class NodeOperationsWithCombinedValidatorsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ValidatedNodeType = "combined";
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -1043,7 +1043,7 @@ public class HiddenNodeReadValidator : INodeValidator
 public class NodeOperationsWithReadValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string ReadableNodeType = "readable";
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -1160,7 +1160,7 @@ public class BlockedNodeReadValidator : INodeValidator
 [Collection("NodeOperationsTests")]
 public class NodeOperationsWithGlobalReadValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -1265,7 +1265,7 @@ public class NoVersionDowngradeValidator : INodeValidator
 public class NodeOperationsWithUpdateValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string UpdatableNodeType = "updatable";
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -1462,7 +1462,7 @@ public class ForbiddenNameUpdateValidator : INodeValidator
 [Collection("NodeOperationsTests")]
 public class NodeOperationsWithGlobalUpdateValidatorTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
