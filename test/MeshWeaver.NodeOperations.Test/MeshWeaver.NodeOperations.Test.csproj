@@ -6,6 +6,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Pre-copy samples/Graph for tests - avoids runtime directory copying -->
     <Content Include="..\..\samples\Graph\**">
       <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>

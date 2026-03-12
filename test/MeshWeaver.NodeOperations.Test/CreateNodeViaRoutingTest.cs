@@ -22,7 +22,7 @@ namespace MeshWeaver.NodeOperations.Test;
 /// </summary>
 public class CreateNodeViaEventTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(15.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {

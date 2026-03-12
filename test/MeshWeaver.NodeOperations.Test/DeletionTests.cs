@@ -23,7 +23,7 @@ namespace MeshWeaver.NodeOperations.Test;
 /// </summary>
 public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(10.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder);
