@@ -6,8 +6,9 @@ namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
 /// Factory for creating per-partition FileSystem persistence stores.
-/// All partitions share the same FileSystemStorageAdapter at the base directory.
-/// Each partition gets its own FileSystemPersistenceService (with separate cache).
+/// All partitions share the same CachingStorageAdapter at the base directory
+/// for fast in-memory reads (all files pre-loaded at construction).
+/// Each partition gets its own InMemoryPersistenceService (with separate cache).
 /// </summary>
 internal class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
 {
@@ -26,7 +27,7 @@ internal class FileSystemPartitionedStoreFactory : IPartitionedStoreFactory
         _baseDirectory = baseDirectory;
         _writeOptionsModifier = writeOptionsModifier;
         _changeNotifier = changeNotifier;
-        _sharedAdapter = new FileSystemStorageAdapter(baseDirectory, writeOptionsModifier);
+        _sharedAdapter = new CachingStorageAdapter(baseDirectory, writeOptionsModifier);
         _filter = filter;
     }
 
