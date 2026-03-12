@@ -99,11 +99,11 @@ public static class MeshDataSourceExtensions
 
             try
             {
-                var subResponse = await subHub.AwaitResponse(
-                    new GetDataRequest(new SchemaReference()),
-                    ct);
+                var schemaDelivery = subHub.Post(new GetDataRequest(new SchemaReference()))!;
+                var subResponse = await subHub.RegisterCallback(schemaDelivery, (d, _) => Task.FromResult(d), ct);
+                var schemaResponse = ((IMessageDelivery<GetDataResponse>)subResponse).Message;
 
-                hub.Post(subResponse.Message, o => o.ResponseFor(request));
+                hub.Post(schemaResponse, o => o.ResponseFor(request));
                 return request.Processed();
             }
             finally

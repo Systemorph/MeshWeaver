@@ -97,7 +97,7 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
                     scope = part[6..];
             }
 
-            if (pathFilter != null && string.Equals(scope, "exact", StringComparison.OrdinalIgnoreCase))
+            if (pathFilter != null && (scope == null || string.Equals(scope, "exact", StringComparison.OrdinalIgnoreCase)))
             {
                 var node = await persistence.GetNodeAsync(pathFilter, jsonOptions, ct);
                 if (node != null)

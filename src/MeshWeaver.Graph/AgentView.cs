@@ -434,15 +434,16 @@ public static class AgentView
                 };
 
                 using var cts = new CancellationTokenSource(10.Seconds());
-                var response = await actx.Host.Hub.AwaitResponse<DataChangeResponse>(
+                var delivery = actx.Host.Hub.Post(
                     new DataChangeRequest { ChangedBy = actx.Host.Stream.ClientId }.WithUpdates(updatedAgent),
-                    o => o.WithTarget(hubAddress),
-                    cts.Token);
+                    o => o.WithTarget(hubAddress))!;
+                var callbackResponse = await actx.Host.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+                var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
 
-                if (response.Message.Log.Status != ActivityStatus.Succeeded)
+                if (responseMsg.Log.Status != ActivityStatus.Succeeded)
                 {
                     var errorDialog = Controls.Dialog(
-                        Controls.Markdown($"**Error saving:**\n\n{response.Message.Log}"),
+                        Controls.Markdown($"**Error saving:**\n\n{responseMsg.Log}"),
                         "Save Failed"
                     ).WithSize("M");
                     actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);

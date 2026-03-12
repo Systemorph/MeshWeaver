@@ -36,14 +36,15 @@ public class AutocompleteClient(
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeoutCts.CancelAfter(DefaultTimeout);
 
-                var response = await hub.AwaitResponse(
+                var delivery = hub.Post(
                     new AutocompleteRequest(query, context?.Context),
-                    o => o.WithTarget(address),
-                    timeoutCts.Token);
+                    o => o.WithTarget(address))!;
+                var callbackResponse = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), timeoutCts.Token);
+                var responseMsg = ((IMessageDelivery<AutocompleteResponse>)callbackResponse).Message;
 
-                if (response?.Message?.Items != null)
+                if (responseMsg?.Items != null)
                 {
-                    allItems.AddRange(response.Message.Items);
+                    allItems.AddRange(responseMsg.Items);
                 }
             }
             catch

@@ -108,14 +108,17 @@ public class MeshOperations
         logger.LogInformation("Resolving Unified Path: address={Address}, remainder={Remainder}",
             addressPart, remainder);
 
-        var response = await hub.AwaitResponse(
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var delivery = hub.Post(
             new GetDataRequest(reference),
-            o => o.WithTarget(address));
+            o => o.WithTarget(address))!;
+        var callbackResponse = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+        var responseMsg = ((IMessageDelivery<GetDataResponse>)callbackResponse).Message;
 
-        if (response.Message.Error != null)
-            return $"Error: {response.Message.Error}";
+        if (responseMsg.Error != null)
+            return $"Error: {responseMsg.Error}";
 
-        return JsonSerializer.Serialize(response.Message.Data, hub.JsonSerializerOptions);
+        return JsonSerializer.Serialize(responseMsg.Data, hub.JsonSerializerOptions);
     }
 
     public async Task<string> Search(string query, string? basePath = null)

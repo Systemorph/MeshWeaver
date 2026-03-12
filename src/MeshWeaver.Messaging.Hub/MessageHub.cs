@@ -472,12 +472,22 @@ public sealed class MessageHub : IMessageHub
 
         var tcs = new TaskCompletionSource<IMessageDelivery>(combinedCts.Token);
 
+        // Register cancellation callback so the TCS completes when the token fires
+        // This prevents the TCS from waiting forever when no response arrives
+        var cancellationRegistration = combinedCts.Token.Register(() =>
+        {
+            tcs.TrySetException(new TimeoutException(
+                $"No response received for message {messageId} in hub {Address}. " +
+                $"The request may have been undeliverable or the target hub was not found."));
+        });
+
         // Register for disposal cancellation
         lock (locker)
         {
             if (RunLevel >= MessageHubRunLevel.ShutDown)
             {
                 // If already disposing, immediately cancel the callback
+                cancellationRegistration.Dispose();
                 tcs.SetCanceled(combinedCts.Token);
                 disposalCts.Dispose();
                 combinedCts.Dispose();
@@ -492,7 +502,8 @@ public sealed class MessageHub : IMessageHub
         {
             try
             {
-                // Clean up disposal cancellation token
+                // Clean up cancellation registration and disposal token
+                await cancellationRegistration.DisposeAsync();
                 lock (locker)
                 {
                     pendingCallbackCancellations.Remove(disposalCts);

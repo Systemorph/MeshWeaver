@@ -38,14 +38,16 @@ Agents: Executor, Navigator, Planner, Research
 
 ## Bash Command Guidelines
 
-**Stay in the root directory** (`C:\dev\MeshWeaver`) and use relative sub-paths for all build/test commands. Do NOT use `cd ... && ...` chains — they require user confirmation. Issue commands separately or specify paths directly:
+**Stay in the root directory** (`C:\dev\MeshWeaver`) and use simple, single commands. Chained commands (`&&`, `||`), `for` loops, and `cd` all require user confirmation — avoid them.
 ```bash
-# CORRECT — run from root directory with sub-path
+# CORRECT — simple single commands from root directory
 dotnet build src/MeshWeaver.Graph/MeshWeaver.Graph.csproj
-dotnet test test/MeshWeaver.Graph.Test --no-restore
+dotnet test test/MeshWeaver.Graph.Test --no-build
 
-# WRONG — chained cd requires extra approval
-cd /c/dev/MeshWeaver && dotnet build
+# WRONG — these all require extra approval:
+cd /c/dev/MeshWeaver && dotnet build    # chained cd
+for d in test/*; do dotnet test $d; done  # for loop
+dotnet build && dotnet test               # chained commands
 ```
 
 ## Development Commands
