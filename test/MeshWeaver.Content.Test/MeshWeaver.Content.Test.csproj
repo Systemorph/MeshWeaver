@@ -13,9 +13,6 @@
         <PackageReference Include="NSubstitute" />
     </ItemGroup>
     <ItemGroup>
-        <Content Include="Markdown\**">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </Content>
         <!-- Pre-copy samples/Graph for tests - avoids runtime directory copying -->
         <Content Include="..\..\samples\Graph\**">
             <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
