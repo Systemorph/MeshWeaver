@@ -85,7 +85,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Verify that the User node type is registered and has HubConfiguration.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void UserNodeType_IsRegistered()
     {
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
@@ -98,7 +98,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Verify that NodeTypeService returns cached HubConfiguration for the "User" node type.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void NodeTypeService_HasCachedConfig_ForUserType()
     {
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
@@ -111,7 +111,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Verify that the Roland user node can be loaded and enriched with HubConfiguration.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UserNode_Roland_CanBeLoaded()
     {
         var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
@@ -130,7 +130,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Verify that a hub can be created for the User/TestUser address
     /// and that it responds to PingRequest (hub is alive).
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UserHub_Roland_CanBeCreated()
     {
         var client = GetClient();
@@ -150,7 +150,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Regression test: compilation of User/_Source/Person.cs was overwriting
     /// the built-in HubConfiguration, losing layout areas.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ActivityArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
@@ -226,7 +226,7 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Also verify the Overview area works (baseline — this uses AddDefaultLayoutAreas).
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task OverviewArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();

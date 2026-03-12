@@ -25,6 +25,7 @@
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\MeshWeaver.Kernel\MeshWeaver.Kernel.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Kernel.Hub\MeshWeaver.Kernel.Hub.csproj" />
     <ProjectReference Include="..\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />

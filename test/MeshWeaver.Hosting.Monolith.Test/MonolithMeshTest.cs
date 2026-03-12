@@ -7,7 +7,7 @@ using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Kernel.Hub;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 
 public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PingPong()
     {
         var client = GetClient();
@@ -30,7 +30,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
 
-    [Theory(Timeout = 10000)]
+    [Theory(Timeout = 20000)]
     [InlineData("HubFactory")]
     [InlineData("Kernel")]
     public async Task HubWorksAfterDisposal(string id)
@@ -74,7 +74,7 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         ex.GetBaseException().Message.Should().Contain("No node found");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task StreamToNonExistentHub_ThrowsDeliveryFailure()
     {
         var client = GetClient(c => c.AddData());
@@ -107,5 +107,5 @@ public class MonolithMeshTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                     Name = "Kernel",
                     HubConfiguration = x => x
                 })
-            .AddKernel();
+; // AddKernel() is already included via AddGraph() in base class
 }

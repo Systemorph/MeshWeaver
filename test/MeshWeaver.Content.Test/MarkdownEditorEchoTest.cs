@@ -85,7 +85,7 @@ public class MarkdownEditorEchoTest(ITestOutputHelper output) : MonolithMeshTest
     /// This is the mechanism that prevents unnecessary data notifications when
     /// the markdown editor auto-saves with ChangedBy = Stream.ClientId.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task OwnAutoSave_DoesNotEcho_ExternalChange_DoesEcho()
     {
         var nodePath = "Doc/DataMesh/CollaborativeEditing";

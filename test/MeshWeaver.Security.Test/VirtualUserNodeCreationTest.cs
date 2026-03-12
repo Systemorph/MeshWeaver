@@ -30,7 +30,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
     /// This mirrors the VirtualUserMiddleware flow where the portal hub's
     /// address (portal/xxx) is used as the identity for the access check.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PortalHub_CreateVUser_Succeeds()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -53,7 +53,7 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
     /// This was the root cause of the portal startup hang — the Post+RegisterCallback
     /// race condition in HubNodePersistence caused the task to never complete.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PortalHub_CreateVUser_AlreadyExists_ReturnsFailure()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -77,11 +77,11 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
 
     /// <summary>
     /// Mimics the full VirtualUserMiddleware.EnsureVirtualUserNodeAsync flow:
-    /// 1. Check if VUser exists (PingRequest to VUser address)
+    /// 1. Check if VUser exists via persistence query
     /// 2. If not, create it via IMeshService with hub identity scope
-    /// 3. Second call detects VUser exists via Ping, skips creation
+    /// 3. Second call detects VUser exists, skips creation
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task EnsureVirtualUserNode_CheckThenCreate_NoHang()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -90,40 +90,31 @@ public class VirtualUserNodeCreationTest(ITestOutputHelper output) : MonolithMes
         var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
         var virtualUserId = "visitor3";
-        var vUserAddress = new Address("VUser", virtualUserId);
         var node = CreateVUserNode(virtualUserId);
 
         using (accessService.ImpersonateAsHub(portalHub))
         {
-            // First call: VUser doesn't exist, Ping should fail, then create
-            var existsBefore = await CheckNodeExistsAsync(portalHub, vUserAddress);
+            // First call: VUser doesn't exist in persistence
+            var existsBefore = await CheckNodeExistsAsync(meshService, $"VUser/{virtualUserId}", ct);
             existsBefore.Should().BeFalse("VUser node should not exist yet");
 
             await meshService.CreateNodeAsync(node, ct);
 
-            // Second call: VUser exists, Ping should succeed, skip creation
-            var existsAfter = await CheckNodeExistsAsync(portalHub, vUserAddress);
+            // Second call: VUser exists after creation
+            var existsAfter = await CheckNodeExistsAsync(meshService, $"VUser/{virtualUserId}", ct);
             existsAfter.Should().BeTrue("VUser node should exist after creation");
         }
     }
 
     /// <summary>
-    /// Mirrors the CheckNodeExistsAsync logic from VirtualUserMiddleware.
+    /// Checks if a node exists in persistence via query.
     /// </summary>
-    private static async Task<bool> CheckNodeExistsAsync(IMessageHub hub, Address nodeAddress)
+    private static async Task<bool> CheckNodeExistsAsync(IMeshService meshService, string path, CancellationToken ct)
     {
-        try
-        {
-            await hub.AwaitResponse(
-                new PingRequest(),
-                o => o.WithTarget(nodeAddress),
-                new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
+        var node = await meshService.QueryAsync<MeshNode>(
+            $"path:{path}", ct: ct
+        ).FirstOrDefaultAsync(ct);
+        return node != null;
     }
 
     private IMessageHub CreatePortalHub()

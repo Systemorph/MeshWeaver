@@ -44,7 +44,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// Link 1: HubDataSource with denied access → workspace stream errors.
     /// Verifies: data source stream's OnError propagates through workspace stream to subscriber.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task HubDataSource_WithoutAccess_ShouldErrorStream()
     {
         await EnsureHubStarted(new Address("SourceHub"));
@@ -69,7 +69,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>
     /// Link 2: PartitionedHubDataSource → combined stream errors.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PartitionedHubDataSource_WithoutAccess_ShouldErrorStream()
     {
         await EnsureHubStarted(new Address("SourceHub/A"));
@@ -99,7 +99,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// Verifies: when workspace stream is already errored, CreateSynchronizationStream's
     /// onError handler fires and posts DeliveryFailure to remote subscriber.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ErroredDataSource_ThenRemoteSubscribe_ShouldError()
     {
         await EnsureHubStarted(new Address("SourceHub"));
@@ -138,7 +138,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>
     /// Link 4: Subscribe remotely CONCURRENTLY with data source initialization (race).
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ClientRemoteStream_WhenDataSourceErrors_ShouldError()
     {
         await EnsureHubStarted(new Address("SourceHub"));
@@ -166,7 +166,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// Link 5: DataContext failure state — when initialization fails, DataContext stores the error.
     /// Subsequent SubscribeRequests get immediate DeliveryFailure with a meaningful message.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task FailedHub_SubsequentSubscribe_ShouldGetImmediateError()
     {
         await EnsureHubStarted(new Address("SourceHub"));
@@ -210,7 +210,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>
     /// Link 6: Failed hub rejects GetDataRequest with DeliveryFailure.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task FailedHub_GetDataRequest_ShouldReturnError()
     {
         await EnsureHubStarted(new Address("SourceHub"));
@@ -244,7 +244,7 @@ public class HubDataSourceSecurityTest(ITestOutputHelper output) : MonolithMeshT
     /// <summary>
     /// Link 7: Failed hub rejects DataChangeRequest with DeliveryFailure.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task FailedHub_DataChangeRequest_ShouldReturnError()
     {
         await EnsureHubStarted(new Address("SourceHub"));

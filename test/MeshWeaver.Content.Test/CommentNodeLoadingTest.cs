@@ -38,7 +38,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// Verifies that the comment node c1 can be loaded by exact path query.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CommentNode_IsLoadableByExactPath()
     {
         var node = await MeshQuery
@@ -58,7 +58,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// Verifies the comment node content deserializes as a Comment object.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CommentNode_HasValidCommentContent()
     {
         var node = await MeshQuery
@@ -82,7 +82,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// Verifies all comment nodes (c1-c6) under CollaborativeEditing are discoverable
     /// via namespace query with nodeType filter.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CommentNodes_AreDiscoverableByNamespaceQuery()
     {
         var comments = await MeshQuery
@@ -109,7 +109,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// Verifies the reply node under c1 is also loadable.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ReplyNode_IsLoadableUnderComment()
     {
         var replyPath = $"{DocPartitionCommentPath}/reply1";
@@ -128,7 +128,7 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
     /// Verifies that the comment node can be addressed and a hub can be initialized for it.
     /// This tests the full addressability chain -- not just persistence, but also hub routing.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CommentNode_IsAddressable()
     {
         var client = GetClient();

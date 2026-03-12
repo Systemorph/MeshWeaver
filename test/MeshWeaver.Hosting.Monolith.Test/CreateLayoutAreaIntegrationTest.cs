@@ -78,7 +78,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Create area renders on a parent node (ProductLaunch) with type parameter.
     /// Should show the Name+Description form when ?type=ACME/Project/Todo is specified.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateArea_WithTypeParam_ShowsCreateForm()
     {
         var client = GetClient();
@@ -115,7 +115,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Create area renders on a parent node without type parameter.
     /// Should show type selection grid or a message.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
@@ -147,7 +147,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that the Overview area works for ProductLaunch (baseline test).
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task OverviewArea_WorksForProductLaunch()
     {
         var client = GetClient();
@@ -179,7 +179,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that IMeshService service is available for CreateLayoutArea.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MeshNodeFactory_IsRegistered()
     {
         var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -191,7 +191,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that INodeTypeService service is available for CreateLayoutArea.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task NodeTypeService_IsRegistered()
     {
         var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();

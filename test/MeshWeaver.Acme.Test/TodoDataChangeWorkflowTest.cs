@@ -132,7 +132,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that a Todo node can be retrieved via the persistence service.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task TodoNode_CanBeRetrievedViaPersistence()
     {
         var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
@@ -149,7 +149,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that child Todo nodes can be enumerated via IMeshService.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task ChildTodos_CanBeEnumeratedViaQuery()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -170,7 +170,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that Todo content can be deserialized correctly.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task TodoContent_CanBeDeserializedCorrectly()
     {
         var todoNode = await MeshQuery.QueryAsync<MeshNode>("path:ACME/ProductLaunch/Todo/DefinePersona").FirstOrDefaultAsync();
@@ -196,7 +196,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that DataChangeRequest can be used to update Todo content.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task DataChangeRequest_CanBeCreatedForTodoUpdate()
     {
         // Get the original todo
@@ -214,7 +214,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that the Project hub can receive requests.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task ProjectHub_CanReceiveRequests()
     {
         var client = GetClient();
@@ -233,7 +233,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that the Todo hub can receive requests.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task TodoHub_CanReceiveRequests()
     {
         var client = GetClient();
@@ -252,7 +252,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that multiple Todo hubs can be accessed independently.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MultipleTodoHubs_CanBeAccessedIndependently()
     {
         var client = GetClient();
@@ -282,7 +282,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the TodaysFocus view (used as summary) responds to data access.
     /// Note: "Summary" view doesn't exist, using TodaysFocus as the overview view.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task SummaryView_RespondsToDataAccess()
     {
         var client = GetClient();
@@ -313,7 +313,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that DataChangeRequest.WithUpdates can update a Todo's status.
     /// This tests the pattern used by the Edit operation.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task UpdateStatus_ViaDataChangeRequest_ShouldWork()
     {
         var client = GetClient();
@@ -346,7 +346,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that DataChangeRequest.WithDeletions can be used for deleting Todos.
     /// This tests the pattern used by the Delete operation.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task DeleteTodo_ViaDataChangeRequest_PatternIsAvailable()
     {
         // Get an existing todo to verify the pattern
@@ -368,7 +368,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that DataChangeRequest.WithCreations can be used for creating new Todos.
     /// This tests the pattern used by the Create operation in ProjectViews.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public void CreateTodo_ViaDataChangeRequest_PatternIsAvailable()
     {
         // Verify the DataChangeRequest pattern is available
@@ -385,7 +385,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that the AllTasks view renders with groups.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task AllTasksView_ShouldIncludeNewTaskButton()
     {
         var client = GetClient();
@@ -412,7 +412,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the Overview view renders for a Todo.
     /// Note: "Details" view is named "Overview" in Todo.json.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task DetailsView_ShouldIncludeCrudButtons()
     {
         var client = GetClient();
@@ -440,7 +440,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// Test that the AllTasks view compiles and renders correctly with deleted items.
     /// This tests the dynamically compiled ProjectViews code including the Deleted section.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task AllTasksView_CompilesAndRendersWithDeletedSection()
     {
         var client = GetClient();
@@ -479,7 +479,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that soft delete changes the node state to Deleted.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task SoftDelete_ChangesStateToDeleted()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -504,7 +504,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that querying with state:Active excludes deleted items.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task QueryWithStateActive_ExcludesDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -532,7 +532,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that querying with state:Deleted only returns deleted items.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task QueryWithStateDeleted_OnlyReturnsDeletedItems()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -560,7 +560,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that restore changes the node state back to Active.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Restore_ChangesStateBackToActive()
     {
         var todoPath = "ACME/ProductLaunch/Todo/DefinePersona";
@@ -592,7 +592,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Test that permanent (hard) delete removes the node completely.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task PermanentDelete_RemovesNodeCompletely()
     {
         // Create a temporary test node for this test

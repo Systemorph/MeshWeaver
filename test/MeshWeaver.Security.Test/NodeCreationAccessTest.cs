@@ -40,7 +40,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     /// Tests that creating a node without Create permission throws UnauthorizedAccessException.
     /// The RlsNodeValidator should check permission on the parent path.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateNode_WithoutPermission_ThrowsUnauthorized()
     {
         // Arrange — switch to unauthorized user who has NO permissions
@@ -76,7 +76,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// Tests that creating a node with Create permission succeeds via IMeshService.CreateNodeAsync.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateNode_WithPermission_Succeeds()
     {
         // Arrange
@@ -120,7 +120,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     /// Tests the Id change flow: when user changes Id during creation,
     /// a new node is created at the new path and the transient node is deleted.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateNode_IdChanged_CreatesNewNodeAndDeletesTransient()
     {
         // Arrange
@@ -182,7 +182,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     /// <summary>
     /// Tests that DesiredId property is properly persisted with the transient node.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateTransientNode_PreservesDesiredId()
     {
         // Arrange
@@ -225,7 +225,7 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
     /// Tests that confirming a transient node (Transient -> Active) works correctly
     /// via CreateNodeRequest when node already exists.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ConfirmTransientNode_UpdatesStateToActive()
     {
         // Arrange

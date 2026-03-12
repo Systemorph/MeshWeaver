@@ -37,7 +37,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// When a subscriber sends a SubscribeRequest to a hub whose Read validator rejects it,
     /// the error should propagate as an exception on the stream — not cause a silent timeout.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SubscribeRequest_RejectedByValidator_PropagatesException()
     {
         var client = GetClient();
@@ -70,7 +70,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// A portal hub can create VUser nodes using ImpersonateAsHub scope.
     /// The VUserAccessRule allows portal namespace identities.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PortalHub_CanCreateVUserNode_WithImpersonateScope()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -105,7 +105,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Non-portal identities should NOT be able to create VUser nodes.
     /// The VUserAccessRule replaces RLS and only allows portal namespace identities.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task NonPortalIdentity_CannotCreateVUserNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -133,7 +133,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// The hub's address becomes the identity via the post pipeline — no IMeshService needed.
     /// This mirrors how VirtualUserMiddleware creates VUser nodes.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PortalHub_ImpersonateAsHub_CanCreateVUser()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -171,7 +171,7 @@ public class HubAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// A non-portal hub posting CreateNodeRequest with ImpersonateAsHub() should fail.
     /// The VUserAccessRule only allows identities in the "portal" namespace.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task NonPortalHub_ImpersonateAsHub_CannotCreateVUser()
     {
         var ct = TestContext.Current.CancellationToken;

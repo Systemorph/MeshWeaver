@@ -1,8 +1,10 @@
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Kernel;
+using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph.Configuration;
@@ -14,19 +16,48 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 public static class KernelNodeType
 {
-    public const string NodeType = "Kernel";
+    public const string NodeType = "kernel";
 
-    public static TBuilder AddKernelType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    public static TBuilder AddKernel<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
-        builder.ConfigureServices(services =>
-        {
-            services.AddSingleton<INodeTypeAccessRule>(sp =>
-                new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
-            return services;
-        });
+        builder
+            .ConfigureHub(AddKernelTypes)
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<INodeTypeAccessRule>(sp =>
+                    new SatelliteAccessRule(NodeType, sp.GetService<ISecurityService>() ?? new NullSecurityService()));
+                services.AddSingleton<IKernelHubConfigurator, KernelHubConfiguratorAdapter>();
+                return services;
+            });
         return builder;
+    }
+
+    /// <summary>
+    /// Registers Kernel message types for JSON deserialization.
+    /// Called at mesh level so types are known before routing.
+    /// </summary>
+    private static MessageHubConfiguration AddKernelTypes(MessageHubConfiguration config)
+    {
+        config.TypeRegistry.WithType(typeof(SubmitCodeRequest), nameof(SubmitCodeRequest));
+        config.TypeRegistry.WithType(typeof(KernelEventEnvelope), nameof(KernelEventEnvelope));
+        config.TypeRegistry.WithType(typeof(KernelCommandEnvelope), nameof(KernelCommandEnvelope));
+        config.TypeRegistry.WithType(typeof(SubscribeKernelEventsRequest), nameof(SubscribeKernelEventsRequest));
+        config.TypeRegistry.WithType(typeof(UnsubscribeKernelEventsRequest), nameof(UnsubscribeKernelEventsRequest));
+        return config;
+    }
+
+    /// <summary>
+    /// Adapter that creates a fresh KernelContainer per hub and delegates configuration.
+    /// </summary>
+    private class KernelHubConfiguratorAdapter : IKernelHubConfigurator
+    {
+        public MessageHubConfiguration Configure(MessageHubConfiguration config)
+        {
+            var kernelContainer = new KernelContainer(config.ParentHub!.ServiceProvider);
+            return kernelContainer.ConfigureHub(config);
+        }
     }
 
     /// <summary>

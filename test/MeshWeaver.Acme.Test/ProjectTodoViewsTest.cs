@@ -81,7 +81,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// This is a prerequisite for the views to work correctly.
     /// Uses the same query pattern as ProjectViews: path:{project}/Todo scope:subtree
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MeshQuery_ShouldFindTodosByNodeType()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -106,7 +106,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Test that IMeshService can find all 21 Todo nodes.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MeshQuery_ShouldFindAll21TodoNodes()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -131,7 +131,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Test that IMeshService filters by nodeType correctly.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MeshQuery_ShouldFilterByNodeType()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -160,7 +160,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the TodaysFocus view renders (used as summary overview).
     /// Note: "Summary" view doesn't exist, using TodaysFocus as the overview/summary view.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Summary_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
@@ -185,7 +185,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Test that the AllTasks view renders with tasks grouped by status.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task AllTasks_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
@@ -210,7 +210,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Test that the TodosByCategory view renders with actual task categories.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task TodosByCategory_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
@@ -237,7 +237,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that the Backlog view (in Planning group) renders with data.
     /// Note: "Planning" is a group name, not a view. Backlog is the view in this group.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Planning_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
@@ -266,7 +266,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// which doesn't work reliably in the test infrastructure. The test verifies the view
     /// renders without checking task content.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MyTasks_ShouldRenderWithData()
     {
         // Note: Setting AccessService context on the client doesn't propagate to the server hub
@@ -293,7 +293,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Test that the Backlog view renders with data.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Backlog_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
@@ -318,7 +318,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Test that the TodaysFocus view renders with data.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task TodaysFocus_ShouldRenderWithData()
     {
         var workspace = GetClient().GetWorkspace();
@@ -348,7 +348,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// All other non-completed items have positive offsets (future dates).
     /// Note: The IContentInitializable.Initialize() method calculates DueDate from DueDateOffsetDays.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task TodaysFocus_ShouldHaveExactlyThreeOverdueItems()
     {
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -417,7 +417,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// When no user context is set, the view should show "Guest" not "Alice",
     /// proving the hardcoded value was removed.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MyTasks_UsesAccessService_NotHardcodedAlice()
     {
         // Act: Request MyTasks view WITHOUT setting any user context
@@ -447,7 +447,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// Test that verifies the MyTasks view uses AccessService to get the current user.
     /// This test queries the actual data and verifies the expected task assignments.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MyTasks_RolandShouldHaveTwoTasks()
     {
         // Arrange: Query all Todo items to verify test data

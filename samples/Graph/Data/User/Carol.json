@@ -1,0 +1,13 @@
+{
+  "id": "Carol",
+  "namespace": "User",
+  "name": "Carol Johnson",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "User",
+    "email": "carol.johnson@meshweaver.io",
+    "bio": "Software engineer and project contributor."
+  }
+}
