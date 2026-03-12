@@ -135,6 +135,7 @@ c => c
         {
             logger.LogError(ex, "Error in combined stream for {Address} with reference {Reference}",
                 workspace.Hub.Address, reference);
+            ret.OnError(ex);
         }));
 
         return ret.Reduce(reference, configuration ?? (c => c));

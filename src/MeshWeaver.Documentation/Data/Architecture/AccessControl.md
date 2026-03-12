@@ -13,8 +13,10 @@ MeshWeaver provides row-level security through **AccessAssignment MeshNodes** st
 
 Access control is managed through AccessAssignment nodes — first-class MeshNodes with `nodeType: "AccessAssignment"`. Each assignment grants (or denies) a role to a subject at a specific scope.
 
+AccessAssignment nodes are **satellite entities** stored in the `_Access` sub-namespace:
+
 ```
-Node path: {scope}/{Subject}_Access
+Node path: {scope}/_Access/{Subject}_Access
 Node type: AccessAssignment
 Content: {
   "accessObject": "Alice",
@@ -25,6 +27,19 @@ Content: {
   ]
 }
 ```
+
+On disk (file system persistence), access files live in `_Access/` sub-directories:
+```
+ACME/
+  _Access/
+    Public_Access.json     ← All authenticated users get Viewer
+    Alice_Access.json      ← Alice gets Editor
+  Projects/
+    _Access/
+      Bob_Access.json      ← Bob gets Viewer on ACME/Projects
+```
+
+In PostgreSQL, access nodes are routed to a dedicated `access` table (via `PartitionDefinition.StandardTableMappings`), separate from the main `mesh_nodes` table.
 
 Each AccessAssignment node maps **one subject** (User or Group) to **multiple roles** at a given scope. This reduces the number of nodes and trigger invocations compared to one-node-per-role.
 
@@ -127,7 +142,7 @@ Access control uses these shipped node types:
 ## AccessAssignment
 - **NodeType**: `"AccessAssignment"`
 - **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
-- **Path pattern**: `{scope}/{Subject}_Access`
+- **Path pattern**: `{scope}/_Access/{Subject}_Access`
 - **Name pattern**: `{Subject} Access`
 - Created via `ISecurityService.AddUserRoleAsync()` or `IMeshCatalog.CreateNodeAsync()`
 - One node per subject per scope — multiple roles are stored in the `Roles` array
@@ -232,7 +247,7 @@ The Access Control layout area (`AccessControlArea`) provides:
 
 2. **Local Assignments** (editable): Shows AccessAssignment nodes that are direct children of the current node. Admins can toggle Allow/Deny and delete assignments.
 
-3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshQuery) and Role selection.
+3. **Add Assignment** (admin-only): Dialog with autocompleting comboboxes for Subject (User/Group search via IMeshService) and Role selection.
 
 # PostgreSQL Integration
 
@@ -285,6 +300,175 @@ public class RlsNodeValidator : INodeValidator
 
 Read operations are not validated by the node validator — read filtering is handled by `SecurePersistenceServiceDecorator` which wraps `GetChildrenAsync` and `GetNodeAsync` with permission checks.
 
+# Hub Identity and ImpersonateAsHub
+
+## How Hubs Authenticate
+
+Every message in MeshWeaver carries an `AccessContext` that identifies the sender. The `UserServicePostPipeline` automatically attaches this context to outgoing messages:
+
+1. **User in scope** — if a user is authenticated (e.g., via Blazor circuit), their `AccessContext` is attached.
+2. **ImpersonateAsHub()** — if the message was posted with `PostOptions.ImpersonateAsHub()`, the hub's own address becomes the identity.
+3. **Hub-to-hub fallback** — if neither of the above applies, the hub's address is used as a fallback identity.
+
+The identity is set **per-message on the delivery**, not globally on a service. This prevents spoofing — the hub's address comes from the hub itself and cannot be overridden by callers.
+
+## Using ImpersonateAsHub()
+
+When a hub needs to perform an operation as itself (not as the current user), use `ImpersonateAsHub()` on the post options:
+
+```csharp
+// Portal hub creates a VUser node as itself
+var response = await portalHub.AwaitResponse(
+    new CreateNodeRequest(vUserNode),
+    o => o.WithTarget(meshHubAddress).ImpersonateAsHub(),
+    ct);
+```
+
+The hub's address (e.g., `portal/mysite`) becomes the `AccessContext.ObjectId` on the message delivery. The receiving handler uses this identity for permission checks.
+
+**Key properties:**
+
+| Property | Value |
+|----------|-------|
+| `AccessContext.ObjectId` | Hub address as full string (e.g., `portal/mysite`) |
+| `AccessContext.Name` | Hub address display name |
+| Scope | Per-message (not per-service) |
+| Spoofing | Not possible — address comes from the hub itself |
+
+## Identity Resolution in Node Operations
+
+When `HandleCreateNodeRequest` receives a message, it resolves the identity:
+
+1. If `CreateNodeRequest.CreatedBy` is explicitly set, it is used as-is.
+2. If `CreatedBy` is empty, the handler fills it from `AccessContext.ObjectId` on the message delivery.
+
+The same pattern applies to `UpdateNodeRequest.UpdatedBy` and `DeleteNodeRequest.DeletedBy`.
+
+## ImpersonateAsNode() on IMeshService
+
+`IMeshService` automatically resolves identity from `AccessService.Context.ObjectId`. When `ImpersonateAsNode()` is called, it switches to the hub's own address:
+
+```csharp
+var factory = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+// Normal: createdBy = AccessService.Context.ObjectId (current user)
+await factory.CreateNodeAsync(node, ct: ct);
+
+// Impersonated: createdBy = hub.Address, AccessContext = hub identity
+var impersonated = factory.ImpersonateAsNode();
+await impersonated.CreateNodeAsync(node, ct: ct);
+```
+
+Internally, `ImpersonateAsNode()` sets a flag on the same class — `createdBy`/`updatedBy`/`deletedBy` resolve to `hub.Address.ToFullString()` and `PostOptions.ImpersonateAsHub()` is added. The hub must have the required roles on the target namespace.
+
+**When to use:**
+- Background jobs or automated processes without a user session
+- Hub-to-hub operations where the hub acts on its own behalf
+- System-level node management (auto-generated content, cleanup tasks)
+
+# Per-Node-Type Access Rules (INodeTypeAccessRule)
+
+## Overview
+
+Some node types require custom access logic that differs from the standard AccessAssignment-based RLS check. For example, VUser nodes should only be creatable by portal hubs, regardless of AccessAssignment configurations.
+
+The `INodeTypeAccessRule` interface allows node types to replace the standard RLS check with custom logic:
+
+```csharp
+public interface INodeTypeAccessRule
+{
+    string NodeType { get; }
+    IReadOnlyCollection<NodeOperation> SupportedOperations { get; }
+    Task<bool> HasAccessAsync(
+        NodeValidationContext context, string? userId, CancellationToken ct);
+}
+```
+
+When `RlsNodeValidator` encounters a node whose type has a registered `INodeTypeAccessRule`, it delegates to the rule **instead of** checking AccessAssignment permissions. The rule returns `true` to allow or `false` to deny.
+
+## How It Works
+
+```mermaid
+flowchart TD
+    A[RlsNodeValidator.ValidateAsync] --> B{Custom access rule<br/>for this NodeType?}
+    B -->|Yes| C[INodeTypeAccessRule.HasAccessAsync]
+    B -->|No| D[Standard RLS:<br/>Check AccessAssignment permissions]
+    C -->|true| E[Valid]
+    C -->|false| F[Unauthorized]
+    D -->|Has permission| E
+    D -->|No permission| F
+```
+
+## Registering a Custom Access Rule
+
+Register via DI in your node type's configuration method:
+
+```csharp
+public static TBuilder AddVUserType<TBuilder>(this TBuilder builder)
+    where TBuilder : MeshBuilder
+{
+    builder.AddMeshNodes(CreateMeshNode());
+    builder.ConfigureServices(services =>
+    {
+        services.AddSingleton<INodeTypeAccessRule, VUserAccessRule>();
+        return services;
+    });
+    return builder;
+}
+```
+
+## Example: VUser Access Rule
+
+The VUser node type uses a custom access rule that allows portal namespace hubs to create, read, and update VUser nodes:
+
+```csharp
+private class VUserAccessRule : INodeTypeAccessRule
+{
+    public string NodeType => "VUser";
+
+    public IReadOnlyCollection<NodeOperation> SupportedOperations =>
+        [NodeOperation.Create, NodeOperation.Read, NodeOperation.Update];
+
+    public Task<bool> HasAccessAsync(
+        NodeValidationContext context, string? userId, CancellationToken ct)
+    {
+        // Allow if the identity is in the portal namespace
+        if (!string.IsNullOrEmpty(userId) &&
+            userId.StartsWith("portal/", StringComparison.OrdinalIgnoreCase))
+            return Task.FromResult(true);
+
+        // Deny all others
+        return Task.FromResult(false);
+    }
+}
+```
+
+**Key behaviors:**
+- Only identities starting with `portal/` can create, read, or update VUser nodes.
+- Other identities are denied — the standard AccessAssignment check is **not** performed for VUser nodes.
+- Delete operations are not covered by this rule and fall through to standard RLS.
+
+## End-to-End: Portal Hub Creating a VUser
+
+```mermaid
+sequenceDiagram
+    participant Portal as Portal Hub<br/>(portal/mysite)
+    participant Pipeline as UserServicePostPipeline
+    participant Mesh as Mesh Hub
+    participant RLS as RlsNodeValidator
+    participant Rule as VUserAccessRule
+
+    Portal->>Pipeline: Post(CreateNodeRequest, ImpersonateAsHub())
+    Pipeline->>Pipeline: AccessContext already set → skip
+    Pipeline->>Mesh: Deliver message
+    Mesh->>RLS: ValidateAsync(VUser node, Create)
+    RLS->>RLS: NodeType="VUser" → custom rule exists
+    RLS->>Rule: HasAccessAsync(userId="portal/mysite")
+    Rule-->>RLS: true (portal namespace)
+    RLS-->>Mesh: Valid
+    Mesh-->>Portal: CreateNodeResponse(Success)
+```
+
 # Configuration
 
 Enable row-level security in your mesh configuration:
@@ -305,3 +489,5 @@ var builder = new MeshBuilder()
 4. **Cache permissions** — SecurityService caches effective permissions with a 5-minute sliding expiration
 5. **Fail closed** — no roles assigned means no permissions (Permission.None)
 6. **Audit via MeshNodes** — AccessAssignment nodes provide a clear audit trail of who has access to what
+7. **Use ImpersonateAsHub() for hub operations** — when a hub needs to perform operations as itself, use `PostOptions.ImpersonateAsHub()` instead of setting identity on `AccessService` directly
+8. **Custom access rules for special node types** — use `INodeTypeAccessRule` when a node type needs access logic that differs from standard AccessAssignment-based RLS (e.g., namespace-based identity checks)

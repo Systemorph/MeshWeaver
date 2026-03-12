@@ -13,7 +13,7 @@
     "description": "Reach out to Slack, Salesforce, and HubSpot for integration partnerships. Identify 3 consulting partners for implementation services.",
     "category": "Partnerships",
     "priority": "Medium",
-    "assignee": "carol.martinez@example.com",
+    "assignee": "Carol",
     "dueDateOffsetDays": 42,
     "status": "Pending"
   }

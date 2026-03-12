@@ -15,8 +15,16 @@ builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
 
 // Register Aspire-injected PostgreSQL data source (with pgvector support)
-builder.AddNpgsqlDataSource("meshweaver",
-    configureDataSourceBuilder: dsb => dsb.UseVector());
+var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
+if (connectionString.Contains("database.azure.com"))
+    builder.AddAzureNpgsqlDataSource("memex",
+        configureDataSourceBuilder: dsb => dsb.UseVector());
+else
+    builder.AddNpgsqlDataSource("memex",
+        configureDataSourceBuilder: dsb => dsb.UseVector());
+
+// Disable dev login in the distributed deployment
+builder.Configuration["Authentication:EnableDevLogin"] = "false";
 
 // Add web portal services
 builder.ConfigureMemexServices();
@@ -35,7 +43,7 @@ builder.UseOrleansMeshServer(address, silo =>
         })
     )
     .ConfigureServices(services => services
-        .AddPostgreSqlStorageFactory())
+        .AddPartitionedPostgreSqlPersistence())
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal();
 

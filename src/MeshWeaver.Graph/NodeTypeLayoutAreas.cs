@@ -55,7 +55,7 @@ public static class NodeTypeLayoutAreas
         => configuration
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
-                .WithDefaultArea(OverviewArea)
+                .WithDefaultArea(SearchArea)
                 .WithView(MeshNodeLayoutAreas.OverviewArea, ListOverview)  // Override default Overview for listings
                 .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
                 .WithView(OverviewArea, Overview)
@@ -112,7 +112,7 @@ public static class NodeTypeLayoutAreas
     {
         var hubAddress = host.Hub.Address;
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         var definitionStream = GetNodeStream(host);
 

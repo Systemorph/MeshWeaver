@@ -1,12 +1,15 @@
 ﻿using MeshWeaver.Messaging;
 
-[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
+// Infrastructure assemblies that need internal access to IMeshStorage, IStorageService, IMeshCatalog
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Hosting")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Graph")]
+
 namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Catalog service for managing mesh nodes and their configuration.
 /// </summary>
-public interface IMeshCatalog
+internal interface IMeshCatalog : IPathResolver
 {
     /// <summary>
     /// Gets the mesh configuration.
@@ -17,15 +20,17 @@ public interface IMeshCatalog
     /// Gets a mesh node by its address.
     /// </summary>
     /// <param name="address">The address of the node to retrieve.</param>
+    /// <param name="skipValidation">If true, bypass RLS validation (used by routing layer).</param>
     /// <returns>The mesh node, or null if not found.</returns>
-    Task<MeshNode?> GetNodeAsync(Address address);
+    Task<MeshNode?> GetNodeAsync(Address address, bool skipValidation = false);
 
     /// <summary>
     /// Creates a new node in the catalog with validation.
     /// The node is created in Transient state, validated, and then confirmed.
+    /// Identity is resolved from AccessContext.
     /// </summary>
     /// <param name="node">The node to create</param>
-    /// <param name="createdBy">The user or system creating the node</param>
+    /// <param name="createdBy">Optional user who created the node (resolved from AccessContext if null)</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>The created node with State set to Confirmed</returns>
     /// <exception cref="InvalidOperationException">If node already exists or validation fails</exception>

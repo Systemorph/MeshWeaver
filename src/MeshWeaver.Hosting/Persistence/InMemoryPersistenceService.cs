@@ -6,11 +6,11 @@ using MeshWeaver.Mesh.Services;
 namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
-/// In-memory implementation of IPersistenceService.
+/// In-memory implementation of IMeshStorage.
 /// Suitable for development and testing.
 /// Optionally backs to an IStorageAdapter for file system persistence.
 /// </summary>
-public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
+public class InMemoryPersistenceService : IStorageService, IDisposable
 {
     private readonly IStorageAdapter? _storageAdapter;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -89,15 +89,31 @@ public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
         }
     }
 
-    public Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
+    public async Task<MeshNode?> GetNodeAsync(string path, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(path);
-        _nodes.TryGetValue(normalizedPath, out var node);
-        return Task.FromResult(node);
+        if (_nodes.TryGetValue(normalizedPath, out var node))
+            return node;
+
+        // Fall through to storage adapter on cache miss
+        if (_storageAdapter != null)
+        {
+            node = await _storageAdapter.ReadAsync(path, options, ct);
+            if (node != null)
+            {
+                _nodes[normalizedPath] = node;
+                return node;
+            }
+        }
+
+        return null;
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
     {
+        // Ensure children are loaded from storage adapter
+        await EnsureChildrenLoadedAsync(parentPath, options);
+
         var normalizedParent = NormalizePath(parentPath);
         var parentSegments = string.IsNullOrEmpty(normalizedParent)
             ? Array.Empty<string>()
@@ -129,11 +145,13 @@ public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
         {
             yield return child;
         }
-        await Task.CompletedTask; // Keep async signature
     }
 
     public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
     {
+        // Ensure descendants are loaded from storage adapter
+        await EnsureDescendantsLoadedAsync(parentPath, options);
+
         var normalizedParent = NormalizePath(parentPath);
 
         IEnumerable<MeshNode> descendants;
@@ -155,7 +173,35 @@ public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
         {
             yield return descendant;
         }
-        await Task.CompletedTask; // Keep async signature
+    }
+
+    /// <summary>
+    /// Ensures direct children of a path are loaded from the storage adapter into the cache.
+    /// </summary>
+    private async Task EnsureChildrenLoadedAsync(string? parentPath, JsonSerializerOptions options)
+    {
+        if (_storageAdapter == null) return;
+
+        var (nodePaths, _) = await _storageAdapter.ListChildPathsAsync(parentPath ?? "", default);
+        foreach (var path in nodePaths)
+        {
+            var normalizedPath = NormalizePath(path);
+            if (_nodes.ContainsKey(normalizedPath))
+                continue;
+
+            var node = await _storageAdapter.ReadAsync(path, options, default);
+            if (node != null)
+                _nodes[normalizedPath] = node;
+        }
+    }
+
+    /// <summary>
+    /// Ensures all descendants of a path are loaded from the storage adapter into the cache.
+    /// </summary>
+    private async Task EnsureDescendantsLoadedAsync(string? parentPath, JsonSerializerOptions options)
+    {
+        if (_storageAdapter == null) return;
+        await LoadNodesRecursivelyAsync(parentPath, options, default);
     }
 
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
@@ -349,10 +395,66 @@ public class InMemoryPersistenceService : IPersistenceServiceCore, IDisposable
         await Task.CompletedTask; // Keep async signature
     }
 
-    public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
+    public async Task<bool> ExistsAsync(string path, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(path);
-        return Task.FromResult(_nodes.ContainsKey(normalizedPath));
+        if (_nodes.ContainsKey(normalizedPath))
+            return true;
+
+        // Fall through to storage adapter on cache miss
+        if (_storageAdapter != null)
+            return await _storageAdapter.ExistsAsync(path, ct);
+
+        return false;
+    }
+
+    public async Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var normalizedPath = NormalizePath(fullPath);
+        if (string.IsNullOrEmpty(normalizedPath))
+            return (null, 0);
+
+        // Try storage adapter first (e.g., PostgreSQL with dedicated SQL)
+        if (_storageAdapter != null)
+        {
+            var (adapterNode, adapterSegments) = await _storageAdapter.FindBestPrefixMatchAsync(normalizedPath, options, ct);
+            if (adapterNode != null)
+                return (adapterNode, adapterSegments);
+        }
+
+        // Fall back to in-memory LINQ scan
+        var match = _nodes.Values
+            .Where(n =>
+            {
+                var nodePath = NormalizePath(n.Path);
+                return normalizedPath.Equals(nodePath, StringComparison.OrdinalIgnoreCase)
+                    || normalizedPath.StartsWith(nodePath + "/", StringComparison.OrdinalIgnoreCase);
+            })
+            .OrderByDescending(n => n.Path.Length)
+            .FirstOrDefault();
+
+        if (match != null)
+        {
+            var segments = match.Path.Split('/').Length;
+            return (match, segments);
+        }
+
+        // Walk up the path hierarchy using storage adapter (lazy loading)
+        // This handles nodes not yet loaded into _nodes (e.g., _Source/*.cs files)
+        if (_storageAdapter != null)
+        {
+            var segments = normalizedPath.Split('/');
+            for (int depth = segments.Length; depth >= 1; depth--)
+            {
+                var testPath = string.Join("/", segments.Take(depth));
+                var node = await GetNodeAsync(testPath, options, ct);
+                if (node != null)
+                    return (node, depth);
+            }
+        }
+
+        return (null, 0);
     }
 
     private static string NormalizePath(string? path) =>

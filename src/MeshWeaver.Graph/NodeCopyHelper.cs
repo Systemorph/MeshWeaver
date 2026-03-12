@@ -1,5 +1,6 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
@@ -13,35 +14,28 @@ public static class NodeCopyHelper
     /// Copies a node and all its descendants to a target namespace.
     /// The source node's Id is preserved; paths are rewritten under the target namespace.
     /// </summary>
-    /// <param name="persistence">Persistence service for reading/writing nodes</param>
-    /// <param name="sourcePath">Full path of the source node (e.g. "org/Acme")</param>
-    /// <param name="targetNamespace">Target namespace (e.g. "myWorkspace"); empty string for root</param>
-    /// <param name="force">If true, overwrite existing nodes at target paths</param>
-    /// <param name="logger">Optional logger</param>
-    /// <param name="ct">Cancellation token</param>
-    /// <returns>Count of nodes copied</returns>
-    public static async Task<int> CopyNodeTreeAsync(
-        IPersistenceService persistence,
+    internal static async Task<int> CopyNodeTreeAsync(
+        IMeshService meshQuery,
+        IMeshService nodeFactory,
+        IMessageHub hub,
         string sourcePath,
         string targetNamespace,
         bool force,
         ILogger? logger = null,
         CancellationToken ct = default)
     {
-        var sourceNode = await persistence.GetNodeAsync(sourcePath, ct);
+        var sourceNode = await meshQuery.QueryAsync<MeshNode>($"path:{sourcePath}").FirstOrDefaultAsync(ct);
         if (sourceNode == null)
             throw new InvalidOperationException($"Source node not found: {sourcePath}");
 
         // Collect source node + all descendants
         var nodesToCopy = new List<MeshNode> { sourceNode };
-        await foreach (var descendant in persistence.GetDescendantsAsync(sourcePath).WithCancellation(ct))
+        await foreach (var descendant in meshQuery.QueryAsync<MeshNode>($"path:{sourcePath} scope:descendants").WithCancellation(ct))
         {
             nodesToCopy.Add(descendant);
         }
 
-        // Compute the prefix to replace: the source node's namespace
-        // e.g. source "org/Acme" has namespace "org", id "Acme"
-        // descendants like "org/Acme/Team1" should become "targetNamespace/Acme/Team1"
+        // Compute the prefix to replace
         var sourceNamespace = sourceNode.Namespace ?? "";
 
         var nodesCopied = 0;
@@ -49,10 +43,14 @@ public static class NodeCopyHelper
         {
             var newPath = RemapPath(node.Path, sourceNamespace, targetNamespace);
 
-            if (!force && await persistence.ExistsAsync(newPath, ct))
+            if (!force)
             {
-                logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
-                continue;
+                var existing = await meshQuery.QueryAsync<MeshNode>($"path:{newPath}").FirstOrDefaultAsync(ct);
+                if (existing != null)
+                {
+                    logger?.LogInformation("Skipping existing node at {TargetPath}", newPath);
+                    continue;
+                }
             }
 
             var copiedNode = MeshNode.FromPath(newPath) with
@@ -66,7 +64,7 @@ public static class NodeCopyHelper
                 PreRenderedHtml = node.PreRenderedHtml,
             };
 
-            await persistence.SaveNodeAsync(copiedNode, ct);
+            await nodeFactory.CreateNodeAsync(copiedNode, ct: ct);
             nodesCopied++;
             logger?.LogInformation("Copied node {SourcePath} -> {TargetPath}", node.Path, newPath);
         }
@@ -74,13 +72,8 @@ public static class NodeCopyHelper
         return nodesCopied;
     }
 
-    /// <summary>
-    /// Remaps a node path from source namespace to target namespace.
-    /// E.g. RemapPath("org/Acme/Team1", "org", "workspace") => "workspace/Acme/Team1"
-    /// </summary>
     private static string RemapPath(string path, string sourceNamespace, string targetNamespace)
     {
-        // Strip the source namespace prefix to get the relative part
         string relativePart;
         if (string.IsNullOrEmpty(sourceNamespace))
         {
@@ -92,7 +85,6 @@ public static class NodeCopyHelper
         }
         else if (path == sourceNamespace)
         {
-            // Edge case: source node IS at the namespace root
             relativePart = path;
         }
         else
@@ -100,7 +92,6 @@ public static class NodeCopyHelper
             relativePart = path;
         }
 
-        // Build new path under target namespace
         return string.IsNullOrEmpty(targetNamespace)
             ? relativePart
             : $"{targetNamespace}/{relativePart}";

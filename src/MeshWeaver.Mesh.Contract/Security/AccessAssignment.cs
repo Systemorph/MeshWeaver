@@ -61,6 +61,9 @@ public record PartitionAccessPolicy
     /// <summary>false = deny Comment at this scope and below. null = inherit (default: allowed).</summary>
     public bool? Comment { get; init; }
 
+    /// <summary>false = deny Execute at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Execute { get; init; }
+
     /// <summary>
     /// When true, role assignments from ancestor scopes are discarded at this
     /// namespace boundary. Only roles assigned at this scope or deeper take effect
@@ -80,6 +83,7 @@ public record PartitionAccessPolicy
         if (Update == false) cap &= ~Permission.Update;
         if (Delete == false) cap &= ~Permission.Delete;
         if (Comment == false) cap &= ~Permission.Comment;
+        if (Execute == false) cap &= ~Permission.Execute;
         return cap;
     }
 }

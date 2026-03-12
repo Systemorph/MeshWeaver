@@ -23,9 +23,6 @@
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Domain/MeshWeaver.Northwind.Domain.csproj" />
     <Project Path="samples/Northwind/MeshWeaver.Northwind.Model/MeshWeaver.Northwind.Model.csproj" />
   </Folder>
-  <Folder Name="/samples/Graph/">
-    <!-- MeshWeaver.Samples.Graph.csproj excluded from build - used for browsing data files in VS -->
-  </Folder>
   <Folder Name="/memex/">
     <Project Path="memex/Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
     <Project Path="memex/Memex.Portal.Monolith/Memex.Portal.Monolith.csproj" />
@@ -107,6 +104,7 @@
     <Project Path="src/MeshWeaver.Hosting.Monolith.TestBase/MeshWeaver.Hosting.Monolith.TestBase.csproj" />
     <Project Path="test/MeshWeaver.AI.Test/MeshWeaver.AI.Test.csproj" />
     <Project Path="test/MeshWeaver.BusinessRules.Test/MeshWeaver.BusinessRules.Test.csproj" />
+    <Project Path="test/MeshWeaver.Content.Test/MeshWeaver.Content.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
@@ -118,8 +116,10 @@
     <Project Path="test/MeshWeaver.Json.Assertions/MeshWeaver.Json.Assertions.csproj" />
     <Project Path="test/MeshWeaver.Layout.Test/MeshWeaver.Layout.Test.csproj" />
     <Project Path="test/MeshWeaver.Messaging.Hub.Test/MeshWeaver.Messaging.Hub.Test.csproj" />
+    <Project Path="test/MeshWeaver.NodeOperations.Test/MeshWeaver.NodeOperations.Test.csproj" />
     <Project Path="test/MeshWeaver.Northwind.Test/MeshWeaver.Northwind.Test.csproj" />
     <Project Path="test/MeshWeaver.Search.Test/MeshWeaver.Search.Test.csproj" />
+    <Project Path="test/MeshWeaver.Security.Test/MeshWeaver.Security.Test.csproj" />
     <Project Path="test/MeshWeaver.Serialization.Test/MeshWeaver.Serialization.Test.csproj" />
     <Project Path="test/MeshWeaver.TestDomain/MeshWeaver.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.Graph.Test/MeshWeaver.Graph.Test.csproj" />
@@ -133,9 +133,14 @@
     <Project Path="test/MeshWeaver.Hosting.PostgreSql.Test/MeshWeaver.Hosting.PostgreSql.Test.csproj" />
     <Project Path="test/MeshWeaver.Auth.Test/MeshWeaver.Auth.Test.csproj" />
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
+    <Project Path="test/MeshWeaver.AccessControl.Test/MeshWeaver.AccessControl.Test.csproj" />
     <Project Path="test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj" />
     <Project Path="test/MeshWeaver.Hierarchies.Test/MeshWeaver.Hierarchies.Test.csproj" />
+    <Project Path="test/MeshWeaver.Threading.Test/MeshWeaver.Threading.Test.csproj" />
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
+    <Project Path="test/MeshWeaver.PathResolution.Test/MeshWeaver.PathResolution.Test.csproj" />
+    <Project Path="test/MeshWeaver.Persistence.Test/MeshWeaver.Persistence.Test.csproj" />
+    <Project Path="test/MeshWeaver.Query.Test/MeshWeaver.Query.Test.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/MeshWeaver.ThumbnailGenerator/MeshWeaver.ThumbnailGenerator.csproj" />

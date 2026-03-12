@@ -1,0 +1,22 @@
+{
+  "$type": "MeshNode",
+  "id": "c1",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping/MappingRules/_Comment",
+  "path": "FutuRe/EuropeRe/TransactionMapping/MappingRules/_Comment/c1",
+  "name": "Comment by Bob",
+  "nodeType": "Comment",
+  "lastModified": "2026-01-16T14:00:00+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "Comment",
+    "id": "c1",
+    "primaryNodePath": "FutuRe/EuropeRe/TransactionMapping/MappingRules",
+    "markerId": "c1",
+    "highlightedText": "percentage split",
+    "author": "Bob",
+    "text": "The 90/10 split for Household was agreed with the European actuarial team in Q3. The 10% Casualty component reflects the personal liability cover included in European household policies. These ratios should be reviewed annually as product structures evolve.",
+    "createdAt": "2026-01-16T14:00:00+00:00",
+    "status": "Resolved"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

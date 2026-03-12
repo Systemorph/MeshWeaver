@@ -28,10 +28,10 @@ public record NodeTypeDefinition
 
     /// <summary>
     /// Query string for getting "children" to display in the Details view.
-    /// Uses IMeshQuery with the specified query pattern.
+    /// Uses IMeshService with the specified query pattern.
     /// Example: "nodeType:Type/Organization scope:descendants" finds all nodes
     /// of type "Type/Organization" anywhere in the hierarchy.
-    /// If null, defaults to "scope:children" (direct children only).
+    /// If null, defaults to namespace-based children query (direct children only).
     /// </summary>
     public string? ChildrenQuery { get; init; }
 

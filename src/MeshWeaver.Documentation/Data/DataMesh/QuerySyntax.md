@@ -71,8 +71,6 @@ namespace:Systemorph scope:descendants  # All items under Systemorph (recursive)
 ## scope
 Controls the search scope relative to namespace or path:
 ```
-scope:exact           # Only the exact path (default for path:)
-scope:children        # Immediate children only (excludes self)
 scope:descendants     # All descendants recursively (excludes self)
 scope:ancestors       # Parent hierarchy upward (excludes self)
 scope:hierarchy       # Ancestors + self + descendants
@@ -84,7 +82,7 @@ scope:ancestorsandself # Self + all ancestors
 Sets the base path for search (default scope is `exact`):
 ```
 path:Systemorph                # The exact Systemorph node
-path:Systemorph scope:children # Immediate children of Systemorph
+namespace:Systemorph           # Immediate children of Systemorph
 ```
 
 ## sort
@@ -116,6 +114,21 @@ When `source:activity` is specified:
 ```
 source:activity nodeType:Thread namespace:ACME scope:descendants  # Recently accessed threads in ACME
 source:activity nodeType:Document limit:10                        # Last 10 accessed documents
+```
+
+## is
+Filters by node classification:
+```
+is:main            # Only main nodes (excludes satellite content like comments, threads)
+```
+
+Satellite nodes exist in support of a main node (e.g., comments on a document, threads started from a page). Main nodes have `MainNode == Path` (or null). Satellite nodes have `MainNode` pointing to their primary node's path.
+
+Combine with other qualifiers:
+```
+namespace:ACME is:main                    # Main nodes directly under ACME
+namespace:ACME scope:descendants is:main  # All main nodes under ACME (recursive)
+is:main context:search                    # Main nodes visible in search
 ```
 
 ## context

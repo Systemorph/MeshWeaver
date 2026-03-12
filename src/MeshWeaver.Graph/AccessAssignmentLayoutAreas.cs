@@ -27,7 +27,7 @@ public static class AccessAssignmentLayoutAreas
 
     /// <summary>   
     /// Custom thumbnail — rich card showing user icon + name, role names + icons, × buttons.
-    /// Async: queries IMeshQuery for user and role node details.
+    /// Async: queries IMeshService for user and role node details.
     /// </summary>
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
@@ -45,7 +45,7 @@ public static class AccessAssignmentLayoutAreas
             if (assignment == null)
                 return (UiControl?)MeshNodeThumbnailControl.FromNode(node, hubPath);
 
-            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+            var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
             var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
             var canDelete = permissions.HasFlag(Permission.Delete);
 
@@ -56,16 +56,16 @@ public static class AccessAssignmentLayoutAreas
     private static async Task<UiControl> BuildThumbnailCardAsync(
         LayoutAreaHost host, string hubPath,
         AccessAssignment assignment, MeshNode node,
-        IMeshQuery? meshQuery, bool canDelete)
+        IMeshService meshQuery, bool canDelete)
     {
         // Load user node for name + icon
         MeshNode? userNode = null;
-        if (meshQuery != null && !string.IsNullOrEmpty(assignment.AccessObject))
+        if (!string.IsNullOrEmpty(assignment.AccessObject))
         {
             try
             {
                 userNode = await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{assignment.AccessObject} scope:exact").FirstOrDefaultAsync();
+                    $"path:{assignment.AccessObject}").FirstOrDefaultAsync();
             }
             catch { }
         }
@@ -125,12 +125,12 @@ public static class AccessAssignmentLayoutAreas
             {
                 var role = assignment.Roles[i];
                 MeshNode? roleNode = null;
-                if (meshQuery != null && !string.IsNullOrEmpty(role.Role))
+                if (!string.IsNullOrEmpty(role.Role))
                 {
                     try
                     {
                         roleNode = await meshQuery.QueryAsync<MeshNode>(
-                            $"path:{role.Role} scope:exact").FirstOrDefaultAsync();
+                            $"path:{role.Role}").FirstOrDefaultAsync();
                     }
                     catch { }
                 }
@@ -204,7 +204,7 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Custom overview — user thumbnail + roles in LayoutGrid loaded from IMeshQuery.
+    /// Custom overview — user thumbnail + roles in LayoutGrid loaded from IMeshService.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -242,15 +242,15 @@ public static class AccessAssignmentLayoutAreas
         if (assignment == null)
             return stack;
 
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // User card — load from IMeshQuery
-        if (meshQuery != null && !string.IsNullOrEmpty(assignment.AccessObject))
+        // User card — load from IMeshService
+        if (!string.IsNullOrEmpty(assignment.AccessObject))
         {
             try
             {
                 var userNode = await meshQuery.QueryAsync<MeshNode>(
-                    $"path:{assignment.AccessObject} scope:exact").FirstOrDefaultAsync();
+                    $"path:{assignment.AccessObject}").FirstOrDefaultAsync();
                 stack = stack.WithView(MeshNodeThumbnailControl.FromNode(
                     userNode, assignment.AccessObject));
             }
@@ -278,12 +278,12 @@ public static class AccessAssignmentLayoutAreas
             {
                 var role = assignment.Roles[i];
                 MeshNode? roleNode = null;
-                if (meshQuery != null && !string.IsNullOrEmpty(role.Role))
+                if (!string.IsNullOrEmpty(role.Role))
                 {
                     try
                     {
                         roleNode = await meshQuery.QueryAsync<MeshNode>(
-                            $"path:{role.Role} scope:exact").FirstOrDefaultAsync();
+                            $"path:{role.Role}").FirstOrDefaultAsync();
                     }
                     catch { }
                 }
@@ -382,7 +382,7 @@ public static class AccessAssignmentLayoutAreas
     }
 
     /// <summary>
-    /// Reads the current node from the workspace stream (no IMeshCatalog/IMeshQuery dependency).
+    /// Reads the current node from the workspace stream (no IMeshCatalog/IMeshService dependency).
     /// </summary>
     private static async Task<MeshNode?> GetCurrentNodeAsync(LayoutAreaHost host, string path)
     {

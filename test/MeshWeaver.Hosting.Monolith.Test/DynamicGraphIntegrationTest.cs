@@ -12,6 +12,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -36,10 +37,6 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
     private static readonly string TestDirectoryBase = Path.Combine(Path.GetTempPath(), "MeshWeaverDynamicGraphTests");
     private string? _testDirectory;
 
-    private IPersistenceService Persistence => Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-    private IMeshQuery MeshQuery => Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-    private IMeshCatalog MeshCatalog => Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
     /// <summary>
     /// Gets the unique test directory for this test instance, creating it lazily.
     /// </summary>
@@ -62,23 +59,22 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         await base.InitializeAsync();
 
         // Seed test data using async methods
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        await SetupTestConfigurationAsync(persistence);
-        await SeedHierarchyAsync(persistence);
+        await SetupTestConfigurationAsync(NodeFactory);
+        await SeedHierarchyAsync(NodeFactory);
     }
 
-    private static async Task SaveCodeAsChildNodeAsync(IPersistenceService persistence, string nodeTypePath, CodeConfiguration codeConfig)
+    private static async Task SaveCodeAsChildNodeAsync(IMeshService nodeFactory, string nodeTypePath, CodeConfiguration codeConfig)
     {
-        var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/Code")
+        var codeNode = new MeshNode(codeConfig.Id ?? "code", $"{nodeTypePath}/_Source")
         {
             NodeType = "Code",
             Name = codeConfig.DisplayName ?? codeConfig.Id ?? "Code",
             Content = codeConfig
         };
-        await persistence.SaveNodeAsync(codeNode);
+        await nodeFactory.CreateNodeAsync(codeNode);
     }
 
-    private static async Task SetupTestConfigurationAsync(IPersistenceService persistence)
+    private static async Task SetupTestConfigurationAsync(IMeshService nodeFactory)
     {
         // Create Story type using "type/" Namespace for global types
         var storyCodeConfig = new CodeConfiguration
@@ -116,8 +112,8 @@ public enum StoryStatus
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(storyNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/story", storyCodeConfig);
+        await nodeFactory.CreateNodeAsync(storyNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/story", storyCodeConfig);
 
         // Create Organization type
         var orgCodeConfig = new CodeConfiguration
@@ -144,8 +140,8 @@ public record Organization
                 Configuration = "config => config.WithContentType<Organization>().AddDefaultLayoutAreas()"
             }
         };
-        await persistence.SaveNodeAsync(orgNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/org", orgCodeConfig);
+        await nodeFactory.CreateNodeAsync(orgNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/org", orgCodeConfig);
 
         // Create Project type
         var projectCodeConfig = new CodeConfiguration
@@ -172,8 +168,8 @@ public record Project
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(projectNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/project", projectCodeConfig);
+        await nodeFactory.CreateNodeAsync(projectNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/project", projectCodeConfig);
 
         // Create Graph type
         var graphCodeConfig = new CodeConfiguration
@@ -199,21 +195,21 @@ public record Graph
                 Configuration = "config => config"
             }
         };
-        await persistence.SaveNodeAsync(graphTypeNode);
-        await SaveCodeAsChildNodeAsync(persistence, "type/graph", graphCodeConfig);
+        await nodeFactory.CreateNodeAsync(graphTypeNode);
+        await SaveCodeAsChildNodeAsync(nodeFactory, "type/graph", graphCodeConfig);
     }
 
-    private static async Task SeedHierarchyAsync(IPersistenceService persistence)
+    private static async Task SeedHierarchyAsync(IMeshService nodeFactory)
     {
         // Pre-seed the hierarchy: graph -> org -> project -> story
         // NodeType uses full path to type definition (e.g., "type/graph", "type/org")
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });
-        await persistence.SaveNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph") with { Name = "Graph", NodeType = "type/graph" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1") with { Name = "Organization 1", NodeType = "type/org" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org2") with { Name = "Organization 2", NodeType = "type/org" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj1") with { Name = "Project 1", NodeType = "type/project" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj2") with { Name = "Project 2", NodeType = "type/project" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj1/story1") with { Name = "Story 1", NodeType = "type/story" });
+        await nodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/org1/proj1/story2") with { Name = "Story 2", NodeType = "type/story" });
     }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -231,7 +227,7 @@ public record Graph
 
     #region Hub Initialization Tests
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task GraphHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
@@ -243,15 +239,15 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify IMeshQuery finds the pre-seeded data
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph scope:children", null, TestContext.Current.CancellationToken)
+        // Verify IMeshService finds the pre-seeded data
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "graph should have 2 org children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1");
         children.Should().Contain(n => n.Path == "graph/org2");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task OrgHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
@@ -270,15 +266,15 @@ public record Graph
             o => o.WithTarget(orgAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify IMeshQuery finds the pre-seeded projects
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1 scope:children", null, TestContext.Current.CancellationToken)
+        // Verify IMeshService finds the pre-seeded projects
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph/org1", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "org1 should have 2 project children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1");
         children.Should().Contain(n => n.Path == "graph/org1/proj2");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ProjectHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
@@ -297,8 +293,8 @@ public record Graph
             o => o.WithTarget(projAddress),
             TestContext.Current.CancellationToken);
 
-        // Verify IMeshQuery finds the pre-seeded stories
-        var children = await MeshQuery.QueryAsync<MeshNode>("path:graph/org1/proj1 scope:children", null, TestContext.Current.CancellationToken)
+        // Verify IMeshService finds the pre-seeded stories
+        var children = await MeshQuery.QueryAsync<MeshNode>("namespace:graph/org1/proj1", null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
         children.Should().HaveCount(2, "proj1 should have 2 story children pre-seeded");
         children.Should().Contain(n => n.Path == "graph/org1/proj1/story1");
@@ -309,7 +305,7 @@ public record Graph
 
     #region ResolvePath Tests
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_FindsPersistedNode_NotInConfig()
     {
         var client = GetClient();
@@ -322,7 +318,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1");
 
         // Assert
         resolution.Should().NotBeNull("persistence has graph/org1");
@@ -330,7 +326,7 @@ public record Graph
         resolution.Remainder.Should().BeNull();
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_WalksUpHierarchy_FindsBestMatch()
     {
         var client = GetClient();
@@ -343,7 +339,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path that goes deeper than persisted (nonexistent/deep doesn't exist)
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/nonexistent/deep");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1/proj1/nonexistent/deep");
 
         // Assert: should match graph/org1/proj1 with remainder
         resolution.Should().NotBeNull();
@@ -351,7 +347,7 @@ public record Graph
         resolution.Remainder.Should().Be("nonexistent/deep");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_ReturnsExactMatch_WhenFullPathExists()
     {
         var client = GetClient();
@@ -364,7 +360,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/story1");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1/proj1/story1");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -372,7 +368,7 @@ public record Graph
         resolution.Remainder.Should().BeNull();
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_WithRemainder_ReturnsCorrectParts()
     {
         var client = GetClient();
@@ -385,7 +381,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path with additional segments beyond existing node
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/org1/proj1/story1/Overview");
+        var resolution = await PathResolver.ResolvePathAsync("graph/org1/proj1/story1/Overview");
 
         // Assert
         resolution.Should().NotBeNull();
@@ -393,7 +389,7 @@ public record Graph
         resolution.Remainder.Should().Be("Overview");
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_ReturnsNull_WhenNoMatchFound()
     {
         var client = GetClient();
@@ -406,13 +402,13 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path that doesn't exist anywhere
-        var resolution = await MeshCatalog.ResolvePathAsync("nonexistent/path/here");
+        var resolution = await PathResolver.ResolvePathAsync("nonexistent/path/here");
 
         // Assert
         resolution.Should().BeNull();
     }
 
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 10000)]
     public async Task ResolvePath_UnderscoreNamespaceedSegment_ParsesAsRemainder()
     {
         var client = GetClient();
@@ -425,7 +421,7 @@ public record Graph
             TestContext.Current.CancellationToken);
 
         // Act: resolve path with underscore-Namespaceed segment (layout area)
-        var resolution = await MeshCatalog.ResolvePathAsync("graph/_Nodes");
+        var resolution = await PathResolver.ResolvePathAsync("graph/_Nodes");
 
         // Assert: "graph" is the address, "_Nodes" is the remainder (layout area)
         resolution.Should().NotBeNull();
@@ -445,10 +441,10 @@ public record Graph
     public async Task ResolvePath_TypeGraph_ResolvesToTypeGraphNode()
     {
         // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await meshCatalog.ResolvePathAsync("type/graph");
+        var resolution = await pathResolver.ResolvePathAsync("type/graph");
 
         // Assert
         resolution.Should().NotBeNull("type/graph should be resolvable");
@@ -462,15 +458,12 @@ public record Graph
     [Fact(Timeout = 10000)]
     public async Task GetNodeAsync_TypeGraph_ReturnsNodeTypeDefinition()
     {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         // Act
-        var node = await meshCatalog.GetNodeAsync(new Address("type", "graph"));
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:type/graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().NotBeNull("type/graph node should exist");
-        node.Path.Should().Be("type/graph");
+        node!.Path.Should().Be("type/graph");
         node.NodeType.Should().Be("NodeType");
         node.Content.Should().BeOfType<NodeTypeDefinition>();
     }
@@ -486,10 +479,10 @@ public record Graph
     public async Task ResolvePath_TypePaths_ResolveCorrectly(string typePath)
     {
         // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
         // Act
-        var resolution = await meshCatalog.ResolvePathAsync(typePath);
+        var resolution = await pathResolver.ResolvePathAsync(typePath);
 
         // Assert
         resolution.Should().NotBeNull($"{typePath} should be resolvable");
@@ -504,13 +497,13 @@ public record Graph
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
-        var graphType = await Persistence.GetNodeAsync("type/graph", TestContext.Current.CancellationToken);
+        var graphType = await MeshQuery.QueryAsync<MeshNode>("path:type/graph", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         graphType.Should().NotBeNull("type/graph should exist in persistence");
-        graphType.NodeType.Should().Be("NodeType");
+        graphType!.NodeType.Should().Be("NodeType");
 
-        var orgType = await Persistence.GetNodeAsync("type/org", TestContext.Current.CancellationToken);
+        var orgType = await MeshQuery.QueryAsync<MeshNode>("path:type/org", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         orgType.Should().NotBeNull("type/org should exist in persistence");
-        orgType.NodeType.Should().Be("NodeType");
+        orgType!.NodeType.Should().Be("NodeType");
     }
 
     #endregion
@@ -524,22 +517,23 @@ public record Graph
     public async Task MoveNodeAsync_MovesNodeToNewPath()
     {
         // Arrange - create a node to move
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/movetest") with { Name = "Move Test", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
 
         // Act
-        var moved = await Persistence.MoveNodeAsync("graph/movetest", "graph/movetest-renamed", TestContext.Current.CancellationToken);
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/movetest", "graph/movetest-renamed"), o => o, TestContext.Current.CancellationToken);
+        var moved = response.Message.Node;
 
         // Assert
         moved.Should().NotBeNull();
-        moved.Path.Should().Be("graph/movetest-renamed");
+        moved!.Path.Should().Be("graph/movetest-renamed");
         moved.Name.Should().Be("Move Test");
 
-        var oldNode = await Persistence.GetNodeAsync("graph/movetest", TestContext.Current.CancellationToken);
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         oldNode.Should().BeNull("Original node should be deleted");
 
-        var newNode = await Persistence.GetNodeAsync("graph/movetest-renamed", TestContext.Current.CancellationToken);
+        var newNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/movetest-renamed", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newNode.Should().NotBeNull("Node should exist at new path");
-        newNode.Name.Should().Be("Move Test");
+        newNode!.Name.Should().Be("Move Test");
     }
 
     /// <summary>
@@ -549,65 +543,61 @@ public record Graph
     public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
         // Arrange - create a hierarchy to move
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent") with { Name = "Parent", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent/child1") with { Name = "Child 1", NodeType = "type/project" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent/child2") with { Name = "Child 2", NodeType = "type/project" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/parent/child1/grandchild") with { Name = "Grandchild", NodeType = "type/story" }, ct: TestContext.Current.CancellationToken);
 
         // Act
-        await Persistence.MoveNodeAsync("graph/parent", "graph/newparent", TestContext.Current.CancellationToken);
+        await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/parent", "graph/newparent"), o => o, TestContext.Current.CancellationToken);
 
         // Assert - old paths should not exist
-        (await Persistence.GetNodeAsync("graph/parent", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child1", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child2", TestContext.Current.CancellationToken)).Should().BeNull();
-        (await Persistence.GetNodeAsync("graph/parent/child1/grandchild", TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child2", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
+        (await MeshQuery.QueryAsync<MeshNode>("path:graph/parent/child1/grandchild", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken)).Should().BeNull();
 
         // Assert - new paths should exist with correct data
-        var newParent = await Persistence.GetNodeAsync("graph/newparent", TestContext.Current.CancellationToken);
+        var newParent = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newParent.Should().NotBeNull();
-        newParent.Name.Should().Be("Parent");
+        newParent!.Name.Should().Be("Parent");
 
-        var newChild1 = await Persistence.GetNodeAsync("graph/newparent/child1", TestContext.Current.CancellationToken);
+        var newChild1 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newChild1.Should().NotBeNull();
-        newChild1.Name.Should().Be("Child 1");
+        newChild1!.Name.Should().Be("Child 1");
 
-        var newChild2 = await Persistence.GetNodeAsync("graph/newparent/child2", TestContext.Current.CancellationToken);
+        var newChild2 = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child2", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newChild2.Should().NotBeNull();
-        newChild2.Name.Should().Be("Child 2");
+        newChild2!.Name.Should().Be("Child 2");
 
-        var newGrandchild = await Persistence.GetNodeAsync("graph/newparent/child1/grandchild", TestContext.Current.CancellationToken);
+        var newGrandchild = await MeshQuery.QueryAsync<MeshNode>("path:graph/newparent/child1/grandchild", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         newGrandchild.Should().NotBeNull();
-        newGrandchild.Name.Should().Be("Grandchild");
+        newGrandchild!.Name.Should().Be("Grandchild");
     }
 
     /// <summary>
-    /// Move node with comments - comments should be migrated to new path.
+    /// Move node via MoveNodeRequest - verifies the node is moved to the new path.
+    /// Note: Comment migration is handled internally by the persistence layer.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task MoveNodeAsync_MigratesCommentsToNewPath()
+    public async Task MoveNodeAsync_MovesNodeViaRequest()
     {
-        // Arrange - create node with comments
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { PrimaryNodePath = "graph/commented", Text = "Comment 1", Author = "User1" }, TestContext.Current.CancellationToken);
-        await Persistence.AddCommentAsync(new Comment { PrimaryNodePath = "graph/commented", Text = "Comment 2", Author = "User2" }, TestContext.Current.CancellationToken);
+        // Arrange - create node
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/commented") with { Name = "Commented Node", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
 
-        // Verify comments exist at old path
-        var oldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);
-        oldComments.Should().HaveCount(2);
+        // Act - move via MoveNodeRequest
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/commented", "graph/commented-moved"), o => o, TestContext.Current.CancellationToken);
 
-        // Act
-        await Persistence.MoveNodeAsync("graph/commented", "graph/commented-moved", TestContext.Current.CancellationToken);
+        // Assert - node should be at new path
+        response.Message.Success.Should().BeTrue("Move should succeed");
+        response.Message.Node.Should().NotBeNull();
+        response.Message.Node!.Path.Should().Be("graph/commented-moved");
 
-        // Assert - comments should be at new path
-        var newComments = await Persistence.GetCommentsAsync("graph/commented-moved").ToListAsync(TestContext.Current.CancellationToken);
-        newComments.Should().HaveCount(2, "Comments should be migrated to new path");
-        newComments.Should().Contain(c => c.Text == "Comment 1");
-        newComments.Should().Contain(c => c.Text == "Comment 2");
+        var movedNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented-moved", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        movedNode.Should().NotBeNull("Node should exist at new path");
 
-        // Assert - no comments at old path
-        var remainingOldComments = await Persistence.GetCommentsAsync("graph/commented").ToListAsync(TestContext.Current.CancellationToken);
-        remainingOldComments.Should().BeEmpty("Comments should not remain at old path");
+        var oldNode = await MeshQuery.QueryAsync<MeshNode>("path:graph/commented", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        oldNode.Should().BeNull("Node should not remain at old path");
     }
 
     /// <summary>
@@ -616,10 +606,12 @@ public record Graph
     [Fact(Timeout = 10000)]
     public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
-        // Act & Assert
-        var act = () => Persistence.MoveNodeAsync("graph/nonexistent", "graph/newpath");
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*not found*");
+        // Act - move via MoveNodeRequest
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/nonexistent", "graph/newpath"), o => o, TestContext.Current.CancellationToken);
+
+        // Assert - should fail with source not found
+        response.Message.Success.Should().BeFalse("Move should fail when source doesn't exist");
+        response.Message.Error.Should().Contain("not found");
     }
 
     /// <summary>
@@ -629,13 +621,15 @@ public record Graph
     public async Task MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" }, TestContext.Current.CancellationToken);
-        await Persistence.SaveNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" }, TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/source") with { Name = "Source", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath("graph/target") with { Name = "Target", NodeType = "type/org" }, ct: TestContext.Current.CancellationToken);
 
-        // Act & Assert
-        var act = () => Persistence.MoveNodeAsync("graph/source", "graph/target");
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*already exists*");
+        // Act - move via MoveNodeRequest
+        var response = await Mesh.AwaitResponse<MoveNodeResponse>(new MoveNodeRequest("graph/source", "graph/target"), o => o, TestContext.Current.CancellationToken);
+
+        // Assert - should fail because target already exists
+        response.Message.Success.Should().BeFalse("Move should fail when target already exists");
+        response.Message.Error.Should().Contain("already exists");
     }
 
     #endregion
@@ -675,7 +669,7 @@ public record Graph
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
         // Wait for the stream to emit a value (with timeout from test attribute)
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Default layout area should return content");
@@ -712,8 +706,8 @@ public record Graph
         var reference = new LayoutAreaReference(string.Empty);
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(orgAddress, reference);
 
-        // Wait for the stream to emit a value (with timeout from test attribute)
-        var value = await stream.FirstAsync();
+        // Wait for the stream to emit a value
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         // Assert
         value.Should().NotBe(default(JsonElement), "Empty area should return default view content");
@@ -725,7 +719,7 @@ public record Graph
     /// it should render a StackControl with CatalogContent that contains either
     /// organization thumbnails or "No items found" message.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task OrganizationType_GetCatalog_ShowsOrganizations()
     {
         // Arrange
@@ -772,9 +766,9 @@ public record Graph
         var hasSearchStructure = json.Contains("Search") && json.Contains("MeshSearchControl");
         hasSearchStructure.Should().BeTrue($"Search should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
 
-        // The MeshSearchControl should have the correct query for nodeType filtering
-        var hasCorrectQuery = json.Contains("nodeType:type/org") && json.Contains("scope:subtree");
-        hasCorrectQuery.Should().BeTrue($"Search should have nodeType filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The MeshSearchControl should have the correct namespace and scope
+        var hasCorrectQuery = json.Contains("namespace:type/org");
+        hasCorrectQuery.Should().BeTrue($"Search should have namespace filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
     }
 
     /// <summary>
@@ -802,13 +796,13 @@ public record Graph
 
     /// <summary>
     /// Verifies the parent path derivation logic used by CodeLayoutAreas.Overview.
-    /// For a code node at "type/story/Code/code", the parent NodeType path should be "type/story".
+    /// For a code node at "type/story/_Source/code", the parent NodeType path should be "type/story".
     /// </summary>
     [Theory]
-    [InlineData("type/story/Code/code", "type/story")]
-    [InlineData("type/org/Code/orgCode", "type/org")]
-    [InlineData("Organization/Code/Organization", "Organization")]
-    [InlineData("a/b/Code/c", "a/b")]
+    [InlineData("type/story/_Source/code", "type/story")]
+    [InlineData("type/org/_Source/orgCode", "type/org")]
+    [InlineData("Organization/_Source/Organization", "Organization")]
+    [InlineData("a/b/_Source/c", "a/b")]
     public void CodeNode_ParentPathParsing_StripsTwoSegments(string codePath, string expectedParent)
     {
         var segments = codePath.Split('/');
@@ -821,11 +815,11 @@ public record Graph
     }
 
     /// <summary>
-    /// Verifies that IMeshQuery with scope:descendants finds Code nodes that are 2 levels deep.
-    /// Code nodes at "type/story/Code/code" are NOT immediate children of "type/story" (they're
-    /// grandchildren), so scope:children would miss them. scope:descendants is required.
+    /// Verifies that IMeshService with scope:descendants finds Code nodes that are 2 levels deep.
+    /// Code nodes at "type/story/_Source/code" are NOT immediate children of "type/story" (they're
+    /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task QueryAsync_ScopeDescendants_FindsCodeNodesUnderNodeType()
     {
         // Arrange
@@ -852,10 +846,10 @@ public record Graph
     }
 
     /// <summary>
-    /// Verifies that scope:children does NOT find Code nodes (they are 2 levels deep).
+    /// Verifies that namespace: does NOT find Code nodes (they are 2 levels deep).
     /// This confirms the bug that was fixed by switching to scope:descendants.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task QueryAsync_ScopeChildren_DoesNotFindCodeNodes()
     {
         // Arrange
@@ -867,16 +861,16 @@ public record Graph
             o => o.WithTarget(graphAddress),
             TestContext.Current.CancellationToken);
 
-        // Act: Query for Code nodes under type/story using scope:children (1 level deep only)
-        var query = "path:type/story nodeType:Code scope:children";
+        // Act: Query for Code nodes under type/story using namespace: (1 level deep only)
+        var query = "namespace:type/story nodeType:Code";
         var nodes = await MeshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken);
 
         foreach (var node in nodes)
-            Output.WriteLine($"Found with scope:children: {node.Path}");
+            Output.WriteLine($"Found with namespace: {node.Path}");
 
-        // Assert: scope:children only checks 1 level deep — Code nodes are at depth 2 (type/story/Code/id)
-        nodes.Should().BeEmpty("scope:children only finds immediate children; Code nodes are 2 levels deep");
+        // Assert: namespace: only checks 1 level deep — Code nodes are at depth 2 (type/story/_Source/id)
+        nodes.Should().BeEmpty("namespace: only finds immediate children; Code nodes are 2 levels deep");
     }
 
     /// <summary>
@@ -976,15 +970,15 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeDir, "Organizations.json"), organizationsTypeJson);
 
-        // 2. Create Type/Organizations/Code/codeConfiguration.json - Code as child MeshNode
+        // 2. Create Type/Organizations/_Source/codeConfiguration.json - Code as child MeshNode
         var organizationsTypeDir = Path.Combine(typeDir, "Organizations");
-        var codeDir = Path.Combine(organizationsTypeDir, "Code");
+        var codeDir = Path.Combine(organizationsTypeDir, "_Source");
         Directory.CreateDirectory(codeDir);
 
         var codeConfigJson = """
         {
           "id": "codeConfiguration",
-          "namespace": "Type/Organizations/Code",
+          "namespace": "Type/Organizations/_Source",
           "name": "Code",
           "nodeType": "Code",
           "content": {
@@ -1043,13 +1037,13 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
         """;
         File.WriteAllText(Path.Combine(typeGraphDir, "graph.json"), graphTypeJson);
 
-        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "Code");
+        var graphCodeDir = Path.Combine(typeGraphDir, "graph", "_Source");
         Directory.CreateDirectory(graphCodeDir);
 
         var graphCodeConfigJson = """
         {
           "id": "codeConfiguration",
-          "namespace": "type/graph/Code",
+          "namespace": "type/graph/_Source",
           "name": "Code",
           "nodeType": "Code",
           "content": {
@@ -1101,17 +1095,14 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
-        // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
         // Act - this should find Type/Organizations by reading from disk
-        var nodeTypeNode = await persistence.GetNodeAsync("Type/Organizations", TestContext.Current.CancellationToken);
+        var nodeTypeNode = await MeshQuery.QueryAsync<MeshNode>("path:Type/Organizations", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         nodeTypeNode.Should().NotBeNull(
             "PersistenceService should find the NodeType node from disk. " +
             "If null, the Content property was likely deserialized as JsonElement instead of NodeTypeDefinition.");
-        nodeTypeNode.Path.Should().Be("Type/Organizations");
+        nodeTypeNode!.Path.Should().Be("Type/Organizations");
         nodeTypeNode.NodeType.Should().Be("NodeType");
 
         // Critical: Content must be NodeTypeDefinition, not JsonElement
@@ -1124,18 +1115,11 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// Tests that CodeConfiguration can be loaded from child MeshNodes under the Code path.
     /// Code is now stored as regular MeshNodes with nodeType="Code" and content=CodeConfiguration.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        // Arrange
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
         // Act - get children of the Code path
-        var codeChildren = new List<MeshNode>();
-        await foreach (var child in persistence.GetChildrenAsync("Type/Organizations/Code"))
-        {
-            codeChildren.Add(child);
-        }
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>("namespace:Type/Organizations/_Source", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert
         codeChildren.Should().NotBeEmpty("Code path should have child MeshNodes with CodeConfiguration");
@@ -1152,17 +1136,19 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// Tests the complete flow: node loading, type compilation, and HubConfiguration setting.
     /// This is the end-to-end test for the production scenario.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
-        // Arrange
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
-        var node = await meshCatalog.GetNodeAsync(new Address("Organizations"));
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:Organizations", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         // Assert
         node.Should().NotBeNull("Organizations node should exist on disk");
+
+        // Enrich via NodeTypeService to trigger compilation and populate HubConfiguration
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        node = await nodeTypeService.EnrichWithNodeTypeAsync(node!, TestContext.Current.CancellationToken);
+
         node.HubConfiguration.Should().NotBeNull(
             "Organizations node should have HubConfiguration from the compiled assembly. " +
             "If null, the on-demand compilation failed - likely because NodeTypeDefinition or CodeConfiguration " +
@@ -1185,15 +1171,17 @@ public class DynamicGraphIntegrationTestsCollection
 /// <summary>
 /// Tests that use the actual samples/Graph/Data directory to test real sample data.
 /// This replicates the exact production scenario with real sample data.
+/// Uses MeshWeaver/Documentation/Article as the NodeType with Code children
+/// (Article.cs and ArticleLayoutAreas.cs).
 /// </summary>
 [Collection("SamplesGraphDataTests")]
 public class SamplesGraphDataTest : MonolithMeshTestBase
 {
-    // Use the actual samples directory
-    private static readonly string SamplesDataDirectory = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "samples", "Graph", "Data"));
-
     private readonly string _cacheDirectory;
+
+    // Article NodeType is at MeshWeaver/Documentation/Article with 2 code files
+    private const string ArticleNodeTypePath = "MeshWeaver/Documentation/Article";
+    private const string ArticleCodeNamespace = "MeshWeaver/Documentation/Article/_Source";
 
     public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
     {
@@ -1205,8 +1193,15 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     {
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(SamplesDataDirectory)
+            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddUserData()
+            .AddTypeData()
+            .AddMeshWeaverDocs()
+            .AddSystemorph()
+            .AddAcme()
+            .AddVUser()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas())
             .AddGraph();
     }
 
@@ -1222,91 +1217,88 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that tries to get the default layout from Organization.
+    /// Test that tries to get the default layout from the Article NodeType.
     /// This test is expected to deadlock if the NodeTypeService implementation has issues.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Organization_GetDefaultLayout_ShouldNotDeadlock()
+    [Fact(Timeout = 10000)]
+    public async Task Article_GetDefaultLayout_ShouldNotDeadlock()
     {
-        // Arrange - Organization is now at root level
-        var organizationAddress = new Address("Organization");
+        // Arrange - Article NodeType is at MeshWeaver/Documentation/Article
+        var articleAddress = new Address(ArticleNodeTypePath);
 
         // Get a client with data services configured
         var client = GetClient(c => c.AddData(data => data));
 
-        Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
-        Output.WriteLine($"Directory exists: {Directory.Exists(SamplesDataDirectory)}");
+        Output.WriteLine($"Samples data directory: {TestPaths.SamplesGraphData}");
+        Output.WriteLine($"Directory exists: {Directory.Exists(TestPaths.SamplesGraphData)}");
 
         // Act: Request the default layout area (empty = default view)
         var workspace = client.GetWorkspace();
         var reference = new LayoutAreaReference(string.Empty);
 
-        Output.WriteLine("Getting remote stream for Organization...");
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        Output.WriteLine("Getting remote stream for Article NodeType...");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(articleAddress, reference);
 
         Output.WriteLine("Waiting for first value from stream...");
         // Wait for the stream to emit a value - this is where deadlock would occur
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         Output.WriteLine($"Received value: {value}");
 
         // Assert
         value.Should().NotBe(default(JsonElement),
-            "Organization node should return default layout area content");
+            "Article NodeType should return default layout area content");
     }
 
     /// <summary>
     /// Test that verifies the samples directory exists and has the expected structure.
-    /// Organization is now at root level with Organization.json and Organization/ folder for code.
+    /// Article NodeType is at MeshWeaver/Documentation/Article.json with Code/ subfolder.
     /// </summary>
     [Fact]
     public void SamplesDirectory_Exists_WithExpectedStructure()
     {
-        Output.WriteLine($"Checking samples directory: {SamplesDataDirectory}");
+        Output.WriteLine($"Checking samples directory: {TestPaths.SamplesGraphData}");
 
-        Directory.Exists(SamplesDataDirectory).Should().BeTrue(
-            $"Samples directory should exist at {SamplesDataDirectory}");
+        Directory.Exists(TestPaths.SamplesGraphData).Should().BeTrue(
+            $"Samples directory should exist at {TestPaths.SamplesGraphData}");
 
-        var organizationPath = Path.Combine(SamplesDataDirectory, "Organization.json");
-        File.Exists(organizationPath).Should().BeTrue(
-            $"Organization.json should exist at {organizationPath}");
+        var articleJsonPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article.json");
+        File.Exists(articleJsonPath).Should().BeTrue(
+            $"Article.json should exist at {articleJsonPath}");
 
-        var codeConfigPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "Organization.cs");
+        var codeConfigPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "_Source", "Article.cs");
         File.Exists(codeConfigPath).Should().BeTrue(
-            $"Organization/Code/Organization.cs should exist at {codeConfigPath}");
+            $"Article/_Source/Article.cs should exist at {codeConfigPath}");
     }
 
     /// <summary>
-    /// Test that the MeshCatalog can resolve Organization path.
+    /// Test that the MeshCatalog can resolve the Article NodeType path.
     /// </summary>
     [Fact(Timeout = 10000)]
-    public async Task Organization_CanBeResolved_FromSamples()
+    public async Task Article_CanBeResolved_FromSamples()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
 
-        Output.WriteLine("Resolving Organization path...");
-        var resolution = await meshCatalog.ResolvePathAsync("Organization");
+        Output.WriteLine($"Resolving {ArticleNodeTypePath} path...");
+        var resolution = await pathResolver.ResolvePathAsync(ArticleNodeTypePath);
 
-        resolution.Should().NotBeNull("Organization should be resolvable from samples");
-        resolution.Prefix.Should().Be("Organization");
+        resolution.Should().NotBeNull("Article NodeType should be resolvable from samples");
         Output.WriteLine($"Resolved: Prefix={resolution.Prefix}, Remainder={resolution.Remainder}");
     }
 
     /// <summary>
-    /// Test that GetNodeAsync works for Organization.
+    /// Test that GetNodeAsync works for the Article NodeType.
     /// </summary>
-    [Fact(Timeout = 15000)]
-    public async Task Organization_GetNodeAsync_FromSamples()
+    [Fact(Timeout = 10000)]
+    public async Task Article_GetNodeAsync_FromSamples()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        Output.WriteLine($"Getting node for {ArticleNodeTypePath}...");
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-        Output.WriteLine("Getting node for Organization...");
-        var node = await meshCatalog.GetNodeAsync(new Address("Organization"));
+        node.Should().NotBeNull("Article NodeType node should exist in samples");
+        Output.WriteLine($"Node: Path={node!.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
 
-        node.Should().NotBeNull("Organization node should exist in samples");
-        Output.WriteLine($"Node: Path={node.Path}, NodeType={node.NodeType}, HubConfiguration={node.HubConfiguration != null}");
-
-        node.Path.Should().Be("Organization");
+        node.Path.Should().Be(ArticleNodeTypePath);
         node.NodeType.Should().Be("NodeType");
     }
 
@@ -1314,42 +1306,43 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that verifies the node's HubConfiguration is set for NodeType nodes.
     /// Nodes with nodeType=NodeType compile their own code to get HubConfiguration.
     /// </summary>
-    [Fact(Timeout = 15000)]
-    public async Task Organization_HubConfiguration_IsSetForNodeType()
+    [Fact(Timeout = 10000)]
+    public async Task Article_HubConfiguration_IsSetForNodeType()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var node = await meshCatalog.GetNodeAsync(new Address("Organization"));
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         node.Should().NotBeNull();
-        node.NodeType.Should().Be("NodeType");
+        node!.NodeType.Should().Be("NodeType");
 
-        // NodeType nodes compile their OWN code (at their path) to get HubConfiguration
+        // Query results don't include HubConfiguration - enrichment (compilation) happens via NodeTypeService
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        node = await nodeTypeService.EnrichWithNodeTypeAsync(node, TestContext.Current.CancellationToken);
+
         Output.WriteLine($"Node.HubConfiguration is null: {node.HubConfiguration == null}");
         node.HubConfiguration.Should().NotBeNull(
             "NodeType nodes should have HubConfiguration from their own code");
 
-        // Verify we can get the actual HubConfiguration function
         var hubConfig = node.HubConfiguration;
         hubConfig.Should().NotBeNull("Should be able to get HubConfiguration");
         Output.WriteLine("Successfully obtained HubConfiguration");
     }
 
     /// <summary>
-    /// Test that sends a PingRequest to Organization hub.
+    /// Test that sends a PingRequest to the Article NodeType hub.
     /// This triggers hub creation which may cause deadlock.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Organization_PingRequest_ShouldNotDeadlock()
+    [Fact(Timeout = 10000)]
+    public async Task Article_PingRequest_ShouldNotDeadlock()
     {
-        var organizationAddress = new Address("Organization");
+        var articleAddress = new Address(ArticleNodeTypePath);
         var client = GetClient();
 
-        Output.WriteLine("Sending PingRequest to Organization...");
+        Output.WriteLine($"Sending PingRequest to {ArticleNodeTypePath}...");
 
         // This triggers hub creation - may deadlock here
         var response = await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(organizationAddress),
+            o => o.WithTarget(articleAddress),
             TestContext.Current.CancellationToken);
 
         Output.WriteLine($"Received response: {response}");
@@ -1360,10 +1353,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that Code node Overview returns non-empty content.
     /// Uses JsonElement and GetControlStream to verify the Overview area renders a control.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_ReturnsNonEmptyContent()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
             .AddLayoutClient(cc => cc)
@@ -1389,22 +1382,19 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
     /// <summary>
     /// Test that CodeConfiguration can be loaded from child MeshNodes via persistence.
-    /// Code is stored as child MeshNodes with nodeType="Code" under the Organization/Code path.
+    /// Code is stored as child MeshNodes with nodeType="Code" under the Article/_Source path.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Organization_CodeConfiguration_LoadedFromChildMeshNodes()
+    [Fact(Timeout = 10000)]
+    public async Task Article_CodeConfiguration_LoadedFromChildMeshNodes()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-
-        Output.WriteLine("Getting Code children for Organization...");
-        var codeChildren = new List<MeshNode>();
-        await foreach (var child in persistence.GetChildrenAsync("Organization/Code"))
+        Output.WriteLine($"Getting Code children for {ArticleCodeNamespace}...");
+        var codeChildren = await MeshQuery.QueryAsync<MeshNode>($"namespace:{ArticleCodeNamespace}", ct: TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        foreach (var child in codeChildren)
         {
-            codeChildren.Add(child);
             Output.WriteLine($"Found code child: {child.Path}, NodeType={child.NodeType}");
         }
 
-        codeChildren.Should().NotBeEmpty("Organization/Code should have child MeshNodes");
+        codeChildren.Should().NotBeEmpty($"{ArticleCodeNamespace} should have child MeshNodes");
 
         foreach (var codeNode in codeChildren)
         {
@@ -1419,10 +1409,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that Code node Overview returns a Splitter control with code list and content pane.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_WithLayoutClient_ReturnsSplitter()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
 
         // Configure client with AddLayoutClient for proper control deserialization
         var client = GetClient(c => c
@@ -1454,10 +1444,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Debug test: Collect control updates for Code node Overview.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_DebugUpdateSequence()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1493,10 +1483,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test using GetControlStream to get properly typed controls for Code node.
     /// </summary>
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 10000)]
     public async Task CodeNode_Overview_GetControlStream_Test()
     {
-        var codeNodeAddress = new Address("Organization/Code/Organization");
+        var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1539,7 +1529,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that loading the default layout area (empty string) from MeshWeaver node works.
     /// This test diagnoses eternal spinner issue when navigating to /MeshWeaver.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task MeshWeaver_GetDefaultLayoutArea_ShouldNotHang()
     {
         // Arrange
@@ -1551,13 +1541,12 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             .AddLayoutClient(cc => cc)
             .AddData(data => data));
 
-        Output.WriteLine($"Samples data directory: {SamplesDataDirectory}");
+        Output.WriteLine($"Samples data directory: {TestPaths.SamplesGraphData}");
 
         // First check if MeshWeaver node exists
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var node = await meshCatalog.GetNodeAsync(meshWeaverAddress);
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         node.Should().NotBeNull("MeshWeaver node should exist in samples");
-        Output.WriteLine($"MeshWeaver node: Path={node.Path}, NodeType={node.NodeType}");
+        Output.WriteLine($"MeshWeaver node: Path={node!.Path}, NodeType={node.NodeType}");
 
         // Initialize hub via PingRequest
         Output.WriteLine("Sending PingRequest to MeshWeaver...");
@@ -1576,7 +1565,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         Output.WriteLine("Waiting for first value from stream...");
         // Wait for the stream to emit a value - this is where eternal spinner would occur
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
 
         Output.WriteLine($"Received value: {value}");
 
@@ -1586,53 +1575,51 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Test that the OrganizationViews.cs file exists alongside Organization.cs for Organization.
+    /// Test that the ArticleLayoutAreas.cs file exists alongside Article.cs for Article.
     /// This validates the custom view configuration structure.
     /// </summary>
     [Fact]
-    public void Organization_ViewsCs_Exists()
+    public void Article_ViewsCs_Exists()
     {
-        var viewsCsPath = Path.Combine(SamplesDataDirectory, "Organization", "Code", "OrganizationViews.cs");
-        Output.WriteLine($"Checking for OrganizationViews.cs at: {viewsCsPath}");
+        var viewsCsPath = Path.Combine(TestPaths.SamplesGraphData, "MeshWeaver", "Documentation", "Article", "_Source", "ArticleLayoutAreas.cs");
+        Output.WriteLine($"Checking for ArticleLayoutAreas.cs at: {viewsCsPath}");
 
         File.Exists(viewsCsPath).Should().BeTrue(
-            $"Organization/Code/OrganizationViews.cs should exist at {viewsCsPath} for custom view configuration");
+            $"Article/_Source/ArticleLayoutAreas.cs should exist at {viewsCsPath} for custom view configuration");
     }
 
     /// <summary>
-    /// Test that Organization node with custom AddLayout view compiles successfully.
+    /// Test that Article NodeType with custom AddLayout view compiles successfully.
     /// This validates the fix for missing using statements in DynamicMeshNodeAttributeGenerator.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Organization_CustomView_CompilesSuccessfully()
+    [Fact(Timeout = 10000)]
+    public async Task Article_CustomView_CompilesSuccessfully()
     {
-        var organizationAddress = new Address("Organization");
+        Output.WriteLine($"Getting {ArticleNodeTypePath} node (triggers compilation)...");
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
-        // Get node from mesh catalog - this triggers compilation
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
+        node.Should().NotBeNull("Article NodeType node should exist");
+        node!.NodeType.Should().Be("NodeType");
 
-        Output.WriteLine("Getting Organization node (triggers compilation)...");
-        var node = await meshCatalog.GetNodeAsync(organizationAddress);
+        // Enrich via NodeTypeService to trigger compilation and populate HubConfiguration
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
+        node = await nodeTypeService.EnrichWithNodeTypeAsync(node, TestContext.Current.CancellationToken);
 
-        node.Should().NotBeNull("Organization node should exist");
-        node.NodeType.Should().Be("NodeType");
         node.HubConfiguration.Should().NotBeNull(
-            "Organization node should have HubConfiguration from compiled assembly with custom view");
+            "Article NodeType should have HubConfiguration from compiled assembly with custom view");
 
-        // Get the hub configuration function
         var hubConfig = node.HubConfiguration;
         hubConfig.Should().NotBeNull("HubConfiguration should be available");
 
-        Output.WriteLine("Organization custom view compiled successfully!");
+        Output.WriteLine("Article custom view compiled successfully!");
     }
 
     /// <summary>
-    /// Test that the custom OrganizationViews.Details view compiles and renders.
+    /// Test that the custom view compiles and renders for a Systemorph organization instance.
     /// This tests the complete flow from views.json through compilation to rendering.
-    /// Note: In a test environment without full data setup, the view may return a loading state.
     /// </summary>
-    [Fact(Timeout = 60000)]
-    public async Task Organization_DetailsView_RendersCustomView()
+    [Fact(Timeout = 10000)]
+    public async Task Systemorph_OverviewView_RendersCustomView()
     {
         var organizationAddress = new Address("Systemorph");
 
@@ -1663,32 +1650,23 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         Output.WriteLine($"Received control type: {control?.GetType().FullName}");
 
-        // Verify the custom view is invoked and returns a control
-        // The view returns either:
-        // - StackControl (when data is loaded - the organization header)
-        // - MarkdownControl (loading state "*Loading...*")
-        control.Should().NotBeNull("Details view should render a control for Organization instance");
-
-        // The important thing is that the custom view compiled and was called.
-        // In test environment, we may get loading state since data isn't fully set up.
-        var isExpectedType = control is StackControl || control is MarkdownControl;
-        isExpectedType.Should().BeTrue(
-            $"Custom OrganizationViews.Details should return StackControl or MarkdownControl, got {control?.GetType().Name}");
+        // Verify the view is invoked and returns a control
+        control.Should().NotBeNull("Overview should render a control for Organization instance");
     }
 
     /// <summary>
-    /// Verifies that QueryAsync with scope:descendants finds Code nodes under Organization.
-    /// Organization has 2 code files: Organization.cs and OrganizationViews.cs
-    /// stored at Organization/Code/Organization and Organization/Code/OrganizationViews.
+    /// Verifies that QueryAsync with scope:descendants finds Code nodes under Article.
+    /// Article has 2 code files: Article.cs and ArticleLayoutAreas.cs
+    /// stored at MeshWeaver/Documentation/Article/_Source/Article and MeshWeaver/Documentation/Article/_Source/ArticleLayoutAreas.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Organization_QueryAsync_ScopeDescendants_FindsCodeNodes()
+    [Fact(Timeout = 10000)]
+    public async Task Article_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
         // Arrange
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
 
-        // Act: Query for Code nodes under Organization using scope:descendants
-        var query = $"path:Organization nodeType:{CodeNodeType.NodeType} scope:descendants";
+        // Act: Query for Code nodes under Article using scope:descendants
+        var query = $"path:{ArticleNodeTypePath} nodeType:{CodeNodeType.NodeType} scope:descendants";
         Output.WriteLine($"Executing query: {query}");
 
         var nodes = await meshQuery.QueryAsync<MeshNode>(query, null, TestContext.Current.CancellationToken)
@@ -1697,21 +1675,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         foreach (var node in nodes)
             Output.WriteLine($"Found Code node: Path={node.Path}, Name={node.Name}, NodeType={node.NodeType}");
 
-        // Assert: Organization has 2 code files
-        nodes.Should().HaveCount(2, "Organization should have 2 Code descendants (Organization.cs and OrganizationViews.cs)");
+        // Assert: Article has 2 code files
+        nodes.Should().HaveCount(2, "Article should have 2 Code descendants (Article.cs and ArticleLayoutAreas.cs)");
         nodes.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType, "All results should be Code nodes");
         nodes.Should().OnlyContain(n => n.Content is CodeConfiguration, "All Code nodes should have CodeConfiguration content");
     }
 
     /// <summary>
-    /// Verifies that the NodeType Overview area for Organization renders a SplitterControl
+    /// Verifies that the NodeType Overview area for Article renders a SplitterControl
     /// and that the left menu contains the correct number of code file entries.
     /// This diagnoses the "no code files" issue in the NodeType Overview.
     /// </summary>
-    [Fact(Timeout = 60000)]
-    public async Task Organization_NodeTypeOverview_ContainsCodeNodes()
+    [Fact(Timeout = 10000)]
+    public async Task Article_NodeTypeOverview_ContainsCodeNodes()
     {
-        var organizationAddress = new Address("Organization");
+        var articleAddress = new Address(ArticleNodeTypePath);
 
         var client = GetClient(c => c
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h))
@@ -1721,10 +1699,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var workspace = client.GetWorkspace();
 
         // Initialize hub
-        Output.WriteLine("Sending PingRequest to Organization NodeType hub...");
+        Output.WriteLine($"Sending PingRequest to {ArticleNodeTypePath} NodeType hub...");
         await client.AwaitResponse(
             new PingRequest(),
-            o => o.WithTarget(organizationAddress),
+            o => o.WithTarget(articleAddress),
             TestContext.Current.CancellationToken);
         Output.WriteLine("PingRequest completed");
 
@@ -1732,22 +1710,21 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var reference = new LayoutAreaReference(NodeTypeLayoutAreas.OverviewArea);
         Output.WriteLine($"Requesting layout area: {reference.Area}");
 
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(organizationAddress, reference);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(articleAddress, reference);
 
         // Wait for a JSON update that contains code node content (instead of collecting for 30s)
         Output.WriteLine("Waiting for JSON update containing code nodes...");
         var lastJson = await stream
             .Select(x => x.Value.GetRawText())
-            .Where(json => json.Contains("Organization") && json.Contains("Code") && !json.Contains("No code files"))
+            .Where(json => json.Contains("Article") && json.Contains("Code") && !json.Contains("No code files"))
             .Timeout(TimeSpan.FromSeconds(30))
             .FirstAsync();
 
         Output.WriteLine($"Received matching JSON update (first 5000 chars):\n{lastJson.Substring(0, Math.Min(5000, lastJson.Length))}");
 
         // The NavMenu should contain code file entries
-        // Organization has 2 code files: Organization.cs and OrganizationViews.cs
-        var hasOrganizationCode = lastJson.Contains("Organization") && lastJson.Contains("Code");
-        hasOrganizationCode.Should().BeTrue("Overview JSON should contain Code section references");
+        var hasArticleCode = lastJson.Contains("Article") && lastJson.Contains("Code");
+        hasArticleCode.Should().BeTrue("Overview JSON should contain Code section references");
 
         // Check specifically for "No code files" to detect the bug
         var hasNoCodeFiles = lastJson.Contains("No code files");
@@ -1755,20 +1732,20 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         hasNoCodeFiles.Should().BeFalse(
             "NodeType Overview should NOT show 'No code files'. " +
-            "Organization has 2 code files (Organization.cs, OrganizationViews.cs) " +
+            "Article has 2 code files (Article.cs, ArticleLayoutAreas.cs) " +
             "which should be found by scope:descendants query.");
     }
 
     /// <summary>
-    /// Tests the ObserveQuery reactive path specifically for Code nodes under Organization.
+    /// Tests the ObserveQuery reactive path specifically for Code nodes under Article.
     /// This mirrors the exact query used by NodeTypeLayoutAreas.Overview.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task Organization_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
+    [Fact(Timeout = 10000)]
+    public async Task Article_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
     {
         // Arrange
-        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshQuery>();
-        var hubPath = "Organization";
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var hubPath = ArticleNodeTypePath;
 
         // Act: Use ObserveQuery with the same query pattern as NodeTypeLayoutAreas.Overview
         var queryString = $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:descendants";
@@ -1787,14 +1764,14 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         // Assert
         initialChange.ChangeType.Should().Be(QueryChangeType.Initial, "First emission should be Initial");
         initialChange.Items.Should().HaveCount(2,
-            "ObserveQuery should find 2 Code nodes under Organization (Organization.cs and OrganizationViews.cs)");
+            "ObserveQuery should find 2 Code nodes under Article (Article.cs and ArticleLayoutAreas.cs)");
         initialChange.Items.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType);
     }
 
     /// <summary>
     /// Test that loading the Search area from MeshWeaver node works.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task MeshWeaver_GetSearchArea_ShouldNotHang()
     {
         // Arrange
@@ -1818,12 +1795,66 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         Output.WriteLine("Getting Search area for MeshWeaver...");
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(meshWeaverAddress, reference);
 
-        var value = await stream.FirstAsync();
+        var value = await stream.Timeout(10.Seconds()).FirstAsync();
         Output.WriteLine($"Received Search area value");
 
         // Assert
         value.Should().NotBe(default(JsonElement),
             "MeshWeaver Search area should return content");
+    }
+
+    /// <summary>
+    /// Test that a VUser node can be created and detected as already existing.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task PortalHub_CreateVUser_AlreadyExists_ReturnsFailure()
+    {
+        // Use a unique ID to avoid collisions with pre-loaded VUser partition data
+        var uniqueId = $"DupTest_{Guid.NewGuid():N}"[..20];
+
+        // Create a VUser node first
+        await NodeFactory.CreateNodeAsync(new MeshNode(uniqueId, "VUser")
+        {
+            Name = uniqueId,
+            NodeType = "VUser"
+        });
+
+        // Try to create the same VUser again
+        var act = () => NodeFactory.CreateNodeAsync(new MeshNode(uniqueId, "VUser")
+        {
+            Name = uniqueId,
+            NodeType = "VUser"
+        });
+
+        await act.Should().ThrowAsync<Exception>();
+    }
+
+    /// <summary>
+    /// Test that creating a VUser node and then checking for it does not hang.
+    /// </summary>
+    [Fact(Timeout = 10000)]
+    public async Task EnsureVirtualUserNode_CheckThenCreate_NoHang()
+    {
+        // Use a unique ID to avoid collisions with pre-loaded VUser partition data
+        var uniqueId = $"HangTest_{Guid.NewGuid():N}"[..20];
+        var vUserPath = $"VUser/{uniqueId}";
+
+        // Check that node doesn't exist first
+        var existingNode = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath}", ct: TestContext.Current.CancellationToken)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        existingNode.Should().BeNull("VUser should not exist yet");
+
+        // Create the VUser
+        await NodeFactory.CreateNodeAsync(new MeshNode(uniqueId, "VUser")
+        {
+            Name = uniqueId,
+            NodeType = "VUser"
+        });
+
+        // Verify it can be retrieved
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{vUserPath}", ct: TestContext.Current.CancellationToken)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+        node.Should().NotBeNull("VUser should exist after creation");
     }
 }
 

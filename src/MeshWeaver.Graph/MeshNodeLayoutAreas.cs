@@ -68,7 +68,11 @@ public static class MeshNodeLayoutAreas
     public const string EditArea = "Edit";
     public const string DeleteArea = "Delete";
     public const string ThreadsArea = "Threads";
+    public const string ChatArea = "Chat";
     public const string ImportMeshNodesArea = "ImportMeshNodes";
+    public const string ExportArea = "Export";
+    public const string VersionsArea = "Versions";
+    public const string VersionDiffArea = "VersionDiff";
 
     // UCR (Unified Content Reference) special areas
     public const string ContentArea = "$Content";
@@ -88,6 +92,8 @@ public static class MeshNodeLayoutAreas
             .AddMeshDataSource()
             .AddDefaultMeshMenu()
             .AddDefaultSettingsMenuItems()
+            .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
+            .WithHandler<UndoActivityRequest>(VersionLayoutArea.HandleUndoActivityRequest)
             .AddLayout(layout => layout.AddDefaultLayoutAreas());
 
     public static LayoutDefinition AddDefaultLayoutAreas(this LayoutDefinition layout)
@@ -100,11 +106,16 @@ public static class MeshNodeLayoutAreas
             .WithView(FilesArea, Files)
             .WithView(ChildrenArea, Children)
             .WithView(ThreadsArea, Threads)
+            .WithView(ChatArea, Chat)
             .WithView(NodeTypesArea, NodeTypes)
             .WithView(AccessControlArea, AccessControl)
             .WithView(GroupsArea, Groups)
             .WithView(CreateNodeArea, CreateNode)
+            .WithView(EditArea, EditNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
+            .WithView(ExportArea, ExportLayoutArea.Export)
+            .WithView(VersionsArea, VersionLayoutArea.Versions)
+            .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
             // UCR special areas
             .WithView(DataArea, Data)
@@ -184,8 +195,14 @@ public static class MeshNodeLayoutAreas
         // Header with title/icon
         stack = stack.WithView(BuildHeader(host, node, canEdit));
 
+        // For built-in type nodes (Content is NodeTypeDefinition), show type info
+        // instead of property editor which would expose internal NodeTypeDefinition fields.
+        if (node?.Content is NodeTypeDefinition ntd)
+        {
+            stack = stack.WithView(BuildTypeInfoSection(node, ntd));
+        }
         // Property overview (read-only with click-to-edit)
-        if (node != null)
+        else if (node != null)
         {
             stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
         }
@@ -209,6 +226,21 @@ public static class MeshNodeLayoutAreas
         }
 
         return stack;
+    }
+
+    /// <summary>
+    /// Builds a description section for built-in type nodes.
+    /// Shows the type description from NodeTypeDefinition or a default message.
+    /// </summary>
+    private static UiControl BuildTypeInfoSection(MeshNode node, NodeTypeDefinition typeDef)
+    {
+        var description = typeDef.Description
+            ?? $"Built-in type for managing {node.Name ?? node.NodeType ?? "content"} nodes.";
+
+        return Controls.Stack
+            .WithStyle("margin-top: 16px; padding: 16px 0;")
+            .WithView(Controls.Markdown(description)
+                .WithStyle("color: var(--neutral-foreground-hint); font-size: 1rem;"));
     }
 
     /// <summary>
@@ -437,7 +469,7 @@ public static class MeshNodeLayoutAreas
     /// Renders the Search view showing nodes as thumbnails with search.
     /// Uses MeshSearchControl for unified search and display.
     /// For NodeType nodes, shows instances of that type (nodeType:name scope:subtree).
-    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to scope:children.
+    /// For instance nodes, uses CatalogQuery if set, otherwise defaults to namespace query.
     /// Excludes NodeType nodes from results (use NodeTypes area to view those).
     /// Render mode is determined by CatalogMode property (hierarchical or grouped).
     /// Reads search term from ?q= query parameter.
@@ -466,13 +498,15 @@ public static class MeshNodeLayoutAreas
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var hiddenQuery = $"namespace:{nodeTypePath} scope:children";
+                var hiddenQuery = $"namespace:{nodeTypePath}";
 
                 // Build create href with type restriction and optional namespace restrictions
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
-                var createNs = nodeTypeDefinition?.DefaultNamespace ?? hubPath;
-                var createPath = string.IsNullOrEmpty(createNs) ? CreateNodeArea : $"{createNs}/{CreateNodeArea}";
-                var createHref = $"/{createPath}?types={Uri.EscapeDataString(nodeTypePath)}";
+                // Route through the current hub; DefaultNamespace is passed to the Create form via the type definition
+                var createNs = !string.IsNullOrEmpty(nodeTypeDefinition?.DefaultNamespace)
+                    ? nodeTypeDefinition.DefaultNamespace
+                    : hubPath;
+                var createHref = $"/{createNs}/{CreateNodeArea}?types={Uri.EscapeDataString(nodeTypePath)}";
                 if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
                     createHref += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
 
@@ -486,8 +520,8 @@ public static class MeshNodeLayoutAreas
                     .WithCreateHref(createHref);
             }
 
-            // Instance node catalog - excludes NodeType nodes
-            var instanceHiddenQuery = $"path:{node?.Namespace ?? hubPath} scope:children -nodeType:NodeType";
+            // Instance node catalog - excludes satellite and search-excluded types
+            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} is:main context:search";
 
             return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
@@ -504,6 +538,7 @@ public static class MeshNodeLayoutAreas
     /// Renders the Children view showing child nodes as thumbnails without search.
     /// Groups children by NodeType (default) or Category if set, excludes NodeType nodes.
     /// Uses MeshSearchControl for unified search/catalog functionality.
+    /// Includes a "Create Sub-Node" button when the user has Create permission.
     /// </summary>
     [Browsable(false)]
     public static UiControl Children(LayoutAreaHost host, RenderingContext _)
@@ -511,7 +546,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"path:{hubPath} scope:children -nodeType:NodeType -nodeType:Comment -nodeType:{ThreadNodeType.NodeType} -nodeType:Code -nodeType:AccessAssignment -nodeType:GroupMembership")
+            .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
             .WithShowLoadingIndicator(false)
@@ -519,7 +554,8 @@ public static class MeshNodeLayoutAreas
             // No explicit grouping - defaults to NodeType which gives meaningful labels
             .WithSectionCounts(true)
             .WithItemLimit(10)
-            .WithCollapsibleSections(true);
+            .WithCollapsibleSections(true)
+            .WithCreateHref($"/{hubPath}/{CreateNodeArea}");
     }
 
     /// <summary>
@@ -546,7 +582,7 @@ public static class MeshNodeLayoutAreas
     public static IObservable<UiControl?> NodeTypes(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
         {
@@ -564,7 +600,7 @@ public static class MeshNodeLayoutAreas
             IReadOnlyList<MeshNode> nodeTypeChildren;
             try
             {
-                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath} nodeType:NodeType scope:children").ToListAsync();
+                nodeTypeChildren = await meshQuery.QueryAsync<MeshNode>($"namespace:{hubPath} nodeType:NodeType").ToListAsync();
             }
             catch
             {
@@ -577,7 +613,7 @@ public static class MeshNodeLayoutAreas
             {
                 try
                 {
-                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType} scope:exact").FirstOrDefaultAsync();
+                    ownType = await meshQuery.QueryAsync<MeshNode>($"path:{node.NodeType}").FirstOrDefaultAsync();
                 }
                 catch { }
             }
@@ -1110,6 +1146,25 @@ public static class MeshNodeLayoutAreas
 
     #endregion
 
+    #region Chat
+
+    /// <summary>
+    /// Renders a standalone ThreadChatControl for the current node.
+    /// Can be embedded in markdown via @@("path/Chat").
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> Chat(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        var nodeName = nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
+
+        return Observable.Return<UiControl?>(new ThreadChatControl()
+            .WithInitialContext(nodePath)
+            .WithInitialContextDisplayName(nodeName));
+    }
+
+    #endregion
+
     #region Create Node
 
     /// <summary>
@@ -1119,6 +1174,72 @@ public static class MeshNodeLayoutAreas
     [Browsable(false)]
     public static IObservable<UiControl?> CreateNode(LayoutAreaHost host, RenderingContext ctx)
         => CreateLayoutArea.Create(host, ctx);
+
+    /// <summary>
+    /// Renders the Edit area showing all content type fields in pure edit mode with auto-save.
+    /// Unlike Overview (which is toggleable click-to-edit), Edit shows all fields as editable immediately.
+    /// </summary>
+    [Browsable(false)]
+    public static IObservable<UiControl?> EditNode(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+
+        return nodeStream.SelectMany(async nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var permissions = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+
+            if (!permissions.HasFlag(Permission.Update))
+                return (UiControl?)BuildAccessDenied(hubPath);
+
+            return (UiControl?)BuildEditNodeContent(host, node);
+        });
+    }
+
+    private static UiControl BuildEditNodeContent(LayoutAreaHost host, MeshNode? node)
+    {
+        if (node == null)
+            return Controls.Markdown("*Node not found*");
+
+        var instance = node.Content;
+        if (instance == null)
+            return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
+                .WithView(BuildHeader(host, node, false))
+                .WithView(Controls.Markdown("*No content type configured for this node.*")
+                    .WithStyle("color: var(--neutral-foreground-hint);"));
+
+        if (instance is JsonElement je)
+            instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
+
+        // Skip edit form for NodeTypeDefinition content (type root nodes)
+        if (instance is Configuration.NodeTypeDefinition)
+            return Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host))
+                .WithView(BuildHeader(host, node, false))
+                .WithView(Controls.Markdown("*Built-in type nodes cannot be edited here.*")
+                    .WithStyle("color: var(--neutral-foreground-hint);"));
+
+        var contentType = instance.GetType();
+        var nodePath = node.Path;
+        var dataId = Layout.Domain.EditLayoutArea.GetDataId(nodePath);
+        host.UpdateData(dataId, instance);
+
+        // Setup auto-save (same mechanism as Overview)
+        OverviewLayoutArea.SetupAutoSave(host, dataId, instance, node);
+
+        var container = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host));
+
+        // Header with title
+        container = container.WithView(BuildHeader(host, node, canEdit: true));
+
+        // Property form in pure edit mode (not toggleable)
+        container = container.WithView(Layout.Domain.EditLayoutArea.BuildPropertyForm(
+            host, contentType, dataId, canEdit: true, isToggleable: false));
+
+        return container;
+    }
 
     #endregion
 

@@ -887,6 +887,11 @@ public static class EditorExtensions
         {
             editCtrl = CreateEditControlFromUiAttribute(host, uiAttr, property, jsonPointer, isRequired, editStateId, isToggleable);
         }
+        else if (property.GetCustomAttribute<ContentItemAttribute>() is { } contentItemAttr
+                 && propType == typeof(string))
+        {
+            editCtrl = CreateContentItemControl(host, jsonPointer, dataId, editStateId, isRequired, isToggleable, contentItemAttr.Collection);
+        }
         else if (property.GetCustomAttribute<DimensionAttribute>() is { } dimAttr)
         {
             editCtrl = CreateDimensionSelectControl(host, jsonPointer, dimAttr, isRequired, dataId, editStateId, isToggleable);
@@ -955,6 +960,48 @@ public static class EditorExtensions
     {
         ctx.Host.UpdateData(editStateId, false);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Creates a text field + "Browse" button for [ContentItem] properties.
+    /// The Browse button opens a modal dialog with a FileBrowser for the collection.
+    /// </summary>
+    private static UiControl CreateContentItemControl(
+        LayoutAreaHost host,
+        JsonPointerReference jsonPointer,
+        string dataId,
+        string editStateId,
+        bool isRequired,
+        bool isToggleable,
+        string collection)
+    {
+        var textCtrl = new TextFieldControl(jsonPointer)
+        {
+            Required = isRequired,
+            Immediate = true,
+            DataContext = LayoutAreaReference.GetDataPointer(dataId)
+        };
+
+        var browseButton = Controls.Button("Browse...")
+            .WithAppearance(Appearance.Outline)
+            .WithStyle("flex-shrink: 0;")
+            .WithClickAction(ctx =>
+            {
+                var fileBrowser = new FileBrowserControl(collection);
+                var dialog = Controls.Dialog(fileBrowser, "Select File")
+                    .WithSize("L")
+                    .WithClosable(true);
+                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+                return Task.CompletedTask;
+            });
+
+        var row = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; align-items: center; width: 100%;")
+            .WithView(textCtrl.WithStyle("flex: 1;"))
+            .WithView(browseButton);
+
+        return row;
     }
 
     private static UiControl CreateEditControlFromUiAttribute(

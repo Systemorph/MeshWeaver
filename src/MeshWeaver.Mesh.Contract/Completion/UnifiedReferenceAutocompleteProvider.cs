@@ -13,9 +13,9 @@ namespace MeshWeaver.Mesh.Completion;
 /// - Stage 2: "@app/Northwind/" → suggest keywords (data/, area/, content/, etc.)
 /// - Stage 3: "@app/Northwind/data/" → suggest specific items (collections, areas, files)
 /// </summary>
-public class UnifiedReferenceAutocompleteProvider(
+internal class UnifiedReferenceAutocompleteProvider(
     IMeshCatalog? meshCatalog,
-    IMeshQuery? meshQuery,
+    IMeshService? meshQuery,
     INavigationService? navigationContext,
     IMessageHub hub) : IAutocompleteProvider
 {

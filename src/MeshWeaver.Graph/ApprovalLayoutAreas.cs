@@ -131,8 +131,7 @@ public static class ApprovalLayoutAreas
 
     private static async Task UpdateApprovalStatusAsync(LayoutAreaHost host, MeshNode node, ApprovalStatus newStatus)
     {
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-        if (persistence == null || node.Content is not Approval approval)
+        if (node.Content is not Approval approval)
             return;
 
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
@@ -147,11 +146,11 @@ public static class ApprovalLayoutAreas
                 ApprovalDate = DateTimeOffset.UtcNow
             }
         };
-        await persistence.SaveNodeAsync(updated);
+        host.Hub.Post(new UpdateNodeRequest(updated));
 
-        // Record approval activity in ActivityLogStore
-        var activityLogStore = host.Hub.ServiceProvider.GetService<IActivityLogStore>();
-        if (activityLogStore != null && !string.IsNullOrEmpty(approval.PrimaryNodePath))
+        // Record approval activity as a MeshNode
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        if (!string.IsNullOrEmpty(approval.PrimaryNodePath))
         {
             var verb = newStatus == ApprovalStatus.Approved ? "Approved" : "Rejected";
             var log = new ActivityLog("Approval")
@@ -164,26 +163,27 @@ public static class ApprovalLayoutAreas
                 Messages = ImmutableList.Create(
                     new LogMessage($"{verb}: {approval.Purpose}", LogLevel.Information))
             };
-            await activityLogStore.SaveActivityLogAsync(approval.PrimaryNodePath, log);
+            var activityNode = MeshNode.FromPath($"{approval.PrimaryNodePath}/ActivityLog/{log.Id}") with
+            {
+                NodeType = "ActivityLog",
+                Name = $"Approval: {verb}",
+                State = MeshNodeState.Active,
+                Content = log
+            };
+            await nodeFactory.CreateNodeAsync(activityNode);
         }
+        var notificationType = newStatus == ApprovalStatus.Approved
+            ? NotificationType.ApprovalGiven
+            : NotificationType.ApprovalRejected;
 
-        // Create notification for the requester
-        var meshCatalog = host.Hub.ServiceProvider.GetService<IMeshCatalog>();
-        if (meshCatalog != null)
-        {
-            var notificationType = newStatus == ApprovalStatus.Approved
-                ? NotificationType.ApprovalGiven
-                : NotificationType.ApprovalRejected;
-
-            await NotificationService.CreateNotificationAsync(
-                meshCatalog,
-                approval.Requester,
-                $"Approval {newStatus}",
-                $"Your approval request for \"{approval.Purpose}\" has been {newStatus.ToString().ToLowerInvariant()}.",
-                notificationType,
-                approval.PrimaryNodePath,
-                currentUser);
-        }
+        await NotificationService.CreateNotificationAsync(
+            nodeFactory,
+            approval.Requester,
+            $"Approval {newStatus}",
+            $"Your approval request for \"{approval.Purpose}\" has been {newStatus.ToString().ToLowerInvariant()}.",
+            notificationType,
+            approval.PrimaryNodePath,
+            currentUser);
     }
 
     /// <summary>

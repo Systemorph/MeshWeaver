@@ -23,8 +23,8 @@ Software demonstrates how MeshWeaver organizes data and applications:
 ACME/                                    # Organization level
 ├── Project/                             # Shared NodeType definitions
 │   ├── Todo.json                        # Task NodeType (reusable)
-│   ├── Todo/Code/                       # Todo.cs, TodoViews.cs, Status.cs, etc.
-│   ├── Code/                            # ProjectViews.cs (project-level views)
+│   ├── Todo/_Source/                    # Todo.cs, TodoViews.cs, Status.cs, etc.
+│   ├── _Source/                         # ProjectViews.cs (project-level views)
 │   └── TodoAgent.md                     # AI agent for task management
 ├── CustomerOnboarding/                  # Project: Insurance onboarding
 │   └── Todo/                            # Tasks: ReviewKYC, CalculateRiskScore, etc.

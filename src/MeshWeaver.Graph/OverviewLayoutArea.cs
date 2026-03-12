@@ -87,9 +87,9 @@ public static class OverviewLayoutArea
     }
 
     private static UiControl BuildTitleReadView(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         MeshNode node,
-        string dataId,
+        string _1,
         string editStateId,
         bool canEdit)
     {
@@ -112,7 +112,7 @@ public static class OverviewLayoutArea
     }
 
     private static UiControl BuildTitleEditView(
-        LayoutAreaHost host,
+        LayoutAreaHost _,
         string dataId,
         string editStateId)
     {

@@ -20,14 +20,6 @@ public record RouteConfiguration(IMessageHub Hub)
             // Check if the parent hub is disposing before attempting to create/route to hosted hubs
             if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
             {
-                // During disposal, reject messages to hosted hubs to prevent deadlocks
-                Hub.Post(
-                    new DeliveryFailure(d)
-                    {
-                        ErrorType = ErrorType.Rejected,
-                        Message = $"Cannot route to hosted hub {routedAddress} - parent hub {Hub.Address} is disposing"
-                    }, o => o.ResponseFor(d)
-                );
                 return d.Failed("Parent hub disposing");
             }
 
@@ -101,13 +93,6 @@ public record RouteConfiguration(IMessageHub Hub)
                 {
                     if (Hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
                     {
-                        Hub.Post(
-                            new DeliveryFailure(delivery)
-                            {
-                                ErrorType = ErrorType.Rejected,
-                                Message = $"Cannot route to hosted hub {delivery.Target.Host} - parent hub {Hub.Address} is disposing"
-                            }, o => o.ResponseFor(delivery)
-                        );
                         return delivery.Failed("Parent hub disposing");
                     }
 

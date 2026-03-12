@@ -18,7 +18,7 @@ public enum NotificationType
 
 /// <summary>
 /// Represents a notification for a user.
-/// Notifications live under User/{userId} independently — no ISatelliteContent.
+/// Notifications live under User/{userId} independently — not satellite content.
 /// </summary>
 public record Notification
 {

@@ -9,8 +9,8 @@ using Orleans.Streams;
 namespace MeshWeaver.Hosting.Orleans;
 
 [StatelessWorker(1)]
-public class RoutingGrain(
-    IMeshCatalog meshCatalog,
+internal class RoutingGrain(
+    IPathResolver pathResolver,
     ILogger<RoutingGrain> logger) : Grain, IRoutingGrain
 {
     public async Task<IMessageDelivery> RouteMessage(IMessageDelivery delivery)
@@ -18,7 +18,7 @@ public class RoutingGrain(
         var address = GetHostAddress(delivery.Target!);
 
 
-        var resolution = await meshCatalog.ResolvePathAsync(address.ToString());
+        var resolution = await pathResolver.ResolvePathAsync(address.ToString());
         var grainKey = resolution?.Prefix;
 
         if (grainKey != null)

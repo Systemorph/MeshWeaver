@@ -31,14 +31,12 @@ public static class MeshNodeExtensions
 
     /// <summary>
     /// Gets the primary node path for this node.
-    /// For satellite nodes (Comment, Thread), returns the primary node's path.
+    /// For satellite nodes, returns the MainNode path.
     /// For regular nodes, returns the node's own path.
     /// </summary>
     public static string GetPrimaryPath(this MeshNode node)
     {
-        if (node.Content is ISatelliteContent satellite && !string.IsNullOrEmpty(satellite.PrimaryNodePath))
-            return satellite.PrimaryNodePath;
-        return node.Path;
+        return node.MainNode;
     }
 
     /// <summary>
@@ -65,8 +63,16 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(MeshNodeCardControl), nameof(MeshNodeCardControl));
         typeRegistry.WithType(typeof(Approval), nameof(Approval));
         typeRegistry.WithType(typeof(ApprovalStatus), nameof(ApprovalStatus));
+        typeRegistry.WithType(typeof(TrackedChange), nameof(TrackedChange));
+        typeRegistry.WithType(typeof(TrackedChangeType), nameof(TrackedChangeType));
+        typeRegistry.WithType(typeof(TrackedChangeStatus), nameof(TrackedChangeStatus));
         typeRegistry.WithType(typeof(Notification), nameof(Notification));
         typeRegistry.WithType(typeof(NotificationType), nameof(NotificationType));
+        typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
+        typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
+        typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
+        typeRegistry.WithType(typeof(ExecuteThreadMessageRequest), nameof(ExecuteThreadMessageRequest));
+        typeRegistry.WithType(typeof(ExecuteThreadMessageResponse), nameof(ExecuteThreadMessageResponse));
         return typeRegistry;
     }
 }

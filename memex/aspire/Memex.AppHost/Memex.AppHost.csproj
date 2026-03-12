@@ -21,5 +21,6 @@
     <PackageReference Include="Aspire.Hosting.Orleans" />
     <PackageReference Include="Aspire.Hosting.Azure.Storage" />
     <PackageReference Include="Aspire.Hosting.PostgreSQL" />
+    <PackageReference Include="Aspire.Hosting.Azure.PostgreSQL" />
   </ItemGroup>
 </Project>

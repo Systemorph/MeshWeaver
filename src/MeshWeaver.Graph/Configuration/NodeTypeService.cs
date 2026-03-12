@@ -48,6 +48,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     // Compilation errors by nodeTypePath - tracks last compilation failure for error reporting
     private readonly ConcurrentDictionary<string, string> _compilationErrors = new();
 
+    // Cached access rules extracted from hub configurations
+    private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
+
     public NodeTypeService(
         IMessageHub meshHub,
         MeshConfiguration meshConfiguration,
@@ -107,6 +110,13 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 _notCreatableTypes[nodeTypePath] = true;
                 logger.LogDebug("Marked {Path} as NotCreatable", nodeTypePath);
             }
+
+            var accessRuleSet = configured.GetNodeAccessRuleSet();
+            if (accessRuleSet != null)
+            {
+                _accessRules[nodeTypePath] = accessRuleSet.ToAccessRule(nodeTypePath);
+                logger.LogDebug("Cached AccessRule for {Path}", nodeTypePath);
+            }
         }
         catch (Exception ex)
         {
@@ -121,6 +131,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     public CreatableTypesRules? GetCreatableTypesRules(string nodeTypePath)
     {
         return _creatableTypesRules.GetValueOrDefault(nodeTypePath);
+    }
+
+    /// <summary>
+    /// Gets the access rule extracted from the hub configuration for a node type.
+    /// </summary>
+    public INodeTypeAccessRule? GetAccessRule(string nodeTypePath)
+    {
+        return _accessRules.GetValueOrDefault(nodeTypePath);
     }
 
     /// <summary>
@@ -211,6 +229,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _hubConfigurations.TryRemove(nodeTypePath, out _);
         _creatableTypesRules.TryRemove(nodeTypePath, out _);
         _notCreatableTypes.TryRemove(nodeTypePath, out _);
+        _accessRules.TryRemove(nodeTypePath, out _);
 
         // Dispose subscription (will re-subscribe on next access)
         if (_subscriptions.TryRemove(nodeTypePath, out var subscription))
@@ -520,20 +539,17 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<(NodeTypeRelease? Release, MeshNode? Node)> GatherInputsAsync(string nodeTypePath, CancellationToken ct)
     {
-        var meshQuery = meshHub.ServiceProvider.GetService<IMeshQuery>();
-        if (meshQuery == null)
+        // Use IMeshStorage directly to bypass routing/hub creation.
+        // This avoids the circular dependency: compilation → routing → hub creation → needs compilation.
+        var meshStorage = meshHub.ServiceProvider.GetService<IMeshStorage>();
+        if (meshStorage == null)
         {
-            logger.LogWarning("IMeshQuery not available for {NodeTypePath}", nodeTypePath);
+            logger.LogWarning("IMeshStorage not available for {NodeTypePath}", nodeTypePath);
             return (null, null);
         }
 
-        // Get the node via mesh query
-        MeshNode? node = null;
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{nodeTypePath}", ct: ct).WithCancellation(ct))
-        {
-            node = n;
-            break;
-        }
+        // Get the node directly from persistence (no routing)
+        var node = await meshStorage.GetNodeAsync(nodeTypePath, ct);
         if (node == null)
         {
             logger.LogDebug("No node found for {NodeTypePath}", nodeTypePath);
@@ -548,11 +564,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return (null, null);
         }
 
-        // Get CodeConfigurations from child MeshNodes under /Code path
-        // Collect ALL CodeConfiguration files and combine them
+        // Get CodeConfigurations from child MeshNodes under /_Source path directly
         var codeFiles = new List<string>();
-        var codeQuery = $"namespace:{nodeTypePath}/Code";
-        await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
+        await foreach (var codeNode in meshStorage.GetChildrenAsync($"{nodeTypePath}/_Source"))
         {
             if (codeNode.Content is CodeConfiguration codeConfig && !string.IsNullOrEmpty(codeConfig.Code))
             {
@@ -560,12 +574,12 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             }
         }
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Code/LineOfBusiness)
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
         if (compilationService != null)
         {
             for (int i = 0; i < codeFiles.Count; i++)
             {
-                codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshQuery, ct);
+                codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshStorage, ct);
             }
         }
 
@@ -715,11 +729,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         string nodePath,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var meshQuery = meshHub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = meshHub.ServiceProvider.GetService<IMeshService>();
 
         if (meshQuery == null)
         {
-            logger.LogWarning("IMeshQuery not available for GetCreatableTypesAsync");
+            logger.LogWarning("IMeshService not available for GetCreatableTypesAsync");
             yield break;
         }
 
@@ -748,7 +762,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         if (!string.IsNullOrEmpty(nodePath))
         {
             // Child NodeTypes under this node's path
-            var childQuery = $"path:{nodePath} nodeType:NodeType scope:children";
+            var childQuery = $"namespace:{nodePath} nodeType:NodeType";
             await foreach (var childType in meshQuery.QueryAsync<MeshNode>(childQuery, ct: ct).WithCancellation(ct))
             {
                 creatableTypes.Add(childType.Path);
@@ -758,7 +772,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             // e.g., ProductLaunch (nodeType: ACME/Project) can create ACME/Project/Todo
             if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
             {
-                var nodeTypeChildQuery = $"path:{currentNodeType} nodeType:NodeType scope:children";
+                var nodeTypeChildQuery = $"namespace:{currentNodeType} nodeType:NodeType";
                 await foreach (var childType in meshQuery.QueryAsync<MeshNode>(nodeTypeChildQuery, ct: ct).WithCancellation(ct))
                 {
                     creatableTypes.Add(childType.Path);
@@ -859,7 +873,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<CreatableTypeInfo?> GetTypeInfoAsync(
         string typePath,
-        IMeshQuery meshQuery,
+        IMeshService meshQuery,
         CancellationToken ct)
     {
         // Check for global types first
@@ -964,6 +978,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _compilationTasks.Clear();
         _releaseKeys.Clear();
         _hubConfigurations.Clear();
+        _accessRules.Clear();
     }
 
     /// <summary>

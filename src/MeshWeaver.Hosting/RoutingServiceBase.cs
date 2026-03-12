@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Domain;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting
 {
-    public abstract class RoutingServiceBase(IMessageHub hub) : IRoutingService
+    internal abstract class RoutingServiceBase(IMessageHub hub) : IRoutingService
     {
         protected readonly ITypeRegistry TypeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
         protected readonly IMessageHub Mesh = hub;
@@ -32,6 +32,10 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken
             )
         {
+            // Don't route during shutdown - recipients are likely also disposing
+            if (Mesh.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+                return;
+
             try
             {
                 var address = GetHostAddress(delivery.Target!);
@@ -45,28 +49,21 @@ namespace MeshWeaver.Hosting
                 }
 
                 var hostAddress = GetHostAddress(address);
-                var result = await RouteMessageAsync(delivery, hostAddress, cancellationToken);
-
-                // If routing failed (e.g. no node found), send a DeliveryFailure response
-                // so the caller gets an error instead of waiting indefinitely
-                if (result.State == MessageDeliveryState.Failed)
-                {
-                    Mesh.Post(new DeliveryFailure(delivery, $"Routing failed for {delivery.Target}")
-                    {
-                        ErrorType = ErrorType.NotFound
-                    },
-                        o => o.ResponseFor(delivery));
-                }
+                await RouteMessageAsync(delivery, hostAddress, cancellationToken);
             }
             catch (Exception e)
             {
-                Mesh.Post(new DeliveryFailure(delivery)
+                // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown
+                if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
                 {
-                    Message = e.Message,
-                    ExceptionType = e.GetType().Name,
-                    StackTrace = e.StackTrace!
-                },
-                    o => o.ResponseFor(delivery));
+                    Mesh.Post(new DeliveryFailure(delivery)
+                    {
+                        Message = e.Message,
+                        ExceptionType = e.GetType().Name,
+                        StackTrace = e.StackTrace!
+                    },
+                        o => o.ResponseFor(delivery));
+                }
             }
         }
 
@@ -101,11 +98,19 @@ namespace MeshWeaver.Hosting
                 if (!string.IsNullOrEmpty(resolution.Remainder))
                 {
                     delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
+                    // Update target to the resolved hub address to prevent routing loops.
+                    // The hub at the prefix will handle the message using the UnifiedPath property.
+                    delivery = delivery.WithTarget(address);
                 }
             }
 
-            // Get node - HubConfiguration is now an IObservable so no deadlock
-            var node = await MeshCatalog.GetNodeAsync(address);
+            // Get node - skip RLS validation for routing (RLS is enforced at handler level)
+            var node = await MeshCatalog.GetNodeAsync(address, skipValidation: true);
+
+            var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
+            logger?.LogDebug("RouteMessageAsync: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",
+                delivery.Message.GetType().Name, address, originalAddress,
+                resolution?.Prefix, node != null, node?.NodeType, node?.HubConfiguration != null);
 
             return await RouteImplAsync(delivery, node, address, cancellationToken);
         }
@@ -116,11 +121,13 @@ namespace MeshWeaver.Hosting
             CancellationToken cancellationToken);
 
 
-        private Address GetHostAddress(Address address)
+        private Address GetHostAddress(Address address, int depth = 0)
         {
+            if (depth > 50)
+                throw new InvalidOperationException($"GetHostAddress recursion depth exceeded 50. Address: {address}");
             if (address.Host != null)
             {
-                var host = GetHostAddress(address.Host);
+                var host = GetHostAddress(address.Host, depth + 1);
                 if (host.Type == AddressExtensions.MeshType)
                     return address with { Host = null };
                 return host;

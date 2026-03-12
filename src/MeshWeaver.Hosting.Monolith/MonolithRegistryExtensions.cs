@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Mesh;
+﻿using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -11,8 +12,7 @@ public static class MonolithRegistryExtensions
     {
         builder.ConfigureServices(services =>
         {
-            // Use TryAdd so user can register their own catalog first
-            services.TryAddSingleton<IMeshCatalog, MeshCatalog>();
+            services.AddMeshCatalog();
             services.TryAddSingleton<IRoutingService, MonolithRoutingService>();
             return services;
         });

@@ -78,7 +78,7 @@ config.WithContentType<Organization>()
 
 # Content Record
 
-Define the content type in a Code/dataModel.json file:
+Define the content type in a `_Source/dataModel.json` file:
 
 ```csharp
 using System.ComponentModel.DataAnnotations;
@@ -154,7 +154,7 @@ config
 }
 ```
 
-## 2. Create Story/Code/dataModel.json
+## 2. Create Story/_Source/dataModel.json
 ```json
 {
   "code": "public record Story { [Key] public string Id { get; init; } public string Title { get; init; } public string? Markdown { get; init; } }"

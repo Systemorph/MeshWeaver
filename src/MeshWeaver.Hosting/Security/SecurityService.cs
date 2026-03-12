@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -15,12 +16,15 @@ namespace MeshWeaver.Hosting.Security;
 /// - AccessAssignment MeshNodes: namespace = scope, id = {Subject}_Access, content has Id + Roles[] array
 /// - Permission evaluation walks AccessAssignment nodes from root to target path.
 /// - Built-in roles: Admin, Editor, Viewer, Commenter.
+///
+/// IMPORTANT: This service uses the UNSECURED persistence core directly to avoid
+/// circular dependency (security checking cannot go through security-filtered persistence).
 /// </summary>
-public class SecurityService : ISecurityService
+internal class SecurityService : ISecurityService
 {
     private const string AccessPartitionName = "Access";
 
-    private readonly IPersistenceService _persistence;
+    private readonly IStorageService _persistenceCore;
     private readonly AccessService _accessService;
     private readonly ILogger<SecurityService> _logger;
     private readonly IMessageHub _hub;
@@ -49,24 +53,49 @@ public class SecurityService : ISecurityService
     // Static policies from IStaticNodeProvider (e.g., Doc, Agent, Role namespaces are read-only)
     private readonly Dictionary<string, PartitionAccessPolicy> _staticPolicies;
 
+    // Static access assignments from IStaticNodeProvider and MeshConfiguration
+    // Keyed by namespace (scope), value is list of AccessAssignment nodes at that scope
+    private readonly Dictionary<string, List<MeshNode>> _staticAccessAssignments;
+
     public SecurityService(
-        IPersistenceService persistence,
+        IStorageService persistenceCore,
         AccessService accessService,
         IMessageHub hub,
         ILogger<SecurityService> logger,
-        IEnumerable<IStaticNodeProvider> staticNodeProviders)
+        IEnumerable<IStaticNodeProvider> staticNodeProviders,
+        MeshConfiguration? meshConfiguration = null)
     {
-        _persistence = persistence;
+        _persistenceCore = persistenceCore;
         _accessService = accessService;
         _hub = hub;
         _logger = logger;
 
-        // Collect PartitionAccessPolicy nodes from static providers
-        _staticPolicies = staticNodeProviders
+        var allStaticNodes = staticNodeProviders
             .SelectMany(p => p.GetStaticNodes())
+            .ToList();
+
+        // Also include AccessAssignment nodes from MeshConfiguration (e.g., PublicAdminAccess)
+        if (meshConfiguration != null)
+        {
+            allStaticNodes.AddRange(
+                meshConfiguration.Nodes.Values
+                    .Where(n => n.NodeType == "AccessAssignment"));
+        }
+
+        // Collect PartitionAccessPolicy nodes from static providers (last-wins for duplicate namespaces)
+        _staticPolicies = allStaticNodes
             .Where(n => n.NodeType == "PartitionAccessPolicy" && n.Id == "_Policy" && n.Content is PartitionAccessPolicy)
-            .ToDictionary(n => n.Namespace ?? "", n => (PartitionAccessPolicy)n.Content!);
+            .GroupBy(n => n.Namespace ?? "")
+            .ToDictionary(g => g.Key, g => (PartitionAccessPolicy)g.Last().Content!);
+
+        // Collect AccessAssignment nodes keyed by their parent namespace (scope)
+        _staticAccessAssignments = allStaticNodes
+            .Where(n => n.NodeType == "AccessAssignment" && n.Content != null)
+            .GroupBy(n => n.Namespace ?? "")
+            .ToDictionary(g => g.Key, g => g.ToList());
     }
+
+    private JsonSerializerOptions Options => _hub.JsonSerializerOptions;
 
     #region Permission Evaluation
 
@@ -136,7 +165,25 @@ public class SecurityService : ISecurityService
                 permissionCap &= staticPolicy.GetPermissionCap();
             }
 
-            await foreach (var node in _persistence.GetChildrenAsync(scope).WithCancellation(ct))
+            // Check static access assignments from MeshConfiguration and IStaticNodeProvider
+            if (_staticAccessAssignments.TryGetValue(scope, out var staticAssignmentNodes))
+            {
+                foreach (var staticNode in staticAssignmentNodes)
+                {
+                    var staticAssignment = DeserializeAssignment(staticNode);
+                    if (staticAssignment == null || staticAssignment.AccessObject != userId)
+                        continue;
+
+                    foreach (var roleAssignment in staticAssignment.Roles)
+                    {
+                        if (string.IsNullOrEmpty(roleAssignment.Role))
+                            continue;
+                        roleAssignments[roleAssignment.Role] = (roleAssignment.Denied, depth);
+                    }
+                }
+            }
+
+            await foreach (var node in _persistenceCore.GetChildrenAsync(scope, Options).WithCancellation(ct))
             {
                 if (node.Content == null)
                     continue;
@@ -173,6 +220,13 @@ public class SecurityService : ISecurityService
                     roleAssignments[roleAssignment.Role] = (roleAssignment.Denied, depth);
                 }
             }
+        }
+
+        // Check Admin scope for PlatformAdmin assignments (global reach).
+        // PlatformAdmin stored at Admin/{userId}_Access should grant access to ALL paths.
+        if (!scopes.Contains("Admin"))
+        {
+            await CheckPlatformAdminAsync("Admin", userId, roleAssignments, scopes.Count, ct);
         }
 
         // Resolve permissions from non-denied role assignments
@@ -239,6 +293,46 @@ public class SecurityService : ISecurityService
         return scopes;
     }
 
+    /// <summary>
+    /// Checks the Admin scope for PlatformAdmin role assignments.
+    /// PlatformAdmin is a global role — even though stored in Admin namespace,
+    /// it grants full access to all paths.
+    /// </summary>
+    private async Task CheckPlatformAdminAsync(
+        string adminScope, string userId,
+        Dictionary<string, (bool Denied, int Depth)> roleAssignments,
+        int depth, CancellationToken ct)
+    {
+        // Check static access assignments at Admin scope
+        if (_staticAccessAssignments.TryGetValue(adminScope, out var staticNodes))
+        {
+            foreach (var staticNode in staticNodes)
+            {
+                var sa = DeserializeAssignment(staticNode);
+                if (sa?.AccessObject != userId) continue;
+                foreach (var ra in sa.Roles)
+                {
+                    if (ra.Role == "PlatformAdmin")
+                        roleAssignments["PlatformAdmin"] = (ra.Denied, depth);
+                }
+            }
+        }
+
+        // Check persisted access assignments at Admin scope
+        await foreach (var node in _persistenceCore.GetChildrenAsync(adminScope, Options).WithCancellation(ct))
+        {
+            if (node.NodeType != "AccessAssignment" || node.Content == null)
+                continue;
+            var assignment = DeserializeAssignment(node);
+            if (assignment?.AccessObject != userId) continue;
+            foreach (var ra in assignment.Roles)
+            {
+                if (ra.Role == "PlatformAdmin")
+                    roleAssignments["PlatformAdmin"] = (ra.Denied, depth);
+            }
+        }
+    }
+
     private AccessAssignment? DeserializeAssignment(MeshNode node)
     {
         if (node.Content is AccessAssignment aa)
@@ -247,7 +341,7 @@ public class SecurityService : ISecurityService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), _hub.JsonSerializerOptions);
+                return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText(), Options);
             }
             catch
             {
@@ -265,7 +359,7 @@ public class SecurityService : ISecurityService
         {
             try
             {
-                return System.Text.Json.JsonSerializer.Deserialize<PartitionAccessPolicy>(je.GetRawText(), _hub.JsonSerializerOptions);
+                return System.Text.Json.JsonSerializer.Deserialize<PartitionAccessPolicy>(je.GetRawText(), Options);
             }
             catch
             {
@@ -317,7 +411,7 @@ public class SecurityService : ISecurityService
             throw new InvalidOperationException($"Cannot modify built-in role: {role.Id}");
 
         var objects = new List<object>();
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
+        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(AccessPartitionName, null, Options).WithCancellation(ct))
         {
             if (obj is Role existing && existing.Id == role.Id)
                 continue;
@@ -325,7 +419,7 @@ public class SecurityService : ISecurityService
         }
 
         objects.Add(role);
-        await _persistence.SavePartitionObjectsAsync(AccessPartitionName, null, objects, ct);
+        await _persistenceCore.SavePartitionObjectsAsync(AccessPartitionName, null, objects, Options, ct);
         _customRoleCache[role.Id] = role;
     }
 
@@ -334,7 +428,7 @@ public class SecurityService : ISecurityService
         if (_customRolesLoaded)
             return;
 
-        await foreach (var obj in _persistence.GetPartitionObjectsAsync(AccessPartitionName, null).WithCancellation(ct))
+        await foreach (var obj in _persistenceCore.GetPartitionObjectsAsync(AccessPartitionName, null, Options).WithCancellation(ct))
         {
             if (obj is Role role && !BuiltInRoles.ContainsKey(role.Id))
                 _customRoleCache[role.Id] = role;
@@ -361,7 +455,7 @@ public class SecurityService : ISecurityService
         var path = string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}";
 
         // Try to load existing AccessAssignment node
-        var existingNode = await _persistence.GetNodeAsync(path, ct);
+        var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
         var roles = existingAssignment?.Roles?.ToList() ?? [];
@@ -374,6 +468,7 @@ public class SecurityService : ISecurityService
         {
             NodeType = "AccessAssignment",
             Name = $"{userId} Access",
+            MainNode = string.IsNullOrEmpty(ns) ? nodeId : ns,
             Content = new AccessAssignment
             {
                 AccessObject = userId,
@@ -382,7 +477,7 @@ public class SecurityService : ISecurityService
             }
         };
 
-        await _persistence.SaveNodeAsync(node, ct);
+        await _persistenceCore.SaveNodeAsync(node, Options, ct);
         ClearPermissionCache();
     }
 
@@ -399,7 +494,7 @@ public class SecurityService : ISecurityService
         var nodeId = $"{userId}_Access";
         var path = string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}";
 
-        var existingNode = await _persistence.GetNodeAsync(path, ct);
+        var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
         if (existingAssignment == null)
@@ -410,7 +505,7 @@ public class SecurityService : ISecurityService
         if (roles.Count == 0)
         {
             // No roles left, delete the node
-            await _persistence.DeleteNodeAsync(path, false, ct);
+            await _persistenceCore.DeleteNodeAsync(path, false, ct);
         }
         else
         {
@@ -426,7 +521,7 @@ public class SecurityService : ISecurityService
                     Roles = roles
                 }
             };
-            await _persistence.SaveNodeAsync(node, ct);
+            await _persistenceCore.SaveNodeAsync(node, Options, ct);
         }
 
         ClearPermissionCache();
@@ -453,7 +548,7 @@ public class SecurityService : ISecurityService
             return cached;
 
         var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
-        var node = await _persistence.GetNodeAsync(path, ct);
+        var node = await _persistenceCore.GetNodeAsync(path, Options, ct);
         var policy = node != null ? DeserializePolicy(node) : null;
         _policyCache[ns] = policy;
         return policy;
@@ -474,7 +569,7 @@ public class SecurityService : ISecurityService
             Content = policy
         };
 
-        await _persistence.SaveNodeAsync(node, ct);
+        await _persistenceCore.SaveNodeAsync(node, Options, ct);
         _policyCache[ns] = policy;
         ClearPermissionCache();
     }
@@ -488,7 +583,7 @@ public class SecurityService : ISecurityService
             string.IsNullOrEmpty(ns) ? "(global)" : ns);
 
         var path = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
-        await _persistence.DeleteNodeAsync(path, false, ct);
+        await _persistenceCore.DeleteNodeAsync(path, false, ct);
         _policyCache.TryRemove(ns, out _);
         ClearPermissionCache();
     }

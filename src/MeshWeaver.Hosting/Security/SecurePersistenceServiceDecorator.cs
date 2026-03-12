@@ -8,24 +8,29 @@ using System.Runtime.CompilerServices;
 namespace MeshWeaver.Hosting.Security;
 
 /// <summary>
-/// Decorator that adds security filtering to IPersistenceService operations.
+/// Decorator that adds security filtering to IMeshStorage operations.
 /// Implements the secure query methods by delegating to the inner service
 /// and filtering results based on user permissions.
 /// </summary>
-public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
+internal class SecurePersistenceServiceDecorator : IStorageService
 {
-    private readonly IPersistenceServiceCore _inner;
+    private readonly IStorageService _inner;
     private readonly Lazy<ISecurityService> _securityService;
     private readonly ILogger<SecurePersistenceServiceDecorator> _logger;
+    private readonly Dictionary<string, INodeTypeAccessRule> _nodeTypeAccessRules;
 
     public SecurePersistenceServiceDecorator(
-        IPersistenceServiceCore inner,
+        IStorageService inner,
         Lazy<ISecurityService> securityService,
-        ILogger<SecurePersistenceServiceDecorator> logger)
+        ILogger<SecurePersistenceServiceDecorator> logger,
+        IEnumerable<INodeTypeAccessRule>? nodeTypeAccessRules = null)
     {
         _inner = inner;
         _securityService = securityService;
         _logger = logger;
+        _nodeTypeAccessRules = (nodeTypeAccessRules ?? [])
+            .Where(r => r.SupportedOperations.Contains(NodeOperation.Read))
+            .ToDictionary(r => r.NodeType, StringComparer.OrdinalIgnoreCase);
     }
 
     private ISecurityService SecurityService => _securityService.Value;
@@ -38,50 +43,54 @@ public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
     private static bool IsPubliclyReadable(MeshNode node)
         => node.NodeType == MeshNode.NodeTypePath;
 
+    /// <summary>
+    /// Checks if a user has read access to a node.
+    /// Checks in order: publicly readable → INodeTypeAccessRule → ISecurityService permissions.
+    /// </summary>
+    private async Task<bool> HasReadAccessAsync(MeshNode node, string? userId, CancellationToken ct = default)
+    {
+        if (IsPubliclyReadable(node))
+            return true;
+
+        // Check INodeTypeAccessRule (e.g., User, VUser, Organization nodes with WithPublicRead)
+        if (!string.IsNullOrEmpty(node.NodeType)
+            && _nodeTypeAccessRules.TryGetValue(node.NodeType, out var rule))
+        {
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node
+            };
+            if (await rule.HasAccessAsync(context, userId, ct))
+                return true;
+        }
+
+        return string.IsNullOrEmpty(userId)
+            ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read, ct)
+            : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read, ct);
+    }
+
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var node = await _inner.GetNodeAsync(path, options, ct);
         if (node == null)
             return null;
 
-        if (IsPubliclyReadable(node))
+        if (await HasReadAccessAsync(node, userId, ct))
             return node;
 
-        var hasPermission = string.IsNullOrEmpty(userId)
-            ? await SecurityService.HasPermissionAsync(path, Permission.Read, ct)
-            : await SecurityService.HasPermissionAsync(path, userId, Permission.Read, ct);
-
-        if (!hasPermission)
-        {
-            _logger.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
-            return null;
-        }
-
-        return node;
+        _logger.LogDebug("SecurePersistence: User {UserId} denied read access to {Path}", userId ?? "(anonymous)", path);
+        return null;
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenSecureAsync(string? parentPath, string? userId, JsonSerializerOptions options)
     {
         await foreach (var node in _inner.GetChildrenAsync(parentPath, options))
         {
-            if (IsPubliclyReadable(node))
-            {
+            if (await HasReadAccessAsync(node, userId))
                 yield return node;
-                continue;
-            }
-
-            var hasPermission = string.IsNullOrEmpty(userId)
-                ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
-                : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read);
-
-            if (hasPermission)
-            {
-                yield return node;
-            }
             else
-            {
                 _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
-            }
         }
     }
 
@@ -89,24 +98,10 @@ public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
     {
         await foreach (var node in _inner.GetDescendantsAsync(parentPath, options))
         {
-            if (IsPubliclyReadable(node))
-            {
+            if (await HasReadAccessAsync(node, userId))
                 yield return node;
-                continue;
-            }
-
-            var hasPermission = string.IsNullOrEmpty(userId)
-                ? await SecurityService.HasPermissionAsync(node.Path, Permission.Read)
-                : await SecurityService.HasPermissionAsync(node.Path, userId, Permission.Read);
-
-            if (hasPermission)
-            {
-                yield return node;
-            }
             else
-            {
                 _logger.LogTrace("SecurePersistence: Filtering out {Path} for user {UserId}", node.Path, userId ?? "(anonymous)");
-            }
         }
     }
 
@@ -137,6 +132,10 @@ public class SecurePersistenceServiceDecorator : IPersistenceServiceCore
 
     public Task<bool> ExistsAsync(string path, CancellationToken ct = default)
         => _inner.ExistsAsync(path, ct);
+
+    public Task<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatchAsync(
+        string fullPath, JsonSerializerOptions options, CancellationToken ct = default)
+        => _inner.FindBestPrefixMatchAsync(fullPath, options, ct);
 
     public Task InitializeAsync(CancellationToken ct = default)
         => _inner.InitializeAsync(ct);

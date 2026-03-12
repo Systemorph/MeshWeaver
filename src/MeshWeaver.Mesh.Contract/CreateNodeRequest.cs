@@ -151,7 +151,12 @@ public enum NodeDeletionRejectionReason
     /// <summary>
     /// Deletion validation failed.
     /// </summary>
-    ValidationFailed
+    ValidationFailed,
+
+    /// <summary>
+    /// A child node could not be deleted, so the parent was not deleted either.
+    /// </summary>
+    ChildDeletionFailed
 }
 
 /// <summary>
@@ -228,4 +233,70 @@ public enum NodeUpdateRejectionReason
     /// The node was modified by another process (optimistic concurrency conflict).
     /// </summary>
     ConcurrencyConflict
+}
+
+/// <summary>
+/// Request to move a MeshNode to a new path.
+/// </summary>
+/// <param name="SourcePath">The current path of the node</param>
+/// <param name="TargetPath">The new path for the node</param>
+public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<MoveNodeResponse>;
+
+/// <summary>
+/// Response for node move request.
+/// </summary>
+/// <param name="Node">The moved node at its new path, or null if failed</param>
+public record MoveNodeResponse(MeshNode? Node)
+{
+    /// <summary>
+    /// Error message if the move failed.
+    /// </summary>
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// Indicates if the move was successful.
+    /// </summary>
+    public bool Success => Error == null && Node != null;
+
+    /// <summary>
+    /// The rejection reason if the move was rejected.
+    /// </summary>
+    public NodeMoveRejectionReason? RejectionReason { get; init; }
+
+    /// <summary>
+    /// Creates a successful move response.
+    /// </summary>
+    public static MoveNodeResponse Ok(MeshNode node) => new(node);
+
+    /// <summary>
+    /// Creates a failed move response with an error message.
+    /// </summary>
+    public static MoveNodeResponse Fail(string error, NodeMoveRejectionReason reason = NodeMoveRejectionReason.Unknown)
+        => new((MeshNode?)null) { Error = error, RejectionReason = reason };
+}
+
+/// <summary>
+/// Reasons why a node move request can be rejected.
+/// </summary>
+public enum NodeMoveRejectionReason
+{
+    /// <summary>
+    /// Unknown or unspecified reason.
+    /// </summary>
+    Unknown,
+
+    /// <summary>
+    /// The source node was not found.
+    /// </summary>
+    SourceNotFound,
+
+    /// <summary>
+    /// A node already exists at the target path.
+    /// </summary>
+    TargetAlreadyExists,
+
+    /// <summary>
+    /// Move validation failed.
+    /// </summary>
+    ValidationFailed
 }

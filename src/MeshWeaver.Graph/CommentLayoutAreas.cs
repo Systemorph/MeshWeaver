@@ -4,7 +4,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -59,7 +58,7 @@ public static class CommentLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
@@ -76,7 +75,7 @@ public static class CommentLayoutAreas
         if (meshQuery != null)
         {
             meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{hubPath} nodeType:{CommentNodeType.NodeType} scope:children"))
+                    $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}"))
                 .Scan(new List<MeshNode>(), (list, change) =>
                 {
                     if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
@@ -159,8 +158,10 @@ public static class CommentLayoutAreas
         var canAct = !string.IsNullOrEmpty(currentUser);
 
         var hasContent = !string.IsNullOrWhiteSpace(comment.Text);
+        var isResolved = comment.Status == CommentStatus.Resolved;
 
-        var container = Controls.Stack.WithWidth("100%");
+        var container = Controls.Stack.WithWidth("100%")
+            .WithStyle(isResolved ? "opacity: 0.5;" : "");
 
         // Header: author on the left, time + action buttons right-aligned
         var author = System.Web.HttpUtility.HtmlEncode(comment.Author);
@@ -191,7 +192,7 @@ public static class CommentLayoutAreas
                     }));
         if (canAct)
             rightGroup = rightGroup.WithView(BuildReplyButton(host, hubPath, comment, currentUser));
-        if (canAct)
+        if (canAct && !isResolved && IsTopLevelComment(hubPath, comment))
             rightGroup = rightGroup.WithView(BuildResolveButton(host, hubPath, comment));
         if (canDelete || canComment)
             rightGroup = rightGroup.WithView(BuildDeleteButton(host, hubPath));
@@ -208,7 +209,7 @@ public static class CommentLayoutAreas
                 // Initialize edit state once
                 if (!initialized[0])
                 {
-                    h.UpdateData(editStateId, !hasContent);
+                    h.UpdateData(editStateId, false);
                     initialized[0] = true;
                 }
 
@@ -275,7 +276,7 @@ public static class CommentLayoutAreas
                         for (var i = 0; i < shown; i++)
                         {
                             section = section.WithView(Controls.Stack
-                                .WithStyle("margin-left: 4px; padding-left: 6px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
+                                .WithStyle("margin-left: 0; padding-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
                                 .WithView(replyControls[i]));
                         }
 
@@ -378,17 +379,14 @@ public static class CommentLayoutAreas
                         .Take(1)
                         .Subscribe(data => newText = data?.GetValueOrDefault("text")?.ToString() ?? "");
 
-                    // Save via persistence — update only the Text property of the Comment
-                    var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                    if (persistence != null)
+                    // Save via message — update only the Text property of the Comment
+                    var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
+                    if (node != null)
                     {
-                        var node = await persistence.GetNodeAsync(hubPath);
-                        if (node != null)
-                        {
-                            var comment = node.Content as Comment ?? new Comment();
-                            var updatedNode = node with { Content = comment with { Text = newText } };
-                            await persistence.SaveNodeAsync(updatedNode);
-                        }
+                        var comment = node.Content as Comment ?? new Comment();
+                        var updatedNode = node with { Content = comment with { Text = newText } };
+                        host.Hub.Post(new UpdateNodeRequest(updatedNode));
                     }
 
                     ctx.Host.UpdateData(editStateId, false);
@@ -404,8 +402,8 @@ public static class CommentLayoutAreas
     /// </summary>
     private static UiControl BuildReplyCreateForm(LayoutAreaHost host, string replyPath, string replyPathStateId)
     {
-        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var replyTextDataId = $"replyText_{replyPath.Replace("/", "_")}";
 
         host.UpdateData(replyTextDataId, new Dictionary<string, object?> { ["text"] = "" });
@@ -433,7 +431,7 @@ public static class CommentLayoutAreas
                 .WithAppearance(Appearance.Neutral)
                 .WithClickAction(async _ =>
                 {
-                    try { await meshCatalog.DeleteNodeAsync(replyPath); } catch { }
+                    try { await nodeFactory.DeleteNodeAsync(replyPath); } catch { }
                     host.UpdateData(replyPathStateId, "");
                 }))
             .WithView(Controls.Button("Create")
@@ -447,19 +445,16 @@ public static class CommentLayoutAreas
                         .Take(1)
                         .Subscribe(data => text = data?.GetValueOrDefault("text")?.ToString() ?? "");
 
-                    if (persistence != null)
+                    var node = await meshQuery.QueryAsync<MeshNode>($"path:{replyPath}").FirstOrDefaultAsync();
+                    if (node != null)
                     {
-                        var node = await persistence.GetNodeAsync(replyPath);
-                        if (node != null)
+                        var replyComment = node.Content as Comment ?? new Comment();
+                        var activeNode = node with
                         {
-                            var replyComment = node.Content as Comment ?? new Comment();
-                            var activeNode = node with
-                            {
-                                State = MeshNodeState.Active,
-                                Content = replyComment with { Text = text }
-                            };
-                            await persistence.SaveNodeAsync(activeNode);
-                        }
+                            State = MeshNodeState.Active,
+                            Content = replyComment with { Text = text }
+                        };
+                        host.Hub.Post(new UpdateNodeRequest(activeNode));
                     }
 
                     host.UpdateData(replyPathStateId, "");
@@ -469,7 +464,7 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Reply icon button. Creates a transient reply node via IMeshCatalog and shows inline Create area.
+    /// Builds the Reply icon button. Creates a transient reply node via IMeshService and shows inline Create area.
     /// </summary>
     private static UiControl BuildReplyButton(LayoutAreaHost host, string hubPath, Comment comment, string currentUser)
     {
@@ -494,8 +489,8 @@ public static class CommentLayoutAreas
                     }
                 };
 
-                var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                await meshCatalog.CreateTransientAsync(replyNode);
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                await nodeFactory.CreateTransientAsync(replyNode);
 
                 // Expand the replies section so the new reply is visible
                 var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
@@ -506,36 +501,36 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Resolve (checkmark) icon button. Marks the comment as Resolved and strips markers from document.
+    /// Builds the Resolve (checkmark) icon button. Marks the comment as Resolved.
+    /// Markers are kept in the document so resolved comments remain visible (grayed out) in the sidebar.
     /// </summary>
     private static UiControl BuildResolveButton(LayoutAreaHost host, string hubPath, Comment comment)
     {
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #4ade80;\" title=\"Resolve\">✓</span>")
             .WithClickAction(async _ =>
             {
-                var persistence = host.Hub.ServiceProvider.GetService<IPersistenceService>();
-                if (persistence == null) return;
+                var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
                 // Update comment status to Resolved
-                var node = await persistence.GetNodeAsync(hubPath);
+                var node = await meshQuery.QueryAsync<MeshNode>($"path:{hubPath}").FirstOrDefaultAsync();
                 if (node != null)
                 {
                     var updatedNode = node with { Content = comment with { Status = CommentStatus.Resolved } };
-                    await persistence.SaveNodeAsync(updatedNode);
-                }
-
-                // Remove comment markers from the document markdown
-                if (!string.IsNullOrEmpty(comment.PrimaryNodePath) && !string.IsNullOrEmpty(comment.MarkerId))
-                {
-                    var docNode = await persistence.GetNodeAsync(comment.PrimaryNodePath);
-                    if (docNode?.Content is string docContent)
-                    {
-                        var cleaned = AnnotationMarkdownExtension.ResolveComment(docContent, comment.MarkerId);
-                        var updatedDoc = docNode with { Content = cleaned };
-                        await persistence.SaveNodeAsync(updatedDoc);
-                    }
+                    host.Hub.Post(new UpdateNodeRequest(updatedNode));
                 }
             });
+    }
+
+    /// <summary>
+    /// Returns true if this comment is a top-level comment (direct child of the document node),
+    /// false if it is a reply (child of another comment).
+    /// </summary>
+    private static bool IsTopLevelComment(string hubPath, Comment comment)
+    {
+        if (string.IsNullOrEmpty(comment.PrimaryNodePath))
+            return true;
+        var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
+        return string.Equals(parentPath, comment.PrimaryNodePath, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -546,8 +541,8 @@ public static class CommentLayoutAreas
         return Controls.Html("<span style=\"cursor: pointer; font-size: 0.8rem; color: #f87171;\" title=\"Delete\">✕</span>")
             .WithClickAction(async _ =>
             {
-                var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                await meshCatalog.DeleteNodeAsync(hubPath, recursive: true);
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                await nodeFactory.DeleteNodeAsync(hubPath);
             });
     }
 
@@ -574,8 +569,8 @@ public static class CommentLayoutAreas
                 Controls.MenuItem("Delete", FluentIcons.Delete(IconSize.Size16))
                     .WithClickAction(async _ =>
                     {
-                        var meshCatalog = host.Hub.ServiceProvider.GetRequiredService<IMeshCatalog>();
-                        await meshCatalog.DeleteNodeAsync(hubPath, recursive: true);
+                        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                        await nodeFactory.DeleteNodeAsync(hubPath);
                     }));
         }
 

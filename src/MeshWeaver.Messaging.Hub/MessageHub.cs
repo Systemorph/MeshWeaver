@@ -50,8 +50,13 @@ public sealed class MessageHub : IMessageHub
         if (RunLevel < MessageHubRunLevel.Started)
         {
             RunLevel = MessageHubRunLevel.Started;
-            hasStarted.SetResult();
+            hasStarted.TrySetResult();
         }
+    }
+
+    public void FailStartup(Exception error)
+    {
+        hasStarted.TrySetException(error);
     }
 
     /// <summary>
@@ -262,30 +267,28 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    private async Task<IMessageDelivery> HandleMessageAsync(
+    private Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
+    ) => HandleMessageAsyncImpl(delivery, node, cancellationToken, 0);
+
+    private async Task<IMessageDelivery> HandleMessageAsyncImpl(
+        IMessageDelivery delivery,
+        LinkedListNode<AsyncDelivery> node,
+        CancellationToken cancellationToken,
+        int depth
     )
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        if (depth > 500)
+            throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
 
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
-
         if (node.Next == null)
-        {
-            logger.LogTrace("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
-        }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
-        return await HandleMessageAsync(delivery, node.Next, cancellationToken);
+        return await HandleMessageAsyncImpl(delivery, node.Next, cancellationToken, depth + 1);
     }
 
     public bool OpenGate(string name)
@@ -681,9 +684,36 @@ public sealed class MessageHub : IMessageHub
             logger.LogDebug("Hub {address} has no hosted hubs to dispose", Address);
         }
 
+        // Cancel any in-progress message handlers (e.g. stuck initialization) to free the
+        // execution block so that the ShutdownRequest can be processed immediately.
+        // ShutdownRequest uses CancellationToken.None so it won't be affected.
+        messageService.CancelExecution();
+
         logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)",
             Address, Version, totalStopwatch.ElapsedMilliseconds);
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+
+        // Safety net: if the normal shutdown path deadlocks for any reason,
+        // force-complete the disposal task after a timeout to prevent indefinite hangs.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                if (!disposingTaskCompletionSource.Task.IsCompleted)
+                {
+                    logger.LogError(
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within 5 seconds. " +
+                        "RunLevel={RunLevel}. Force-completing disposal to prevent hang.",
+                        Address, RunLevel);
+                    disposingTaskCompletionSource.TrySetResult();
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error in disposal safety timeout for hub {Address}", Address);
+            }
+        });
     }
 
     private void DisposeImpl()
@@ -763,22 +793,21 @@ public sealed class MessageHub : IMessageHub
                 {
                     try
                     {
-                        logger.LogDebug("Awaiting disposal for hosted hubs in {address}", Address);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
+                            Address, hostedHubs.Disposal?.IsCompleted);
                         await hostedHubs.Disposal!;
-
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
+                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds);
                     }
                     catch (Exception e)
                     {
-                        logger.LogError(
-                            "Error during disposal of hosted hubs for hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}",
-                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds,
-                            disposalStopwatch.ElapsedMilliseconds, e);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
+                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds, e.Message);
                     }
                     finally
                     {
-                        logger.LogDebug(
-                            "POSTING ShutDown request after DisposeHostedHubs initiation for hub {Address}, new Version={Version} (phase took {elapsed}ms)",
-                            Address, Version, phaseStopwatch.ElapsedMilliseconds);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
+                            Address, Version);
                         Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                     }
                 });
@@ -793,30 +822,27 @@ public sealed class MessageHub : IMessageHub
                     {
                         if (RunLevel == MessageHubRunLevel.ShutDown)
                         {
-                            logger.LogWarning("ShutDown already processed for hub {Address}, ignoring (phase time: {elapsed}ms)",
-                                Address, phaseStopwatch.ElapsedMilliseconds);
+                            logger.LogDebug("[DISPOSE-TRACE] {address}: ShutDown already processed, ignoring", Address);
                             return request.Ignored();
                         }
 
-                        logger.LogDebug("STARTING ShutDown for hub {address} with parent {parent} (total disposal time so far: {totalElapsed}ms)",
-                            Address, Configuration.ParentHub?.Address, disposalStopwatch.ElapsedMilliseconds);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: STARTING ShutDown phase", Address);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
 
                     CancelCallbacks();
                     DisposeImpl();
 
-                    var messageServiceStopwatch = Stopwatch.StartNew();
-                    logger.LogDebug("Disposing message service for hub {address}", Address);
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting messageService.DisposeAsync()...", Address);
                     await messageService.DisposeAsync();
-                    logger.LogDebug("Message service disposed successfully for hub {address} in {elapsed}ms",
-                        Address, messageServiceStopwatch.ElapsedMilliseconds);
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.DisposeAsync() done in {elapsed}ms",
+                        Address, shutdownStopwatch.ElapsedMilliseconds);
 
                     try
                     {
                         disposingTaskCompletionSource.TrySetResult();
-                        logger.LogDebug("Disposal completed successfully for hub {address} with parent {parent} in {elapsed}ms (total disposal time: {totalElapsed}ms)",
-                            Address, Configuration.ParentHub?.Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: Disposal COMPLETED in {elapsed}ms total",
+                            Address, disposalStopwatch.ElapsedMilliseconds);
                     }
                     catch (InvalidOperationException)
                     {

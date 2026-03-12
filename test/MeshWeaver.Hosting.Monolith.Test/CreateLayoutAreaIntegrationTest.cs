@@ -11,6 +11,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -51,7 +52,8 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -62,6 +64,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
                 services.AddSingleton<IConfiguration>(configuration);
                 return services;
             })
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas())
             .AddGraph();
     }
 
@@ -75,7 +78,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Create area renders on a parent node (ProductLaunch) with type parameter.
     /// Should show the Name+Description form when ?type=ACME/Project/Todo is specified.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateArea_WithTypeParam_ShowsCreateForm()
     {
         var client = GetClient();
@@ -112,7 +115,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// Test that the Create area renders on a parent node without type parameter.
     /// Should show type selection grid or a message.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
@@ -144,7 +147,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that the Overview area works for ProductLaunch (baseline test).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task OverviewArea_WorksForProductLaunch()
     {
         var client = GetClient();
@@ -174,13 +177,13 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
-    /// Test that IMeshCatalog service is available for CreateLayoutArea.
+    /// Test that IMeshService service is available for CreateLayoutArea.
     /// </summary>
-    [Fact(Timeout = 15000)]
-    public async Task MeshCatalog_IsRegistered()
+    [Fact(Timeout = 10000)]
+    public async Task MeshNodeFactory_IsRegistered()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetService<IMeshCatalog>();
-        meshCatalog.Should().NotBeNull("IMeshCatalog should be registered for CreateLayoutArea to work");
+        var nodeFactory = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        nodeFactory.Should().NotBeNull("IMeshService should be registered for CreateLayoutArea to work");
 
         await Task.CompletedTask;
     }
@@ -188,7 +191,7 @@ public class CreateLayoutAreaIntegrationTest(ITestOutputHelper output) : Monolit
     /// <summary>
     /// Test that INodeTypeService service is available for CreateLayoutArea.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task NodeTypeService_IsRegistered()
     {
         var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();

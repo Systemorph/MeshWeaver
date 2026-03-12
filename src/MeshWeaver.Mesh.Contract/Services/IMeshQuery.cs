@@ -4,7 +4,7 @@ namespace MeshWeaver.Mesh.Services;
 
 /// <summary>
 /// Query service for searching MeshNodes and partition objects.
-/// Separated from IPersistenceService to allow swappable implementations
+/// Separated from IMeshStorage to allow swappable implementations
 /// (InMemory, ElasticSearch, Cosmos with vector search, etc.)
 /// This is the scoped wrapper that automatically injects JsonSerializerOptions from IMessageHub.
 /// </summary>
@@ -86,6 +86,14 @@ public interface IMeshQuery
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The property value, or default if node not found or property is null.</returns>
     Task<T?> SelectAsync<T>(string path, string property, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns an IMeshQuery that runs all queries with the node's own identity
+    /// as the AccessContext (same as IMeshNodePersistence.ImpersonateAsNode()).
+    /// Use this when infrastructure code needs read access without a user context
+    /// (e.g., VirtualUserMiddleware checking node existence before authentication).
+    /// </summary>
+    IMeshQuery ImpersonateAsNode();
 }
 
 /// <summary>

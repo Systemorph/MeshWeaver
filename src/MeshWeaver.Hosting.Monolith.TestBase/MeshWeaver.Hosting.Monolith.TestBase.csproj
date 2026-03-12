@@ -10,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
   </ItemGroup>
 </Project>

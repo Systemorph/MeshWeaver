@@ -7,25 +7,28 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Monolith")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Test")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.PostgreSql.Test")]
 
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Mesh catalog implementation that uses IPersistenceService for storage.
+/// Mesh catalog implementation that uses IMeshStorage for storage.
 /// Configure with AddFileSystemPersistence() for file-backed storage
 /// or AddInMemoryPersistence() for transient storage.
 /// </summary>
-public sealed class MeshCatalog(
+internal sealed class MeshCatalog(
     IMessageHub hub,
     MeshConfiguration configuration,
-    IPersistenceService persistenceService,
-    IMeshQuery? meshQuery = null)
+    IMeshStorage persistenceService)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
-    public IPersistenceService Persistence { get; } = persistenceService;
-    private readonly IMeshQuery? _meshQuery = meshQuery;
+    internal IMeshStorage Persistence { get; } = persistenceService;
+    internal Address MeshAddress => hub.Address;
     private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly IMessageHub persistenceHub = hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!;
@@ -35,6 +38,24 @@ public sealed class MeshCatalog(
     // and may not be available during MeshCatalog construction
     private INodeTypeService? nodeTypeService;
     private bool nodeTypeServiceResolved;
+
+    // Lazy-loaded to avoid circular dependency:
+    // MeshCatalog -> IMeshService -> MeshService -> MeshCatalog
+    private IMeshService? meshServiceCached;
+    private bool meshServiceResolved;
+
+    private IMeshService? MeshService
+    {
+        get
+        {
+            if (!meshServiceResolved)
+            {
+                meshServiceCached = hub.ServiceProvider.GetService<IMeshService>();
+                meshServiceResolved = true;
+            }
+            return meshServiceCached;
+        }
+    }
 
     private INodeTypeService? NodeTypeService
     {
@@ -49,7 +70,7 @@ public sealed class MeshCatalog(
         }
     }
 
-    public async Task<MeshNode?> GetNodeAsync(Address address)
+    public async Task<MeshNode?> GetNodeAsync(Address address, bool skipValidation = false)
     {
         var addressKey = address.ToString();
 
@@ -57,7 +78,7 @@ public sealed class MeshCatalog(
         if (cache.TryGetValue(addressKey, out var ret))
         {
             var cachedNode = (MeshNode?)ret;
-            if (cachedNode != null && !await ValidateReadAsync(cachedNode))
+            if (cachedNode != null && !skipValidation && !await ValidateReadAsync(cachedNode))
                 return null;
             return cachedNode;
         }
@@ -71,7 +92,7 @@ public sealed class MeshCatalog(
                 node = await NodeTypeService.EnrichWithNodeTypeAsync(node);
             }
             cache.Set(node.Path, node, cacheOptions);
-            if (!await ValidateReadAsync(node))
+            if (!skipValidation && !await ValidateReadAsync(node))
                 return null;
             return node;
         }
@@ -94,7 +115,7 @@ public sealed class MeshCatalog(
             }
 
             cache.Set(persistenceNode.Path, persistenceNode, cacheOptions);
-            if (!await ValidateReadAsync(persistenceNode))
+            if (!skipValidation && !await ValidateReadAsync(persistenceNode))
                 return null;
             return persistenceNode;
         }
@@ -143,67 +164,21 @@ public sealed class MeshCatalog(
     public Task UpdateAsync(MeshNode node) =>
         Persistence.SaveNodeAsync(node);
 
-    /// <inheritdoc />
+    // IMeshCatalog — delegate to HubNodePersistence
+    private HubNodePersistence NodePersistence => new(hub, this);
+
     public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-    {
-        var tcs = new TaskCompletionSource<MeshNode>();
+        => NodePersistence.CreateNodeAsync(node, ct);
 
-        // Post CreateNodeRequest to the mesh hub where handlers are registered
-        var request = new CreateNodeRequest(node) { CreatedBy = createdBy };
-        var delivery = hub.Post(request, o => o.WithTarget(hub.Address));
+    public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
+        => NodePersistence.CreateTransientAsync(node, ct);
 
-        if (delivery == null)
-        {
-            tcs.SetException(new InvalidOperationException("Failed to post CreateNodeRequest"));
-            return tcs.Task;
-        }
-
-        // Use typed callback for proper response handling
-        hub.RegisterCallback<CreateNodeResponse>(delivery, response =>
-        {
-            if (ct.IsCancellationRequested)
-            {
-                tcs.TrySetCanceled(ct);
-                return response;
-            }
-
-            var createResponse = response.Message;
-            if (createResponse.Success && createResponse.Node != null)
-            {
-                cache.Set(createResponse.Node.Path, createResponse.Node, cacheOptions);
-                tcs.TrySetResult(createResponse.Node);
-            }
-            else
-            {
-                Exception exception = createResponse.RejectionReason switch
-                {
-                    NodeCreationRejectionReason.ValidationFailed =>
-                        new UnauthorizedAccessException(createResponse.Error ?? "Access denied"),
-                    NodeCreationRejectionReason.NodeAlreadyExists =>
-                        new InvalidOperationException($"Node already exists: {node.Path}"),
-                    _ => new InvalidOperationException(createResponse.Error ?? "Node creation failed")
-                };
-                tcs.TrySetException(exception);
-            }
-            return response;
-        });
-
-        return tcs.Task;
-    }
-
-    /// <inheritdoc />
-    public async Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var currentUser = accessService?.Context?.Name;
-        return await CreateTransientNodeAsync(node, currentUser, ct);
-    }
 
     /// <summary>
     /// Creates a new node in Transient state without confirming it.
     /// This is internal - used by handlers that need direct node creation after validation.
     /// </summary>
-    internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
+    internal async Task<MeshNode> CreateTransientNodeAsync(MeshNode node, CancellationToken ct = default)
     {
         // 1. Check if node already exists in cache
         if (cache.TryGetValue(node.Path, out var cachedValue) && cachedValue is MeshNode cachedNode)
@@ -238,6 +213,15 @@ public sealed class MeshCatalog(
         // 5. Create node with Transient state
         var transientNode = node with { State = MeshNodeState.Transient };
 
+        // 5a. Auto-set MainNode for satellite types: point to parent node, not self
+        if (!string.IsNullOrEmpty(transientNode.NodeType)
+            && !string.IsNullOrEmpty(transientNode.Namespace)
+            && Configuration.IsSatelliteNodeType(transientNode.NodeType)
+            && transientNode.MainNode == transientNode.Path)
+        {
+            transientNode = transientNode with { MainNode = transientNode.Namespace };
+        }
+
         // 6. Enrich with HubConfiguration based on NodeType
         if (NodeTypeService != null)
         {
@@ -250,7 +234,7 @@ public sealed class MeshCatalog(
         // 8. Update cache with enriched transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
 
-        logger.LogInformation("Created transient node at path {Path} by {CreatedBy}", savedNode.Path, createdBy ?? "system");
+        logger.LogInformation("Created transient node at path {Path}", savedNode.Path);
 
         return savedNode;
     }
@@ -291,22 +275,19 @@ public sealed class MeshCatalog(
         return confirmedNode;
     }
 
-    /// <inheritdoc />
-    public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)
+    /// <summary>
+    /// IMeshCatalog.DeleteNodeAsync — internal, called by the DeleteNodeRequest handler.
+    /// Deletes directly from persistence and cache.
+    /// </summary>
+    async Task IMeshCatalog.DeleteNodeAsync(string path, bool recursive, CancellationToken ct)
     {
-        // Remove from cache - for recursive, also remove all descendants
         if (recursive)
         {
             await foreach (var descendant in Persistence.GetDescendantsAsync(path).WithCancellation(ct))
-            {
                 cache.Remove(descendant.Path);
-            }
         }
         cache.Remove(path);
-
-        // Delete from persistence
         await Persistence.DeleteNodeAsync(path, recursive, ct);
-
         logger.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
     }
 
@@ -360,7 +341,7 @@ public sealed class MeshCatalog(
             return await ResolveFromConfigNodeAsync(configMatch.Node, segments, path);
         }
 
-        // 2. Try IPersistenceService - walk UP the path hierarchy to find best match
+        // 2. Try IMeshStorage - walk UP the path hierarchy to find best match
         var (persistenceMatch, matchedSegmentCount) = await FindBestPersistenceMatchAsync(segments);
         if (persistenceMatch != null)
         {
@@ -372,26 +353,39 @@ public sealed class MeshCatalog(
             return new AddressResolution(matchedPath, remainder);
         }
 
+        // 3. Fallback: check the in-memory cache (covers transient nodes not yet visible to persistence queries)
+        var firstSegment = segments[0];
+        if (cache.TryGetValue(firstSegment, out var cachedValue) && cachedValue is MeshNode cachedNode)
+        {
+            var remainder = segments.Length > 1
+                ? string.Join("/", segments.Skip(1))
+                : null;
+            logger.LogDebug("ResolvePathAsync: cache fallback found node at path={Path} for input={Input}",
+                cachedNode.Path, path);
+            return new AddressResolution(cachedNode.Path, remainder);
+        }
+
+        logger.LogDebug("ResolvePathAsync: no match found for path={Path}", path);
         return null;
     }
 
     private async Task<(MeshNode? Node, int MatchedSegments)> FindBestPersistenceMatchAsync(string[] segments)
     {
-        // Walk from full path down to single segment, finding deepest existing node
+        var fullPath = string.Join("/", segments);
+
+        // 1. Try dedicated prefix match query (single SQL call in PostgreSQL)
+        var (prefixMatch, prefixSegments) = await Persistence.FindBestPrefixMatchAsync(fullPath);
+        if (prefixMatch != null)
+        {
+            logger.LogDebug("FindBestPersistenceMatchAsync: prefix match found node at path={Path}", prefixMatch.Path);
+            return (prefixMatch, prefixSegments);
+        }
+
+        // 2. Check for virtual namespaces (paths with children but no explicit node)
         for (int depth = segments.Length; depth >= 1; depth--)
         {
             var testPath = string.Join("/", segments.Take(depth));
 
-            var node = await Persistence.GetNodeAsync(testPath);
-            if (node != null)
-            {
-                logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", testPath);
-                return (node, depth);
-            }
-
-            // Check if this path is a virtual namespace (has children but no explicit node).
-            // This handles directories like FutuRe/EuropeRe/LineOfBusiness which contain
-            // instance nodes but have no node file themselves.
             await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
             if (await enumerator.MoveNextAsync())
             {
@@ -405,7 +399,7 @@ public sealed class MeshCatalog(
             }
         }
 
-        // Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
+        // 3. Fallback: check static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
         var staticNodes = hub.ServiceProvider.GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
             .ToArray();
@@ -445,10 +439,8 @@ public sealed class MeshCatalog(
                 return new AddressResolution(matchedPath, persistenceRemainder);
             }
 
-            // Path goes deeper than config node but nothing exists in persistence.
-            // Config nodes are type templates (e.g. "User"), not routing targets for
-            // arbitrary child paths. Return null so the caller gets a proper error.
-            return null;
+            // No deeper persistence match — fall through to use the config node itself.
+            // The extra segments are the layout area/id remainder (e.g., Organization/Search).
         }
 
         // Exact match or config node covers the full path - use it directly
@@ -484,18 +476,16 @@ public sealed class MeshCatalog(
 
         // Build query string for IMeshQuery
         var queryParts = new List<string>();
-        if (!string.IsNullOrEmpty(parentPath))
-            queryParts.Add($"path:{parentPath}");
-        queryParts.Add("scope:children");
+        queryParts.Add(string.IsNullOrEmpty(parentPath) ? "namespace:" : $"namespace:{parentPath}");
         if (!string.IsNullOrWhiteSpace(query))
             queryParts.Add(query);
 
         var fullQuery = string.Join(" ", queryParts);
 
-        if (_meshQuery != null)
+        if (MeshService != null)
         {
             var request = new MeshQueryRequest { Query = fullQuery, Limit = maxResults };
-            await foreach (var item in _meshQuery.QueryAsync(request, ct))
+            await foreach (var item in MeshService.QueryAsync(request, ct))
             {
                 if (item is MeshNode child)
                 {

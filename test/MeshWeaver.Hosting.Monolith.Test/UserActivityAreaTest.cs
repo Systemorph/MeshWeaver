@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -13,6 +14,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
@@ -51,7 +53,16 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         return builder
             .UseMonolithMesh()
-            .AddFileSystemPersistence(dataDirectory)
+            .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddUserData()
+            .AddCornerstone()
+            .AddMeshWeaverDocs()
+            .AddMeshNodes(MeshNode.FromPath("User/TestUser") with
+            {
+                Name = "Test User",
+                NodeType = "User",
+                State = MeshNodeState.Active,
+            })
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -74,30 +85,25 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Verify that the User node type is registered and has HubConfiguration.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public void UserNodeType_IsRegistered()
     {
-        var meshCatalog = Mesh.ServiceProvider.GetRequiredService<IMeshCatalog>();
-        var config = meshCatalog.Configuration;
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        config.Nodes.Should().ContainKey("User",
-            "User node type should be registered via AddGraph() → AddUserType()");
-
-        var userNode = config.Nodes["User"];
-        userNode.HubConfiguration.Should().NotBeNull(
-            "User MeshNode should have a HubConfiguration lambda that calls AddUserActivityViews()");
+        var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
+        cachedConfig.Should().NotBeNull(
+            "User node type should be registered via AddGraph() → AddUserType() with HubConfiguration");
     }
 
     /// <summary>
     /// Verify that NodeTypeService returns cached HubConfiguration for the "User" node type.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public void NodeTypeService_HasCachedConfig_ForUserType()
     {
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
-        nodeTypeService.Should().NotBeNull("INodeTypeService should be registered by AddGraph()");
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        var cachedConfig = nodeTypeService!.GetCachedHubConfiguration("User");
+        var cachedConfig = nodeTypeService.GetCachedHubConfiguration("User");
         cachedConfig.Should().NotBeNull(
             "NodeTypeService should have cached HubConfiguration for 'User' node type");
     }
@@ -105,54 +111,50 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
     /// <summary>
     /// Verify that the Roland user node can be loaded and enriched with HubConfiguration.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 10000)]
     public async Task UserNode_Roland_CanBeLoaded()
     {
-        var persistence = Mesh.ServiceProvider.GetRequiredService<IPersistenceService>();
-        var nodeTypeService = Mesh.ServiceProvider.GetService<INodeTypeService>();
+        var nodeTypeService = Mesh.ServiceProvider.GetRequiredService<INodeTypeService>();
 
-        var node = await persistence.GetNodeAsync("User/Roland");
-        node.Should().NotBeNull("Roland user node should exist in samples/Graph/Data/User/Roland.json");
+        var node = await MeshQuery.QueryAsync<MeshNode>("path:User/TestUser").FirstOrDefaultAsync();
+        node.Should().NotBeNull("Oliver user node should exist in samples/Graph/Data/User/TestUser.json");
         node!.NodeType.Should().Be("User");
 
         // Enrich with node type — this should attach HubConfiguration
-        if (nodeTypeService != null)
-        {
-            var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
-            enriched.HubConfiguration.Should().NotBeNull(
-                "After enrichment, User node should have HubConfiguration from UserNodeType");
-        }
+        var enriched = await nodeTypeService.EnrichWithNodeTypeAsync(node);
+        enriched.HubConfiguration.Should().NotBeNull(
+            "After enrichment, User node should have HubConfiguration from UserNodeType");
     }
 
     /// <summary>
-    /// Verify that a hub can be created for the User/Roland address
+    /// Verify that a hub can be created for the User/TestUser address
     /// and that it responds to PingRequest (hub is alive).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task UserHub_Roland_CanBeCreated()
     {
         var client = GetClient();
-        var rolandAddress = new Address("User/Roland");
+        var rolandAddress = new Address("User/TestUser");
 
         var response = await client.AwaitResponse(
             new PingRequest(),
             o => o.WithTarget(rolandAddress),
             TestContext.Current.CancellationToken);
 
-        response.Should().NotBeNull("User/Roland hub should be created and respond to ping");
+        response.Should().NotBeNull("User/TestUser hub should be created and respond to ping");
     }
 
     /// <summary>
-    /// The main test: resolve the Activity layout area on User/Roland.
+    /// The main test: resolve the Activity layout area on User/TestUser.
     /// This is the area registered by AddUserActivityViews().
-    /// Regression test: compilation of User/Code/Person.cs was overwriting
+    /// Regression test: compilation of User/_Source/Person.cs was overwriting
     /// the built-in HubConfiguration, losing layout areas.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task ActivityArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
-        var rolandAddress = new Address("User/Roland");
+        var rolandAddress = new Address("User/TestUser");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -169,17 +171,66 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Activity area should render for User/Roland — AddUserActivityViews() must be invoked");
+            "Activity area should render for User/TestUser — AddUserActivityViews() must be invoked");
+    }
+
+    /// <summary>
+    /// Simulates the production onboarding flow: creates a User node at runtime
+    /// (not pre-registered via AddMeshNodes), then verifies the Activity area resolves.
+    /// This tests the path: persistence → MeshCatalog.ResolvePathAsync → routing → hub creation.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task ActivityArea_WorksForRuntimeCreatedUser()
+    {
+        // Arrange — create a user node at runtime (simulating onboarding)
+        var username = $"RuntimeUser_{Guid.NewGuid():N}"[..20];
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        using (accessService.ImpersonateAsHub(Mesh))
+        {
+            await meshService.CreateNodeAsync(new MeshNode(username, "User")
+            {
+                Name = "Runtime Test User",
+                NodeType = "User",
+                State = MeshNodeState.Active,
+                Content = new User { Email = "runtime@test.com", Bio = "Created at runtime" }
+            });
+        }
+
+        // Act — request the Activity area (same as Index.razor does)
+        var client = GetClient();
+        var userAddress = new Address("User", username);
+
+        // First, verify the hub can be created
+        var pingResponse = await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(userAddress),
+            TestContext.Current.CancellationToken);
+        pingResponse.Should().NotBeNull($"User/{username} hub should be created and respond to ping");
+
+        // Now request the Activity layout area
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(UserActivityLayoutAreas.ActivityArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            userAddress, reference);
+
+        var value = await stream.Timeout(TimeSpan.FromSeconds(10)).FirstAsync();
+
+        // Assert
+        value.Should().NotBe(default(JsonElement),
+            "Activity area should render for a runtime-created User node — " +
+            "this simulates the production onboarding → Index.razor flow");
     }
 
     /// <summary>
     /// Also verify the Overview area works (baseline — this uses AddDefaultLayoutAreas).
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact(Timeout = 10000)]
     public async Task OverviewArea_CanBeResolved_ForUserRoland()
     {
         var client = GetClient();
-        var rolandAddress = new Address("User/Roland");
+        var rolandAddress = new Address("User/TestUser");
 
         await client.AwaitResponse(
             new PingRequest(),
@@ -196,6 +247,6 @@ public class UserActivityAreaTest(ITestOutputHelper output) : MonolithMeshTestBa
         var value = await stream.Timeout(TimeSpan.FromSeconds(15)).FirstAsync();
 
         value.Should().NotBe(default(JsonElement),
-            "Overview area should render for User/Roland — AddDefaultLayoutAreas() must be invoked");
+            "Overview area should render for User/TestUser — AddDefaultLayoutAreas() must be invoked");
     }
 }

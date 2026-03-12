@@ -34,6 +34,9 @@ public static class MeshExtensions
         config.TypeRegistry.WithType(typeof(UpdateNodeRequest), nameof(UpdateNodeRequest));
         config.TypeRegistry.WithType(typeof(UpdateNodeResponse), nameof(UpdateNodeResponse));
         config.TypeRegistry.WithType(typeof(NodeUpdateRejectionReason), nameof(NodeUpdateRejectionReason));
+        config.TypeRegistry.WithType(typeof(MoveNodeRequest), nameof(MoveNodeRequest));
+        config.TypeRegistry.WithType(typeof(MoveNodeResponse), nameof(MoveNodeResponse));
+        config.TypeRegistry.WithType(typeof(NodeMoveRejectionReason), nameof(NodeMoveRejectionReason));
 
         // Import/Delete types
         config.TypeRegistry.WithType(typeof(ImportNodesRequest), nameof(ImportNodesRequest));
@@ -54,7 +57,8 @@ public static class MeshExtensions
         return config
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
-            .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
+            .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
+            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest);
     }
 
     private static async Task<IMessageDelivery> HandleCreateNodeRequest(
@@ -64,7 +68,7 @@ public static class MeshExtensions
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
         var catalog = hub.ServiceProvider.GetService<IMeshCatalog>();
-        var persistence = hub.ServiceProvider.GetService<IPersistenceService>();
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
 
         if (catalog == null)
         {
@@ -77,6 +81,13 @@ public static class MeshExtensions
         try
         {
             var createRequest = request.Message;
+
+            // Identity resolution: if no explicit CreatedBy, use the sender's
+            // AccessContext identity from the authenticated pipeline.
+            if (string.IsNullOrEmpty(createRequest.CreatedBy)
+                && request.AccessContext?.ObjectId is { Length: > 0 } senderId)
+                createRequest = createRequest with { CreatedBy = senderId };
+
             var node = createRequest.Node;
 
             // 0. Validate path is not empty or whitespace
@@ -121,6 +132,9 @@ public static class MeshExtensions
                     // Post the change to ourselves to update the workspace
                     hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(hub.Address));
 
+                    // Run post-creation handlers (e.g. grant creator Admin role)
+                    await RunPostCreationHandlersAsync(hub, confirmedNode, createRequest.CreatedBy, logger, ct);
+
                     hub.Post(CreateNodeResponse.Ok(confirmedNode), o => o.ResponseFor(request));
                     logger.LogInformation("Confirmed transient node at {Path}", confirmedNode.Path);
                     return request.Processed();
@@ -133,6 +147,16 @@ public static class MeshExtensions
                         NodeCreationRejectionReason.NodeAlreadyExists),
                     o => o.ResponseFor(request));
                 return request.Processed();
+            }
+
+            // 1b. Auto-set MainNode for satellite types before validation
+            // so that SatelliteAccessRule can delegate to the parent node.
+            if (!string.IsNullOrEmpty(node.NodeType)
+                && !string.IsNullOrEmpty(node.Namespace)
+                && catalog.Configuration.IsSatelliteNodeType(node.NodeType)
+                && node.MainNode == node.Path) // still at default (self-referencing)
+            {
+                node = node with { MainNode = node.Namespace };
             }
 
             // 2. Run validators (global + NodeType-specific)
@@ -167,6 +191,8 @@ public static class MeshExtensions
             // 4. Create node with Active state (validated, ready to persist)
             var newNode = node with { State = MeshNodeState.Active };
 
+            // 4a. MainNode already set in step 1b (before validation)
+
             // 5. Enrich with HubConfiguration based on NodeType
             var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
             if (nodeTypeService != null)
@@ -180,9 +206,23 @@ public static class MeshExtensions
                 newNode = await persistence.SaveNodeAsync(newNode, ct);
             }
 
+            // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
+            if (!catalog.Configuration.IsSatelliteNodeType(newNode.NodeType))
+            {
+                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                if (versionQuery != null)
+                {
+                    try { await versionQuery.WriteVersionAsync(newNode, hub.JsonSerializerOptions, ct); }
+                    catch { /* version write failure is non-critical */ }
+                }
+            }
+
             logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
 
-            // 7. Return success response
+            // 8. Run post-creation handlers (e.g. grant creator Admin role)
+            await RunPostCreationHandlersAsync(hub, newNode, createRequest.CreatedBy, logger, ct);
+
+            // 9. Return success response
             hub.Post(CreateNodeResponse.Ok(newNode), o => o.ResponseFor(request));
 
             return request.Processed();
@@ -224,6 +264,12 @@ public static class MeshExtensions
         try
         {
             var deleteRequest = request.Message;
+
+            // Identity resolution: if no explicit DeletedBy, use AccessContext identity
+            if (string.IsNullOrEmpty(deleteRequest.DeletedBy)
+                && request.AccessContext?.ObjectId is { Length: > 0 } deleteSenderId)
+                deleteRequest = deleteRequest with { DeletedBy = deleteSenderId };
+
             var path = deleteRequest.Path;
 
             // 1. Check if node exists
@@ -238,28 +284,7 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 2. Check for children if not recursive
-            if (!deleteRequest.Recursive)
-            {
-                var hasChildren = false;
-                await foreach (var _ in catalog.QueryAsync(path, maxResults: 1, ct: ct))
-                {
-                    hasChildren = true;
-                    break;
-                }
-
-                if (hasChildren)
-                {
-                    hub.Post(
-                        DeleteNodeResponse.Fail(
-                            $"Node at path '{path}' has children. Use Recursive=true to delete.",
-                            NodeDeletionRejectionReason.HasChildren),
-                        o => o.ResponseFor(request));
-                    return request.Processed();
-                }
-            }
-
-            // 3. Run validators (global + NodeType-specific)
+            // 2. Run validators on this node (global + NodeType-specific)
             var validationError = await RunDeletionValidatorsAsync(hub, catalog, existingNode, deleteRequest, ct);
             if (validationError != null)
             {
@@ -274,13 +299,82 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Delete the node
-            await catalog.DeleteNodeAsync(path, deleteRequest.Recursive, ct);
+            // 3. Get direct children
+            var children = new List<MeshNode>();
+            await foreach (var child in catalog.QueryAsync(path, maxResults: int.MaxValue, ct: ct))
+                children.Add(child);
 
-            // 4. Return success response
-            hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+            if (children.Count == 0)
+            {
+                // Leaf node — delete immediately
+                await catalog.DeleteNodeAsync(path, recursive: false, ct);
+                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
+                return request.Processed();
+            }
 
-            logger.LogInformation("Node deleted successfully at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
+            // Non-recursive delete with children — reject
+            if (!deleteRequest.Recursive)
+            {
+                hub.Post(
+                    DeleteNodeResponse.Fail(
+                        $"Node at '{path}' has children. Use recursive delete to remove it.",
+                        NodeDeletionRejectionReason.HasChildren),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 4. Has children — post DeleteNodeRequest for each child, do NOT await.
+            //    Use RegisterCallback to collect responses asynchronously.
+            //    When all children have responded, delete self and post response.
+            var childResponses = new DeleteNodeResponse[children.Count];
+            var remaining = children.Count;
+
+            for (var i = 0; i < children.Count; i++)
+            {
+                var idx = i;
+                var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy, Recursive = true };
+                var delivery = hub.Post(childRequest, o => o.WithTarget(hub.Address))!;
+
+                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                {
+                    childResponses[idx] = response.Message;
+
+                    if (Interlocked.Decrement(ref remaining) == 0)
+                    {
+                        // All children responded — decide on parent deletion
+                        hub.InvokeAsync(async _ =>
+                        {
+                            var failed = childResponses.Where(r => !r.Success).Select(r => r.Error).ToList();
+                            if (failed.Count > 0)
+                            {
+                                hub.Post(
+                                    DeleteNodeResponse.Fail(
+                                        $"Cannot delete '{path}': {failed.Count} child deletion(s) failed: {string.Join("; ", failed)}",
+                                        NodeDeletionRejectionReason.ChildDeletionFailed),
+                                    o => o.ResponseFor(request));
+                            }
+                            else
+                            {
+                                await catalog.DeleteNodeAsync(path, recursive: false, ct);
+                                hub.Post(DeleteNodeResponse.Ok(), o => o.ResponseFor(request));
+                                logger.LogInformation("Node deleted at {Path} by {DeletedBy}", path, deleteRequest.DeletedBy ?? "system");
+                            }
+                        }, ex =>
+                        {
+                            logger.LogError(ex, "Error completing deletion of {Path}", path);
+                            hub.Post(
+                                DeleteNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                                o => o.ResponseFor(request));
+                            return Task.CompletedTask;
+                        });
+                    }
+
+                    return response;
+                });
+            }
+
+            // Return immediately — response will be posted from the callbacks above
             return request.Processed();
         }
         catch (InvalidOperationException ex)
@@ -350,6 +444,63 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Runs DI-registered post-creation handlers for the given node type.
+    /// Failures are logged but do not affect the creation response.
+    /// Additional nodes returned by handlers are persisted directly via IMeshStorage
+    /// (bypassing the hub pipeline to avoid deadlocks).
+    /// </summary>
+    private static async Task RunPostCreationHandlersAsync(
+        IMessageHub hub,
+        MeshNode node,
+        string? createdBy,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(node.NodeType))
+            return;
+
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        var handlers = hub.ServiceProvider.GetServices<INodePostCreationHandler>();
+        foreach (var handler in handlers)
+        {
+            if (!handler.NodeType.Equals(node.NodeType, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                await handler.HandleAsync(node, createdBy, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Post-creation handler {Handler} failed for node {Path}",
+                    handler.GetType().Name, node.Path);
+            }
+
+            // Persist additional nodes directly (bypass hub pipeline to avoid deadlocks)
+            try
+            {
+                var additionalNodes = handler.GetAdditionalNodes(node);
+                foreach (var additional in additionalNodes)
+                {
+                    if (persistence != null)
+                    {
+                        var saved = await persistence.SaveNodeAsync(additional with { State = MeshNodeState.Active }, ct);
+                        hub.Post(DataChangeRequest.Update([saved]), o => o.WithTarget(hub.Address));
+                        logger.LogInformation("Post-creation handler created additional node at {Path}", saved.Path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Post-creation handler {Handler} failed to create additional nodes for {Path}",
+                    handler.GetType().Name, node.Path);
+            }
+        }
+    }
+
+    /// <summary>
     /// Runs all deletion validators from DI using the unified INodeValidator interface.
     /// </summary>
     private static async Task<(string? ErrorMessage, NodeDeletionRejectionReason Reason)?> RunDeletionValidatorsAsync(
@@ -415,6 +566,12 @@ public static class MeshExtensions
         try
         {
             var updateRequest = request.Message;
+
+            // Identity resolution: if no explicit UpdatedBy, use AccessContext identity
+            if (string.IsNullOrEmpty(updateRequest.UpdatedBy)
+                && request.AccessContext?.ObjectId is { Length: > 0 } updateSenderId)
+                updateRequest = updateRequest with { UpdatedBy = updateSenderId };
+
             var updatedNode = updateRequest.Node;
 
             // 1. Check if node exists
@@ -457,33 +614,35 @@ public static class MeshExtensions
                 return request.Processed();
             }
 
-            // 4. Update the node - preserve State and HubConfiguration from existing
+            // 4. Update the node - preserve HubConfiguration from existing; allow State changes
             var nodeToSave = updatedNode with
             {
-                State = existingNode.State,
+                State = updatedNode.State != default ? updatedNode.State : existingNode.State,
                 HubConfiguration = existingNode.HubConfiguration
             };
 
             // 5. Persist the validated node
-            var persistence = hub.ServiceProvider.GetRequiredService<IPersistenceService>();
-            await persistence.SaveNodeAsync(nodeToSave, ct);
+            var persistence = hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+            var savedNode = await persistence.SaveNodeAsync(nodeToSave, ct);
 
-            // 6. Update workspace stream via DataChangeRequest so GetDataRequest returns updated state
-            var changeResponse = await hub.AwaitResponse(
-                DataChangeRequest.Update([nodeToSave]),
-                o => o.WithTarget(hub.Address), ct);
-            if (changeResponse.Message.Status == DataChangeStatus.Failed)
+            // 5b. Write version history snapshot (non-critical, skip satellite types like threads/comments)
+            if (!catalog.Configuration.IsSatelliteNodeType(savedNode.NodeType))
             {
-                var errorMsg = changeResponse.Message.Log?.Messages
-                    .FirstOrDefault(m => m.LogLevel == LogLevel.Error)?.Message
-                    ?? "Data change failed";
-                hub.Post(
-                    UpdateNodeResponse.Fail(errorMsg, NodeUpdateRejectionReason.ValidationFailed),
-                    o => o.ResponseFor(request));
-                return request.Processed();
+                var versionQuery = hub.ServiceProvider.GetService<IVersionQuery>();
+                if (versionQuery != null)
+                {
+                    try { await versionQuery.WriteVersionAsync(savedNode, hub.JsonSerializerOptions, ct); }
+                    catch { /* version write failure is non-critical */ }
+                }
             }
 
-            // 7. Return success response
+            // 6. Update workspace stream via DataChangeRequest (fire-and-forget, non-blocking)
+            //    Do NOT await — posting to the same hub inside a handler would deadlock.
+            var changeDelivery = hub.Post(
+                DataChangeRequest.Update([nodeToSave]),
+                o => o.WithTarget(hub.Address));
+
+            // 7. Return success response immediately after persistence
             hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));
 
             logger.LogInformation("Node updated successfully at {Path} by {UpdatedBy}",
@@ -556,5 +715,124 @@ public static class MeshExtensions
         }
 
         return null; // All validators passed
+    }
+
+    private static async Task<IMessageDelivery> HandleMoveNodeRequest(
+        IMessageHub hub,
+        IMessageDelivery<MoveNodeRequest> request,
+        CancellationToken ct)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<IMeshCatalog>>();
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+
+        if (persistence == null)
+        {
+            hub.Post(
+                MoveNodeResponse.Fail("IMeshStorage not available", NodeMoveRejectionReason.Unknown),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
+        try
+        {
+            var moveRequest = request.Message;
+
+            // 1. Check source exists
+            var sourceNode = await persistence.GetNodeAsync(moveRequest.SourcePath, ct);
+            if (sourceNode == null)
+            {
+                hub.Post(
+                    MoveNodeResponse.Fail(
+                        $"Source node not found at path: {moveRequest.SourcePath}",
+                        NodeMoveRejectionReason.SourceNotFound),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 2. Check target does not exist
+            if (await persistence.ExistsAsync(moveRequest.TargetPath, ct))
+            {
+                hub.Post(
+                    MoveNodeResponse.Fail(
+                        $"Target path already exists: {moveRequest.TargetPath}",
+                        NodeMoveRejectionReason.TargetAlreadyExists),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 3. Run validators
+            var validationError = await RunMoveValidatorsAsync(hub, sourceNode, moveRequest, ct);
+            if (validationError != null)
+            {
+                logger.LogWarning("Validator rejected node move from {Source} to {Target}: {Error}",
+                    moveRequest.SourcePath, moveRequest.TargetPath, validationError.Value.ErrorMessage);
+
+                hub.Post(
+                    MoveNodeResponse.Fail(
+                        validationError.Value.ErrorMessage ?? "Validation failed",
+                        validationError.Value.Reason),
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // 4. Move the node
+            var movedNode = await persistence.MoveNodeAsync(moveRequest.SourcePath, moveRequest.TargetPath, ct);
+
+            // 5. Return success
+            hub.Post(MoveNodeResponse.Ok(movedNode), o => o.ResponseFor(request));
+
+            logger.LogInformation("Node moved from {Source} to {Target}",
+                moveRequest.SourcePath, moveRequest.TargetPath);
+            return request.Processed();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error moving node from {Source} to {Target}",
+                request.Message.SourcePath, request.Message.TargetPath);
+            hub.Post(
+                MoveNodeResponse.Fail($"Unexpected error: {ex.Message}"),
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
+    }
+
+    private static async Task<(string? ErrorMessage, NodeMoveRejectionReason Reason)?> RunMoveValidatorsAsync(
+        IMessageHub hub,
+        MeshNode node,
+        MoveNodeRequest request,
+        CancellationToken ct)
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Move,
+            Node = node,
+            Request = request,
+            AccessContext = accessService?.Context
+        };
+
+        var validators = hub.ServiceProvider.GetServices<INodeValidator>();
+        foreach (var validator in validators)
+        {
+            if (validator.SupportedOperations.Count > 0 &&
+                !validator.SupportedOperations.Contains(NodeOperation.Move))
+            {
+                continue;
+            }
+
+            var result = await validator.ValidateAsync(context, ct);
+            if (!result.IsValid)
+            {
+                var reason = result.Reason switch
+                {
+                    NodeRejectionReason.NodeNotFound => NodeMoveRejectionReason.SourceNotFound,
+                    NodeRejectionReason.Unauthorized => NodeMoveRejectionReason.ValidationFailed,
+                    _ => NodeMoveRejectionReason.ValidationFailed
+                };
+                return (result.ErrorMessage, reason);
+            }
+        }
+
+        return null;
     }
 }

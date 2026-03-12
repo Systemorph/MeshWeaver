@@ -89,18 +89,29 @@ internal class MeshNodeCompilationService(
 
     /// <summary>
     /// Resolves @@path references in code content by fetching the referenced node's CodeConfiguration.
-    /// For example, @@FutuRe/LineOfBusiness/Code/LineOfBusiness resolves to that node's code content.
+    /// For example, @@FutuRe/LineOfBusiness/_Source/LineOfBusiness resolves to that node's code content.
     /// Resolution is transitive: if a resolved include itself contains @@references, those are resolved too.
     /// </summary>
     internal async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshQuery meshQuery, CancellationToken ct)
+        string code, IMeshService meshQuery, CancellationToken ct)
     {
         var resolved = new HashSet<string>();
         return await ResolveCodeIncludesAsync(code, meshQuery, resolved, ct);
     }
 
+    /// <summary>
+    /// Overload that uses IMeshStorage directly to bypass routing.
+    /// Used by NodeTypeService during compilation to avoid circular hub creation.
+    /// </summary>
+    internal async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshStorage meshStorage, CancellationToken ct)
+    {
+        var resolved = new HashSet<string>();
+        return await ResolveCodeIncludesAsync(code, meshStorage, resolved, ct);
+    }
+
     private async Task<string> ResolveCodeIncludesAsync(
-        string code, IMeshQuery meshQuery, HashSet<string> resolved, CancellationToken ct)
+        string code, IMeshService meshQuery, HashSet<string> resolved, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
             return code;
@@ -115,7 +126,6 @@ internal class MeshNodeCompilationService(
             var path = match.Groups[1].Value;
             if (!resolved.Add(path))
             {
-                // Already resolved this path — remove the duplicate reference
                 result = result.Replace(match.Value, string.Empty);
                 continue;
             }
@@ -136,8 +146,50 @@ internal class MeshNodeCompilationService(
             if (resolvedCode != null)
             {
                 logger.LogDebug("Resolved code include @@{Path}", path);
-                // Transitively resolve nested includes
                 resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshQuery, resolved, ct);
+                result = result.Replace(match.Value, resolvedCode);
+            }
+            else
+            {
+                logger.LogWarning("Could not resolve code include @@{Path}", path);
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<string> ResolveCodeIncludesAsync(
+        string code, IMeshStorage meshStorage, HashSet<string> resolved, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(code) || !code.Contains("@@"))
+            return code;
+
+        var matches = CodeIncludePattern.Matches(code);
+        if (matches.Count == 0)
+            return code;
+
+        var result = code;
+        foreach (Match match in matches)
+        {
+            var path = match.Groups[1].Value;
+            if (!resolved.Add(path))
+            {
+                result = result.Replace(match.Value, string.Empty);
+                continue;
+            }
+
+            // Use IMeshStorage directly to bypass routing
+            var referencedNode = await meshStorage.GetNodeAsync(path, ct);
+            string? resolvedCode = null;
+            if (referencedNode?.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
+            {
+                resolvedCode = cf.Code;
+            }
+
+            if (resolvedCode != null)
+            {
+                logger.LogDebug("Resolved code include @@{Path}", path);
+                resolvedCode = await ResolveCodeIncludesAsync(resolvedCode, meshStorage, resolved, ct);
                 result = result.Replace(match.Value, resolvedCode);
             }
             else
@@ -168,18 +220,18 @@ internal class MeshNodeCompilationService(
             return dllPath;
         }
 
-        // Get CodeConfiguration from child MeshNodes under the Code path
+        // Get CodeConfiguration from child MeshNodes under the _Source path
         // For NodeType nodes (where Content is NodeTypeDefinition), use the node's own path
-        // For instance nodes, use the NodeType's path (e.g., "Person/Code" for Alice with NodeType="Person")
+        // For instance nodes, use the NodeType's path (e.g., "Person/_Source" for Alice with NodeType="Person")
         // Collect ALL CodeConfiguration files and combine them
-        var meshQuery = hub.ServiceProvider.GetService<IMeshQuery>();
+        var meshQuery = hub.ServiceProvider.GetService<IMeshService>();
         var codeFiles = new List<CodeConfiguration>();
         var codeParentPath = node.Content is NodeTypeDefinition
-            ? $"{node.Path}/Code"    // NodeType node - use its own Code path
-            : $"{node.NodeType}/Code"; // Instance node - use NodeType's Code path
+            ? $"{node.Path}/_Source"    // NodeType node - use its own _Source path
+            : $"{node.NodeType}/_Source"; // Instance node - use NodeType's _Source path
         if (meshQuery != null)
         {
-            var codeQuery = $"namespace:{codeParentPath}";
+            var codeQuery = $"namespace:{codeParentPath} scope:subtree";
             await foreach (var codeNode in meshQuery.QueryAsync<MeshNode>(codeQuery, ct: ct).WithCancellation(ct))
             {
                 if (codeNode.Content is CodeConfiguration cf && !string.IsNullOrWhiteSpace(cf.Code))
@@ -189,7 +241,7 @@ internal class MeshNodeCompilationService(
             }
         }
 
-        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/Code/LineOfBusiness)
+        // Resolve @@ include references in code files (e.g., @@FutuRe/LineOfBusiness/_Source/LineOfBusiness)
         if (meshQuery != null)
         {
             for (int i = 0; i < codeFiles.Count; i++)

@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
+internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
     private readonly INodeTypeService? nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
@@ -42,9 +42,31 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
         var hub = CreateHub(node, address);
         if (hub is null)
         {
-            logger.LogWarning("No node found for address {Address}. Node: {NodePath}, NodeType: {NodeType}, HubConfig: {HasHubConfig}",
-                address, node?.Path, node?.NodeType, node?.HubConfiguration != null);
-            return delivery.Failed($"No node found for address {address}");
+            var isShuttingDown = Mesh.Disposal is not null;
+            string errorMessage;
+            if (isShuttingDown)
+                errorMessage = $"Mesh is shutting down, cannot route to {address}";
+            else if (node is null)
+                errorMessage = $"No node found for address {address}";
+            else
+                errorMessage = $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). Ensure the node type is registered via AddGraph() or a custom builder extension.";
+
+            logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
+                delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
+
+            // Post DeliveryFailure response so AwaitResponse callers get an exception.
+            // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown.
+            if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                Mesh.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound,
+                        Message = errorMessage
+                    }, o => o.ResponseFor(delivery)
+                );
+            }
+            return delivery.Failed(errorMessage);
         }
 
         hub.DeliverMessage(delivery);
@@ -53,6 +75,17 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
 
     private IMessageHub? CreateHub(MeshNode? node, Address address)
     {
+        // Don't create new hubs during shutdown - would lead to endless disposal cycles
+        if (Mesh.Disposal is not null)
+        {
+            logger.LogDebug("Rejecting hub creation for {Address} - mesh is shutting down", address);
+            return null;
+        }
+
+        // Don't create hubs for non-existent nodes - caller will post DeliveryFailure
+        if (node is null)
+            return null;
+
         // Use INodeTypeService if available - it properly combines DefaultNodeHubConfiguration
         // with node type's specific configuration
         var hubConfig = GetHubConfiguration(node);

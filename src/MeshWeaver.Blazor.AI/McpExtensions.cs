@@ -1,3 +1,5 @@
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Mesh;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,6 +13,16 @@ namespace MeshWeaver.Blazor.AI;
 /// </summary>
 public static class McpExtensions
 {
+    /// <summary>
+    /// Adds MCP support to the mesh: registers ApiToken node type (with ValidateTokenRequest handler)
+    /// so that API tokens can authenticate users via the message hub.
+    /// </summary>
+    public static TBuilder AddMcp<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
+    {
+        builder.AddApiTokenType();
+        return builder;
+    }
+
     /// <summary>
     /// Adds MCP server services to the service collection.
     /// Registers tools from McpMeshPlugin and resources from McpResources.

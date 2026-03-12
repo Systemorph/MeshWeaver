@@ -129,24 +129,13 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
         var siloHandle = (InProcessSiloHandle)Cluster.Silos[0];
         var siloServiceProvider = siloHandle.SiloHost.Services;
 
-        var persistenceCore = siloServiceProvider.GetRequiredService<IPersistenceServiceCore>();
-        Output.WriteLine($"IPersistenceServiceCore type: {persistenceCore.GetType().Name}");
-        persistenceCore.Should().BeOfType<FileSystemPersistenceService>(
-            "FileSystem persistence should override InMemory persistence");
-
         var storageAdapter = siloServiceProvider.GetService<IStorageAdapter>();
         Output.WriteLine($"IStorageAdapter type: {storageAdapter?.GetType().Name ?? "null"}");
         storageAdapter.Should().NotBeNull("FileSystemStorageAdapter should be registered");
 
-        // Check if Organization node exists in persistence
-        var persistence = siloServiceProvider.GetRequiredService<IPersistenceService>();
-        var orgNode = await persistence.GetNodeAsync("Organization", TestContext.Current.CancellationToken);
-        Output.WriteLine($"Organization node from persistence: {orgNode?.Path ?? "null"}");
-        orgNode.Should().NotBeNull("Organization node should exist in FileSystem persistence");
-
-        // Check the mesh catalog resolution
-        var meshCatalog = siloServiceProvider.GetRequiredService<IMeshCatalog>();
-        var resolution = await meshCatalog.ResolvePathAsync("Organization");
+        // Check the path resolution (verifies both persistence and catalog are working)
+        var pathResolver = siloServiceProvider.GetRequiredService<IPathResolver>();
+        var resolution = await pathResolver.ResolvePathAsync("Organization");
         Output.WriteLine($"ResolvePathAsync('Organization'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
         resolution.Should().NotBeNull("Organization path should resolve");
     }

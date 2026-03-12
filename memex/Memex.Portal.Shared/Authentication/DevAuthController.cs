@@ -12,10 +12,10 @@ namespace Memex.Portal.Shared.Authentication;
 [Route("dev")]
 public class DevAuthController : ControllerBase
 {
-    private readonly IMeshQuery _meshQuery;
+    private readonly IMeshService _meshQuery;
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public DevAuthController(IMeshQuery meshQuery)
+    public DevAuthController(IMeshService meshQuery)
     {
         _meshQuery = meshQuery;
     }
@@ -26,7 +26,7 @@ public class DevAuthController : ControllerBase
     [HttpPost("signin")]
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
-        // Fetch the person node via IMeshQuery (bypasses security)
+        // Fetch the person node via IMeshService (bypasses security)
         var node = await _meshQuery.QueryAsync<MeshNode>($"path:User/{personId} scope:self").FirstOrDefaultAsync();
         if (node?.NodeType != "User" || node.Content == null)
         {
@@ -39,16 +39,22 @@ public class DevAuthController : ControllerBase
             return BadRequest("Could not extract person info");
         }
 
-        // Create claims: ObjectId = email address (UPN), always
-        var email = person.Email ?? node.Id;
+        // Create claims: username is the node ID, email in content
+        var email = person.Email ?? "";
+        var username = node.Id;
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, email),
-            new(ClaimTypes.Name, person.Name),
-            new("name", person.Name),
-            new(ClaimTypes.Email, email),
-            new("email", email),
+            new(ClaimTypes.NameIdentifier, username),
+            new(ClaimTypes.Name, username),
+            new("name", username),
         };
+
+        if (!string.IsNullOrEmpty(email))
+        {
+            claims.Add(new Claim(ClaimTypes.Email, email));
+            claims.Add(new Claim("email", email));
+            claims.Add(new Claim("preferred_username", email));
+        }
 
         if (!string.IsNullOrEmpty(person.Role))
         {

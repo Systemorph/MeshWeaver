@@ -37,7 +37,7 @@ Northwind/                           # Analytics platform
 ├── Data/                            # CSV data sources
 │   ├── orders.csv                   # Order transactions
 │   └── orders_details.csv           # Order line items
-└── AnalyticsCatalog/Code/            # View implementations
+└── AnalyticsCatalog/_Source/            # View implementations
     ├── DashboardViews.cs            # Main dashboard
     ├── SalesViews.cs                # Sales analytics
     ├── OrderViews.cs                # Order analysis

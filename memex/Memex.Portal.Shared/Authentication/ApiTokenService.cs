@@ -1,8 +1,12 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
+
+[assembly: InternalsVisibleTo("MeshWeaver.Auth.Test")]
 
 namespace Memex.Portal.Shared.Authentication;
 
@@ -11,17 +15,13 @@ namespace Memex.Portal.Shared.Authentication;
 /// Tokens are stored as MeshNodes with nodeType "ApiToken".
 /// Raw tokens are never persisted — only their SHA-256 hash.
 /// </summary>
-public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenService> logger)
+internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery, IMessageHub hub, ILogger<ApiTokenService> logger)
 {
     private const string TokenPrefix = "mw_";
     private const int TokenByteLength = 32;
     private const string NodeTypeApiToken = "ApiToken";
     private const string ApiTokenNamespace = "ApiToken";
 
-    /// <summary>
-    /// Creates a new API token for the specified user.
-    /// Returns the raw token (shown once to the user) and the persisted MeshNode.
-    /// </summary>
     public async Task<(string RawToken, MeshNode Node)> CreateTokenAsync(
         string userId, string userName, string userEmail, string label, DateTimeOffset? expiresAt = null)
     {
@@ -51,17 +51,14 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
             Content = apiToken,
         };
 
-        await persistence.SaveNodeAsync(node);
+        var created = await nodeFactory.CreateNodeAsync(node);
 
         logger.LogInformation("Created API token {Label} for user {UserId} (hash prefix {HashPrefix})",
             label, userId, hashPrefix);
 
-        return (rawToken, node);
+        return (rawToken, created);
     }
 
-    /// <summary>
-    /// Validates a raw token. Returns the ApiToken if valid, null otherwise.
-    /// </summary>
     public async Task<ApiToken?> ValidateTokenAsync(string rawToken)
     {
         if (string.IsNullOrEmpty(rawToken) || !rawToken.StartsWith(TokenPrefix))
@@ -71,12 +68,11 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
         var hashPrefix = hash[..12];
         var path = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        var node = await persistence.GetNodeAsync(path);
+        var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
         var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
         if (apiToken == null)
             return null;
 
-        // Verify full hash matches
         if (!string.Equals(apiToken.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
             return null;
 
@@ -93,13 +89,13 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
         }
 
         // Update LastUsedAt (fire-and-forget, non-critical)
-        _ = Task.Run(async () =>
+        _ = Task.Run(() =>
         {
             try
             {
                 var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };
                 var updatedNode = node! with { Content = updated };
-                await persistence.SaveNodeAsync(updatedNode);
+                hub.Post(new UpdateNodeRequest(updatedNode));
             }
             catch (Exception ex)
             {
@@ -110,12 +106,9 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
         return apiToken;
     }
 
-    /// <summary>
-    /// Revokes a token by its node path (e.g. "ApiToken/abc123def456").
-    /// </summary>
     public async Task<bool> RevokeTokenAsync(string tokenNodePath)
     {
-        var node = await persistence.GetNodeAsync(tokenNodePath);
+        var node = await meshQuery.QueryAsync<MeshNode>($"path:{tokenNodePath}").FirstOrDefaultAsync();
         if (node == null)
             return false;
 
@@ -125,20 +118,17 @@ public class ApiTokenService(IPersistenceService persistence, ILogger<ApiTokenSe
 
         var revoked = apiToken with { IsRevoked = true };
         var updatedNode = node with { Content = revoked };
-        await persistence.SaveNodeAsync(updatedNode);
+        hub.Post(new UpdateNodeRequest(updatedNode));
 
         logger.LogInformation("Revoked API token at {Path}", tokenNodePath);
         return true;
     }
 
-    /// <summary>
-    /// Gets all tokens for a user. Never returns the raw token or full hash.
-    /// </summary>
     public async Task<List<ApiTokenInfo>> GetTokensForUserAsync(string userId)
     {
         var tokens = new List<ApiTokenInfo>();
 
-        await foreach (var node in persistence.GetChildrenAsync(ApiTokenNamespace))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{ApiTokenNamespace}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
             if (apiToken == null || apiToken.UserId != userId)
