@@ -43,12 +43,16 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
         if (hub is null)
         {
             var isShuttingDown = Mesh.Disposal is not null;
-            var errorMessage = isShuttingDown
-                ? $"Mesh is shutting down, cannot route to {address}"
-                : $"No node found for address {address}";
+            string errorMessage;
+            if (isShuttingDown)
+                errorMessage = $"Mesh is shutting down, cannot route to {address}";
+            else if (node is null)
+                errorMessage = $"No node found for address {address}";
+            else
+                errorMessage = $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). Ensure the node type is registered via AddGraph() or a custom builder extension.";
 
-            logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
-                delivery.Message.GetType().Name, address, node?.Path, delivery.Sender, isShuttingDown);
+            logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
+                delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
 
             // Post DeliveryFailure response so AwaitResponse callers get an exception.
             // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown.

@@ -31,8 +31,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
             .AddGraph();
 
     /// <summary>
-    /// Default mesh configuration with PublicAdminAccess (grants all users Admin).
-    /// Override to customize. Security tests should call ConfigureMeshBase() instead.
+    /// Default mesh configuration with PublicAdminAccess for in-memory tests.
+    /// File-system tests should override and omit PublicAdminAccess (access comes from _Access/ files).
+    /// Security tests should call ConfigureMeshBase() instead.
     /// </summary>
     protected virtual MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)

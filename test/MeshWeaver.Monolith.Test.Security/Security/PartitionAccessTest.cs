@@ -23,8 +23,6 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
-            .AddOrganizationType()
-            .AddRowLevelSecurity()
             .AddMeshNodes(
                 // Pre-seed a partition node for testing
                 new MeshNode("TestPartition", PartitionNodeType.Namespace)

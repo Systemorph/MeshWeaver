@@ -37,8 +37,7 @@ public class AutocompleteIconTests : MonolithMeshTestBase
             .AddSystemorph()
             .AddAcme()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
-            .AddGraph()
-            .AddOrganizationType();
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()

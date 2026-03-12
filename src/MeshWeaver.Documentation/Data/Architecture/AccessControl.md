@@ -13,8 +13,10 @@ MeshWeaver provides row-level security through **AccessAssignment MeshNodes** st
 
 Access control is managed through AccessAssignment nodes — first-class MeshNodes with `nodeType: "AccessAssignment"`. Each assignment grants (or denies) a role to a subject at a specific scope.
 
+AccessAssignment nodes are **satellite entities** stored in the `_Access` sub-namespace:
+
 ```
-Node path: {scope}/{Subject}_Access
+Node path: {scope}/_Access/{Subject}_Access
 Node type: AccessAssignment
 Content: {
   "accessObject": "Alice",
@@ -25,6 +27,19 @@ Content: {
   ]
 }
 ```
+
+On disk (file system persistence), access files live in `_Access/` sub-directories:
+```
+ACME/
+  _Access/
+    Public_Access.json     ← All authenticated users get Viewer
+    Alice_Access.json      ← Alice gets Editor
+  Projects/
+    _Access/
+      Bob_Access.json      ← Bob gets Viewer on ACME/Projects
+```
+
+In PostgreSQL, access nodes are routed to a dedicated `access` table (via `PartitionDefinition.StandardTableMappings`), separate from the main `mesh_nodes` table.
 
 Each AccessAssignment node maps **one subject** (User or Group) to **multiple roles** at a given scope. This reduces the number of nodes and trigger invocations compared to one-node-per-role.
 
@@ -127,7 +142,7 @@ Access control uses these shipped node types:
 ## AccessAssignment
 - **NodeType**: `"AccessAssignment"`
 - **Content**: `AccessAssignment` record with `Id` and `Roles[]` array
-- **Path pattern**: `{scope}/{Subject}_Access`
+- **Path pattern**: `{scope}/_Access/{Subject}_Access`
 - **Name pattern**: `{Subject} Access`
 - Created via `ISecurityService.AddUserRoleAsync()` or `IMeshCatalog.CreateNodeAsync()`
 - One node per subject per scope — multiple roles are stored in the `Roles` array

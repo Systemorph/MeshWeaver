@@ -26,6 +26,7 @@ public static class GraphConfigurationExtensions
         {
             builder
                 .AddNodeTypeType()
+                .AddOrganizationType()
                 .AddAgentType()
                 .AddCodeType()
                 .AddMarkdownType()

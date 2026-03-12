@@ -28,5 +28,12 @@ var dataSource = host.Services.GetRequiredService<NpgsqlDataSource>();
 var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions>>();
 
 logger.LogInformation("Running database migration...");
-await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options.Value);
-logger.LogInformation("Database migration completed successfully.");
+
+// In partitioned mode, only create the vector extension. Schema/table creation
+// is handled per-partition by PostgreSqlPartitionedStoreFactory at app startup.
+await using (var cmd = dataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
+{
+    await cmd.ExecuteNonQueryAsync();
+}
+
+logger.LogInformation("Database migration completed successfully (vector extension ready).");

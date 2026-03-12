@@ -1,0 +1,17 @@
+{
+  "id": "Roland_Access",
+  "namespace": "Northwind/_Access",
+  "name": "Roland Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Roland",
+    "displayName": "Roland Buergi",
+    "roles": [
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}
