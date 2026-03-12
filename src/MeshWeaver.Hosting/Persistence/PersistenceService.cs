@@ -23,7 +23,8 @@ internal class PersistenceService(
     private readonly Dictionary<string, INodeTypeAccessRule> _nodeTypeAccessRules =
         (nodeTypeAccessRules ?? [])
             .Where(r => r.SupportedOperations.Contains(NodeOperation.Read))
-            .ToDictionary(r => r.NodeType, StringComparer.OrdinalIgnoreCase);
+            .GroupBy(r => r.NodeType, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
     private JsonSerializerOptions Options => hub.JsonSerializerOptions;
 
     public Task<MeshNode?> GetNodeAsync(string path, CancellationToken ct = default)

@@ -306,10 +306,11 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     }
 
     /// <summary>
-    /// Thread CANNOT be read by a different user (no read permission).
+    /// Threads under User/{userId}/ are readable by other users (User namespace has public read),
+    /// but other users CANNOT modify them (no write permission).
     /// </summary>
     [Fact(Timeout = 15000)]
-    public async Task ReadThread_ByOtherUser_ReturnsNull()
+    public async Task ReadThread_ByOtherUser_ReadableButNotWritable()
     {
         // Create thread as owner
         var owner = "owner-read-test";
@@ -327,11 +328,17 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         try
         {
+            // User namespace has public Viewer access, so other users CAN read
             var node = await MeshQuery.QueryAsync<MeshNode>(
                 $"path:{threadPath}"
             ).FirstOrDefaultAsync(TestTimeout);
 
-            node.Should().BeNull("Other user should NOT see private threads");
+            node.Should().NotBeNull("User namespace has public read access");
+
+            // But other users CANNOT update the thread (no write permission)
+            var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+            var canUpdate = await securityService.HasPermissionAsync(threadPath, "reader-no-access", Permission.Update, TestTimeout);
+            canUpdate.Should().BeFalse("Other user should NOT be able to update someone else's thread");
         }
         finally
         {

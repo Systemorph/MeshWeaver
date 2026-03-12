@@ -27,7 +27,6 @@ using MeshWeaver.Hosting.AzureBlob;
 using MeshWeaver.Hosting.Blazor;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
-using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Authentication;
@@ -288,8 +287,6 @@ public static class MemexConfiguration
                 .AddGraph()
                 .AddSelfRegistry()
                 .AddDocumentation()
-                // Add kernel for interactive markdown code execution
-                .AddKernel()
                 // Register Azure Blob support for content collections.
                 .ConfigureServices(services => services.AddAzureBlob())
                 // Register the mesh catalog and its public interfaces

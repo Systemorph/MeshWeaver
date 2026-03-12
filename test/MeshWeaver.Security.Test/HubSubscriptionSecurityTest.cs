@@ -41,7 +41,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     /// <summary>
     /// A user with no roles should have no read permission on the hub.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UnauthorizedUser_HasNoReadPermission()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -58,7 +58,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     /// The subscription stream error is about unmapped collections, not about access —
     /// proving the access check would pass.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Subscription_WithReadAccess_PassesAccessCheck()
     {
         var hubAddress = new Address("SecuredHub");

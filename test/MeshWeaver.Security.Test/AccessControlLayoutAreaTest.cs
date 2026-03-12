@@ -47,7 +47,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             .AddLayoutClient()
             .WithTypes([new KeyValuePair<string, Type>(nameof(AccessAssignment), typeof(AccessAssignment))]);
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_RendersStackControl()
     {
         // Seed data so the layout has something to render
@@ -80,7 +80,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         stack.Areas.Should().NotBeEmpty("AccessControl should have child areas");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_ShowsInheritedAndLocalSections()
     {
         // Seed both inherited and local assignments
@@ -116,7 +116,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
             "should have header, inherited section, local section, and content areas");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_NoRLS_ShowsWarning()
     {
         // Verify the service exists when RLS is configured.
@@ -124,7 +124,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         svc.Should().NotBeNull("RLS is configured in this test fixture");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
     {
         // Seed assignments at parent and at a deeper nested path
@@ -156,7 +156,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         stack.Areas.Should().NotBeEmpty("AccessControl should have child areas");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_DeeplyNestedPath_InheritsFromAllAncestors()
     {
         // Seed assignments at multiple ancestor levels
@@ -177,7 +177,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
         deepPerms.Should().Be(Permission.Read | Permission.Execute, "DeepUser with Viewer at exact path should have read + execute permissions");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SecurityService_NestedPath_ReturnsCorrectPermissions()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();

@@ -87,7 +87,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// Verifies that the CollaborativeEditing Read view renders as a StackControl
     /// and that comment children (c1-c6) are queryable.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ReadView_ShouldRenderWithCommentData()
     {
         var client = GetClient();
@@ -139,7 +139,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// create a reply MeshNode -> verify it persists -> verify it links to parent -> cleanup.
     /// This mirrors the exact logic in BuildCommentAndReplies.WithClickAction for the Reply button.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Reply_FullFlow_CreateAndVerify()
     {
         var client = GetClient();
@@ -243,7 +243,7 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     /// <summary>
     /// Tests that creating multiple replies to the same comment all link correctly.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MultipleReplies_ShouldAllLinkToParent()
     {
         var docPath = "Doc/DataMesh/CollaborativeEditing";

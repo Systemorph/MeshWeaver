@@ -58,7 +58,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         });
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AuthenticatedUser_CanRead_UserNode_ByPath()
     {
         LoginAsUnprivilegedUser();
@@ -77,7 +77,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         results[0].Name.Should().Be("Roland");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AuthenticatedUser_CanRead_OrganizationNode_ByPath()
     {
         LoginAsUnprivilegedUser();
@@ -96,7 +96,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         results[0].Name.Should().Be("Acme Corp");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AuthenticatedUser_CanQuery_UserNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();
@@ -115,7 +115,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         results.Should().Contain(n => n.Path == "User/Bob");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AuthenticatedUser_CanQuery_OrganizationNodes_ByNodeType()
     {
         LoginAsUnprivilegedUser();

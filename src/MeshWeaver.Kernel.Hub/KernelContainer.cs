@@ -45,7 +45,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     public MessageHubConfiguration ConfigureHub(MessageHubConfiguration config)
     {
-        // Note: Kernel types are registered at mesh level in KernelExtensions.AddKernelTypes
+        // Note: Kernel types are registered at mesh level in KernelNodeType.AddKernel
         return config
             .AddLayout(layout =>
                 layout.WithView(_ => true,

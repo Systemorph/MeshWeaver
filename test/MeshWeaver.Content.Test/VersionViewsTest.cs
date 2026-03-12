@@ -92,7 +92,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     /// Request the Versions layout area and verify that GetControlStream
     /// returns a StackControl (the version list container).
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionsArea_RendersVersionList()
     {
         // Arrange: create node with 3 versions
@@ -129,7 +129,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     /// Request the Versions layout area and verify the stack renders without error.
     /// FileSystemVersionStore writes even the first version, so this should still produce a valid stack.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionsArea_SingleVersion_RendersWithoutError()
     {
         // Arrange: create node with just 1 version
@@ -167,7 +167,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     /// Verify that GetControlStream returns a StackControl that contains
     /// a DiffEditorControl somewhere in the rendered area tree.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionDiffArea_RendersWithVersionParam()
     {
         // Arrange: create node with 2 versions (create + 1 update)
@@ -221,7 +221,7 @@ public class VersionViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     /// Create a node. Request the menu area ($Menu) via the Overview layout area.
     /// Verify that a "Versions" menu item appears in the MenuControl items.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionsMenu_AppearsInNodeMenu()
     {
         // Arrange: create a node

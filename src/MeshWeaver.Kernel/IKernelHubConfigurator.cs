@@ -7,7 +7,7 @@ namespace MeshWeaver.Kernel;
 /// Abstracts the kernel hub configuration (handlers, services, etc.)
 /// so KernelNodeType in Graph can reference it without depending on Kernel.Hub.
 /// Implemented by KernelContainer in MeshWeaver.Kernel.Hub.
-/// Registered via AddKernel().
+/// Registered via KernelNodeType.AddKernel().
 /// </summary>
 public interface IKernelHubConfigurator
 {

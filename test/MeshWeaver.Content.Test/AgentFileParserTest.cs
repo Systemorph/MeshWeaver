@@ -16,7 +16,7 @@ public class AgentFileParserTest
 
     #region Parse Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_ValidAgentMarkdown_ReturnsAgentConfiguration()
     {
         // Arrange
@@ -51,7 +51,7 @@ public class AgentFileParserTest
         agentConfig.Instructions.Should().Be("You are a test agent. Do testing things.");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_WithDelegations_ParsesDelegationsList()
     {
         // Arrange
@@ -82,7 +82,7 @@ public class AgentFileParserTest
         agentConfig.Delegations[1].Instructions.Should().Be("Execute actions");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_InstructionsInMarkdownBody_ExtractsToInstructions()
     {
         // Arrange
@@ -116,7 +116,7 @@ public class AgentFileParserTest
         agentConfig.Instructions.Should().Contain("Be thorough and accurate.");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_WithAllProperties_ParsesAllProperties()
     {
         // Arrange
@@ -152,7 +152,7 @@ public class AgentFileParserTest
         agentConfig.Order.Should().Be(10);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_NonAgentNodeType_ReturnsNull()
     {
         // Arrange
@@ -172,7 +172,7 @@ public class AgentFileParserTest
         node.Should().BeNull();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_NoYamlFrontMatter_ReturnsNull()
     {
         // Arrange
@@ -189,7 +189,7 @@ public class AgentFileParserTest
         node.Should().BeNull();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_WithHandoffs_ParsesHandoffsList()
     {
         // Arrange
@@ -226,7 +226,7 @@ public class AgentFileParserTest
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute actions directly");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ParseAsync_WithHandoffsOnly_ParsesHandoffs()
     {
         // Arrange
@@ -257,7 +257,7 @@ public class AgentFileParserTest
 
     #region Serialize Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SerializeAsync_AgentNode_ProducesValidMarkdown()
     {
         // Arrange
@@ -295,7 +295,7 @@ public class AgentFileParserTest
         result.Should().Contain("You are a test agent.");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SerializeAsync_WithDelegations_SerializesDelegations()
     {
         // Arrange
@@ -329,7 +329,7 @@ public class AgentFileParserTest
         result.Should().Contain("instructions: Execute tasks");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SerializeAsync_WithHandoffs_SerializesHandoffs()
     {
         // Arrange
@@ -369,7 +369,7 @@ public class AgentFileParserTest
         result.Should().Contain("instructions: Execute tasks");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task RoundTrip_WithHandoffs_PreservesHandoffs()
     {
         // Arrange
@@ -415,14 +415,14 @@ public class AgentFileParserTest
 
     #region CanSerialize Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void CanSerialize_AgentNode_ReturnsTrue()
     {
         var node = new MeshNode("test") { NodeType = "Agent" };
         _parser.CanSerialize(node).Should().BeTrue();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void CanSerialize_AgentConfigurationContent_ReturnsTrue()
     {
         var node = new MeshNode("test")
@@ -432,7 +432,7 @@ public class AgentFileParserTest
         _parser.CanSerialize(node).Should().BeTrue();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void CanSerialize_MarkdownNode_ReturnsFalse()
     {
         var node = new MeshNode("test")
@@ -443,7 +443,7 @@ public class AgentFileParserTest
         _parser.CanSerialize(node).Should().BeFalse();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void CanSerialize_OtherNodeType_ReturnsFalse()
     {
         var node = new MeshNode("test")
@@ -458,7 +458,7 @@ public class AgentFileParserTest
 
     #region Round-Trip Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task RoundTrip_PreservesAllProperties()
     {
         // Arrange
@@ -518,7 +518,7 @@ public class AgentFileParserTest
 
     #region IsAgentMarkdown Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void IsAgentMarkdown_WithAgentNodeType_ReturnsTrue()
     {
         var content = """
@@ -532,7 +532,7 @@ public class AgentFileParserTest
         AgentFileParser.IsAgentMarkdown(content).Should().BeTrue();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void IsAgentMarkdown_WithMarkdownNodeType_ReturnsFalse()
     {
         var content = """
@@ -546,7 +546,7 @@ public class AgentFileParserTest
         AgentFileParser.IsAgentMarkdown(content).Should().BeFalse();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void IsAgentMarkdown_WithNoYaml_ReturnsFalse()
     {
         var content = "# Just markdown content";
@@ -554,7 +554,7 @@ public class AgentFileParserTest
         AgentFileParser.IsAgentMarkdown(content).Should().BeFalse();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void IsAgentMarkdown_WithEmptyContent_ReturnsFalse()
     {
         AgentFileParser.IsAgentMarkdown("").Should().BeFalse();

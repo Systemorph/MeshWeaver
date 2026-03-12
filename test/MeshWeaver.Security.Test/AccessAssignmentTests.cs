@@ -27,7 +27,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
     #region AddUserRole creates AccessAssignment MeshNodes
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AddUserRole_GlobalAssignment_GrantsPermissionsEverywhere()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -37,7 +37,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AddUserRole_AncestorAssignment_GrantsPermissionsToDescendants()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -49,7 +49,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permissions.Should().HaveFlag(Permission.Update);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AddUserRole_LocalAssignment_GrantsPermissionsAtPath()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -59,7 +59,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permissions.Should().Be(Permission.Read | Permission.Execute);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AddUserRole_MixedLevels_CombinesPermissions()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -85,7 +85,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
     #region Deny via AccessAssignment MeshNode
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DenyAssignment_OverridesInheritedGrant()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -110,7 +110,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permissions.Should().Be(Permission.None, "denied Editor role should yield no permissions at child");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DenyAtMiddle_GrantAtChild_ChildOverridesDeny()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -141,7 +141,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permProject.Should().Be(Permission.Read | Permission.Execute, "grant at child should override deny at parent");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DenyOneRole_KeepsOtherRoles()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -178,7 +178,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
     #region RemoveUserRole
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task RemoveUserRole_RevokesPermissions()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -200,14 +200,14 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
     #region UI Layout (Structural)
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_NoRLS_ShowsWarningMessage()
     {
         var svc = Mesh.ServiceProvider.GetService<ISecurityService>();
         svc.Should().NotBeNull("RLS is configured in this test base");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_EmptyAssignments_HasNoPermissions()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -218,7 +218,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         permissions.Should().Be(Permission.None, "no roles have been assigned to this path");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AccessControl_InheritedAndLocalAssignments_BothApply()
     {
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();

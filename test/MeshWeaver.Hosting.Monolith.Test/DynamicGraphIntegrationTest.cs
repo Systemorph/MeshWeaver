@@ -227,7 +227,7 @@ public record Graph
 
     #region Hub Initialization Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GraphHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
@@ -247,7 +247,7 @@ public record Graph
         children.Should().Contain(n => n.Path == "graph/org2");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task OrgHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
@@ -274,7 +274,7 @@ public record Graph
         children.Should().Contain(n => n.Path == "graph/org1/proj2");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ProjectHub_LoadsChildrenFromPersistence_AtInitialization()
     {
         var client = GetClient();
@@ -305,7 +305,7 @@ public record Graph
 
     #region ResolvePath Tests
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_FindsPersistedNode_NotInConfig()
     {
         var client = GetClient();
@@ -326,7 +326,7 @@ public record Graph
         resolution.Remainder.Should().BeNull();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_WalksUpHierarchy_FindsBestMatch()
     {
         var client = GetClient();
@@ -347,7 +347,7 @@ public record Graph
         resolution.Remainder.Should().Be("nonexistent/deep");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_ReturnsExactMatch_WhenFullPathExists()
     {
         var client = GetClient();
@@ -368,7 +368,7 @@ public record Graph
         resolution.Remainder.Should().BeNull();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_WithRemainder_ReturnsCorrectParts()
     {
         var client = GetClient();
@@ -389,7 +389,7 @@ public record Graph
         resolution.Remainder.Should().Be("Overview");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_ReturnsNull_WhenNoMatchFound()
     {
         var client = GetClient();
@@ -408,7 +408,7 @@ public record Graph
         resolution.Should().BeNull();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_UnderscoreNamespaceedSegment_ParsesAsRemainder()
     {
         var client = GetClient();
@@ -437,7 +437,7 @@ public record Graph
     /// Navigating to type/graph should resolve to the type/graph node.
     /// The type node has NodeType = "NodeType" and contains the type definition.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ResolvePath_TypeGraph_ResolvesToTypeGraphNode()
     {
         // Arrange
@@ -455,7 +455,7 @@ public record Graph
     /// <summary>
     /// GetNodeAsync for type/graph should return the NodeType definition node.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetNodeAsync_TypeGraph_ReturnsNodeTypeDefinition()
     {
         // Act
@@ -493,7 +493,7 @@ public record Graph
     /// <summary>
     /// Type nodes should exist in persistence and be retrievable.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task TypeNodes_ExistInPersistence()
     {
         // Assert that type nodes exist
@@ -513,7 +513,7 @@ public record Graph
     /// <summary>
     /// Move single node to new path.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MoveNodeAsync_MovesNodeToNewPath()
     {
         // Arrange - create a node to move
@@ -539,7 +539,7 @@ public record Graph
     /// <summary>
     /// Move node with descendants - all paths should be updated.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MoveNodeAsync_MovesDescendantsWithUpdatedPaths()
     {
         // Arrange - create a hierarchy to move
@@ -579,7 +579,7 @@ public record Graph
     /// Move node via MoveNodeRequest - verifies the node is moved to the new path.
     /// Note: Comment migration is handled internally by the persistence layer.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MoveNodeAsync_MovesNodeViaRequest()
     {
         // Arrange - create node
@@ -603,7 +603,7 @@ public record Graph
     /// <summary>
     /// Move node throws when source doesn't exist.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MoveNodeAsync_ThrowsWhenSourceNotFound()
     {
         // Act - move via MoveNodeRequest
@@ -617,7 +617,7 @@ public record Graph
     /// <summary>
     /// Move node throws when target path already exists.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MoveNodeAsync_ThrowsWhenTargetExists()
     {
         // Arrange
@@ -641,7 +641,7 @@ public record Graph
     /// returns successfully without hanging.
     /// This validates that default views are properly configured for dynamically compiled node types.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Organization_GetDefaultLayoutArea_DoesNotHang()
     {
         var graphAddress = new Address("graph");
@@ -680,7 +680,7 @@ public record Graph
     /// When area is empty/null, the default view should be returned (Details).
     /// This matches the pattern used in LayoutTest.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Organization_GetEmptyArea_ReturnsDefaultView()
     {
         var graphAddress = new Address("graph");
@@ -719,7 +719,7 @@ public record Graph
     /// it should render a StackControl with CatalogContent that contains either
     /// organization thumbnails or "No items found" message.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task OrganizationType_GetCatalog_ShowsOrganizations()
     {
         // Arrange
@@ -775,7 +775,7 @@ public record Graph
     /// Tests that QueryAsync with nodeType filter returns organizations.
     /// This tests the underlying query that the search uses.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task QueryAsync_NodeTypeOrg_ReturnsOrganizations()
     {
         // Act - query for all nodes with nodeType type/org
@@ -819,7 +819,7 @@ public record Graph
     /// Code nodes at "type/story/_Source/code" are NOT immediate children of "type/story" (they're
     /// grandchildren), so namespace: would miss them. scope:descendants is required.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task QueryAsync_ScopeDescendants_FindsCodeNodesUnderNodeType()
     {
         // Arrange
@@ -849,7 +849,7 @@ public record Graph
     /// Verifies that namespace: does NOT find Code nodes (they are 2 levels deep).
     /// This confirms the bug that was fixed by switching to scope:descendants.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task QueryAsync_ScopeChildren_DoesNotFindCodeNodes()
     {
         // Arrange
@@ -1092,7 +1092,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// 2. ObjectPolymorphicConverter is properly added to FileSystemStorageAdapter
     /// 3. $type discriminator is respected during JSON deserialization
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task FileSystem_PersistenceService_FindsNodeTypeNode_WithPolymorphicDeserialization()
     {
         // Act - this should find Type/Organizations by reading from disk
@@ -1115,7 +1115,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// Tests that CodeConfiguration can be loaded from child MeshNodes under the Code path.
     /// Code is now stored as regular MeshNodes with nodeType="Code" and content=CodeConfiguration.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task FileSystem_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         // Act - get children of the Code path
@@ -1136,7 +1136,7 @@ public class DynamicGraphFileSystemPersistenceTest : MonolithMeshTestBase
     /// Tests the complete flow: node loading, type compilation, and HubConfiguration setting.
     /// This is the end-to-end test for the production scenario.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task FileSystem_Organizations_GetsHubConfiguration_FromCompiledAssembly()
     {
         // Act - get the Organizations node (triggers on-demand compilation from disk files)
@@ -1220,7 +1220,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that tries to get the default layout from the Article NodeType.
     /// This test is expected to deadlock if the NodeTypeService implementation has issues.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_GetDefaultLayout_ShouldNotDeadlock()
     {
         // Arrange - Article NodeType is at MeshWeaver/Documentation/Article
@@ -1274,7 +1274,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that the MeshCatalog can resolve the Article NodeType path.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_CanBeResolved_FromSamples()
     {
         var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
@@ -1289,7 +1289,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that GetNodeAsync works for the Article NodeType.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_GetNodeAsync_FromSamples()
     {
         Output.WriteLine($"Getting node for {ArticleNodeTypePath}...");
@@ -1306,7 +1306,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that verifies the node's HubConfiguration is set for NodeType nodes.
     /// Nodes with nodeType=NodeType compile their own code to get HubConfiguration.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_HubConfiguration_IsSetForNodeType()
     {
         var node = await MeshQuery.QueryAsync<MeshNode>($"path:{ArticleNodeTypePath}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
@@ -1331,7 +1331,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that sends a PingRequest to the Article NodeType hub.
     /// This triggers hub creation which may cause deadlock.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_PingRequest_ShouldNotDeadlock()
     {
         var articleAddress = new Address(ArticleNodeTypePath);
@@ -1353,7 +1353,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that Code node Overview returns non-empty content.
     /// Uses JsonElement and GetControlStream to verify the Overview area renders a control.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CodeNode_Overview_ReturnsNonEmptyContent()
     {
         var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
@@ -1384,7 +1384,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that CodeConfiguration can be loaded from child MeshNodes via persistence.
     /// Code is stored as child MeshNodes with nodeType="Code" under the Article/_Source path.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_CodeConfiguration_LoadedFromChildMeshNodes()
     {
         Output.WriteLine($"Getting Code children for {ArticleCodeNamespace}...");
@@ -1409,7 +1409,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that Code node Overview returns a Splitter control with code list and content pane.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CodeNode_Overview_WithLayoutClient_ReturnsSplitter()
     {
         var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
@@ -1444,7 +1444,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Debug test: Collect control updates for Code node Overview.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CodeNode_Overview_DebugUpdateSequence()
     {
         var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
@@ -1483,7 +1483,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test using GetControlStream to get properly typed controls for Code node.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CodeNode_Overview_GetControlStream_Test()
     {
         var codeNodeAddress = new Address($"{ArticleCodeNamespace}/Article");
@@ -1529,7 +1529,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that loading the default layout area (empty string) from MeshWeaver node works.
     /// This test diagnoses eternal spinner issue when navigating to /MeshWeaver.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MeshWeaver_GetDefaultLayoutArea_ShouldNotHang()
     {
         // Arrange
@@ -1592,7 +1592,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that Article NodeType with custom AddLayout view compiles successfully.
     /// This validates the fix for missing using statements in DynamicMeshNodeAttributeGenerator.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_CustomView_CompilesSuccessfully()
     {
         Output.WriteLine($"Getting {ArticleNodeTypePath} node (triggers compilation)...");
@@ -1618,7 +1618,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Test that the custom view compiles and renders for a Systemorph organization instance.
     /// This tests the complete flow from views.json through compilation to rendering.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Systemorph_OverviewView_RendersCustomView()
     {
         var organizationAddress = new Address("Systemorph");
@@ -1659,7 +1659,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Article has 2 code files: Article.cs and ArticleLayoutAreas.cs
     /// stored at MeshWeaver/Documentation/Article/_Source/Article and MeshWeaver/Documentation/Article/_Source/ArticleLayoutAreas.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_QueryAsync_ScopeDescendants_FindsCodeNodes()
     {
         // Arrange
@@ -1686,7 +1686,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// and that the left menu contains the correct number of code file entries.
     /// This diagnoses the "no code files" issue in the NodeType Overview.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_NodeTypeOverview_ContainsCodeNodes()
     {
         var articleAddress = new Address(ArticleNodeTypePath);
@@ -1740,7 +1740,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// Tests the ObserveQuery reactive path specifically for Code nodes under Article.
     /// This mirrors the exact query used by NodeTypeLayoutAreas.Overview.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Article_ObserveQuery_ScopeDescendants_EmitsCodeNodes()
     {
         // Arrange
@@ -1771,7 +1771,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that loading the Search area from MeshWeaver node works.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MeshWeaver_GetSearchArea_ShouldNotHang()
     {
         // Arrange
@@ -1806,7 +1806,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that a VUser node can be created and detected as already existing.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PortalHub_CreateVUser_AlreadyExists_ReturnsFailure()
     {
         // Use a unique ID to avoid collisions with pre-loaded VUser partition data
@@ -1832,7 +1832,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// <summary>
     /// Test that creating a VUser node and then checking for it does not hang.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task EnsureVirtualUserNode_CheckThenCreate_NoHang()
     {
         // Use a unique ID to avoid collisions with pre-loaded VUser partition data

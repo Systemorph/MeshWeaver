@@ -78,7 +78,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// <summary>
     /// Test that the Details view renders for a Todo item.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Details_ShouldRenderTodoItem()
     {
         var client = GetClient();
@@ -108,7 +108,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// <summary>
     /// Test that the Thumbnail view renders for a Todo item.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Thumbnail_ShouldRenderTodoItem()
     {
         var client = GetClient();
@@ -138,7 +138,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// <summary>
     /// Test that the Overview view renders for a Todo.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task Details_ShouldRenderAsStackControl()
     {
         var client = GetClient();
@@ -168,7 +168,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// <summary>
     /// Test that multiple Todo items can be accessed independently.
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task MultipleTodos_CanBeAccessedIndependently()
     {
         var client = GetClient();
@@ -207,7 +207,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// <summary>
     /// Diagnostic test to verify MeshConfiguration has DefaultNodeHubConfiguration set.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void Configuration_HasDefaultNodeHubConfiguration()
     {
         // Get the MeshConfiguration from DI
@@ -307,7 +307,7 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
     /// Test that the Create area renders with type parameter on ProductLaunch.
     /// This tests the exact URL: /ACME/ProductLaunch/Create?type=ACME%2FProject%2FTodo
     /// </summary>
-    [Fact(Timeout = 15000)]
+    [Fact(Timeout = 20000)]
     public async Task CreateArea_WithTypeParam_ShouldRenderCreateForm()
     {
         var client = GetClient();

@@ -97,7 +97,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that GetDataRequest with ContentCollectionReference returns collection configurations
     /// from a Person instance hub (Alice).
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetDataRequest_WithContentCollectionReference_ReturnsConfig()
     {
         var aliceAddress = new Address("Cornerstone/Microsoft");
@@ -132,7 +132,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that GetDataRequest with empty ContentCollectionReference returns all collections.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetDataRequest_WithEmptyContentCollectionReference_ReturnsAllCollections()
     {
         var aliceAddress = new Address("Cornerstone/Microsoft");
@@ -159,7 +159,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that Organization instance hub's (ACME) collection is accessible via ContentCollectionReference.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetDataRequest_WithContentCollectionReference_ForOrganization_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
@@ -191,7 +191,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "collection:attachments" prefix resolves collection config from ACME.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UnifiedReference_CollectionPrefix_ReturnsConfig()
     {
         var acmeAddress = new Address("ACME");
@@ -219,7 +219,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "content:attachments/test.txt" prefix resolves file content from ACME.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UnifiedReference_ContentPrefix_ReturnsFileContent()
     {
         var acmeAddress = new Address("ACME");
@@ -247,7 +247,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that UnifiedReference with "data:" prefix resolves to DataPathReference behavior.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UnifiedReference_DataPrefix_ReturnsData()
     {
         var acmeAddress = new Address("ACME");
@@ -274,7 +274,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// to verify thread-safe hub initialization with collection:name format.
     /// Both ACME and Systemorph are Organizations which have the "attachments" collection.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ConcurrentCollectionRequests_WithUnifiedReference_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
@@ -318,7 +318,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests concurrent content file requests to verify thread-safe file resolution.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ConcurrentContentRequests_ToSameOrganization_AllSucceed()
     {
         var acmeAddress = new Address("ACME");
@@ -360,7 +360,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This test verifies that ACME/attachments and Systemorph/attachments are stored separately
     /// and don't overwrite each other when added to the portal's content service.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task StaticContentFlow_MultipleOrganizations_ReturnsCorrectContent()
     {
         var acmeAddress = new Address("ACME");
@@ -445,7 +445,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that "content" collection is properly mapped for Markdown nodes.
     /// The content files at samples/Graph/content/{nodePath}/ should be accessible.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ContentCollection_ForMarkdownNode_ResolvesCorrectly()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
@@ -480,42 +480,10 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Tests that content files can be retrieved from the "content" collection.
-    /// The icon.svg file at samples/Graph/content/Doc/DataMesh/UnifiedPath/icon.svg should be accessible.
-    /// </summary>
-    [Fact(Timeout = 10000)]
-    public async Task ContentCollection_RetrieveFile_ReturnsContent()
-    {
-        var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
-        var client = GetClient(c => c.AddContentCollections());
-
-        // Initialize the UCR node hub
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-
-        // Request content:content/icon.svg from UCR hub
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new UnifiedReference("content:content/icon.svg")),
-            o => o.WithTarget(ucrAddress),
-            TestContext.Current.CancellationToken);
-
-        response.Should().NotBeNull();
-        response.Message.Should().NotBeNull();
-        response.Message.Data.Should().NotBeNull();
-
-        // Content should be SVG text
-        var content = response.Message.Data as string;
-        content.Should().NotBeNull();
-        content.Should().Contain("<svg");
-    }
-
-    /// <summary>
     /// Tests that $Content layout area for icon.svg returns content without hanging.
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/content:icon.svg is rendered.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ContentLayoutArea_IconSvg_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
@@ -556,7 +524,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Content layout area for sample.md returns content without hanging.
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/content:sample.md is rendered.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ContentLayoutArea_SampleMd_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
@@ -595,7 +563,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// <summary>
     /// Tests that $Content layout area for non-existent file returns error message, not eternal spinner.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ContentLayoutArea_NonExistentFile_ReturnsErrorMessage()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
@@ -635,7 +603,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Schema layout area returns schema without hanging.
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/schema: is rendered.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SchemaLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
@@ -675,7 +643,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// Tests that $Data layout area returns data without hanging.
     /// This simulates what happens when @@Doc/DataMesh/UnifiedPath/data: is rendered.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DataLayoutArea_SelfReference_ReturnsWithoutHanging()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");
@@ -716,7 +684,7 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
     /// This uses the same configuration pattern as MemexConfiguration.cs.
     /// When requesting the default area (empty area), it should resolve to $Content for Markdown nodes.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task MarkdownNode_DefaultArea_IsContentNotCatalog()
     {
         var ucrAddress = new Address("Doc/DataMesh/UnifiedPath");

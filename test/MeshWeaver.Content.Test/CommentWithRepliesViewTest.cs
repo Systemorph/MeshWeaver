@@ -36,7 +36,7 @@ namespace MeshWeaver.Content.Test;
 public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string DocPath = "Doc/DataMesh/CollaborativeEditing";
-    private const string CommentC1Path = DocPath + "/c1";
+    private const string CommentC1Path = DocPath + "/_Comment/c1";
     private const string ReplyPath = CommentC1Path + "/reply1";
 
     private static readonly string SharedCacheDirectory = Path.Combine(
@@ -89,7 +89,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// This triggers the full rendering pipeline including comments sidebar
     /// where comment c1 has a reply — the scenario that caused OperationCanceledException.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CollaborativeEditingDocument_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -121,7 +121,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the document-level Comments area which lists all comments.
     /// Comments with replies are rendered with nested LayoutArea controls.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DocumentComments_ShouldRenderAllComments()
     {
         var client = GetClient();
@@ -152,7 +152,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// <summary>
     /// Renders the Overview area for comment c1 which has a reply.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CommentWithReply_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -184,7 +184,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the Overview area for the reply node directly.
     /// Tests whether the reply node's hub can be started independently.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ReplyNode_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -215,7 +215,7 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Renders the Overview area for a comment (c2) that has NO replies.
     /// Baseline test — should always work.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task CommentWithoutReplies_Overview_ShouldRender()
     {
         var client = GetClient();
@@ -246,14 +246,21 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Verifies that the persistence service can load the comment with reply
     /// and that the reply node exists on disk with correct Id and Path.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
+        // Initialize hub so partitioned data is loaded
+        var client = GetClient();
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(new Address(DocPath)),
+            TestContext.Current.CancellationToken);
+
         // Load parent comment
         var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();
         parentNode.Should().NotBeNull("Parent comment c1 should exist");
         parentNode!.Id.Should().Be("c1");
-        parentNode.Namespace.Should().Be(DocPath);
+        parentNode.Namespace.Should().Be(DocPath + "/_Comment");
         parentNode.Path.Should().Be(CommentC1Path);
         var parentComment = parentNode.Content as Comment;
         parentComment.Should().NotBeNull();

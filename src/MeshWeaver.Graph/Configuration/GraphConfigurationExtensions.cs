@@ -50,7 +50,7 @@ public static class GraphConfigurationExtensions
                 .AddNotificationType()
                 .AddActivityType()
                 .AddUserActivityType()
-                .AddKernelType()
+                .AddKernel()
                 .AddPortalType()
                 .AddApiTokenType()
                 .AddMeshDataSourceType()

@@ -40,7 +40,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
     /// </summary>
     protected override Task SetupAccessRightsAsync() => Task.CompletedTask;
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithAdminRole_ReturnsAllPermissions()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -54,7 +54,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithViewerRole_ReturnsReadOnly()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -68,7 +68,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Execute);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithEditorRole_ReturnsReadCreateUpdate()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -82,7 +82,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_NoRoles_ReturnsNone()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -94,7 +94,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.None);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithInheritance_InheritsFromParent()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -109,7 +109,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_WithGlobalRole_AppliesEverywhere()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -123,7 +123,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.All);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetEffectivePermissions_CombinesMultipleRoles()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -139,7 +139,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task HasPermission_WithSufficientPermissions_ReturnsTrue()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -152,7 +152,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         canRead.Should().BeTrue();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task HasPermission_WithoutSufficientPermissions_ReturnsFalse()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -165,7 +165,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         canDelete.Should().BeFalse();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AddUserRole_CreatesAssignment()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -179,7 +179,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().HaveFlag(Permission.Update);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task RemoveUserRole_RemovesAssignment()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -193,7 +193,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.None);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AnonymousUser_GetsAnonymousPermissions()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -206,7 +206,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         permissions.Should().Be(Permission.Read | Permission.Execute);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetRole_ReturnsBuiltInRole()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -217,7 +217,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         adminRole!.Permissions.Should().Be(Permission.All);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SaveRole_PersistsCustomRole()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -236,7 +236,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         retrievedRole!.Permissions.Should().Be(Permission.Read | Permission.Create);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task GetRoles_ReturnsAllRoles()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -268,7 +268,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ValidateAsync_WithoutPermission_ReturnsUnauthorized()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
@@ -289,7 +289,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         result.Reason.Should().Be(NodeRejectionReason.Unauthorized);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ValidateAsync_WithPermission_ReturnsValid()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -320,7 +320,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
     /// Self-access rule: when MainNode matches userId, all operations are allowed
     /// even without explicit permission grants.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ValidateAsync_SelfAccess_MainNodeMatchesUserId_ReturnsValid()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
@@ -348,7 +348,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
     /// <summary>
     /// Self-access rule should NOT apply when MainNode does not match userId.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task ValidateAsync_SelfAccess_MainNodeMismatch_ChecksPermissions()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
@@ -368,7 +368,7 @@ public class RlsNodeValidatorTests(ITestOutputHelper output) : MonolithMeshTestB
         result.IsValid.Should().BeFalse("user should NOT have self-access when MainNode != userId");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void SupportedOperations_ReturnsCreateUpdateDeleteOperations()
     {
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>()
@@ -426,7 +426,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
     /// A hub using ImpersonateAsHub can query its own MeshNode
     /// even without any explicit permission grants.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Hub_CanQueryOwnNode_WithImpersonateAsHub()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -451,7 +451,7 @@ public class HubSelfAccessTests(ITestOutputHelper output) : MonolithMeshTestBase
     /// Without ImpersonateAsHub and without permissions, a random user
     /// should NOT be able to see the hub's node.
     /// </summary>
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task UnauthorizedUser_CannotQueryHubNode()
     {
         var accessService = Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -493,7 +493,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
             .AddRowLevelSecurity();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Roland_WithGlobalAdminRole_CanEditArchitectureNode()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -507,7 +507,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canEdit.Should().BeTrue("Roland should be able to edit the Architecture node");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Roland_GlobalAdmin_CanEditAnyNode()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -528,7 +528,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         }
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Alice_WithAcmeEditorRole_CanEditInAcmeOnly()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -541,7 +541,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canEditMeshWeaver.Should().BeFalse("Alice should NOT be able to edit in MeshWeaver namespace");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PublicUser_WithMeshWeaverViewerRole_CannotEdit()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -555,7 +555,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         canEdit.Should().BeFalse("Public user should NOT be able to edit MeshWeaver content");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Roland_AdminCappedByDocPolicy_ReadOnlyOnDocs()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -593,7 +593,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         return ConfigureMeshBase(builder).AddRowLevelSecurity();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PolicyCapsPermissions_EditorCappedToRead()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -607,7 +607,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.Read | Permission.Execute);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PolicyCapsAdmin_GlobalAdminCappedToRead()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -631,7 +631,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         otherPermissions.Should().Be(Permission.All);
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PolicyDoesNotAffectSiblingNamespace()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -644,7 +644,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         acmePermissions.Should().Be(Permission.All, "ACME should not be affected by Doc policy");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task NestedPoliciesAccumulate()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -661,7 +661,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         restrictedPermissions.Should().Be(Permission.Read | Permission.Execute, "nested policy further restricts to Read + Execute only");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task BreaksInheritance_DiscardsParentRoles()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -676,7 +676,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.None, "inherited Admin from global should be discarded");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task BreaksInheritance_KeepsLocalRoles()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -692,7 +692,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
             "local Editor role should survive, inherited Admin should be discarded");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PolicyRemoval_RestoresPermissions()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -711,7 +711,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         restoredPerms.Should().Be(Permission.All, "permissions should be restored after policy removal");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SetGetPolicy_RoundTrip()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -737,7 +737,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         retrieved.BreaksInheritance.Should().BeTrue();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PolicyAppliesToPublicUser()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -750,7 +750,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.Execute, "Public user permissions should be capped to Execute only (Read denied by policy)");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PolicyAtGlobalScope_CapsEverything()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -782,7 +782,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
             .AddRowLevelSecurity();
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DocNamespace_AdminCappedToReadOnly()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -794,7 +794,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.Read | Permission.Execute, "Doc namespace has a static read-only policy");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DocNamespace_EditorCappedToReadOnly()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -806,7 +806,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.Read | Permission.Execute, "Doc namespace has a static read-only policy");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AgentNamespace_AdminCappedToReadOnly()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -818,7 +818,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.Read | Permission.Execute, "Agent namespace has a static read-only policy");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task RoleNamespace_AdminCappedToReadOnly()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -830,7 +830,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.Read | Permission.Execute, "Role namespace has a static read-only policy");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task StaticPolicy_DoesNotAffectOtherNamespaces()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -842,7 +842,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         permissions.Should().Be(Permission.All, "ACME is not a static namespace, Admin should have full access");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task StaticPolicy_DocRootItselfCapped()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();

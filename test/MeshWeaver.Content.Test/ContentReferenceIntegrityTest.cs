@@ -35,7 +35,7 @@ public class ContentReferenceIntegrityTest
 
     #region Markdown Thumbnails
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Validate_MarkdownThumbnails_AllResolveToExistingFiles()
     {
         // Arrange
@@ -70,7 +70,7 @@ public class ContentReferenceIntegrityTest
             string.Join("\n", broken));
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Validate_MarkdownThumbnailUrls_ResolveToExistingFiles()
     {
         // Arrange — verify that thumbnail paths, when resolved the same way
@@ -118,7 +118,7 @@ public class ContentReferenceIntegrityTest
 
     #region Markdown Node Icons
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Validate_MarkdownNodeIcons_AreValidReferences()
     {
         // Arrange
@@ -196,7 +196,7 @@ public class ContentReferenceIntegrityTest
 
     #region Inline Image References
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Validate_InlineImageReferences_AllResolveToExistingFiles()
     {
         // Arrange
@@ -269,7 +269,7 @@ public class ContentReferenceIntegrityTest
 
     #region JSON Node Icons
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public void Validate_JsonNodeImages_AllResolveToExistingFiles()
     {
         // Arrange

@@ -183,41 +183,46 @@ internal class SecurityService : ISecurityService
                 }
             }
 
-            await foreach (var node in _persistenceCore.GetChildrenAsync(scope, Options).WithCancellation(ct))
+            // Check direct children and _Access subfolder for AccessAssignment and Policy nodes
+            var childScopes = new[] { scope, string.IsNullOrEmpty(scope) ? "_Access" : $"{scope}/_Access" };
+            foreach (var childScope in childScopes)
             {
-                if (node.Content == null)
-                    continue;
-
-                // Check for PartitionAccessPolicy nodes (persisted policies)
-                if (node.NodeType == "PartitionAccessPolicy" && node.Id == "_Policy")
+                await foreach (var node in _persistenceCore.GetChildrenAsync(childScope, Options).WithCancellation(ct))
                 {
-                    var policy = DeserializePolicy(node);
-                    if (policy != null)
-                    {
-                        if (policy.BreaksInheritance)
-                            roleAssignments.Clear();
-
-                        // Tighten the cap (nested policies can only further restrict)
-                        permissionCap &= policy.GetPermissionCap();
-                    }
-                    continue;
-                }
-
-                if (node.NodeType != "AccessAssignment")
-                    continue;
-
-                var assignment = DeserializeAssignment(node);
-                if (assignment == null || assignment.AccessObject != userId)
-                    continue;
-
-                // Process each role in the assignment's Roles list
-                foreach (var roleAssignment in assignment.Roles)
-                {
-                    if (string.IsNullOrEmpty(roleAssignment.Role))
+                    if (node.Content == null)
                         continue;
 
-                    // Closest-wins: later (deeper) assignments override earlier ones for the same role
-                    roleAssignments[roleAssignment.Role] = (roleAssignment.Denied, depth);
+                    // Check for PartitionAccessPolicy nodes (persisted policies)
+                    if (node.NodeType == "PartitionAccessPolicy" && node.Id == "_Policy")
+                    {
+                        var policy = DeserializePolicy(node);
+                        if (policy != null)
+                        {
+                            if (policy.BreaksInheritance)
+                                roleAssignments.Clear();
+
+                            // Tighten the cap (nested policies can only further restrict)
+                            permissionCap &= policy.GetPermissionCap();
+                        }
+                        continue;
+                    }
+
+                    if (node.NodeType != "AccessAssignment")
+                        continue;
+
+                    var assignment = DeserializeAssignment(node);
+                    if (assignment == null || assignment.AccessObject != userId)
+                        continue;
+
+                    // Process each role in the assignment's Roles list
+                    foreach (var roleAssignment in assignment.Roles)
+                    {
+                        if (string.IsNullOrEmpty(roleAssignment.Role))
+                            continue;
+
+                        // Closest-wins: later (deeper) assignments override earlier ones for the same role
+                        roleAssignments[roleAssignment.Role] = (roleAssignment.Denied, depth);
+                    }
                 }
             }
         }

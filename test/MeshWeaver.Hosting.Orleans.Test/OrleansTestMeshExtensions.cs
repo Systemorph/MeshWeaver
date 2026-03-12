@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Kernel.Hub;
+﻿using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 

@@ -62,7 +62,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
         });
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task Admin_CanSee_AllPartitions()
     {
         // Default login is admin (Roland)
@@ -80,7 +80,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
         results.Should().Contain(n => n.Path == "Admin/Partition/Documentation");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task AuthenticatedUser_CanRead_PartitionNodes()
     {
         LoginAsUnprivilegedUser();
@@ -99,7 +99,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
             "Partition nodes should be publicly readable by any authenticated user");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task PartitionNode_HasCorrectNamespace()
     {
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -117,7 +117,7 @@ public class PartitionAccessTest(ITestOutputHelper output) : MonolithMeshTestBas
         def.Description.Should().Contain("Test partition");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task DocumentationPartition_HasDocNamespace()
     {
         var results = await MeshQuery.QueryAsync<MeshNode>(

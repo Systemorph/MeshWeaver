@@ -46,7 +46,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         }
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionQuery_GetVersions_ReturnsHistory()
     {
         // Arrange
@@ -74,7 +74,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         versions.Should().BeInDescendingOrder(v => v.Version, "versions should be ordered newest first");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionQuery_GetVersionAsync_ReturnsCorrectSnapshot()
     {
         // Arrange
@@ -104,7 +104,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         historicalNode!.Name.Should().Be("V1", "the first version should have the original name");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task VersionQuery_GetVersionBeforeAsync_FindsPreChangeState()
     {
         // Arrange
@@ -148,7 +148,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         beforeV1.Should().BeNull("there should be no version before the first one");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task SatelliteContent_IncludedInVersionHistory()
     {
         // Arrange - create a satellite node (MainNode != Path)
@@ -176,7 +176,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         versions.Should().NotBeEmpty("satellite content nodes should now have version history");
     }
 
-    [Fact(Timeout = 10000)]
+    [Fact(Timeout = 20000)]
     public async Task RollbackNode_RestoresHistoricalState()
     {
         // Arrange

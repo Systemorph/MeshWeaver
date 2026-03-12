@@ -11,7 +11,6 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Kernel;
-using MeshWeaver.Kernel.Hub;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
@@ -27,9 +26,9 @@ public class MonolithKernelTest(ITestOutputHelper output) : MonolithMeshTestBase
 {
     private const int DefaultTimeoutMs = 30000;
 
+    // AddKernel() is already included via AddGraph() in base class
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) =>
-        base.ConfigureMesh(builder)
-            .AddKernel();
+        base.ConfigureMesh(builder);
 
     /// <summary>
     /// Creates a kernel session MeshNode and returns the address to send messages to.
