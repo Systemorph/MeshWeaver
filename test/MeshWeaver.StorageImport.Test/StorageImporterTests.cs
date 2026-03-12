@@ -252,16 +252,17 @@ public class StorageImporterTests : IDisposable
         var fullResult = await importer.ImportAsync(ct: ct);
         fullResult.NodesImported.Should().BeGreaterThan(0);
 
-        // Verify Organization and Northwind exist in target (both are root-level nodes)
-        (await target.ExistsAsync("Organization", ct)).Should().BeTrue();
-        (await target.ExistsAsync("Northwind", ct)).Should().BeTrue();
+        // Verify ACME/Project/TodoAgent and Cornerstone exist in target
+        (await target.ExistsAsync("ACME/Project/TodoAgent", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue();
 
-        // Now create a partial source with only Organization
+        // Now create a partial source with only ACME/Project/TodoAgent.md
         var partialSourceDir = Path.Combine(_targetDir, "partial_source");
-        Directory.CreateDirectory(partialSourceDir);
-        var sampleOrg = Path.Combine(_sourceDir, "Organization.json");
-        File.Exists(sampleOrg).Should().BeTrue();
-        File.Copy(sampleOrg, Path.Combine(partialSourceDir, "Organization.json"));
+        var projectDir = Path.Combine(partialSourceDir, "ACME", "Project");
+        Directory.CreateDirectory(projectDir);
+        var sampleFile = Path.Combine(_sourceDir, "ACME", "Project", "TodoAgent.md");
+        File.Exists(sampleFile).Should().BeTrue();
+        File.Copy(sampleFile, Path.Combine(projectDir, "TodoAgent.md"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
@@ -269,11 +270,11 @@ public class StorageImporterTests : IDisposable
         // Act - re-import partial source with RemoveMissing
         var result = await importer2.ImportAsync(new StorageImportOptions { RemoveMissing = true }, ct);
 
-        // Assert - Organization should still exist, Northwind should be removed
+        // Assert - ACME/Project/TodoAgent should still exist, Cornerstone should be removed
         result.NodesImported.Should().Be(1);
         result.NodesRemoved.Should().BeGreaterThan(0);
-        (await target.ExistsAsync("Organization", ct)).Should().BeTrue("Organization was in the source");
-        (await target.ExistsAsync("Northwind", ct)).Should().BeFalse("Northwind was not in partial source and should be removed");
+        (await target.ExistsAsync("ACME/Project/TodoAgent", ct)).Should().BeTrue("ACME/Project/TodoAgent was in the source");
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeFalse("Cornerstone was not in partial source and should be removed");
     }
 
     [Fact]
@@ -341,12 +342,13 @@ public class StorageImporterTests : IDisposable
         // Full import first
         await importer.ImportAsync(ct: ct);
 
-        // Create partial source with only Organization
+        // Create partial source with only ACME/Project/TodoAgent.md
         var partialSourceDir = Path.Combine(_targetDir, "partial_no_remove");
-        Directory.CreateDirectory(partialSourceDir);
+        var projectDir = Path.Combine(partialSourceDir, "ACME", "Project");
+        Directory.CreateDirectory(projectDir);
         File.Copy(
-            Path.Combine(_sourceDir, "Organization.json"),
-            Path.Combine(partialSourceDir, "Organization.json"));
+            Path.Combine(_sourceDir, "ACME", "Project", "TodoAgent.md"),
+            Path.Combine(projectDir, "TodoAgent.md"));
 
         var partialSource = new FileSystemStorageAdapter(partialSourceDir);
         var importer2 = new StorageImporter(partialSource, target);
@@ -356,8 +358,8 @@ public class StorageImporterTests : IDisposable
 
         // Assert - nothing should be removed
         result.NodesRemoved.Should().Be(0);
-        (await target.ExistsAsync("Organization", ct)).Should().BeTrue();
-        (await target.ExistsAsync("Northwind", ct)).Should().BeTrue("Northwind should still exist when RemoveMissing is false");
+        (await target.ExistsAsync("ACME/Project/TodoAgent", ct)).Should().BeTrue();
+        (await target.ExistsAsync("Cornerstone", ct)).Should().BeTrue("Cornerstone should still exist when RemoveMissing is false");
     }
 
     [Fact]

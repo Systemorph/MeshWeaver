@@ -76,15 +76,24 @@ public class MeshNodeCompilationServiceTest : IDisposable
         services.AddInMemoryPersistence(persistence);
         // Register the mock hub so scoped MeshQuery can resolve it
         services.AddScoped<IMessageHub>(_ => _mockHub);
+        // Register MeshConfiguration and logging (required by MeshCatalog)
+        services.AddSingleton(new MeshConfiguration(new Dictionary<string, MeshNode>()));
+        services.AddLogging();
+
+        // Set up mock hub's ServiceProvider BEFORE building the DI container,
+        // because MeshCatalog constructor resolves ILogger from hub.ServiceProvider.
+        // Use a lazy approach: build provider first, then wire up the mock.
         var sp = services.BuildServiceProvider();
+        var hubSp = Substitute.For<IServiceProvider>();
+        hubSp.GetService(Arg.Any<Type>()).Returns(ci => sp.GetService(ci.Arg<Type>()));
+        _mockHub.ServiceProvider.Returns(hubSp);
 
         // Resolve IMeshService from a scope (IMeshService is registered as scoped)
         var scope = sp.CreateScope();
         var meshQuery = scope.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var serviceProvider = Substitute.For<IServiceProvider>();
-        serviceProvider.GetService(typeof(IMeshService)).Returns(meshQuery);
-        _mockHub.ServiceProvider.Returns(serviceProvider);
+        // Update to use the real scope service provider for subsequent calls
+        hubSp.GetService(typeof(IMeshService)).Returns(meshQuery);
         return new(_cacheService, _cacheOptions, _mockHub, NullLogger<MeshNodeCompilationService>.Instance);
     }
 

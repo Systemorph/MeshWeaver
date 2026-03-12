@@ -266,6 +266,9 @@ public static class PersistenceExtensions
                 sp.GetServices<IStaticNodeProvider>(),
                 sp.GetService<MeshConfiguration>()));
 
+        // Register MeshCatalog and its interfaces
+        services.AddMeshCatalog();
+
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
@@ -430,6 +433,9 @@ public static class PersistenceExtensions
                 return new FileSystemVersionStore(fsAdapter.BaseDirectory);
             return new NoOpVersionQuery();
         });
+
+        // Register MeshCatalog and its interfaces
+        services.AddMeshCatalog();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
