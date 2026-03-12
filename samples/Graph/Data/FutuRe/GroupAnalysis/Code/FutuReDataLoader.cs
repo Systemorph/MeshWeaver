@@ -216,7 +216,7 @@ public static class FutuReDataLoader
             ? $"{segments[0]}/{segments[1]}"
             : segments[0];
 
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery(
@@ -233,11 +233,11 @@ public static class FutuReDataLoader
     // ---------------------------------------------------------------
 
     /// <summary>
-    /// Loads AmountType reference data from MeshNodes via IMeshService.
+    /// Loads AmountType reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<AmountType>> LoadAmountTypes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active"))
@@ -249,11 +249,11 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
-    /// Loads Currency reference data from MeshNodes via IMeshService.
+    /// Loads Currency reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<Currency>> LoadCurrencies(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active"))
@@ -265,11 +265,11 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
-    /// Loads Country reference data from MeshNodes via IMeshService.
+    /// Loads Country reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<Country>> LoadCountries(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active"))
@@ -281,11 +281,11 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
-    /// Loads TransactionMapping instances from MeshNode graph via IMeshService.
+    /// Loads TransactionMapping instances from MeshNode graph via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<TransactionMapping>> LoadTransactionMappingsFromNodes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         return meshQuery
             .ObserveQuery<MeshNode>(
@@ -297,11 +297,11 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
-    /// Loads ExchangeRate reference data from MeshNodes via IMeshService.
+    /// Loads ExchangeRate reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<ExchangeRate>> LoadExchangeRates(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active"))
@@ -313,11 +313,11 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
-    /// Loads BusinessUnit reference data from MeshNodes via IMeshService.
+    /// Loads BusinessUnit reference data from MeshNodes via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<BusinessUnit>> LoadBusinessUnits(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
         return meshQuery
             .ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery("nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active"))
@@ -328,11 +328,11 @@ public static class FutuReDataLoader
     }
 
     /// <summary>
-    /// Loads group-level LineOfBusiness instances from MeshNode graph via IMeshService.
+    /// Loads group-level LineOfBusiness instances from MeshNode graph via IMeshQuery.
     /// </summary>
     public static IObservable<IEnumerable<LineOfBusiness>> LoadLinesOfBusinessFromNodes(IWorkspace workspace)
     {
-        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshQuery>();
 
         return meshQuery
             .ObserveQuery<MeshNode>(
