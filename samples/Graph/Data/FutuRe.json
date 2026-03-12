@@ -1,0 +1,9 @@
+{
+  "id": "FutuRe",
+  "name": "FutuRe",
+  "nodeType": "Organization",
+  "category": "Insurance & Reinsurance",
+  "description": "Insurance group with three business units, local-to-group LoB mapping, and profitability analysis",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true
+}

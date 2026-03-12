@@ -8,8 +8,6 @@ Tags:
   - "Currency"
 ---
 
-# Multi-Currency Consolidation
-
 FutuRe's three business units operate in three different currencies — EUR, USD, and JPY. The group reports in CHF. Converting local amounts to a common reporting currency is essential for consolidated analysis, but the conversion needs to be transparent, auditable, and switchable between budget rates and market rates.
 
 ---
@@ -120,6 +118,28 @@ graph LR
     class PLAN_CALC,ACT_CALC calc
     class DELTA delta
 ```
+
+---
+
+## Rate Governance & SLOs
+
+Exchange rates follow a strict governance process. Each rate is **frozen on the last business day of the month** — the responsible treasury team publishes it, and no retrospective changes are allowed once the period closes.
+
+Every rate record carries:
+
+- **Effective date** — the month-end snapshot date
+- **Source** — where the rate was obtained (e.g. ECB, Bloomberg, internal treasury)
+- **Owner** — the team or person accountable for the rate (e.g. Group Treasury)
+
+This metadata makes every conversion fully auditable: for any CHF amount in the consolidated P&L, you can trace the exact rate, when it was fixed, where it came from, and who signed off on it.
+
+**Service-Level Objectives (SLOs)** enforce timeliness and quality:
+
+- Rates must be published within **1 business day** after month-end
+- Each rate must reference a verifiable external source
+- Missing or late rates block downstream consolidation — the system will not silently fall back to stale values
+
+These SLOs turn currency conversion from a manual spreadsheet ritual into a governed, observable data product.
 
 ---
 

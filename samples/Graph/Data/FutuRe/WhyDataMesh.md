@@ -8,11 +8,12 @@ Tags:
   - "Strategy"
 ---
 
-# Why Data Mesh?
-
 ---
 
 ## 1. Data Mesh Fundamentals
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
 
 ```mermaid
 graph LR
@@ -21,16 +22,26 @@ graph LR
     T3[Team C] -->|push| DW
     DW -->|batch| R[Reports]
 
-    D1[Team A<br/>owns its data] --> MESH[Mesh]
-    D2[Team B<br/>owns its data] --> MESH
-    D3[Team C<br/>owns its data] --> MESH
+    classDef trad fill:#fce8e6,stroke:#ea4335,color:#333
+    class T1,T2,T3,DW,R trad
+```
+
+</div>
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
+```mermaid
+graph LR
+    D1[Team A<br/>owns its data] -->|publish| MESH[Mesh]
+    D2[Team B<br/>owns its data] -->|publish| MESH
+    D3[Team C<br/>owns its data] -->|publish| MESH
     MESH -->|live| V[Federated Views]
 
-    classDef trad fill:#fce8e6,stroke:#ea4335,color:#333
     classDef mesh fill:#e6f4ea,stroke:#34a853,color:#333
-    class T1,T2,T3,DW,R trad
     class D1,D2,D3,MESH,V mesh
 ```
+
+</div>
+</div>
 
 Each team owns and publishes its own data as a product — no central bottleneck, no waiting for the platform team.
 
@@ -38,20 +49,33 @@ Each team owns and publishes its own data as a product — no central bottleneck
 
 ## 2. From MBOs to SLOs
 
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
 ```mermaid
 graph LR
     CEO[CEO] -->|targets| VP1[VP Finance] -->|cascade| TEAM1[Team executes]
     CEO -->|targets| VP2[VP Ops] -->|cascade| TEAM2[Team executes]
 
+    classDef mbo fill:#fce8e6,stroke:#ea4335,color:#333
+    class CEO,VP1,VP2,TEAM1,TEAM2 mbo
+```
+
+</div>
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
+```mermaid
+graph LR
     P1[Claims Product] -->|owns| S1[Freshness < 1h<br/>Accuracy > 99%]
     P2[Pricing Product] -->|owns| S2[Availability 99.9%<br/>Latency < 5s]
     P3[Reporting Product] -->|owns| S3[Completeness 100%<br/>All BUs covered]
 
-    classDef mbo fill:#fce8e6,stroke:#ea4335,color:#333
     classDef slo fill:#e6f4ea,stroke:#34a853,color:#333
-    class CEO,VP1,VP2,TEAM1,TEAM2 mbo
     class P1,P2,P3,S1,S2,S3 slo
 ```
+
+</div>
+</div>
 
 Each data product defines, monitors, and is accountable for its own quality guarantees — decentralised accountability replaces top-down cascade.
 
@@ -59,19 +83,32 @@ Each data product defines, monitors, and is accountable for its own quality guar
 
 ## 3. Data is Addressed, Not Copied
 
+<div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
 ```mermaid
 graph LR
     SRC1[Source] -->|copy| STG[Staging] -->|copy| WH[Warehouse] -->|copy| MART[Data Mart] -->|copy| RPT1[Report]
 
+    classDef copy fill:#fce8e6,stroke:#ea4335,color:#333
+    class SRC1,STG,WH,MART,RPT1 copy
+```
+
+</div>
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
+```mermaid
+graph LR
     EU[EuropeRe<br/>Analysis] -.->|"@address"| RPT2[Report]
     AM[AmericasIns<br/>Analysis] -.->|"@address"| RPT2
     AS[AsiaRe<br/>Analysis] -.->|"@address"| RPT2
 
-    classDef copy fill:#fce8e6,stroke:#ea4335,color:#333
     classDef addr fill:#e6f4ea,stroke:#34a853,color:#333
-    class SRC1,STG,WH,MART,RPT1 copy
     class EU,AM,AS,RPT2 addr
 ```
+
+</div>
+</div>
 
 Data stays where it lives. Consumers reference it by address — `@FutuRe/EuropeRe/Analysis` — zero copies, zero staleness, zero reconciliation.
 
@@ -79,23 +116,39 @@ Data stays where it lives. Consumers reference it by address — `@FutuRe/Europe
 
 ## 4. Virtual Transformations
 
+<div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
 ```mermaid
 graph LR
     RAW1[Raw Data] --> T1[Transform] --> TBL1[(Table)] --> T2[Transform] --> TBL2[(Table)] --> T3[Transform] --> TBL3[(Table)]
 
+    classDef mat fill:#fce8e6,stroke:#ea4335,color:#333
+    class RAW1,T1,TBL1,T2,TBL2,T3,TBL3 mat
+```
+
+</div>
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
+```mermaid
+graph LR
     RAW2[Raw Data] --> V1[LoB Mapping] --> V2[FX Conversion] --> V3[Aggregation] --> OUT[Live Result]
 
-    classDef mat fill:#fce8e6,stroke:#ea4335,color:#333
     classDef virt fill:#e6f4ea,stroke:#34a853,color:#333
-    class RAW1,T1,TBL1,T2,TBL2,T3,TBL3 mat
     class RAW2,V1,V2,V3,OUT virt
 ```
+
+</div>
+</div>
 
 Transformations are virtual — computed on the fly as reactive streams. Source changes propagate instantly. Only materialise when absolutely necessary.
 
 ---
 
 ## 5. Governance & Auditability
+
+<div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
 
 ```mermaid
 graph LR
@@ -113,32 +166,51 @@ graph LR
     class REJ1,REJ2 reject
 ```
 
+</div>
+</div>
+
 Every change passes through checkpoints. Hierarchical access control — who approved what, when — fully documented and auditable.
 
 ---
 
 ## 6. Types as Data
 
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
 ```mermaid
 graph LR
     CODE[App Code] --> SCHEMA[Hardcoded Schema] --> DEPLOY[Redeploy to Change]
 
+    classDef trad fill:#fce8e6,stroke:#ea4335,color:#333
+    class CODE,SCHEMA,DEPLOY trad
+```
+
+</div>
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
+```mermaid
+graph LR
     NT[NodeType<br/>stored as data] --> VIEWS[Views]
     NT --> VALID[Validation]
     NT --> HANDLERS[Handlers]
     NT --> HUB[Hub Config]
 
-    classDef trad fill:#fce8e6,stroke:#ea4335,color:#333
     classDef mesh fill:#e6f4ea,stroke:#34a853,color:#333
-    class CODE,SCHEMA,DEPLOY trad
     class NT,VIEWS,VALID,HANDLERS,HUB mesh
 ```
+
+</div>
+</div>
 
 Data types are themselves data — stored, versioned, and queryable in the mesh. Change a schema or add a view without redeploying.
 
 ---
 
 ## 7. AI Agents as First-Class Citizens
+
+<div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
 
 ```mermaid
 graph LR
@@ -158,6 +230,9 @@ graph LR
     class MESH,UI mesh
     class EXT ext
 ```
+
+</div>
+</div>
 
 AI agents discover schemas, query data, and execute operations through the same mesh APIs. External tools connect via MCP.
 

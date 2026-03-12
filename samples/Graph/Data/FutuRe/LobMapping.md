@@ -8,8 +8,6 @@ Tags:
   - "Onboarding"
 ---
 
-# Onboarding a New Business Unit
-
 When an insurance group acquires a new subsidiary, one of the hardest tasks isn't signing the deal — it's integrating data. The new unit writes business under its own product classification, but the group needs a single consolidated view.
 
 At FutuRe, **EuropeRe** and **AmericasIns** already map their local Lines of Business to 10 group-level categories. Now **AsiaRe** needs the same treatment. Here's how MeshWeaver makes that possible.
@@ -20,28 +18,42 @@ At FutuRe, **EuropeRe** and **AmericasIns** already map their local Lines of Bus
 
 Every business unit has its own product taxonomy. EuropeRe calls it "Household", AmericasIns calls it "Homeowners" — both map to the group's "Property" line, but at different percentages. Traditionally, building these mappings means months of spreadsheet work between actuaries, product owners, and IT teams.
 
-```mermaid
-graph LR
-    subgraph Before
-        EMAIL[Email discussion between teams]
-        SHEET[Spreadsheets back and forth]
-        MANUAL[Manual JSON editing]
-    end
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
+<div style="display: flex; flex-direction: column; justify-content: center;">
 
-    subgraph With MeshWeaver
-        DISC[Email discussion]
-        AGENT[MeshWeaver Agent extracts rules]
-        RULES[Structured mapping rules]
-    end
+**Old Approach**
+
+```mermaid
+graph TD
+    EMAIL[Email discussion between teams]
+    SHEET[Spreadsheets back and forth]
+    MANUAL[Manual JSON editing]
 
     EMAIL --> SHEET --> MANUAL
-    DISC --> AGENT --> RULES
 
     classDef old fill:#fee,stroke:#c33,color:#333
-    classDef new fill:#efe,stroke:#3a3,color:#333
     class EMAIL,SHEET,MANUAL old
+```
+
+</div>
+<div style="display: flex; flex-direction: column; justify-content: center;">
+
+**With MeshWeaver**
+
+```mermaid
+graph TD
+    DISC[Email discussion]
+    AGENT[MeshWeaver Agent extracts rules]
+    RULES[Structured mapping rules]
+
+    DISC --> AGENT --> RULES
+
+    classDef new fill:#efe,stroke:#3a3,color:#333
     class DISC,AGENT,RULES new
 ```
+
+</div>
+</div>
 
 ---
 
