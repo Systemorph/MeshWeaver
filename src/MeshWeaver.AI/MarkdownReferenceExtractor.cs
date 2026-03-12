@@ -25,8 +25,9 @@ public record ExtractedReference(
 public static class MarkdownReferenceExtractor
 {
     // Pattern for direct @ references: @path/to/node (no spaces, stops at whitespace)
+    // Includes colon for unified reference prefixes like content:collection/path
     private static readonly Regex DirectReferencePattern = new(
-        @"@([a-zA-Z0-9_/\-.]+)",
+        @"@([a-zA-Z0-9_/\-.:]+)",
         RegexOptions.Compiled);
 
     // Pattern for parentheses @ references: @(path) or @("quoted path")

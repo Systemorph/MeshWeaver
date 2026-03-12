@@ -287,6 +287,23 @@
     }
 
     /// <summary>
+    /// Fires when the user accepts a completion suggestion.
+    /// The parameter is the path of the accepted item.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnCompletionAccepted { get; set; }
+
+    /// <summary>
+    /// Called from JavaScript when a completion item is accepted via the command mechanism.
+    /// </summary>
+    [JSInvokable]
+    public async Task HandleCompletionAccepted(string path)
+    {
+        if (OnCompletionAccepted.HasDelegate)
+            await OnCompletionAccepted.InvokeAsync(path);
+    }
+
+    /// <summary>
     /// JSInvokable method called from JavaScript to get async completions.
     /// </summary>
     [JSInvokable]

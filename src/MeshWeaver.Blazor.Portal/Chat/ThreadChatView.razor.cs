@@ -18,6 +18,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Portal.SidePanel;
+using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -436,10 +437,45 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
-    private void OnMessageTextChanged(string? newText)
+    private async Task OnCompletionItemAccepted(string path)
     {
-        MessageText = newText;
-        _ = UpdateExtractedReferencesAsync();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        // Check if this path matches a known agent — select it instead of adding a chip
+        if (_agentsByPath.TryGetValue(path, out var agentInfo))
+        {
+            OnAgentChanged(agentInfo);
+        }
+        else
+        {
+            // Add as attachment chip if not already present
+            if (!attachments.Any(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
+            {
+                var displayName = await ResolveContextDisplayNameAsync(path);
+                attachments.Add(new AttachmentInfo(path, displayName, IsContext: false));
+            }
+        }
+
+        // Wait briefly for Monaco to finish inserting the text
+        await Task.Delay(50);
+
+        // Remove the @reference from the editor text
+        if (monacoEditor != null)
+        {
+            var currentText = await monacoEditor.GetValueAsync();
+            if (!string.IsNullOrEmpty(currentText))
+            {
+                var cleanedText = MarkdownReferenceExtractor.RemoveReferenceByPath(currentText, path);
+                if (cleanedText != currentText)
+                {
+                    MessageText = cleanedText;
+                    await monacoEditor.SetValueAsync(cleanedText);
+                }
+            }
+        }
+
+        StateHasChanged();
     }
 
     private async Task UpdateExtractedReferencesAsync()
@@ -855,67 +891,141 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
+            var results = new List<CompletionItem>();
+
             if (query.StartsWith("@"))
             {
                 var reference = query[1..];
 
+                QuerySuggestion[] suggestions;
                 if (string.IsNullOrWhiteSpace(reference))
                 {
-                    var suggestions = await MeshQuery.AutocompleteAsync("", "", 20).ToArrayAsync();
-                    return suggestions.Select(s => new CompletionItem
-                    {
-                        Label = s.Path,
-                        InsertText = $"@{s.Path}",
-                        Description = s.NodeType ?? s.Name,
-                        Path = s.Path,
-                        Category = "Addresses"
-                    }).ToArray();
+                    suggestions = await MeshQuery.AutocompleteAsync("", "", 20).ToArrayAsync();
                 }
-
-                if (reference.EndsWith("/"))
+                else if (reference.EndsWith("/"))
                 {
                     var basePath = reference.TrimEnd('/');
-                    var suggestions = await MeshQuery.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
-                    return suggestions.Select(s => new CompletionItem
-                    {
-                        Label = s.Path,
-                        InsertText = $"@{s.Path}",
-                        Description = s.NodeType ?? "",
-                        Path = s.Path,
-                        Category = ""
-                    }).ToArray();
+                    suggestions = await MeshQuery.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
                 }
-
+                else
                 {
-                    var suggestions = await MeshQuery.AutocompleteAsync("", reference, 20).ToArrayAsync();
-                    return suggestions.Select(s => new CompletionItem
-                    {
-                        Label = s.Path,
-                        InsertText = $"@{s.Path}",
-                        Description = s.NodeType ?? s.Name,
-                        Path = s.Path,
-                        Category = "Addresses"
-                    }).ToArray();
+                    suggestions = await MeshQuery.AutocompleteAsync("", reference, 20).ToArrayAsync();
                 }
-            }
 
+                results.AddRange(suggestions.Select(s => new CompletionItem
+                {
+                    Label = s.Path,
+                    InsertText = $"@{s.Path}",
+                    Description = s.NodeType ?? s.Name,
+                    Path = s.Path,
+                    Category = "Addresses"
+                }));
+
+                // Also include content collection files from the current context
+                var contentItems = await GetContentCompletionsAsync(reference);
+                results.AddRange(contentItems);
+            }
+            else
             {
                 var suggestions = await MeshQuery.AutocompleteAsync("", query, 20).ToArrayAsync();
-                return suggestions.Select(s => new CompletionItem
+                results.AddRange(suggestions.Select(s => new CompletionItem
                 {
                     Label = s.Path,
                     InsertText = s.Path,
                     Description = s.NodeType ?? "",
                     Path = s.Path,
                     Category = ""
-                }).ToArray();
+                }));
             }
+
+            return results.ToArray();
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error getting completions for query: {Query}", query);
             return [];
         }
+    }
+
+    /// <summary>
+    /// Queries content collection files and returns matching completion items.
+    /// Uses Unified Path format: {address}/{collectionName}:{filePath}
+    /// </summary>
+    private async Task<List<CompletionItem>> GetContentCompletionsAsync(string prefix)
+    {
+        var items = new List<CompletionItem>();
+
+        try
+        {
+            var contentService = Hub.ServiceProvider.GetService<IContentService>();
+            if (contentService == null)
+                return items;
+
+            // The node address forms the first part of the unified path
+            var nodeAddress = initialContext ?? "";
+
+            var configs = contentService.GetAllCollectionConfigs();
+            foreach (var config in configs)
+            {
+                ContentCollection? collection;
+                try
+                {
+                    collection = await contentService.GetCollectionAsync(config.Name);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (collection == null)
+                    continue;
+
+                IReadOnlyCollection<FileItem>? files;
+                try
+                {
+                    files = await collection.GetFilesAsync("/");
+                }
+                catch
+                {
+                    continue; // Skip collections that fail to enumerate
+                }
+
+                if (files == null)
+                    continue;
+
+                var collectionName = collection.Collection;
+                foreach (var file in files)
+                {
+                    var filePath = file.Path.TrimStart('/');
+                    // Unified path: {address}/{collectionName}:{filePath}
+                    var unifiedPath = string.IsNullOrEmpty(nodeAddress)
+                        ? $"{collectionName}:{filePath}"
+                        : $"{nodeAddress}/{collectionName}:{filePath}";
+
+                    // Filter by prefix if one was typed
+                    if (!string.IsNullOrEmpty(prefix) &&
+                        !file.Name.Contains(prefix, StringComparison.OrdinalIgnoreCase) &&
+                        !unifiedPath.Contains(prefix, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    items.Add(new CompletionItem
+                    {
+                        Label = file.Name,
+                        InsertText = $"@{unifiedPath}",
+                        Description = collection.DisplayName,
+                        Path = unifiedPath,
+                        Category = "Content",
+                        Kind = CompletionItemKind.File
+                    });
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Error getting content completions");
+        }
+
+        return items;
     }
 
     private static string TruncateText(string text, int maxLength)

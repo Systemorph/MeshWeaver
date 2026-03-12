@@ -436,6 +436,17 @@ export function registerCompletionProvider(editorId, config) {
         return;
     }
 
+    // Register a command that fires when a completion item is accepted.
+    // keybinding=0 means no keyboard shortcut — invoked only via CompletionItem.command.
+    if (!state.completionCommandId && state.editorInstance) {
+        state.completionCommandId = state.editorInstance.addCommand(0, (_, path) => {
+            const currentState = editorState.get(editorId);
+            if (currentState?.dotNetRef && path) {
+                currentState.dotNetRef.invokeMethodAsync('HandleCompletionAccepted', path);
+            }
+        });
+    }
+
     // Build trigger character set for regex (not used directly anymore, but kept for reference)
     const escapedTriggers = triggerCharacters.map(c => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('');
 
@@ -561,7 +572,7 @@ export function registerCompletionProvider(editorId, config) {
                 // This avoids row height calculation issues with multi-line labels
                 const displayLabel = item.path || item.label;
 
-                return {
+                const suggestion = {
                     label: displayLabel,
                     kind: typeof item.kind === 'number' ? item.kind : monaco.languages.CompletionItemKind.Text,
                     insertText: item.insertText || item.label,
@@ -573,6 +584,17 @@ export function registerCompletionProvider(editorId, config) {
                     filterText: filterText,
                     sortText: displayLabel.toLowerCase()  // Sort alphabetically by path
                 };
+
+                // Attach command to notify C# when a suggestion is accepted
+                if (currentState.completionCommandId && item.path) {
+                    suggestion.command = {
+                        id: currentState.completionCommandId,
+                        title: '',
+                        arguments: [item.path]
+                    };
+                }
+
+                return suggestion;
             });
 
             // Set incomplete: true for async mode to allow re-fetching as user types
