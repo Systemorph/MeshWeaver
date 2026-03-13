@@ -3,6 +3,10 @@
 
 @inject IConfiguration Configuration
 
+@{
+    var aiConnectionString = Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+}
+
 <!DOCTYPE html>
 <html lang="en">
 
@@ -19,6 +23,12 @@
     <script src="_content/Radzen.Blazor/Radzen.Blazor.js"></script>
     <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
     <PageTitle>Memex Portal</PageTitle>
+    @if (!string.IsNullOrEmpty(aiConnectionString))
+    {
+        <script type="text/javascript">
+            !(function (cfg){function e(){cfg.onInit&&cfg.onInit(n)}var S,u,D,t,n,C,i,o,s,a,f,m,v,g=window,T=document,b=g.location,w="script",I="ingestionendpoint",E="disableExceptionTracking",A="ai.device.";"instrumentationKey"in cfg||(cfg.instrumentationKey="");S=cfg.name||"appInsights",cfg.name=S,[g[S]=g[S]||function(){(g[S].q=g[S].q||[]).push(arguments)}][0].l=+new Date,u="https://js.monitor.azure.com/scripts/b/ai.",D=".min.js",t=cfg.sv||"3",n=u+t+D;try{if(g.location&&g.location.protocol&&"file:"===g.location.protocol)return}catch(e){}m=(cfg.dle||cfg.url||n).toLowerCase(),v=T.createElement(w),v.src=m,v.onload=e,T.getElementsByTagName(w)[0].parentNode.appendChild(v)}({connectionString:"@aiConnectionString"}));
+        </script>
+    }
 </head>
 
 <body>

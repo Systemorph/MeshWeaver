@@ -33,7 +33,7 @@ public static class LayoutClientExtensions
                     var patch = stream.GetPatch(value, reference, dataContext, ci);
                     var updated = patch?.Apply(ci) ?? ci;
 
-                    return stream.ToChangeItem(ci, updated, patch!, stream.StreamId);
+                    return stream.ToChangeItem(ci, updated, patch!, stream.ClientId);
                 },
                     ex =>
                     {
