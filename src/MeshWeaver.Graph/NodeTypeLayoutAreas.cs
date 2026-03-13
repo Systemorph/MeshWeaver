@@ -128,18 +128,27 @@ public static class NodeTypeLayoutAreas
             // Markdown Description
             if (!string.IsNullOrEmpty(typeDef?.Description))
             {
-                content = content.WithView(Controls.Markdown(typeDef.Description)
-                    .WithStyle("margin-top: 16px; margin-bottom: 24px;"));
+                content = content.WithView(Controls.Markdown(typeDef.Description));
             }
 
             outer = outer.WithView(content);
 
-            // Children with search
+            // Children — use MeshSearch directly (ChildrenArea is not registered for NodeType hubs)
+            var hubPath = host.Hub.Address.ToString();
             outer = outer.WithView(
                 Controls.Stack
                     .WithWidth("100%")
                     .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
-                    .WithView(LayoutAreaControl.Children(host.Hub)));
+                    .WithView(Controls.MeshSearch
+                        .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
+                        .WithShowSearchBox(false)
+                        .WithShowEmptyMessage(false)
+                        .WithShowLoadingIndicator(false)
+                        .WithRenderMode(MeshSearchRenderMode.Grouped)
+                        .WithSectionCounts(true)
+                        .WithItemLimit(10)
+                        .WithCollapsibleSections(true)
+                        .WithCreateHref($"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}")));
 
             return (UiControl?)outer;
         });

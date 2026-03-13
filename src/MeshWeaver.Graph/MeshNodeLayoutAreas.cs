@@ -245,10 +245,7 @@ public static class MeshNodeLayoutAreas
         var description = typeDef.Description
             ?? $"Built-in type for managing {node.Name ?? node.NodeType ?? "content"} nodes.";
 
-        return Controls.Stack
-            .WithStyle("margin-top: 16px; padding: 16px 0;")
-            .WithView(Controls.Markdown(description)
-                .WithStyle("color: var(--neutral-foreground-hint); font-size: 1rem;"));
+        return Controls.Markdown(description);
     }
 
     /// <summary>
@@ -438,16 +435,22 @@ public static class MeshNodeLayoutAreas
         if (node.Content is MarkdownContent markdownContent)
             return markdownContent.Content;
 
-        // Handle MarkdownDocument content (JSON with $type and content fields)
+        // Handle MarkdownDocument/MarkdownContent content (JSON with $type and content fields)
         if (node.Content is System.Text.Json.JsonElement jsonElement)
         {
             if (jsonElement.TryGetProperty("$type", out var typeProperty))
             {
                 var typeName = typeProperty.GetString();
-                if (typeName == "MarkdownDocument" && jsonElement.TryGetProperty("content", out var contentProperty))
+                if ((typeName == "MarkdownDocument" || typeName == "MarkdownContent") && jsonElement.TryGetProperty("content", out var contentProperty))
                 {
                     return contentProperty.GetString() ?? string.Empty;
                 }
+            }
+
+            // Fallback: try "content" property without $type check
+            if (jsonElement.TryGetProperty("content", out var fallbackContent) && fallbackContent.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return fallbackContent.GetString() ?? string.Empty;
             }
         }
 
