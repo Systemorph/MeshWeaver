@@ -133,10 +133,35 @@
                 {
                     @if (ann.Type == AnnotationType.Comment)
                     {
-                        @* Comments are MeshNodes — render their Overview layout area *@
-                        <div class="annotation-card annotation-for-@ann.Id annotation-type-comment @(activeAnnotationId == ann.Id ? "active" : "")"
+                        var comment = GetCommentData(ann.Id);
+                        <div class="annotation-card annotation-for-@ann.Id annotation-type-comment @(IsResolved(ann.Id) ? "resolved" : "") @(activeAnnotationId == ann.Id ? "active" : "")"
                              @onclick="() => HighlightAnnotation(ann.Id)">
-                            <LayoutArea Address="@GetCommentAddress(ann.Id)" Area="Overview" ShowProgress="true" ProgressMessage="" />
+                            @if (comment != null)
+                            {
+                                <div class="comment-header">
+                                    <span class="comment-author">@comment.Author</span>
+                                    <span class="comment-time">@FormatTimeAgo(comment.CreatedAt)</span>
+                                    <div class="comment-actions">
+                                        @if (!IsResolved(ann.Id))
+                                        {
+                                            <button class="btn-resolve" title="Resolve" @onclick="() => ResolveComment(ann.Id)" @onclick:stopPropagation="true">&#x2713;</button>
+                                        }
+                                        <button class="btn-delete" title="Delete" @onclick="() => DeleteComment(ann.Id)" @onclick:stopPropagation="true">&#x2715;</button>
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(ann.HighlightedText))
+                                {
+                                    <div class="comment-quote">"@Truncate(ann.HighlightedText, 60)"</div>
+                                }
+                                @if (!string.IsNullOrEmpty(comment.Text))
+                                {
+                                    <div class="comment-text">@comment.Text</div>
+                                }
+                            }
+                            else
+                            {
+                                <span class="comment-placeholder">Loading...</span>
+                            }
                         </div>
                     }
                     else

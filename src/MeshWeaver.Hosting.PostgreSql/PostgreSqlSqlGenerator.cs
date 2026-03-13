@@ -151,9 +151,9 @@ public class PostgreSqlSqlGenerator
 
         if (isAccessedQuery)
         {
-            // JOIN with UserActivity MeshNodes stored at User/{userId}/_userActivity/{encodedPath}
+            // JOIN with UserActivity MeshNodes stored at User/{userId}/_UserActivity/{encodedPath}
             // where encodedPath = node.path with / replaced by _
-            parameters["@actUserNs"] = $"User/{activityUserId}/_userActivity";
+            parameters["@actUserNs"] = $"User/{activityUserId}/_UserActivity";
             sql.Append(" INNER JOIN mesh_nodes ua ON ua.namespace = @actUserNs" +
                         " AND ua.node_type = 'UserActivity'" +
                         " AND REPLACE(n.path, '/', '_') = ua.id");

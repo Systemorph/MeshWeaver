@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Application.Styles;
@@ -20,6 +21,7 @@ public static class VersionLayoutArea
     /// Renders the Versions list showing all historical versions of the current node.
     /// Each row has version number, timestamp, and Compare/Restore buttons.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> Versions(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
@@ -92,6 +94,7 @@ public static class VersionLayoutArea
     /// Renders the diff view comparing a historical version to the current version.
     /// Reads ?version= query parameter to determine which version to compare.
     /// </summary>
+    [Browsable(false)]
     public static IObservable<UiControl?> VersionDiff(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();

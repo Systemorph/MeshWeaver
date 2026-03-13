@@ -11,7 +11,7 @@ namespace MeshWeaver.Graph.Configuration;
 /// <summary>
 /// Provides configuration for UserActivity nodes in the graph.
 /// UserActivity nodes track user navigation/access to mesh nodes.
-/// Stored as satellite MeshNodes under User/{userId}/_userActivity/.
+/// Stored as satellite MeshNodes under User/{userId}/_UserActivity/.
 /// Access is delegated to the MainNode (User node) via SatelliteAccessRule.
 /// </summary>
 public static class UserActivityNodeType

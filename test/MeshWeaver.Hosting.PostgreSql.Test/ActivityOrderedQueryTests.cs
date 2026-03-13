@@ -62,9 +62,9 @@ public class ActivityOrderedQueryTests
 
         var now = DateTimeOffset.UtcNow;
 
-        // Seed UserActivity MeshNodes at User/alice/_userActivity/{encodedPath}
+        // Seed UserActivity MeshNodes at User/alice/_UserActivity/{encodedPath}
         // Thread3 most recent, Thread1 second, Thread2 oldest
-        await adapter.WriteAsync(new MeshNode("org_ACME_Discussions_Thread2", "User/alice/_userActivity")
+        await adapter.WriteAsync(new MeshNode("org_ACME_Discussions_Thread2", "User/alice/_UserActivity")
         {
             Name = "Thread Two",
             NodeType = "UserActivity",
@@ -84,7 +84,7 @@ public class ActivityOrderedQueryTests
         // Small delay to ensure distinct last_modified timestamps
         await Task.Delay(10);
 
-        await adapter.WriteAsync(new MeshNode("org_ACME_Discussions_Thread1", "User/alice/_userActivity")
+        await adapter.WriteAsync(new MeshNode("org_ACME_Discussions_Thread1", "User/alice/_UserActivity")
         {
             Name = "Thread One",
             NodeType = "UserActivity",
@@ -103,7 +103,7 @@ public class ActivityOrderedQueryTests
 
         await Task.Delay(10);
 
-        await adapter.WriteAsync(new MeshNode("org_ACME_Discussions_Thread3", "User/alice/_userActivity")
+        await adapter.WriteAsync(new MeshNode("org_ACME_Discussions_Thread3", "User/alice/_UserActivity")
         {
             Name = "Thread Three",
             NodeType = "UserActivity",

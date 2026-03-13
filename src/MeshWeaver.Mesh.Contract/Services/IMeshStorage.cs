@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans")]
+[assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 [assembly: InternalsVisibleTo("MeshWeaver.Blazor.Portal")]
 
 namespace MeshWeaver.Mesh.Services;

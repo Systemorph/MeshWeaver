@@ -295,7 +295,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
-    /// Stores as MeshNode at User/{userId}/_userActivity/{encodedPath}.
+    /// Stores as MeshNode at User/{userId}/_UserActivity/{encodedPath}.
     /// Fire-and-forget: failures are logged but don't affect navigation.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
@@ -320,10 +320,12 @@ internal class NavigationService : INavigationService
             {
                 var now = DateTimeOffset.UtcNow;
                 var encodedPath = node.Path.Replace("/", "_");
-                var activityPath = $"User/{userId}/_userActivity/{encodedPath}";
+                var activityPath = $"User/{userId}/_UserActivity/{encodedPath}";
 
-                // Query for existing activity node
-                var existing = await _meshQuery.QueryAsync<MeshNode>($"path:{activityPath}").FirstOrDefaultAsync();
+                // Use unprotected storage — user activity is internal bookkeeping,
+                // no access control needed for reading/writing the user's own activity nodes.
+                var persistence = _hub.ServiceProvider.GetRequiredService<IMeshStorage>();
+                var existing = await persistence.GetNodeAsync(activityPath);
 
                 UserActivityRecord record;
                 if (existing?.Content is UserActivityRecord existingRecord)
@@ -338,7 +340,7 @@ internal class NavigationService : INavigationService
                         Namespace = node.Namespace ?? existingRecord.Namespace,
                     };
 
-                    await _meshQuery.UpdateNodeAsync(existing with { Content = record });
+                    await persistence.SaveNodeAsync(existing with { Content = record });
                 }
                 else
                 {
@@ -356,7 +358,7 @@ internal class NavigationService : INavigationService
                         Namespace = node.Namespace
                     };
 
-                    await _meshQuery.CreateNodeAsync(MeshNode.FromPath(activityPath) with
+                    await persistence.SaveNodeAsync(MeshNode.FromPath(activityPath) with
                     {
                         NodeType = "UserActivity",
                         Name = node.Name ?? encodedPath,

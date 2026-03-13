@@ -47,8 +47,10 @@ public partial class CollaborativeMarkdownView
     private string RenderedHtml = "";
     private List<ParsedAnnotation> Annotations = new();
 
-    // Comment status cache (markerId -> CommentStatus), populated by mesh query subscription
-    private Dictionary<string, CommentStatus> commentStatuses = new();
+    // Comment data cache (markerId -> Comment), populated by mesh query subscription
+    private Dictionary<string, Comment> commentNodes = new();
+    // Comment path cache (markerId -> MeshNode path), for resolve/delete operations
+    private Dictionary<string, string> commentPaths = new();
 
     private bool HasAnnotations => Annotations.Any(a => a.Type != AnnotationType.Comment);
 
@@ -61,8 +63,8 @@ public partial class CollaborativeMarkdownView
         // "Unresolved" (default): show non-comment annotations + active comments only
         _ => Annotations.Where(a =>
             a.Type != AnnotationType.Comment ||
-            !commentStatuses.TryGetValue(a.Id, out var status) ||
-            status == CommentStatus.Active).ToList()
+            !commentNodes.TryGetValue(a.Id, out var comment) ||
+            comment.Status == CommentStatus.Active).ToList()
     };
 
     private bool HasSideAnnotations =>
@@ -150,11 +152,13 @@ public partial class CollaborativeMarkdownView
             })
             .Subscribe(list =>
             {
-                commentStatuses = list
-                    .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId))
-                    .ToDictionary(
-                        n => ((Comment)n.Content!).MarkerId!,
-                        n => ((Comment)n.Content!).Status);
+                var withMarker = list.Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId));
+                commentNodes = withMarker.ToDictionary(
+                    n => ((Comment)n.Content!).MarkerId!,
+                    n => (Comment)n.Content!);
+                commentPaths = withMarker.ToDictionary(
+                    n => ((Comment)n.Content!).MarkerId!,
+                    n => n.Path);
                 InvokeAsync(StateHasChanged);
             }));
     }
@@ -409,9 +413,35 @@ public partial class CollaborativeMarkdownView
         return map.ToArray();
     }
 
-    // Helpers
-    private string GetCommentAddress(string commentId) =>
-        $"{BoundNodePath}/{commentId}";
+    // Comment helpers
+    private Comment? GetCommentData(string markerId) =>
+        commentNodes.TryGetValue(markerId, out var c) ? c : null;
+
+    private bool IsResolved(string markerId) =>
+        commentNodes.TryGetValue(markerId, out var c) && c.Status == CommentStatus.Resolved;
+
+    private async Task ResolveComment(string markerId)
+    {
+        if (!commentPaths.TryGetValue(markerId, out var path) || string.IsNullOrEmpty(BoundHubAddress))
+            return;
+        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshQuery == null) return;
+        var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+        if (node?.Content is Comment comment)
+        {
+            var updated = node with { Content = comment with { Status = CommentStatus.Resolved } };
+            Hub.Post(new UpdateNodeRequest(updated), o => o.WithTarget(new Address(BoundHubAddress)));
+        }
+    }
+
+    private async Task DeleteComment(string markerId)
+    {
+        if (!commentPaths.TryGetValue(markerId, out var path))
+            return;
+        var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshQuery == null) return;
+        await meshQuery.DeleteNodeAsync(path);
+    }
 
     private static string Truncate(string text, int maxLength) =>
         text.Length <= maxLength ? text : text[..maxLength] + "…";

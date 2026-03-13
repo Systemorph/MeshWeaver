@@ -44,19 +44,19 @@
 }
 
 .collab-md-sidebar {
-    flex: 0 0 380px;
-    min-width: 320px;
-    max-width: 420px;
+    flex: 0 0 320px;
+    min-width: 280px;
+    max-width: 380px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
 /* --- Annotation Cards (compact) --- */
 
 ::deep .annotation-card {
-    padding: 8px 10px;
-    border-radius: 6px;
+    padding: 6px 8px;
+    border-radius: 4px;
     border: 1px solid var(--neutral-stroke-rest);
     background: var(--neutral-layer-1);
     cursor: pointer;
@@ -186,15 +186,106 @@
     color: var(--neutral-foreground-rest);
 }
 
-/* Comment card type styling — min-height prevents layout shift while LayoutArea loads */
+/* Comment card type styling */
 ::deep .annotation-card.annotation-type-comment {
     border-left: 3px solid var(--annotation-comment-border);
-    min-height: 60px;
+}
+
+::deep .annotation-card.annotation-type-comment.resolved {
+    opacity: 0.5;
 }
 
 ::deep .annotation-card.active.annotation-type-comment {
     border-color: var(--annotation-comment-border);
     background: var(--annotation-comment-bg);
+}
+
+/* --- Comment Card Inline Layout (Google Docs-style) --- */
+
+::deep .comment-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+::deep .comment-author {
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-rest);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+::deep .comment-time {
+    font-size: 0.7rem;
+    color: var(--neutral-foreground-hint);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+::deep .comment-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+::deep .annotation-card:hover .comment-actions {
+    opacity: 1;
+}
+
+::deep .comment-actions button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    line-height: 1;
+    transition: background-color 0.15s ease;
+}
+
+::deep .comment-actions button:hover {
+    background: var(--neutral-layer-3);
+}
+
+::deep .comment-actions .btn-resolve {
+    color: #4ade80;
+}
+
+::deep .comment-actions .btn-delete {
+    color: #f87171;
+}
+
+::deep .comment-quote {
+    margin-top: 2px;
+    padding-left: 6px;
+    border-left: 2px solid var(--annotation-comment-border);
+    font-size: 0.78rem;
+    font-style: italic;
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    text-overflow: ellipsis;
+}
+
+::deep .comment-text {
+    margin-top: 2px;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    color: var(--neutral-foreground-rest);
+}
+
+::deep .comment-placeholder {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+    font-style: italic;
 }
 
 /* ==========================================================================
