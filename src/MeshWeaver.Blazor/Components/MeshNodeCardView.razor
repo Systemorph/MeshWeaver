@@ -43,14 +43,7 @@ else
                 <div class="mesh-node-card-content">
                     @if (!string.IsNullOrEmpty(ImageUrl))
                     {
-                        @if (ImageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
-                        {
-                            <div style="--icon-url: url('@ImageUrl')" class="mesh-node-card-icon"></div>
-                        }
-                        else
-                        {
-                            <img src="@ImageUrl" alt="@Title" class="mesh-node-card-image" />
-                        }
+                        <img src="@ImageUrl" alt="@Title" class="mesh-node-card-image" />
                     }
                     else
                     {

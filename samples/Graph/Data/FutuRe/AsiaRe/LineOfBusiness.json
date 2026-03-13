@@ -4,7 +4,7 @@
   "name": "Line of Business",
   "nodeType": "NodeType",
   "category": "Types",
-  "description": "Lines of business for AsiaRe",
+  "description": "8 local lines of business in JPY. Data owner: AsiaRe Head of Actuarial. Updated quarterly; mapping submissions due 60 days before fiscal year start.",
   "icon": "/static/storage/content/FutuRe/AsiaRe/LineOfBusiness/icon.svg",
   "isPersistent": true,
   "content": {
@@ -13,7 +13,7 @@
     "namespace": "FutuRe/AsiaRe",
     "displayName": "Line of Business",
     "iconName": "Grid",
-    "description": "AsiaRe lines of business",
+    "description": "AsiaRe maintains 8 local lines of business denominated in JPY. Each LoB maps to the [10 Group Lines of Business](/FutuRe/LineOfBusiness) via percentage splits defined in the [AsiaRe Mapping Rules](/FutuRe/AsiaRe/TransactionMapping/MappingRules).\n\n**Data Owner:** AsiaRe Head of Actuarial\n\n**SLOs:**\n- **Data freshness:** Cashflows updated quarterly, within 5 business days of quarter close\n- **Mapping submission deadline:** 60 days before fiscal year start\n- **Approval cycle:** Local actuarial review within 10 business days, then [Group Actuarial](/FutuRe/LineOfBusiness) approval\n- **Percentage integrity:** All splits must sum to 100% per local LoB\n\n**Responsibilities:**\n- Local actuaries maintain LoB definitions and cashflow data\n- Local actuaries propose mapping changes to [Group standard](/FutuRe/LineOfBusiness)\n- Finance team validates P&L aggregation in the [Analysis Cube](/FutuRe/AsiaRe/Analysis/AnnualReport)\n- Contact: asiare-actuarial@future-group.com",
     "configuration": "config => config\n    .WithContentType<LineOfBusiness>()\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout\n        .AddLineOfBusinessLayoutAreas())"
   }
 }

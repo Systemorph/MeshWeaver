@@ -31,16 +31,6 @@
     flex-shrink: 0;
 }
 
-.mesh-node-card-icon {
-    width: 48px;
-    height: 48px;
-    min-width: 48px;
-    min-height: 48px;
-    max-width: 48px;
-    max-height: 48px;
-    border-radius: 8px;
-    flex-shrink: 0;
-}
 
 .mesh-node-card-placeholder {
     width: 48px;

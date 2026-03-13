@@ -104,13 +104,11 @@ public static class MarkdownEditLayoutArea
 
         container = container.WithView(headerRow);
 
-        // MarkdownEditorControl with auto-save
-        var lineCount = string.IsNullOrEmpty(initialContent) ? 15 : initialContent.Split('\n').Length;
-        var editorHeight = Math.Clamp(lineCount * 22 + 60, 300, 2000);
+        // MarkdownEditorControl with auto-save — fills remaining vertical space
         var editor = new MarkdownEditorControl()
             .WithDocumentId(hubPath)
             .WithValue(initialContent)
-            .WithHeight($"{editorHeight}px")
+            .WithHeight("100%")
             .WithMaxHeight("none")
             .WithTrackChanges(trackChanges)
             .WithPlaceholder("Start writing your markdown content...")
@@ -118,7 +116,7 @@ public static class MarkdownEditLayoutArea
 
         var editorWrapper = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("flex: 1; width: 100%; padding: 0;")
+            .WithStyle("flex: 1; width: 100%; padding: 0; min-height: 0;")
             .WithView(editor);
 
         container = container.WithView(editorWrapper);

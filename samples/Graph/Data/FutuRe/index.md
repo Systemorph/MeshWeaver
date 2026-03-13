@@ -94,12 +94,18 @@ Each BU writes business in its own currency (EUR, USD, JPY), classifies products
 
 Instead of ripping out existing systems, each BU creates a **local data product** — a structured data cube with its own Lines of Business, its own currency, and its own Performance.
 
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 235" style="width:100%;max-width:860px;display:block;margin:24px auto;border-radius:16px;padding:12px;">
-  <defs><marker id="ad" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#888"/></marker></defs>
-  <text x="140" y="14" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Underwriting · Risk</text>
-  <text x="140" y="28" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Finance · Reserving</text>
-  <line x1="140" y1="34" x2="140" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#ad)"/>
-  <text x="158" y="70" fill="#888" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 240" style="width:100%;max-width:860px;display:block;margin:24px auto;border-radius:16px;padding:12px;">
+  <defs><marker id="ad" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="currentColor" fill-opacity=".3"/></marker></defs>
+  <rect x="62" y="5" width="76" height="26" rx="6" fill="#1e88e5"/>
+  <text x="100" y="22" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Underwriting</text>
+  <rect x="142" y="5" width="76" height="26" rx="6" fill="#e53935"/>
+  <text x="180" y="22" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Risk</text>
+  <rect x="62" y="35" width="76" height="26" rx="6" fill="#43a047"/>
+  <text x="100" y="52" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Finance</text>
+  <rect x="142" y="35" width="76" height="26" rx="6" fill="#8e24aa"/>
+  <text x="180" y="52" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Reserving</text>
+  <line x1="140" y1="65" x2="140" y2="95" stroke="currentColor" stroke-opacity=".3" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="158" y="84" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
   <polygon points="60,105 90,90 250,90 220,105" fill="#42a5f5"/>
   <rect x="60" y="105" width="160" height="100" fill="#1565c0"/>
   <polygon points="220,105 250,90 250,190 220,205" fill="#0d47a1"/>
@@ -107,10 +113,16 @@ Instead of ripping out existing systems, each BU creates a **local data product*
   <text x="140" y="158" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">Aggregated in local</text>
   <text x="140" y="172" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">data language</text>
   <text x="140" y="196" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="10">8 LoBs · EUR</text>
-  <text x="420" y="14" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Underwriting · Risk</text>
-  <text x="420" y="28" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Finance · Reserving</text>
-  <line x1="420" y1="34" x2="420" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#ad)"/>
-  <text x="438" y="70" fill="#888" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
+  <rect x="342" y="5" width="76" height="26" rx="6" fill="#1e88e5"/>
+  <text x="380" y="22" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Underwriting</text>
+  <rect x="422" y="5" width="76" height="26" rx="6" fill="#e53935"/>
+  <text x="460" y="22" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Risk</text>
+  <rect x="342" y="35" width="76" height="26" rx="6" fill="#43a047"/>
+  <text x="380" y="52" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Finance</text>
+  <rect x="422" y="35" width="76" height="26" rx="6" fill="#8e24aa"/>
+  <text x="460" y="52" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Reserving</text>
+  <line x1="420" y1="65" x2="420" y2="95" stroke="currentColor" stroke-opacity=".3" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="438" y="84" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
   <polygon points="340,105 370,90 530,90 500,105" fill="#ef5350"/>
   <rect x="340" y="105" width="160" height="100" fill="#c62828"/>
   <polygon points="500,105 530,90 530,190 500,205" fill="#8e0000"/>
@@ -118,10 +130,16 @@ Instead of ripping out existing systems, each BU creates a **local data product*
   <text x="420" y="158" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">Aggregated in local</text>
   <text x="420" y="172" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">data language</text>
   <text x="420" y="196" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="10">8 LoBs · USD</text>
-  <text x="700" y="14" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Underwriting · Risk</text>
-  <text x="700" y="28" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Finance · Reserving</text>
-  <line x1="700" y1="34" x2="700" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#ad)"/>
-  <text x="718" y="70" fill="#888" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
+  <rect x="622" y="5" width="76" height="26" rx="6" fill="#1e88e5"/>
+  <text x="660" y="22" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Underwriting</text>
+  <rect x="702" y="5" width="76" height="26" rx="6" fill="#e53935"/>
+  <text x="740" y="22" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Risk</text>
+  <rect x="622" y="35" width="76" height="26" rx="6" fill="#43a047"/>
+  <text x="660" y="52" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Finance</text>
+  <rect x="702" y="35" width="76" height="26" rx="6" fill="#8e24aa"/>
+  <text x="740" y="52" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Reserving</text>
+  <line x1="700" y1="65" x2="700" y2="95" stroke="currentColor" stroke-opacity=".3" stroke-width="1.5" marker-end="url(#ad)"/>
+  <text x="718" y="84" fill="currentColor" fill-opacity=".5" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
   <polygon points="620,105 650,90 810,90 780,105" fill="#b388ff"/>
   <rect x="620" y="105" width="160" height="100" fill="#7e57c2"/>
   <polygon points="780,105 810,90 810,190 780,205" fill="#4a148c"/>
@@ -196,7 +214,6 @@ To consolidate, we need two transformations — and both are applied **virtually
 EuropeRe calls it "Household." AmericasIns calls it "Homeowners." Both map to the group's **Property** line — but at different percentages. Each BU maintains its own mapping rules with actuarial signoff.
 
 - [Explore the LoB Mapping story →](@FutuRe/LobMapping)
-- [Transaction Mapping Type →](@FutuRe/TransactionMapping) — SLOs, governance, and mapping rules
 
 ### FX Conversion — Three Currencies, One Dropdown
 
@@ -229,6 +246,8 @@ graph LR
 ```
 
 Onboarding drops from months to minutes. The resulting rules are versioned, auditable, and governed — not buried in a spreadsheet.
+
+[See the AsiaRe onboarding thread →](@FutuRe/AsiaRe/TransactionMapping/MappingRules/_Thread/t1)
 
 ---
 

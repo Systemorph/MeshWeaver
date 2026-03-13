@@ -120,10 +120,16 @@ public static class MarkdownOverviewLayoutArea
             if (jsonElement.TryGetProperty("$type", out var typeProperty))
             {
                 var typeName = typeProperty.GetString();
-                if (typeName == "MarkdownDocument" && jsonElement.TryGetProperty("content", out var contentProperty))
+                if ((typeName == "MarkdownDocument" || typeName == "MarkdownContent") && jsonElement.TryGetProperty("content", out var contentProperty))
                 {
                     return contentProperty.GetString() ?? string.Empty;
                 }
+            }
+
+            // Fallback: try "content" property without $type check
+            if (jsonElement.TryGetProperty("content", out var fallbackContent) && fallbackContent.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return fallbackContent.GetString() ?? string.Empty;
             }
         }
 

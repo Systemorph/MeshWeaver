@@ -1,15 +1,17 @@
 /* ==========================================================================
-   CollaborativeMarkdownView — scoped component styles
+   CollaborativeMarkdownView — Modern Google Docs / Word-style
    Uses Fluent design tokens (var(--neutral-*)) for theme support.
-   CSS custom properties defined in <style> block in .razor file
-   (since :root can't be scoped). All annotation styles use ::deep
-   to target MarkupString HTML content rendered as descendants.
+   CSS custom properties defined in <style> block in .razor file.
+   All annotation styles use ::deep to target MarkupString HTML content.
    ========================================================================== */
+
+/* --- Container & Layout --- */
 
 .collab-md-container {
     width: 100%;
-    padding: 24px 0;
+    padding: 16px 0;
     position: relative;
+    overflow: hidden;
 }
 
 .collab-md-toolbar {
@@ -17,9 +19,10 @@
     align-items: center;
     gap: 8px;
     margin-bottom: 16px;
-    padding: 8px 12px;
+    padding: 6px 12px;
     background: var(--neutral-layer-2);
-    border-radius: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--neutral-stroke-rest);
     flex-wrap: wrap;
 }
 
@@ -27,13 +30,20 @@
     width: 1px;
     height: 20px;
     background: var(--neutral-stroke-rest);
-    margin: 0 8px;
+    margin: 0 4px;
 }
 
 .collab-md-split {
     display: flex;
-    gap: 24px;
+    gap: 20px;
     align-items: flex-start;
+    overflow: hidden;
+}
+
+.collab-md-split.with-sidebar .collab-md-content {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: calc(100% - 300px);
 }
 
 .collab-md-content {
@@ -44,44 +54,50 @@
 }
 
 .collab-md-sidebar {
-    flex: 0 0 320px;
-    min-width: 280px;
-    max-width: 380px;
+    flex: 0 0 280px;
+    width: 280px;
+    max-width: 280px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 6px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    max-height: 80vh;
+    position: sticky;
+    top: 80px;
 }
 
-/* --- Annotation Cards (compact) --- */
+/* --- Annotation Cards (Google Docs style) --- */
 
 ::deep .annotation-card {
-    padding: 6px 8px;
-    border-radius: 4px;
+    padding: 10px 12px;
+    border-radius: 8px;
     border: 1px solid var(--neutral-stroke-rest);
     background: var(--neutral-layer-1);
     cursor: pointer;
-    transition: border-color 0.15s ease, background-color 0.15s ease;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease;
     font-size: 0.85rem;
     line-height: 1.4;
 }
 
 ::deep .annotation-card:hover {
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.08);
     border-color: var(--neutral-stroke-hover);
 }
 
 ::deep .annotation-card.active {
     border: 2px solid var(--annotation-active-border);
-    background: var(--annotation-active-bg);
+    box-shadow: 0 2px 8px rgba(9, 105, 218, 0.12);
 }
 
 ::deep .annotation-card.active.annotation-type-insert {
     border-color: var(--annotation-insert-border);
-    background: var(--annotation-insert-bg);
+    box-shadow: 0 2px 8px rgba(34, 134, 58, 0.12);
 }
 
 ::deep .annotation-card.active.annotation-type-delete {
     border-color: var(--annotation-delete-border);
-    background: var(--annotation-delete-bg);
+    box-shadow: 0 2px 8px rgba(207, 34, 46, 0.12);
 }
 
 /* Card header: author left, buttons right */
@@ -110,26 +126,32 @@
 }
 
 .collab-md-time {
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     color: var(--neutral-foreground-hint);
     white-space: nowrap;
 }
 
-/* Inline action buttons in card header */
+/* Inline action buttons — hidden until hover */
 .collab-md-card-actions {
     display: flex;
     align-items: center;
     gap: 2px;
     flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+::deep .annotation-card:hover .collab-md-card-actions {
+    opacity: 1;
 }
 
 .collab-md-card-actions button {
     background: none;
     border: none;
     cursor: pointer;
-    padding: 2px 6px;
+    padding: 3px 7px;
     border-radius: 4px;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     line-height: 1;
     transition: background-color 0.15s ease;
 }
@@ -148,10 +170,10 @@
 
 /* Quoted text snippet */
 .collab-md-quote {
-    margin-top: 4px;
-    padding: 3px 6px;
+    margin-top: 6px;
+    padding: 4px 8px;
     border-left: 3px solid;
-    border-radius: 4px;
+    border-radius: 0 4px 4px 0;
     font-size: 0.8rem;
     font-style: italic;
     color: var(--neutral-foreground-hint);
@@ -192,12 +214,12 @@
 }
 
 ::deep .annotation-card.annotation-type-comment.resolved {
-    opacity: 0.5;
+    opacity: 0.45;
 }
 
 ::deep .annotation-card.active.annotation-type-comment {
     border-color: var(--annotation-comment-border);
-    background: var(--annotation-comment-bg);
+    box-shadow: 0 2px 8px rgba(212, 167, 44, 0.15);
 }
 
 /* --- Comment Card Inline Layout (Google Docs-style) --- */
@@ -242,8 +264,8 @@
     background: none;
     border: none;
     cursor: pointer;
-    padding: 1px 4px;
-    border-radius: 3px;
+    padding: 2px 6px;
+    border-radius: 4px;
     font-size: 0.8rem;
     line-height: 1;
     transition: background-color 0.15s ease;
@@ -262,12 +284,14 @@
 }
 
 ::deep .comment-quote {
-    margin-top: 2px;
-    padding-left: 6px;
+    margin-top: 4px;
+    padding: 3px 8px;
     border-left: 2px solid var(--annotation-comment-border);
+    border-radius: 0 3px 3px 0;
     font-size: 0.78rem;
     font-style: italic;
     color: var(--neutral-foreground-hint);
+    background: var(--annotation-comment-bg);
     overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -276,9 +300,9 @@
 }
 
 ::deep .comment-text {
-    margin-top: 2px;
-    font-size: 0.8rem;
-    line-height: 1.4;
+    margin-top: 4px;
+    font-size: 0.82rem;
+    line-height: 1.5;
     color: var(--neutral-foreground-rest);
 }
 
@@ -423,7 +447,7 @@
     font-weight: 500;
     white-space: nowrap;
     padding: 8px 12px;
-    border-radius: 6px;
+    border-radius: 8px;
     border-left: 4px solid;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     z-index: 1000;
@@ -455,7 +479,7 @@
     opacity: 1;
 }
 
-/* Popover label colors — use CSS variables for light/dark theming */
+/* Popover label colors */
 ::deep .comment-highlight .annotation-margin-label {
     background: var(--annotation-comment-label-bg);
     border-left-color: var(--annotation-comment-border);
@@ -523,7 +547,7 @@
     flex: 1;
     padding: 6px 10px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 0.75rem;
     font-weight: 600;
     cursor: pointer;
@@ -785,4 +809,26 @@
     border-left: 4px solid var(--annotation-delete-border);
     border-radius: 4px;
     color: var(--annotation-delete-color);
+}
+
+/* ==========================================================================
+   Responsive: collapse sidebar on narrow screens
+   ========================================================================== */
+
+@media (max-width: 768px) {
+    .collab-md-split {
+        flex-direction: column;
+    }
+
+    .collab-md-split.with-sidebar .collab-md-content {
+        max-width: 100%;
+    }
+
+    .collab-md-sidebar {
+        flex: none;
+        width: 100%;
+        max-width: 100%;
+        max-height: none;
+        position: static;
+    }
 }
