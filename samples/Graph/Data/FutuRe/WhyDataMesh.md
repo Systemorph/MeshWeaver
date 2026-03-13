@@ -8,9 +8,9 @@ Tags:
   - "Strategy"
 ---
 
----
+## Data Mesh Fundamentals
 
-## 1. Data Mesh Fundamentals
+Each team owns and publishes its own data as a product — no central bottleneck, no waiting for the platform team.
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -43,11 +43,11 @@ graph LR
 </div>
 </div>
 
-Each team owns and publishes its own data as a product — no central bottleneck, no waiting for the platform team.
-
 ---
 
-## 2. From MBOs to SLOs
+## From MBOs to SLOs
+
+Each data product defines, monitors, and is accountable for its own quality guarantees — decentralised accountability replaces top-down cascade.
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -77,11 +77,11 @@ graph LR
 </div>
 </div>
 
-Each data product defines, monitors, and is accountable for its own quality guarantees — decentralised accountability replaces top-down cascade.
-
 ---
 
-## 3. Data is Addressed, Not Copied
+## Data is Addressed, Not Copied
+
+Data stays where it lives. Consumers reference it by address — `@FutuRe/EuropeRe/Analysis` — zero copies, zero staleness, zero reconciliation.
 
 <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -110,11 +110,11 @@ graph LR
 </div>
 </div>
 
-Data stays where it lives. Consumers reference it by address — `@FutuRe/EuropeRe/Analysis` — zero copies, zero staleness, zero reconciliation.
-
 ---
 
-## 4. Virtual Transformations
+## Virtual Transformations
+
+Transformations are virtual — computed on the fly as reactive streams. Source changes propagate instantly. Only materialise when absolutely necessary.
 
 <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -141,11 +141,11 @@ graph LR
 </div>
 </div>
 
-Transformations are virtual — computed on the fly as reactive streams. Source changes propagate instantly. Only materialise when absolutely necessary.
-
 ---
 
-## 5. Governance & Auditability
+## Governance & Auditability
+
+Every change passes through checkpoints. Hierarchical access control — who approved what, when — fully documented and auditable.
 
 <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -169,11 +169,11 @@ graph LR
 </div>
 </div>
 
-Every change passes through checkpoints. Hierarchical access control — who approved what, when — fully documented and auditable.
-
 ---
 
-## 6. Types as Data
+## Types as Data
+
+Data types are themselves data — stored, versioned, and queryable in the mesh. Change a schema or add a view without redeploying.
 
 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -203,11 +203,11 @@ graph LR
 </div>
 </div>
 
-Data types are themselves data — stored, versioned, and queryable in the mesh. Change a schema or add a view without redeploying.
-
 ---
 
-## 7. AI Agents as First-Class Citizens
+## AI Agents as First-Class Citizens
+
+AI agents discover schemas, query data, and execute operations through the same mesh APIs. External tools connect via MCP.
 
 <div style="display: grid; grid-template-columns: 1fr; gap: 1rem;">
 <div style="display: flex; flex-direction: column; justify-content: center;">
@@ -233,8 +233,6 @@ graph LR
 
 </div>
 </div>
-
-AI agents discover schemas, query data, and execute operations through the same mesh APIs. External tools connect via MCP.
 
 ---
 

@@ -555,6 +555,15 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 20000)]
+    public async Task EuropeRe_KeyMetrics_ShouldShowCorrectCurrency()
+    {
+        var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "KeyMetrics", unwrap: true);
+        var md = AssertMarkdownWithNonZeroNumbers(control, "EuropeRe KeyMetrics currency");
+        md.Should().Contain(" EUR", "EuropeRe amounts should be labeled with EUR, not CHF");
+        md.Should().NotContain(" CHF", "EuropeRe should not show CHF — its currency is EUR");
+    }
+
+    [Fact(Timeout = 20000)]
     public async Task EuropeRe_ProfitabilityTable_ShouldHaveNonZeroData()
     {
         var control = await GetControlAsync("FutuRe/EuropeRe/Analysis", "ProfitabilityTable", unwrap: true);
@@ -879,6 +888,235 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
             "AnnualReport Overview should render the report content");
     }
 
+    // ── AnnualReport Diagnostic Tests ──
+
+    /// <summary>
+    /// Diagnostic: verify that the AnnualReport Overview contains @@() layout area references
+    /// in its markdown content, and that the Markdig pipeline converts them to layout-area divs.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AnnualReport_Overview_ShouldContainLayoutAreaReferences()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/Analysis/AnnualReport");
+
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+
+        // Get the Overview control (StackControl with title + MarkdownControl + children)
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
+
+        // Iterate through child areas to find the MarkdownControl
+        var foundMarkdown = false;
+        foreach (var area in stack.Areas ?? [])
+        {
+            var childKey = area.Area?.ToString();
+            if (string.IsNullOrEmpty(childKey)) continue;
+
+            var childControl = await stream.GetControlStream(childKey)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync(x => x is not null);
+
+            Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
+
+            if (childControl is MarkdownControl md)
+            {
+                foundMarkdown = true;
+                var markdown = md.Markdown?.ToString() ?? "";
+                Output.WriteLine($"  Markdown length: {markdown.Length}");
+                Output.WriteLine($"  Contains @@: {markdown.Contains("@@")}");
+                Output.WriteLine($"  First 500 chars: {markdown[..Math.Min(500, markdown.Length)]}");
+
+                markdown.Should().Contain("@@(", "Report markdown should contain @@() layout area references");
+
+                // Process through Markdig to verify HTML output
+                var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+                var html = Markdig.Markdown.ToHtml(markdown, pipeline);
+                Output.WriteLine($"  HTML contains layout-area: {html.Contains("layout-area")}");
+                Output.WriteLine($"  HTML snippet: {html[..Math.Min(500, html.Length)]}");
+
+                html.Should().Contain("layout-area", "Markdig should convert @@() to layout-area divs");
+            }
+        }
+
+        foundMarkdown.Should().BeTrue("Overview stack should contain a MarkdownControl with report body");
+    }
+
+    /// <summary>
+    /// Diagnostic: verify that IPathResolver resolves FutuRe/Analysis/X paths correctly,
+    /// splitting into Prefix="FutuRe/Analysis" and Remainder="X".
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task PathResolver_ShouldResolve_AnalysisLayoutAreaPaths()
+    {
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+
+        var paths = new[] { "FutuRe/Analysis/KeyMetrics", "FutuRe/Analysis/QuarterlyTrend",
+                            "FutuRe/Analysis/ProfitByLoB" };
+
+        foreach (var path in paths)
+        {
+            var resolution = await pathResolver.ResolvePathAsync(path);
+            Output.WriteLine($"  {path} → Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
+
+            resolution.Should().NotBeNull($"Path '{path}' should resolve");
+            resolution!.Prefix.Should().Be("FutuRe/Analysis", $"'{path}' should resolve to FutuRe/Analysis hub");
+        }
+    }
+
+    /// <summary>
+    /// Diagnostic: simulate the full PathBasedLayoutArea chain — resolve path, then get the
+    /// chart control at the resolved address/area.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution()
+    {
+        await InitializeChildAnalysisHubs();
+
+        // Simulate what PathBasedLayoutArea does
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+        var resolution = await pathResolver.ResolvePathAsync("FutuRe/Analysis/KeyMetrics");
+
+        resolution.Should().NotBeNull();
+        Output.WriteLine($"Resolved: Prefix='{resolution!.Prefix}', Remainder='{resolution.Remainder}'");
+
+        // Now get the control at the resolved address/area
+        var control = await GetControlAsync(resolution.Prefix, resolution.Remainder!,
+            waitForData: false, timeoutSeconds: 15);
+
+        Output.WriteLine($"Control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("KeyMetrics should render when accessed via path resolution");
+    }
+
+    // ── EuropeRe AnnualReport ──
+
+    /// <summary>
+    /// Verifies that the EuropeRe AnnualReport Overview contains @@() layout area references
+    /// in its markdown content, and that Markdig converts them to layout-area divs.
+    /// Since EuropeRe charts render individually, this report should work end-to-end.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_AnnualReport_Overview_ShouldContainLayoutAreaReferences()
+    {
+        var client = GetClient();
+        var address = new Address("FutuRe/EuropeRe/Analysis/AnnualReport");
+
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(address),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Overview");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(address, reference);
+
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(TimeSpan.FromSeconds(15))
+            .FirstAsync(x => x is not null);
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        Output.WriteLine($"Stack has {stack.Areas?.Count} areas");
+
+        var foundMarkdown = false;
+        foreach (var area in stack.Areas ?? [])
+        {
+            var childKey = area.Area?.ToString();
+            if (string.IsNullOrEmpty(childKey)) continue;
+
+            var childControl = await stream.GetControlStream(childKey)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .FirstAsync(x => x is not null);
+
+            Output.WriteLine($"  Area '{childKey}': {childControl?.GetType().Name}");
+
+            if (childControl is MarkdownControl md)
+            {
+                foundMarkdown = true;
+                var markdown = md.Markdown?.ToString() ?? "";
+                Output.WriteLine($"  Markdown length: {markdown.Length}");
+                Output.WriteLine($"  Contains @@: {markdown.Contains("@@")}");
+                Output.WriteLine($"  First 500 chars: {markdown[..Math.Min(500, markdown.Length)]}");
+
+                markdown.Should().Contain("@@(", "EuropeRe report markdown should contain @@() layout area references");
+                markdown.Should().Contain("FutuRe/EuropeRe/Analysis/KeyMetrics",
+                    "Report should reference EuropeRe-specific chart paths");
+
+                var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+                var html = Markdig.Markdown.ToHtml(markdown, pipeline);
+                Output.WriteLine($"  HTML contains layout-area: {html.Contains("layout-area")}");
+                Output.WriteLine($"  HTML snippet: {html[..Math.Min(500, html.Length)]}");
+
+                html.Should().Contain("layout-area", "Markdig should convert @@() to layout-area divs");
+            }
+        }
+
+        foundMarkdown.Should().BeTrue("EuropeRe Overview stack should contain a MarkdownControl with report body");
+    }
+
+    /// <summary>
+    /// Verifies that IPathResolver resolves EuropeRe analysis chart paths correctly,
+    /// splitting e.g. "FutuRe/EuropeRe/Analysis/KeyMetrics" into
+    /// Prefix="FutuRe/EuropeRe/Analysis" and Remainder="KeyMetrics".
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task PathResolver_ShouldResolve_EuropeReAnalysisLayoutAreaPaths()
+    {
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+
+        var paths = new[] { "FutuRe/EuropeRe/Analysis/KeyMetrics", "FutuRe/EuropeRe/Analysis/QuarterlyTrend",
+                            "FutuRe/EuropeRe/Analysis/ProfitByLoB" };
+
+        foreach (var path in paths)
+        {
+            var resolution = await pathResolver.ResolvePathAsync(path);
+            Output.WriteLine($"  {path} → Prefix='{resolution?.Prefix}', Remainder='{resolution?.Remainder}'");
+
+            resolution.Should().NotBeNull($"Path '{path}' should resolve");
+            resolution!.Prefix.Should().Be("FutuRe/EuropeRe/Analysis",
+                $"'{path}' should resolve to FutuRe/EuropeRe/Analysis hub");
+        }
+    }
+
+    /// <summary>
+    /// Simulates the full PathBasedLayoutArea chain for EuropeRe — resolve path, then get the
+    /// chart control at the resolved address/area. Since EuropeRe charts work individually,
+    /// this should succeed and proves the @@() embedding pipeline works end-to-end.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EuropeRe_AnnualReport_EmbeddedCharts_ShouldRenderViaPathResolution()
+    {
+        var pathResolver = Mesh.ServiceProvider.GetRequiredService<IPathResolver>();
+        var resolution = await pathResolver.ResolvePathAsync("FutuRe/EuropeRe/Analysis/KeyMetrics");
+
+        resolution.Should().NotBeNull();
+        Output.WriteLine($"Resolved: Prefix='{resolution!.Prefix}', Remainder='{resolution.Remainder}'");
+
+        resolution.Prefix.Should().Be("FutuRe/EuropeRe/Analysis");
+        resolution.Remainder.Should().Be("KeyMetrics");
+
+        // Get the control at the resolved address/area — this is what PathBasedLayoutArea does
+        var control = await GetControlAsync(resolution.Prefix, resolution.Remainder!,
+            waitForData: false, timeoutSeconds: 15);
+
+        Output.WriteLine($"Control type: {control?.GetType().Name}");
+        control.Should().NotBeNull("EuropeRe KeyMetrics should render when accessed via path resolution");
+
+        // KeyMetrics renders as MarkdownControl with non-zero financial data
+        if (control is MarkdownControl md)
+        {
+            var markdown = md.Markdown?.ToString() ?? "";
+            Output.WriteLine($"KeyMetrics markdown:\n{markdown}");
+            markdown.Should().Contain("Total Premium", "KeyMetrics should show premium");
+        }
+    }
+
     // ── Activity Logs ──
 
     /// <summary>
@@ -898,6 +1136,22 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         Output.WriteLine($"Found {logs.Count} activity logs");
         foreach (var log in logs)
             Output.WriteLine($"  [{log.Category}] {log.User?.DisplayName} - {log.HubPath} ({log.Status})");
+    }
+
+    // ── Hub Initialization Diagnostic ──
+
+    /// <summary>
+    /// Reproduces browser behavior: navigates to FutuRe/Analysis WITHOUT pre-initializing
+    /// child BU hubs. If this fails, the inner exception reveals why the hub can't start
+    /// in the browser (timeout, missing service, access denied, etc.).
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task Group_HubInitialization_ShouldSucceedWithoutPreInit()
+    {
+        // Do NOT call InitializeChildAnalysisHubs() — reproduce browser behavior
+        var control = await GetControlAsync("FutuRe/Analysis", "KeyMetrics",
+            waitForData: false, timeoutSeconds: 15);
+        control.Should().NotBeNull("FutuRe/Analysis hub should initialize without pre-starting child hubs");
     }
 
     // ── Helpers ──

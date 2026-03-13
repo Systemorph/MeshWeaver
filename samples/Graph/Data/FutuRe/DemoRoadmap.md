@@ -48,25 +48,31 @@ graph TD
 
 ---
 
-### Explore
+## Explore
 
-- **Stops:** [FutuRe Home](/FutuRe) → [EuropeRe](/FutuRe/EuropeRe) → [LoBs](/FutuRe/EuropeRe/LineOfBusiness/Search) → [Analysis Hub](/FutuRe/EuropeRe/Analysis/AnnualReport)
+- **Stops:** [FutuRe Home](@FutuRe) → [EuropeRe](@FutuRe/EuropeRe) → [LoBs](@FutuRe/EuropeRe/LineOfBusiness/Search) → [Analysis Hub](@FutuRe/EuropeRe/Analysis/AnnualReport)
 - **What We Show:** Navigate a BU, its local product lines, and profitability charts
 - **Key Takeaway:** Each BU owns its data and analytics — domain ownership in practice
 
-### Consolidation
+---
 
-- **Stops:** [Group Report](/FutuRe/Analysis/AnnualReport) → [LoB Mapping](/FutuRe/LobMapping)
+## Consolidation
+
+- **Stops:** [Group Report](@FutuRe/Analysis/AnnualReport) → [LoB Mapping](@FutuRe/LobMapping)
 - **What We Show:** View consolidated P&L, then edit a mapping rule live — watch numbers update
 - **Key Takeaway:** Virtual aggregation — no copies, instant recalculation
 
-### FX & SLOs
+---
 
-- **Stops:** [FX Conversion](/FutuRe/FxConversion)
+## FX & SLOs
+
+- **Stops:** [FX Conversion](@FutuRe/FxConversion)
 - **What We Show:** Switch between Plan CHF, Actuals CHF, and Original Currency modes
 - **Key Takeaway:** Exchange rates are frozen monthly with clear ownership — SLOs guarantee data quality
 
-### AI Onboarding
+---
+
+## AI Onboarding
 
 - **Stops:** AsiaRe → AI Agent → Mapping Splits
 - **What We Show:** AI agent reads an email thread between actuaries, extracts LoB mapping percentages, and integrates AsiaRe into the group

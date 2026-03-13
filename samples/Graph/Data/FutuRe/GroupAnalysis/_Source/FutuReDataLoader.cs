@@ -32,27 +32,40 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<FutuReDataCube>> LoadLocalDataCube(IWorkspace workspace)
     {
         var contentService = workspace.Hub.ServiceProvider.GetRequiredService<IContentService>();
+        var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var address = workspace.Hub.Address.ToString();
         var segments = address.Split('/');
         var businessUnit = segments.Length > 1 ? segments[1] : address;
+        var buPath = segments.Length > 1 ? $"{segments[0]}/{segments[1]}" : segments[0];
 
-        return Observable.FromAsync(async ct =>
+        return Observable.FromAsync<(List<FutuReDataCube> Rows, string Currency)>(async ct =>
         {
+            // Look up the BU currency from the mesh node
+            var buCurrency = "CHF";
+            var buNode = await meshQuery.QueryAsync<MeshNode>($"path:{buPath}", ct: ct).FirstOrDefaultAsync(ct);
+            if (buNode?.Content is BusinessUnit bu)
+                buCurrency = bu.Currency;
+            else if (buNode?.Content is JsonElement json
+                     && json.TryGetProperty("currency", out var val)
+                     && val.ValueKind == JsonValueKind.String)
+                buCurrency = val.GetString() ?? "CHF";
+
             var stream = await contentService.GetContentAsync("attachments", "datacube.csv", ct);
             if (stream == null)
-                return new List<FutuReDataCube>();
+                return (new List<FutuReDataCube>(), buCurrency);
             using var reader = new StreamReader(stream);
             var content = await reader.ReadToEndAsync(ct);
-            return ParseLocalCsvContent(content, businessUnit);
+            return (ParseLocalCsvContent(content, businessUnit), buCurrency);
         }).CombineLatest(
             LoadLocalLinesOfBusiness(workspace),
-            (csvRows, lobs) =>
+            (csvResult, lobs) =>
             {
                 var lobLookup = lobs.ToDictionary(l => l.SystemName, l => l.DisplayName);
-                return csvRows.Select(row => row with
+                return csvResult.Rows.Select(row => row with
                 {
                     LineOfBusinessName = lobLookup.GetValueOrDefault(row.LineOfBusiness, row.LineOfBusiness),
-                    LocalLineOfBusinessName = lobLookup.GetValueOrDefault(row.LocalLineOfBusiness, row.LocalLineOfBusiness)
+                    LocalLineOfBusinessName = lobLookup.GetValueOrDefault(row.LocalLineOfBusiness, row.LocalLineOfBusiness),
+                    Currency = csvResult.Currency
                 }).AsEnumerable();
             }
         ).DistinctUntilChanged();
@@ -350,6 +363,8 @@ public static class FutuReDataLoader
 
     private static TransactionMapping? ConvertToTransactionMapping(MeshNode node)
     {
+        if (node.Content is TransactionMapping tm)
+            return tm;
         if (node.Content is not JsonElement json)
             return null;
 
@@ -367,6 +382,8 @@ public static class FutuReDataLoader
 
     private static LineOfBusiness? ConvertToLineOfBusiness(MeshNode node)
     {
+        if (node.Content is LineOfBusiness lob)
+            return lob;
         if (node.Content is not JsonElement json)
             return null;
 
@@ -382,6 +399,8 @@ public static class FutuReDataLoader
 
     private static AmountType? ConvertToAmountType(MeshNode node)
     {
+        if (node.Content is AmountType at)
+            return at;
         if (node.Content is not JsonElement json)
             return null;
 
@@ -397,6 +416,8 @@ public static class FutuReDataLoader
 
     private static Currency? ConvertToCurrency(MeshNode node)
     {
+        if (node.Content is Currency c)
+            return c;
         if (node.Content is not JsonElement json)
             return null;
 
@@ -412,6 +433,8 @@ public static class FutuReDataLoader
 
     private static Country? ConvertToCountry(MeshNode node)
     {
+        if (node.Content is Country co)
+            return co;
         if (node.Content is not JsonElement json)
             return null;
 
@@ -427,6 +450,8 @@ public static class FutuReDataLoader
 
     private static ExchangeRate? ConvertToExchangeRate(MeshNode node)
     {
+        if (node.Content is ExchangeRate fx)
+            return fx;
         if (node.Content is not JsonElement json)
             return null;
 
@@ -443,6 +468,8 @@ public static class FutuReDataLoader
 
     private static BusinessUnit? ConvertToBusinessUnit(MeshNode node)
     {
+        if (node.Content is BusinessUnit bu)
+            return bu;
         if (node.Content is not JsonElement json)
             return null;
 
