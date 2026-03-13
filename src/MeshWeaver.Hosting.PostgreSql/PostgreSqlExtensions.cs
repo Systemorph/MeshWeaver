@@ -206,13 +206,15 @@ public static class PostgreSqlExtensions
     public static IServiceCollection AddPartitionedPostgreSqlPersistence(
         this IServiceCollection services,
         string connectionString,
-        Action<PostgreSqlStorageOptions>? configure = null)
+        Action<PostgreSqlStorageOptions>? configure = null,
+        Action<NpgsqlDataSourceBuilder>? configureDataSource = null)
     {
         var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
         configure?.Invoke(opts);
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
         dataSourceBuilder.UseVector();
+        configureDataSource?.Invoke(dataSourceBuilder);
         var baseDataSource = dataSourceBuilder.Build();
 
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
@@ -225,7 +227,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetServices<NodeTypePermission>()));
+                sp.GetServices<NodeTypePermission>(),
+                configureDataSource));
 
         services.AddPartitionedCoreAndWrapperServices();
 
@@ -243,7 +246,8 @@ public static class PostgreSqlExtensions
     /// <returns>The service collection for chaining</returns>
     public static IServiceCollection AddPartitionedPostgreSqlPersistence(
         this IServiceCollection services,
-        Action<PostgreSqlStorageOptions>? configure = null)
+        Action<PostgreSqlStorageOptions>? configure = null,
+        Action<NpgsqlDataSourceBuilder>? configureDataSource = null)
     {
         services.TryAddSingleton<IDataChangeNotifier, DataChangeNotifier>();
 
@@ -265,7 +269,8 @@ public static class PostgreSqlExtensions
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetServices<NodeTypePermission>());
+                sp.GetServices<NodeTypePermission>(),
+                configureDataSource);
         });
 
         services.AddPartitionedCoreAndWrapperServices();

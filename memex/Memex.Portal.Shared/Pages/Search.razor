@@ -20,7 +20,7 @@
         <FluentTextField @bind-Value="searchInput"
                          Placeholder="Search..."
                          Style="flex: 1;"
-                         @onkeydown="HandleKeyDown" />
+                         @onkeyup="HandleKeyUp" />
         <FluentButton Appearance="Appearance.Accent" OnClick="ExecuteSearch">Search</FluentButton>
     </div>
 
@@ -276,7 +276,7 @@
         }
     }
 
-    private async Task HandleKeyDown(KeyboardEventArgs e)
+    private async Task HandleKeyUp(KeyboardEventArgs e)
     {
         var flat = GetFlatResults();
 
