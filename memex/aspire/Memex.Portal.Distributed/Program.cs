@@ -1,4 +1,5 @@
-﻿using Memex.Portal.ServiceDefaults;
+﻿using Azure.Identity;
+using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
@@ -43,7 +44,19 @@ builder.UseOrleansMeshServer(address, silo =>
         })
     )
     .ConfigureServices(services => services
-        .AddPartitionedPostgreSqlPersistence())
+        .AddPartitionedPostgreSqlPersistence(
+            configureDataSource: connectionString.Contains("database.azure.com")
+                ? dsb =>
+                {
+                    var credential = new DefaultAzureCredential();
+                    dsb.UsePeriodicPasswordProvider(async (_, ct) =>
+                    {
+                        var token = await credential.GetTokenAsync(
+                            new Azure.Core.TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]), ct);
+                        return token.Token;
+                    }, TimeSpan.FromMinutes(4), TimeSpan.FromSeconds(10));
+                }
+                : null))
     .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment())
     .ConfigureMemexPortal();
 
