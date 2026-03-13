@@ -1,4 +1,6 @@
-﻿using HtmlAgilityPack;
+﻿using System.Text;
+using System.Text.RegularExpressions;
+using HtmlAgilityPack;
 using Markdig;
 using Markdig.Syntax;
 using MeshWeaver.Data;
@@ -41,6 +43,14 @@ public partial class MarkdownView
     /// Whether to show the References section at the end of the markdown.
     /// </summary>
     public bool ShowReferencesSection { get; set; } = true;
+
+    /// <summary>
+    /// Raw SVG blocks extracted before HtmlAgilityPack parsing.
+    /// HtmlAgilityPack is an HTML parser that treats self-closing SVG elements
+    /// (rect, line, path, polygon, etc.) as opening tags, creating incorrect nesting.
+    /// We extract SVGs first and render them as raw markup.
+    /// </summary>
+    private List<string> _svgBlocks = new();
 
     /// <summary>
     /// Record to hold UCR hyperlink reference information.
@@ -124,9 +134,15 @@ public partial class MarkdownView
 
         // Clear references before rendering
         References.Clear();
+        _svgBlocks.Clear();
+
+        // Extract inline SVG blocks before HtmlAgilityPack parsing.
+        // HtmlAgilityPack treats self-closing SVG elements (rect/, line/, path/)
+        // as opening tags, creating deeply nested structures that break rendering.
+        var processedHtml = ExtractSvgBlocks(Html);
 
         var doc = new HtmlDocument();
-        doc.LoadHtml(Html);
+        doc.LoadHtml(processedHtml);
 
         RenderNodes(builder, doc.DocumentNode.ChildNodes);
 
@@ -135,6 +151,19 @@ public partial class MarkdownView
         {
             RenderReferencesSection(builder);
         }
+    }
+
+    private static readonly Regex SvgBlockRegex = new(@"<svg\b[^>]*>.*?</svg>",
+        RegexOptions.Singleline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private string ExtractSvgBlocks(string html)
+    {
+        return SvgBlockRegex.Replace(html, match =>
+        {
+            var index = _svgBlocks.Count;
+            _svgBlocks.Add(match.Value);
+            return $"<div class=\"raw-svg-block\" data-svg-index=\"{index}\"></div>";
+        });
     }
 
     private void RenderNodes(RenderTreeBuilder builder, IEnumerable<HtmlNode> nodes)
@@ -178,6 +207,12 @@ public partial class MarkdownView
                         var areaId = node.GetAttributeValue($"data-{LayoutAreaMarkdownRenderer.AreaId}", "");
                         RenderLayoutArea(builder, address, area, areaId);
                     }
+                    break;
+                case { Name: "div" } when node.GetAttributeValue("class", "").Contains("raw-svg-block"):
+                    // Render preserved SVG block as raw markup (bypasses HtmlAgilityPack)
+                    var svgIdx = int.Parse(node.GetAttributeValue("data-svg-index", "0"));
+                    if (svgIdx < _svgBlocks.Count)
+                        builder.AddMarkupContent(1, _svgBlocks[svgIdx]);
                     break;
                 case { Name: "div" } when node.GetAttributeValue("class", "").Contains("mermaid"):
                     builder.OpenComponent<Mermaid>(1);

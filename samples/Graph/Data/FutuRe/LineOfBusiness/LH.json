@@ -9,6 +9,8 @@
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
+    "systemName": "LH",
+    "displayName": "Life & Health",
     "description": "Life & Health insurance provides financial protection against mortality, morbidity, and longevity risks. Life insurance pays benefits upon death or survival to a specified age. Health insurance covers medical expenses, disability income, and long-term care. Accident & health products provide lump-sum or periodic payments for accidental injury or illness. Life reinsurance enables primary insurers to manage portfolio concentration and capital requirements. Longevity risk transfer has become increasingly important as populations age globally."
   }
 }

@@ -9,6 +9,8 @@
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
+    "systemName": "CYBER",
+    "displayName": "Cyber",
     "description": "Cyber insurance is one of the fastest-growing lines, covering losses arising from data breaches, ransomware attacks, system failures, and other technology-related perils. First-party coverage addresses the insured's own losses including data restoration, business interruption, and crisis management costs. Third-party coverage protects against privacy liability, regulatory fines, and network security claims. The cyber market faces unique challenges including systemic risk from widespread attacks, rapidly evolving threat landscapes, and limited historical loss data for actuarial modeling."
   }
 }

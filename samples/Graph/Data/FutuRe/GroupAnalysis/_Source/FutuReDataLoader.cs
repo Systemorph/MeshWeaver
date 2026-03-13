@@ -389,10 +389,10 @@ public static class FutuReDataLoader
 
         return new LineOfBusiness
         {
-            SystemName = GetString(json, "systemName") ?? node.Id,
-            DisplayName = GetString(json, "displayName") ?? node.Name ?? node.Id,
+            SystemName = node.Id,
+            DisplayName = node.Name ?? node.Id,
             Description = GetString(json, "description"),
-            Order = GetInt(json, "order"),
+            Order = node.Order ?? GetInt(json, "order"),
             ProductExamples = GetString(json, "productExamples")
         };
     }
@@ -457,12 +457,12 @@ public static class FutuReDataLoader
 
         return new ExchangeRate
         {
-            Id = GetString(json, "id") ?? node.Id,
+            Id = node.Id,
             FromCurrency = GetString(json, "fromCurrency") ?? string.Empty,
             ToCurrency = GetString(json, "toCurrency") ?? string.Empty,
             PlanRate = GetDouble(json, "planRate"),
             ActualRate = GetDouble(json, "actualRate"),
-            Order = GetInt(json, "order")
+            Order = node.Order ?? GetInt(json, "order")
         };
     }
 

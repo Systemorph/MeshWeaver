@@ -9,6 +9,8 @@
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
+    "systemName": "MARINE",
+    "displayName": "Marine",
     "description": "Marine insurance is one of the oldest forms of insurance, covering risks associated with maritime commerce and navigation. Hull insurance protects vessel owners against physical damage to ships. Cargo insurance covers goods in transit by sea, air, or land. Protection & Indemnity (P&I) provides third-party liability coverage for shipowners. Inland marine extends coverage to goods transported over land and specialized movable property. The marine market operates globally with significant concentration in London and Singapore."
   }
 }
