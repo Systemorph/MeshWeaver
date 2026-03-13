@@ -9,15 +9,12 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
 /// <summary>
-/// Exchange rate from one currency to another (e.g. EUR → USD).
+/// Exchange rate from one currency to another (e.g. EUR → CHF).
 /// Used at group aggregation time to convert local-currency amounts
-/// into the group reporting currency (USD).
+/// into the group reporting currency (CHF).
 /// </summary>
-public record ExchangeRate
+public record ExchangeRate : Dimension
 {
-    [Key]
-    public string Id { get; init; } = string.Empty;
-
     /// <summary>
     /// Rich markdown description with SLO and governance details.
     /// </summary>
