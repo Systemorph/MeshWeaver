@@ -15,6 +15,9 @@ using MeshWeaver.Layout;
 /// </summary>
 public record ExchangeRate
 {
+    [Key]
+    public string Id { get; init; } = string.Empty;
+
     /// <summary>
     /// Rich markdown description with SLO and governance details.
     /// </summary>
@@ -47,4 +50,6 @@ public record ExchangeRate
     /// </summary>
     [Display(Name = "Actual Rate")]
     public double ActualRate { get; init; }
+
+    public int Order { get; init; }
 }

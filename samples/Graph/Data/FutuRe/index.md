@@ -15,7 +15,6 @@ Welcome to **FutuRe Insurance & Reinsurance** — a fictional insurance group th
 FutuRe has three business units across three continents. Each one grew independently — different systems, different databases, different spreadsheets. Same departments, completely different technology.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 320" style="width:100%;max-width:860px;display:block;margin:24px auto;border-radius:16px;padding:12px;">
-  <!-- EuropeRe Card -->
   <rect x="5" y="5" width="270" height="295" rx="12" fill="#dce8f5"/>
   <rect x="18" y="15" width="244" height="34" rx="10" fill="#1565c0"/>
   <text x="140" y="37" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="700">EuropeRe — Zurich</text>
@@ -39,8 +38,6 @@ FutuRe has three business units across three continents. Each one grew independe
   <text x="76" y="244" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">Access DB</text>
   <rect x="140" y="228" width="108" height="24" rx="6" fill="#78909c"/>
   <text x="194" y="244" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">VBA Macros</text>
-
-  <!-- AmericasIns Card -->
   <rect x="295" y="5" width="270" height="295" rx="12" fill="#fce4ec"/>
   <rect x="308" y="15" width="244" height="34" rx="10" fill="#c62828"/>
   <text x="430" y="37" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="700">AmericasIns — New York</text>
@@ -64,8 +61,6 @@ FutuRe has three business units across three continents. Each one grew independe
   <text x="366" y="244" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">MongoDB</text>
   <rect x="430" y="228" width="108" height="24" rx="6" fill="#78909c"/>
   <text x="484" y="244" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="10" font-weight="600">REST APIs</text>
-
-  <!-- AsiaRe Card -->
   <rect x="585" y="5" width="270" height="295" rx="12" fill="#f3e5f5"/>
   <rect x="598" y="15" width="244" height="34" rx="10" fill="#7e57c2"/>
   <text x="720" y="37" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="13" font-weight="700">AsiaRe — Tokyo</text>
@@ -100,18 +95,11 @@ Each BU writes business in its own currency (EUR, USD, JPY), classifies products
 Instead of ripping out existing systems, each BU creates a **local data product** — a structured data cube with its own Lines of Business, its own currency, and its own Performance.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 235" style="width:100%;max-width:860px;display:block;margin:24px auto;border-radius:16px;padding:12px;">
-  <defs>
-    <marker id="ad" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-      <path d="M0,0 L7,2.5 L0,5" fill="#888"/>
-    </marker>
-  </defs>
-
-  <!-- EuropeRe: Business areas + Cashflow arrow + Cube -->
+  <defs><marker id="ad" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#888"/></marker></defs>
   <text x="140" y="14" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Underwriting · Risk</text>
   <text x="140" y="28" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Finance · Reserving</text>
   <line x1="140" y1="34" x2="140" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#ad)"/>
   <text x="158" y="70" fill="#888" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
-
   <polygon points="60,105 90,90 250,90 220,105" fill="#42a5f5"/>
   <rect x="60" y="105" width="160" height="100" fill="#1565c0"/>
   <polygon points="220,105 250,90 250,190 220,205" fill="#0d47a1"/>
@@ -119,13 +107,10 @@ Instead of ripping out existing systems, each BU creates a **local data product*
   <text x="140" y="158" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">Aggregated in local</text>
   <text x="140" y="172" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">data language</text>
   <text x="140" y="196" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="10">8 LoBs · EUR</text>
-
-  <!-- AmericasIns: Business areas + Cashflow arrow + Cube -->
   <text x="420" y="14" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Underwriting · Risk</text>
   <text x="420" y="28" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Finance · Reserving</text>
   <line x1="420" y1="34" x2="420" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#ad)"/>
   <text x="438" y="70" fill="#888" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
-
   <polygon points="340,105 370,90 530,90 500,105" fill="#ef5350"/>
   <rect x="340" y="105" width="160" height="100" fill="#c62828"/>
   <polygon points="500,105 530,90 530,190 500,205" fill="#8e0000"/>
@@ -133,13 +118,10 @@ Instead of ripping out existing systems, each BU creates a **local data product*
   <text x="420" y="158" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">Aggregated in local</text>
   <text x="420" y="172" text-anchor="middle" fill="#fff" opacity=".85" font-family="sans-serif" font-size="10">data language</text>
   <text x="420" y="196" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="10">8 LoBs · USD</text>
-
-  <!-- AsiaRe: Business areas + Cashflow arrow + Cube -->
   <text x="700" y="14" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Underwriting · Risk</text>
   <text x="700" y="28" text-anchor="middle" fill="#888" font-family="sans-serif" font-size="9">Finance · Reserving</text>
   <line x1="700" y1="34" x2="700" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#ad)"/>
   <text x="718" y="70" fill="#888" font-family="sans-serif" font-size="9" font-style="italic">Cashflows</text>
-
   <polygon points="620,105 650,90 810,90 780,105" fill="#b388ff"/>
   <rect x="620" y="105" width="160" height="100" fill="#7e57c2"/>
   <polygon points="780,105 810,90 810,190 780,205" fill="#4a148c"/>
@@ -161,13 +143,7 @@ Each cube is a self-contained data product. The BU owns it, controls its quality
 To consolidate, we need two transformations — and both are applied **virtually at query time**, with zero data copying.
 
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 210" style="width:100%;max-width:860px;display:block;margin:24px auto;border-radius:16px;padding:12px;">
-  <defs>
-    <marker id="sa" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-      <path d="M0,0 L7,2.5 L0,5" fill="#888"/>
-    </marker>
-  </defs>
-
-  <!-- EuropeRe Cube (clickable) -->
+  <defs><marker id="sa" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><path d="M0,0 L7,2.5 L0,5" fill="#888"/></marker></defs>
   <a href="/FutuRe/EuropeRe">
     <polygon points="20,18 35,8 145,8 130,18" fill="#42a5f5" style="cursor:pointer"/>
     <rect x="20" y="18" width="110" height="45" fill="#1565c0" style="cursor:pointer"/>
@@ -175,8 +151,6 @@ To consolidate, we need two transformations — and both are applied **virtually
     <text x="75" y="40" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="700">EuropeRe</text>
     <text x="75" y="55" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="9">8 LoBs · EUR</text>
   </a>
-
-  <!-- AmericasIns Cube (clickable) -->
   <a href="/FutuRe/AmericasIns">
     <polygon points="20,78 35,68 145,68 130,78" fill="#ef5350" style="cursor:pointer"/>
     <rect x="20" y="78" width="110" height="45" fill="#c62828" style="cursor:pointer"/>
@@ -184,8 +158,6 @@ To consolidate, we need two transformations — and both are applied **virtually
     <text x="75" y="100" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="700">AmericasIns</text>
     <text x="75" y="115" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="9">8 LoBs · USD</text>
   </a>
-
-  <!-- AsiaRe Cube (clickable) -->
   <a href="/FutuRe/AsiaRe">
     <polygon points="20,138 35,128 145,128 130,138" fill="#b388ff" style="cursor:pointer"/>
     <rect x="20" y="138" width="110" height="45" fill="#7e57c2" style="cursor:pointer"/>
@@ -193,33 +165,21 @@ To consolidate, we need two transformations — and both are applied **virtually
     <text x="75" y="160" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="700">AsiaRe</text>
     <text x="75" y="175" text-anchor="middle" fill="#fff" opacity=".65" font-family="sans-serif" font-size="9">8 LoBs · JPY</text>
   </a>
-
-  <!-- Arrows BU → LoB Mapping -->
   <line x1="150" y1="40" x2="290" y2="38" stroke="#888" stroke-width="1.5" marker-end="url(#sa)"/>
   <line x1="150" y1="100" x2="290" y2="51" stroke="#888" stroke-width="1.5" marker-end="url(#sa)"/>
   <line x1="150" y1="160" x2="290" y2="64" stroke="#888" stroke-width="1.5" marker-end="url(#sa)"/>
-
-  <!-- LoB Mapping (clickable) -->
   <a href="/FutuRe/TransactionMapping">
     <rect x="290" y="22" width="160" height="58" rx="10" fill="#e65100" style="cursor:pointer"/>
     <text x="370" y="48" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">LoB Mapping</text>
     <text x="370" y="66" text-anchor="middle" fill="#fff" opacity=".8" font-family="sans-serif" font-size="10">Local → 10 Group LoBs</text>
   </a>
-
-  <!-- Arrow LoB → FX -->
   <line x1="370" y1="80" x2="370" y2="108" stroke="#888" stroke-width="1.5" marker-end="url(#sa)"/>
-
-  <!-- FX Conversion (clickable) -->
   <a href="/FutuRe/ExchangeRate">
     <rect x="290" y="108" width="160" height="58" rx="10" fill="#e65100" style="cursor:pointer"/>
     <text x="370" y="134" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="12" font-weight="600">FX Conversion</text>
     <text x="370" y="152" text-anchor="middle" fill="#fff" opacity=".8" font-family="sans-serif" font-size="10">EUR/USD/JPY → CHF</text>
   </a>
-
-  <!-- Arrow FX → Group -->
   <line x1="450" y1="137" x2="580" y2="95" stroke="#888" stroke-width="1.5" marker-end="url(#sa)"/>
-
-  <!-- Group Performance Cube (clickable) -->
   <a href="/FutuRe/Analysis/AnnualReport">
     <polygon points="580,50 610,32 770,32 740,50" fill="#43a047" style="cursor:pointer"/>
     <rect x="580" y="50" width="160" height="100" fill="#2e7d32" style="cursor:pointer"/>

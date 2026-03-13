@@ -134,11 +134,11 @@ public static class NodeTypeLayoutAreas
 
             outer = outer.WithView(content);
 
-            // Children with search — full width, outside constrained container
+            // Children with search
             outer = outer.WithView(
                 Controls.Stack
                     .WithWidth("100%")
-                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                    .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
                     .WithView(LayoutAreaControl.Children(host.Hub)));
 
             return (UiControl?)outer;
