@@ -26,6 +26,7 @@ public static class NodeTypeLayoutAreas
 {
     public const string SearchArea = "Search";
     public const string OverviewArea = "Overview";
+    public const string ConfigurationArea = "Configuration";
     public const string HubConfigViewArea = "HubConfig";
     public const string HubConfigEditArea = "HubConfigEdit";
 
@@ -55,10 +56,11 @@ public static class NodeTypeLayoutAreas
         => configuration
             .Set(new NodeTypeCatalogMode())  // Enable NodeType catalog mode
             .AddLayout(layout => layout
-                .WithDefaultArea(SearchArea)
+                .WithDefaultArea(OverviewArea)
                 .WithView(MeshNodeLayoutAreas.OverviewArea, ListOverview)  // Override default Overview for listings
                 .WithView(SearchArea, MeshNodeLayoutAreas.Search)  // Use standard search
                 .WithView(OverviewArea, Overview)
+                .WithView(ConfigurationArea, Configuration)
                 .WithView(HubConfigViewArea, HubConfigView)
                 .WithView(HubConfigEditArea, HubConfigEdit)
                 // UCR special areas for unified content references
@@ -105,10 +107,50 @@ public static class NodeTypeLayoutAreas
 
     /// <summary>
     /// Renders the Overview area for a NodeType.
+    /// Shows the markdown Description from NodeTypeDefinition, followed by
+    /// the children (instances) of this type with a search bar.
+    /// </summary>
+    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext ctx)
+    {
+        var definitionStream = GetNodeStream(host);
+
+        return definitionStream.Select(node =>
+        {
+            var typeDef = node?.Content as NodeTypeDefinition;
+
+            var outer = Controls.Stack.WithWidth("100%");
+
+            // Header
+            var content = Controls.Stack.WithWidth("100%")
+                .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef));
+            content = content.WithView(MeshNodeLayoutAreas.BuildHeader(host, node, false));
+
+            // Markdown Description
+            if (!string.IsNullOrEmpty(typeDef?.Description))
+            {
+                content = content.WithView(Controls.Markdown(typeDef.Description)
+                    .WithStyle("margin-top: 16px; margin-bottom: 24px;"));
+            }
+
+            outer = outer.WithView(content);
+
+            // Children with search — full width, outside constrained container
+            outer = outer.WithView(
+                Controls.Stack
+                    .WithWidth("100%")
+                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                    .WithView(LayoutAreaControl.Children(host.Hub)));
+
+            return (UiControl?)outer;
+        });
+    }
+
+    /// <summary>
+    /// Renders the Configuration area for a NodeType.
     /// Split view with left navigation menu and main configuration pane.
     /// Code files are listed as navigation links to their own Code node addresses.
     /// </summary>
-    public static UiControl Overview(LayoutAreaHost host, RenderingContext ctx)
+    public static UiControl Configuration(LayoutAreaHost host, RenderingContext ctx)
     {
         var hubAddress = host.Hub.Address;
         var hubPath = host.Hub.Address.ToString();
@@ -227,11 +269,17 @@ public static class NodeTypeLayoutAreas
             new NavLinkControl("Search", FluentIcons.Search(), searchHref)
         );
 
-        // Node type definition entry
-        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
-        var configHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
+        // Overview link
+        var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
         navMenu = navMenu.WithView(
-            new NavLinkControl(node.Name ?? nodeId, FluentIcons.Settings(), configHref)
+            new NavLinkControl("Overview", FluentIcons.Home(), overviewHref)
+        );
+
+        // Configuration link
+        var nodeId = hubAddress is Address addr ? addr.Segments.LastOrDefault() : (hubAddress.ToString() ?? "Unknown").Split('/').LastOrDefault() ?? "Unknown";
+        var configHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
+        navMenu = navMenu.WithView(
+            new NavLinkControl("Configuration", FluentIcons.Settings(), configHref)
         );
 
         // Code section - entries navigate to each Code node's own address
@@ -427,11 +475,11 @@ public static class NodeTypeLayoutAreas
         }
 
         // Back button
-        var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
+        var configBackHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
         stack = stack.WithView(Controls.Button("Back")
             .WithAppearance(Appearance.Neutral)
             .WithStyle("margin-top: 24px;")
-            .WithNavigateToHref(overviewHref));
+            .WithNavigateToHref(configBackHref));
 
         return stack;
     }
@@ -582,7 +630,7 @@ public static class NodeTypeLayoutAreas
             .WithStyle("gap: 8px; margin-top: 16px;");
 
         // Cancel button
-        var viewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
+        var viewHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
         buttonRow = buttonRow.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(viewHref));
@@ -664,9 +712,9 @@ public static class NodeTypeLayoutAreas
                     return;
                 }
 
-                // Navigate back to overview
-                var overviewHref = new LayoutAreaReference(OverviewArea).ToHref(hubAddress);
-                actx.Host.UpdateArea(actx.Area, new RedirectControl(overviewHref));
+                // Navigate back to configuration
+                var configNavHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
+                actx.Host.UpdateArea(actx.Area, new RedirectControl(configNavHref));
             }));
 
         stack = stack.WithView(buttonRow);

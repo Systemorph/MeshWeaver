@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 360" fill="none">
+  <style>
+    .dp-center { fill: #2e7d32; rx: 16; }
+    .dp-label { fill: #fff; font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 18px; font-weight: 700; text-anchor: middle; }
+    .dp-icon-text { font-size: 32px; }
+    .attr-box { fill: currentColor; opacity: 0.06; rx: 10; }
+    .attr-stroke { fill: none; stroke: #2e7d32; opacity: 0.4; stroke-width: 1.5; rx: 10; }
+    .attr-label { fill: currentColor; font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 13px; font-weight: 600; text-anchor: middle; }
+    .attr-sub { fill: currentColor; opacity: 0.5; font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 11px; text-anchor: middle; }
+    .attr-icon { font-size: 20px; }
+    .connector { stroke: #2e7d32; opacity: 0.3; stroke-width: 1.5; }
+  </style>
+
+  <!-- Center node -->
+  <rect class="dp-center" x="260" y="130" width="180" height="80" rx="16"/>
+  <text class="dp-icon-text" x="310" y="176" text-anchor="middle">📦</text>
+  <text class="dp-label" x="380" y="178">Data Product</text>
+
+  <!-- Top-left: Owner -->
+  <line class="connector" x1="260" y1="150" x2="160" y2="60"/>
+  <rect class="attr-box" x="40" y="20" width="140" height="76" rx="10"/>
+  <rect class="attr-stroke" x="40" y="20" width="140" height="76" rx="10"/>
+  <text class="attr-icon" x="110" y="48" text-anchor="middle">👤</text>
+  <text class="attr-label" x="110" y="68">Owner</text>
+  <text class="attr-sub" x="110" y="84">Accountable person</text>
+
+  <!-- Top-right: Schema -->
+  <line class="connector" x1="440" y1="150" x2="540" y2="60"/>
+  <rect class="attr-box" x="470" y="20" width="140" height="76" rx="10"/>
+  <rect class="attr-stroke" x="470" y="20" width="140" height="76" rx="10"/>
+  <text class="attr-icon" x="540" y="48" text-anchor="middle">📋</text>
+  <text class="attr-label" x="540" y="68">Schema</text>
+  <text class="attr-sub" x="540" y="84">Typed contracts</text>
+
+  <!-- Left: Service Levels -->
+  <line class="connector" x1="260" y1="170" x2="160" y2="190"/>
+  <rect class="attr-box" x="10" y="155" width="160" height="76" rx="10"/>
+  <rect class="attr-stroke" x="10" y="155" width="160" height="76" rx="10"/>
+  <text class="attr-icon" x="90" y="183" text-anchor="middle">⏱️</text>
+  <text class="attr-label" x="90" y="203">Service Levels</text>
+  <text class="attr-sub" x="90" y="219">Quality &amp; freshness</text>
+
+  <!-- Right: Access Control -->
+  <line class="connector" x1="440" y1="170" x2="540" y2="190"/>
+  <rect class="attr-box" x="480" y="155" width="160" height="76" rx="10"/>
+  <rect class="attr-stroke" x="480" y="155" width="160" height="76" rx="10"/>
+  <text class="attr-icon" x="560" y="183" text-anchor="middle">🔒</text>
+  <text class="attr-label" x="560" y="203">Access Control</text>
+  <text class="attr-sub" x="560" y="219">Read &amp; write perms</text>
+
+  <!-- Bottom-left: Change Cycles -->
+  <line class="connector" x1="280" y1="210" x2="160" y2="310"/>
+  <rect class="attr-box" x="40" y="280" width="140" height="76" rx="10"/>
+  <rect class="attr-stroke" x="40" y="280" width="140" height="76" rx="10"/>
+  <text class="attr-icon" x="110" y="308" text-anchor="middle">🔄</text>
+  <text class="attr-label" x="110" y="328">Change Cycles</text>
+  <text class="attr-sub" x="110" y="344">Versioned evolution</text>
+
+  <!-- Bottom-right: Address -->
+  <line class="connector" x1="420" y1="210" x2="540" y2="310"/>
+  <rect class="attr-box" x="470" y="280" width="140" height="76" rx="10"/>
+  <rect class="attr-stroke" x="470" y="280" width="140" height="76" rx="10"/>
+  <text class="attr-icon" x="540" y="308" text-anchor="middle">📍</text>
+  <text class="attr-label" x="540" y="328">Address</text>
+  <text class="attr-sub" x="540" y="344">Unique mesh path</text>
+</svg>

@@ -14,6 +14,6 @@
     "displayName": "Line of Business",
     "iconName": "Grid",
     "description": "EuropeRe lines of business",
-    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessLayoutAreas())"
+    "configuration": "config => config\n    .WithContentType<LineOfBusiness>()\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout\n        .AddLineOfBusinessLayoutAreas())"
   }
 }

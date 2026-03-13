@@ -6,12 +6,10 @@
   "isPersistent": true,
   "content": {
     "$type": "ExchangeRate",
-    "id": "CHF-CHF",
     "fromCurrency": "CHF",
     "toCurrency": "CHF",
     "planRate": 1.0,
-    "actualRate": 1.0,
-    "order": 1
+    "actualRate": 1.0
   },
   "icon": "/static/storage/content/FutuRe/icon.svg"
 }

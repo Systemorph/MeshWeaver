@@ -70,16 +70,9 @@ Finding the right work distribution between humans and agents is critical. When 
 **Common Anti-Pattern:**
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
 graph LR
     A["Human<br/>prompts"] --> B["Agent<br/>creates text"]
     B --> C["Human<br/>copy/pastes & formats"]
-
-    style A fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
-    style C fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
-    style B fill:#60a5fa,stroke:#3b82f6,stroke-width:3px
-
-    linkStyle 0,1 stroke-width:2px
 ```
 
 *Problem: Human does mechanical work, Agent does creative work*
@@ -87,17 +80,10 @@ graph LR
 **Better Pattern:**
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
 graph LR
     A["Human<br/>provides strategy"] --> B["Agent<br/>drafts & formats"]
     B --> C["Human<br/>reviews quality"]
     C -->|"iterate"| A
-
-    style A fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
-    style C fill:#fbbf24,stroke:#f59e0b,stroke-width:3px
-    style B fill:#60a5fa,stroke:#3b82f6,stroke-width:3px
-
-    linkStyle 0,1,2 stroke-width:2px
 ```
 
 *Solution: Agent handles all repetitive tasks, Human focuses on strategy and quality judgment*
@@ -185,7 +171,6 @@ MeshWeaver supports two patterns for agent-to-agent communication: **delegation*
 Delegation runs a target agent in an **isolated context**. The delegating agent sends a task, waits for a result, and continues its own response.
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
 sequenceDiagram
     participant User
     participant AgentA as Navigator
@@ -215,7 +200,6 @@ delegations:
 Handoff **transfers control entirely** to the target agent. The source agent stops, and the target agent takes over the shared conversation thread with full history.
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'15px'}}}%%
 sequenceDiagram
     participant User
     participant AgentA as Navigator

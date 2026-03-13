@@ -1,6 +1,6 @@
 // <meshweaver>
 // Id: BusinessUnitLayoutAreas
-// DisplayName: Business Unit Views
+// DisplayName: Business Unit Areas
 // </meshweaver>
 
 using MeshWeaver.Layout;
@@ -8,7 +8,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Views;
 
 /// <summary>
-/// Views for displaying business unit details.
+/// Areas for displaying business unit details.
 /// Overrides Children to show Analysis and Lines of Business sections.
 /// </summary>
 public static class BusinessUnitLayoutAreas

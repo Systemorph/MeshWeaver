@@ -9,10 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
-    "systemName": "SPEC",
-    "displayName": "Specialty",
-    "description": "Specialty insurance encompasses niche and complex risks that require specialized underwriting expertise beyond standard property and casualty lines. Political risk insurance protects against government actions such as expropriation, currency inconvertibility, and political violence. Trade credit covers non-payment by commercial buyers. Surety bonds guarantee contractual performance. Other specialty lines include kidnap & ransom, fine art, contingency, and intellectual property insurance. These products often require bespoke policy wordings and tailored risk assessment.",
-    "order": 7,
-    "productExamples": "Political risk, Trade credit, Surety bonds, Kidnap & ransom, Fine art, Contingency, Intellectual property, Title insurance"
+    "description": "Specialty insurance encompasses niche and complex risks that require specialized underwriting expertise beyond standard property and casualty lines. Political risk insurance protects against government actions such as expropriation, currency inconvertibility, and political violence. Trade credit covers non-payment by commercial buyers. Surety bonds guarantee contractual performance. Other specialty lines include kidnap & ransom, fine art, contingency, and intellectual property insurance. These products often require bespoke policy wordings and tailored risk assessment."
   }
 }

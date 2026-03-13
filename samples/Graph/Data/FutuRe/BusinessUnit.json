@@ -14,6 +14,6 @@
     "displayName": "Business Unit",
     "iconName": "Building",
     "description": "Business unit within the FutuRe insurance group",
-    "configuration": "config => config.WithContentType<BusinessUnit>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddBusinessUnitLayoutAreas())"
+    "configuration": "config => config\n    .WithContentType<BusinessUnit>()\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout\n        .AddBusinessUnitLayoutAreas())"
   }
 }

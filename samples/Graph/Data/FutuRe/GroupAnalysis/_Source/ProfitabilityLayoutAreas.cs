@@ -1,6 +1,6 @@
 // <meshweaver>
 // Id: ProfitabilityLayoutAreas
-// DisplayName: Profitability Views
+// DisplayName: Profitability Areas
 // </meshweaver>
 
 using System.ComponentModel.DataAnnotations;
@@ -471,7 +471,7 @@ public static class ProfitabilityLayoutAreas
     }
 
     // ---------------------------------------------------------------
-    // Individual Views (toolbar shown on group hub only)
+    // Individual Areas (toolbar shown on group hub only)
     // ---------------------------------------------------------------
 
     private static bool IsGroupHub(LayoutAreaHost host)
