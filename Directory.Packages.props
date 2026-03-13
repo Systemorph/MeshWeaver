@@ -6,18 +6,18 @@
   <ItemGroup>
     <PackageVersion Include="AngleSharp" Version="1.3.0" />
     <PackageVersion Include="AspectCore.Extensions.Reflection" Version="2.4.0" />
-    <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Npgsql" Version="13.1.0" />
+    <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.CosmosDB" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Microsoft.Azure.Cosmos" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Npgsql" Version="13.1.2" />
     <PackageVersion Include="Autofac" Version="9.0.0" />
     <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageVersion Include="Azure.AI.Inference" Version="1.0.0-beta.5" />
@@ -162,8 +162,8 @@
     <PackageVersion Include="System.Xml.XmlSerializer" Version="4.3.0" />
     <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.0.0" />
-    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.1.0" />
-    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.1.0" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.1.2" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.2" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />

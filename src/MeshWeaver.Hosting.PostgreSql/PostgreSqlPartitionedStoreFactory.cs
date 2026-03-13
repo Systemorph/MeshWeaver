@@ -22,6 +22,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private readonly AccessService? _accessService;
     private readonly IReadOnlyList<NodeTypePermission> _nodeTypePermissions;
     private readonly string _baseConnectionString;
+    private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
 
     public PostgreSqlPartitionedStoreFactory(
         NpgsqlDataSource baseDataSource,
@@ -30,15 +31,39 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         IDataChangeNotifier? changeNotifier = null,
         IEmbeddingProvider? embeddingProvider = null,
         AccessService? accessService = null,
-        IEnumerable<NodeTypePermission>? nodeTypePermissions = null)
+        IEnumerable<NodeTypePermission>? nodeTypePermissions = null,
+        Action<NpgsqlDataSourceBuilder>? configureDataSource = null)
     {
         _baseDataSource = baseDataSource;
-        _baseConnectionString = baseConnectionString;
         _options = options;
         _changeNotifier = changeNotifier;
         _embeddingProvider = embeddingProvider;
         _accessService = accessService;
         _nodeTypePermissions = (nodeTypePermissions ?? []).ToList();
+        _configureDataSource = configureDataSource;
+
+        // Ensure SSL for Azure PostgreSQL
+        if (baseConnectionString.Contains("database.azure.com", StringComparison.OrdinalIgnoreCase))
+        {
+            var csb = new NpgsqlConnectionStringBuilder(baseConnectionString)
+            {
+                SslMode = SslMode.Require
+            };
+            _baseConnectionString = csb.ConnectionString;
+        }
+        else
+        {
+            _baseConnectionString = baseConnectionString;
+        }
+    }
+
+    private NpgsqlDataSource BuildDataSource(string connectionString, bool useVector = false)
+    {
+        var dsb = new NpgsqlDataSourceBuilder(connectionString);
+        if (useVector)
+            dsb.UseVector();
+        _configureDataSource?.Invoke(dsb);
+        return dsb.Build();
     }
 
     public async Task<PartitionedStore> CreateStoreAsync(string firstSegment, CancellationToken ct = default)
@@ -61,16 +86,14 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         {
             SearchPath = $"{schemaName},public"
         };
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
-        dataSourceBuilder.UseVector();
-        var schemaDataSource = dataSourceBuilder.Build();
+        var schemaDataSource = BuildDataSource(builder.ConnectionString, useVector: true);
 
         // Create a versions data source with SearchPath pointing to the versions schema
         var versionsConnBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
         {
             SearchPath = $"{versionsSchemaName},public"
         };
-        var versionsDataSource = new NpgsqlDataSourceBuilder(versionsConnBuilder.ConnectionString).Build();
+        var versionsDataSource = BuildDataSource(versionsConnBuilder.ConnectionString);
 
         // Initialize mesh tables + cross-schema trigger + versions table
         var schemaOptions = new PostgreSqlStorageOptions
@@ -126,9 +149,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             {
                 SearchPath = $"{schemaName},public"
             };
-            var dataSourceBuilder = new NpgsqlDataSourceBuilder(builder.ConnectionString);
-            dataSourceBuilder.UseVector();
-            var schemaDataSource = dataSourceBuilder.Build();
+            var schemaDataSource = BuildDataSource(builder.ConnectionString, useVector: true);
 
             var schemaOptions = new PostgreSqlStorageOptions
             {
@@ -147,7 +168,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
                 {
                     SearchPath = $"{versionsSchemaName},public"
                 };
-                var versionsDataSource = new NpgsqlDataSourceBuilder(versionsConnBuilder.ConnectionString).Build();
+                var versionsDataSource = BuildDataSource(versionsConnBuilder.ConnectionString);
 
                 await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
                     _baseDataSource, schemaDataSource, versionsDataSource,

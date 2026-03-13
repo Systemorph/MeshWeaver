@@ -1,3 +1,5 @@
+using Azure.Provisioning.AppContainers;
+using Azure.Provisioning.ApplicationInsights;
 using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -56,9 +58,26 @@ var embeddingModel = builder.AddParameter("embedding-model", secret: false);
 var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
 
+// --- Custom domain (for deployed modes) ---
+var customDomain = builder.AddParameter("custom-domain", secret: false);
+var certificateName = builder.AddParameter("certificate-name", secret: false);
+
 // --- Infrastructure axes ---
 var isDeployed = mode is "test" or "prod";
 var useLocalDb = mode == "local";
+
+// --- ACA Environment (Sweden Central) ---
+if (isDeployed)
+{
+    builder.AddAzureContainerAppEnvironment("memex-aca")
+        .ConfigureInfrastructure(infra =>
+        {
+            var env = infra.GetProvisionableResources()
+                .OfType<Azure.Provisioning.AppContainers.ContainerAppManagedEnvironment>()
+                .Single();
+            env.Location = new Azure.Core.AzureLocation("swedencentral");
+        });
+}
 
 // --- Orleans (ephemeral, fresh cluster on each restart) ---
 var orleansStorage = builder.AddAzureStorage("orleansstorage");
@@ -66,12 +85,32 @@ if (!isDeployed && builder.Environment.IsDevelopment())
 {
     orleansStorage = orleansStorage.RunAsEmulator();
 }
+else if (isDeployed)
+{
+    orleansStorage = orleansStorage.ConfigureInfrastructure(infra =>
+    {
+        var storageAccount = infra.GetProvisionableResources()
+            .OfType<Azure.Provisioning.Storage.StorageAccount>()
+            .Single();
+        storageAccount.Location = new Azure.Core.AzureLocation("swedencentral");
+    });
+}
 var orleansTables = orleansStorage.AddTables("orleans-clustering");
 var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");
 
 var orleans = builder.AddOrleans("memex-mesh")
     .WithClustering(orleansTables)
     .WithGrainStorage("Default", grainStateBlobs);
+
+// --- Application Insights ---
+var appInsights = builder.AddAzureApplicationInsights("appinsights")
+    .ConfigureInfrastructure(infra =>
+    {
+        var component = infra.GetProvisionableResources()
+            .OfType<Azure.Provisioning.ApplicationInsights.ApplicationInsightsComponent>()
+            .Single();
+        component.Location = new Azure.Core.AzureLocation("swedencentral");
+    });
 
 // --- Database Migration ---
 var dbMigration = builder
@@ -83,6 +122,7 @@ var portal = builder
     .AddProject<Projects.Memex_Portal_Distributed>(isDeployed ? $"memex-{mode}" : "memex-local")
     .WithExternalHttpEndpoints()
     .WithReference(orleans)
+    .WithReference(appInsights)
     // Embedding
     .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
     .WithEnvironment("Embedding__ApiKey", embeddingKey)
@@ -90,9 +130,8 @@ var portal = builder
     // LLM: Anthropic (Azure Foundry Claude)
     .WithEnvironment("Anthropic__Endpoint", "https://s-meshweaver.services.ai.azure.com/anthropic/")
     .WithEnvironment("Anthropic__ApiKey", azureFoundryKey)
-    .WithEnvironment("Anthropic__Models__0", "claude-haiku-4-5")
-    .WithEnvironment("Anthropic__Models__1", "claude-sonnet-4-5")
-    .WithEnvironment("Anthropic__Models__2", "claude-opus-4-5")
+    .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
+    .WithEnvironment("Anthropic__Models__1", "claude-opus-4-6")
     // LLM: Azure OpenAI
     .WithEnvironment("AzureOpenAIS__Endpoint", "https://s-meshweaver.cognitiveservices.azure.com")
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
@@ -105,7 +144,13 @@ var portal = builder
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitFor(grainStateBlobs)
-    .WaitForCompletion(dbMigration);
+    .WaitForCompletion(dbMigration)
+    // ACA deployment: sticky sessions (Blazor Server) + custom domain
+    .PublishAsAzureContainerApp((module, app) =>
+    {
+        app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
+        app.ConfigureCustomDomain(customDomain, certificateName);
+    });
 
 // --- Azure Blob Storage ---
 if (useLocalDb)
