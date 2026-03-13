@@ -17,18 +17,12 @@ Icon: /static/storage/content/MeshWeaver/logo.svg
 
 ```mermaid
 graph LR
-    classDef arch fill:#1565c0,stroke:#0d47a1,color:#fff,rx:8,ry:8
-    classDef data fill:#2e7d32,stroke:#1b5e20,color:#fff,rx:8,ry:8
-    classDef gui fill:#6a1b9a,stroke:#4a148c,color:#fff,rx:8,ry:8
-    classDef ai fill:#e65100,stroke:#bf360c,color:#fff,rx:8,ry:8
-    classDef core fill:#37474f,stroke:#263238,color:#fff,rx:12,ry:12
+    MW((MeshWeaver))
 
-    MW((MeshWeaver)):::core
-
-    MW --> ARCH["Architecture\nMessage-based communication,\nactor model, security"]:::arch
-    MW --> DM["Data Mesh\nNode types, query syntax,\ncollaborative editing"]:::data
-    MW --> GUI["GUI\nControls, layout areas,\ndata binding, observables"]:::gui
-    MW --> AI["AI Integration\nAgents, tools,\nnatural language"]:::ai
+    MW --> ARCH["Architecture\nMessage-based communication,\nactor model, security"]
+    MW --> DM["Data Mesh\nNode types, query syntax,\ncollaborative editing"]
+    MW --> GUI["GUI\nControls, layout areas,\ndata binding, observables"]
+    MW --> AI["AI Integration\nAgents, tools,\nnatural language"]
 
     click ARCH "Architecture"
     click DM "DataMesh"

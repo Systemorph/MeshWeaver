@@ -3,8 +3,10 @@
 // DisplayName: Exchange Rate
 // </meshweaver>
 
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
 
 /// <summary>
 /// Exchange rate from one currency to another (e.g. EUR → USD).
@@ -14,22 +16,21 @@ using MeshWeaver.Domain;
 public record ExchangeRate
 {
     /// <summary>
-    /// Composite key: {FromCurrency}-{ToCurrency} (e.g. EUR-USD).
+    /// Rich markdown description with SLO and governance details.
     /// </summary>
-    [Key]
-    public string Id { get; init; } = string.Empty;
+    [Markdown]
+    [Browsable(false)]
+    public string? Description { get; init; }
 
     /// <summary>
     /// Source currency code (ISO 4217).
     /// </summary>
-    [Dimension(typeof(string), nameof(FromCurrency))]
     [Display(Name = "From Currency")]
     public string FromCurrency { get; init; } = string.Empty;
 
     /// <summary>
     /// Target currency code (ISO 4217).
     /// </summary>
-    [Dimension(typeof(string), nameof(ToCurrency))]
     [Display(Name = "To Currency")]
     public string ToCurrency { get; init; } = string.Empty;
 
@@ -46,9 +47,4 @@ public record ExchangeRate
     /// </summary>
     [Display(Name = "Actual Rate")]
     public double ActualRate { get; init; }
-
-    /// <summary>
-    /// Display order.
-    /// </summary>
-    public int Order { get; init; }
 }

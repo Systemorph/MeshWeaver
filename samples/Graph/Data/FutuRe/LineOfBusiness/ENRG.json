@@ -9,10 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
-    "systemName": "ENRG",
-    "displayName": "Energy",
-    "description": "Energy insurance covers the oil & gas, power generation, mining, and renewable energy sectors. Upstream risks include exploration and production platforms, drilling rigs, and pipelines. Downstream covers refineries, petrochemical plants, and distribution networks. Power generation insurance protects conventional and renewable energy facilities. The energy line is characterized by high-value individual risks, complex engineering assessments, and significant natural catastrophe exposure. Losses can be among the largest in the insurance industry.",
-    "order": 5,
-    "productExamples": "Upstream oil & gas, Downstream refining, Power generation, Renewable energy, Mining, Construction (energy), Control of well"
+    "description": "Energy insurance covers the oil & gas, power generation, mining, and renewable energy sectors. Upstream risks include exploration and production platforms, drilling rigs, and pipelines. Downstream covers refineries, petrochemical plants, and distribution networks. Power generation insurance protects conventional and renewable energy facilities. The energy line is characterized by high-value individual risks, complex engineering assessments, and significant natural catastrophe exposure. Losses can be among the largest in the insurance industry."
   }
 }

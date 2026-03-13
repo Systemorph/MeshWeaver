@@ -11,7 +11,7 @@
     "$type": "BusinessUnit",
     "id": "AsiaRe",
     "name": "FutuRe Asia Reinsurance",
-    "description": "Asian reinsurance operations covering treaty and facultative business across Asia-Pacific markets. Specializes in natural catastrophe (earthquake, typhoon), agricultural, and construction reinsurance. Headquartered in Tokyo with underwriting offices in Singapore, Hong Kong, and Sydney.",
+    "description": "Asian reinsurance operations covering treaty and facultative business across Asia-Pacific markets. Headquartered in Tokyo with offices in Singapore, Hong Kong, and Sydney.\n\n**Data Products:**\n- [Local Lines of Business](/FutuRe/AsiaRe/LineOfBusiness) — 8 LoBs in JPY\n- [Analysis Cube](/FutuRe/AsiaRe/Analysis/AnnualReport) — Local P&L aggregation\n- [Mapping Rules](/FutuRe/AsiaRe/TransactionMapping/MappingRules) — Maps local LoBs to 10 Group LoBs\n\n**Data Flow:** Cashflows → Lines of Business → Analysis Cube → [Transaction Mapping](/FutuRe/TransactionMapping) → Group Consolidation",
     "currency": "JPY",
     "region": "APAC"
   }

@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 320" fill="none">
+  <style>
+    .silo-box { fill: currentColor; opacity: 0.08; rx: 12; }
+    .silo-stroke { fill: none; stroke: currentColor; opacity: 0.25; stroke-width: 1.5; rx: 12; }
+    .silo-icon { font-size: 28px; }
+    .silo-label { fill: currentColor; font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 13px; font-weight: 600; text-anchor: middle; }
+    .silo-sub { fill: currentColor; opacity: 0.5; font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 11px; text-anchor: middle; }
+    .disconnect-line { stroke: currentColor; opacity: 0.12; stroke-width: 1; stroke-dasharray: 6 4; }
+  </style>
+
+  <!-- Row 1 -->
+  <rect class="silo-box" x="20" y="20" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="20" y="20" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="100" y="62" text-anchor="middle">🗄️</text>
+  <text class="silo-label" x="100" y="90">SQL Server</text>
+  <text class="silo-sub" x="100" y="108">Finance</text>
+
+  <rect class="silo-box" x="220" y="20" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="220" y="20" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="300" y="62" text-anchor="middle">🗄️</text>
+  <text class="silo-label" x="300" y="90">PostgreSQL</text>
+  <text class="silo-sub" x="300" y="108">Operations</text>
+
+  <rect class="silo-box" x="420" y="20" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="420" y="20" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="500" y="62" text-anchor="middle">🗄️</text>
+  <text class="silo-label" x="500" y="90">Snowflake</text>
+  <text class="silo-sub" x="500" y="108">Analytics</text>
+
+  <!-- Row 2 -->
+  <rect class="silo-box" x="20" y="180" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="20" y="180" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="100" y="222" text-anchor="middle">📊</text>
+  <text class="silo-label" x="100" y="250">Excel</text>
+  <text class="silo-sub" x="100" y="268">SharePoint</text>
+
+  <rect class="silo-box" x="220" y="180" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="220" y="180" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="300" y="222" text-anchor="middle">📧</text>
+  <text class="silo-label" x="300" y="250">CSV Exports</text>
+  <text class="silo-sub" x="300" y="268">emailed weekly</text>
+
+  <rect class="silo-box" x="420" y="180" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="420" y="180" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="500" y="222" text-anchor="middle">🌊</text>
+  <text class="silo-label" x="500" y="250">Data Lake</text>
+  <text class="silo-sub" x="500" y="268">data swamp</text>
+
+  <!-- Side items -->
+  <rect class="silo-box" x="620" y="20" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="620" y="20" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="700" y="62" text-anchor="middle">🔌</text>
+  <text class="silo-label" x="700" y="90">REST API</text>
+  <text class="silo-sub" x="700" y="108">undocumented</text>
+
+  <rect class="silo-box" x="620" y="180" width="160" height="120" rx="12"/>
+  <rect class="silo-stroke" x="620" y="180" width="160" height="120" rx="12"/>
+  <text class="silo-icon" x="700" y="222" text-anchor="middle">📈</text>
+  <text class="silo-label" x="700" y="250">Power BI</text>
+  <text class="silo-sub" x="700" y="268">200 reports, 5 used</text>
+
+  <!-- Disconnection lines -->
+  <line class="disconnect-line" x1="180" y1="80" x2="220" y2="80"/>
+  <line class="disconnect-line" x1="380" y1="80" x2="420" y2="80"/>
+  <line class="disconnect-line" x1="580" y1="80" x2="620" y2="80"/>
+  <line class="disconnect-line" x1="180" y1="240" x2="220" y2="240"/>
+  <line class="disconnect-line" x1="380" y1="240" x2="420" y2="240"/>
+  <line class="disconnect-line" x1="580" y1="240" x2="620" y2="240"/>
+  <line class="disconnect-line" x1="100" y1="140" x2="100" y2="180"/>
+  <line class="disconnect-line" x1="300" y1="140" x2="300" y2="180"/>
+  <line class="disconnect-line" x1="500" y1="140" x2="500" y2="180"/>
+  <line class="disconnect-line" x1="700" y1="140" x2="700" y2="180"/>
+</svg>

@@ -11,7 +11,7 @@
     "$type": "BusinessUnit",
     "id": "AmericasIns",
     "name": "FutuRe Americas Insurance",
-    "description": "Americas insurance and reinsurance operations covering North and South American markets. Provides primary insurance, excess & surplus lines, and treaty reinsurance. Headquartered in New York with regional offices in Miami, Chicago, and Sao Paulo.",
+    "description": "Americas insurance and reinsurance operations covering North and South American markets. Headquartered in New York with offices in Miami, Chicago, and Sao Paulo.\n\n**Data Products:**\n- [Local Lines of Business](/FutuRe/AmericasIns/LineOfBusiness) — 8 LoBs in USD\n- [Analysis Cube](/FutuRe/AmericasIns/Analysis/AnnualReport) — Local P&L aggregation\n- [Mapping Rules](/FutuRe/AmericasIns/TransactionMapping/MappingRules) — Maps local LoBs to 10 Group LoBs\n\n**Data Flow:** Cashflows → Lines of Business → Analysis Cube → [Transaction Mapping](/FutuRe/TransactionMapping) → Group Consolidation",
     "currency": "USD",
     "region": "Americas"
   }

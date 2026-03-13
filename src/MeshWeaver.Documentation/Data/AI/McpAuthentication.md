@@ -144,7 +144,6 @@ curl -X DELETE https://your-portal.com/api/tokens/ApiToken/a1b2c3d4e5f6 -b cooki
 ## How It Works
 
 ```mermaid
-%%{init: {'theme':'neutral', 'themeVariables': {'fontSize':'14px'}}}%%
 sequenceDiagram
     participant Client as MCP Client
     participant Auth as Auth Handler

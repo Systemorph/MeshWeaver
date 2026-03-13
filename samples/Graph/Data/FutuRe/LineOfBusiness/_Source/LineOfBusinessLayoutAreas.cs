@@ -1,13 +1,13 @@
 // <meshweaver>
 // Id: LineOfBusinessLayoutAreas
-// DisplayName: Line of Business Views
+// DisplayName: Line of Business Areas
 // </meshweaver>
 
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 
 /// <summary>
-/// Views for displaying line of business details.
+/// Areas for displaying line of business details.
 /// Uses the default Overview from MeshNodeLayoutAreas.
 /// </summary>
 public static class LineOfBusinessLayoutAreas

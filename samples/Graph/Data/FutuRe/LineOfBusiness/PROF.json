@@ -9,10 +9,6 @@
   "isPersistent": true,
   "content": {
     "$type": "LineOfBusiness",
-    "systemName": "PROF",
-    "displayName": "Professional Liability",
-    "description": "Professional liability insurance protects professionals and their firms against claims of negligence, errors, or omissions in the performance of professional services. Directors & Officers (D&O) insurance shields corporate leaders from personal liability arising from management decisions. Errors & Omissions (E&O) covers professional service providers including lawyers, architects, and consultants. Medical malpractice addresses claims against healthcare providers. These lines feature claims-made policy forms and often involve complex litigation with significant defense costs.",
-    "order": 9,
-    "productExamples": "Directors & Officers, Errors & Omissions, Medical malpractice, Fiduciary liability, Employment practices, Accountants liability"
+    "description": "Professional liability insurance protects professionals and their firms against claims of negligence, errors, or omissions in the performance of professional services. Directors & Officers (D&O) insurance shields corporate leaders from personal liability arising from management decisions. Errors & Omissions (E&O) covers professional service providers including lawyers, architects, and consultants. Medical malpractice addresses claims against healthcare providers. These lines feature claims-made policy forms and often involve complex litigation with significant defense costs."
   }
 }

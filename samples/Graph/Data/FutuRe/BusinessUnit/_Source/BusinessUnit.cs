@@ -5,6 +5,7 @@
 
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 
 /// <summary>
@@ -30,6 +31,7 @@ public record BusinessUnit
     /// <summary>
     /// Description of the business unit's operations and scope.
     /// </summary>
+    [Markdown]
     public string? Description { get; init; }
 
     /// <summary>

@@ -4,7 +4,7 @@
   "name": "Line of Business",
   "nodeType": "NodeType",
   "category": "Types",
-  "description": "Insurance and reinsurance lines of business classification with product mapping",
+  "description": "Group-standard insurance classification (10 LoBs). All BU mappings must be submitted 60 days before fiscal year start, reviewed annually by Group Actuarial, and approved by Head of Group Actuarial. Percentage splits must sum to 100% per local LoB. Contact: group-actuarial@future-group.com.",
   "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
   "isPersistent": true,
   "content": {
@@ -13,7 +13,7 @@
     "namespace": "FutuRe",
     "displayName": "Line of Business",
     "iconName": "Grid",
-    "description": "Insurance line of business dimension with risk category descriptions and product mappings",
-    "configuration": "config => config.WithContentType<LineOfBusiness>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddLineOfBusinessLayoutAreas())"
+    "description": "Group-standard insurance classification with 10 Lines of Business.\n\n**Governance:**\n- **Change request deadline:** 60 days before fiscal year start\n- **Review cycle:** Annual, led by Group Actuarial\n- **Approval authority:** Head of Group Actuarial\n- **Contact:** group-actuarial@future-group.com\n- **Percentage integrity:** All local LoB splits must sum to 100%\n- **Mapping documentation:** Each BU must maintain a governance doc with actuarial rationale\n\n**Process:** BU actuaries propose mapping changes → AI agent validates percentage integrity → Group Actuarial reviews → Head of Actuarial approves → effective next fiscal year",
+    "configuration": "config => config\n    .WithContentType<LineOfBusiness>()\n    .AddDefaultLayoutAreas()\n    .AddLayout(layout => layout\n        .AddLineOfBusinessLayoutAreas())"
   }
 }
