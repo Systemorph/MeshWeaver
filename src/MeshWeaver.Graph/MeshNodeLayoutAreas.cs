@@ -190,42 +190,50 @@ public static class MeshNodeLayoutAreas
 
     internal static UiControl BuildDetailsContent(this LayoutAreaHost host, MeshNode? node, NodeTypeDefinition? typeDef, bool canEdit = true)
     {
-        var stack = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
+        // Outer wrapper at full page width
+        var outer = Controls.Stack.WithWidth("100%");
+
+        // Constrained content area (header + properties)
+        var content = Controls.Stack.WithWidth("100%").WithStyle(GetContainerStyle(host, typeDef));
 
         // Header with title/icon
-        stack = stack.WithView(BuildHeader(host, node, canEdit));
+        content = content.WithView(BuildHeader(host, node, canEdit));
 
         // For built-in type nodes (Content is NodeTypeDefinition), show type info
         // instead of property editor which would expose internal NodeTypeDefinition fields.
         if (node?.Content is NodeTypeDefinition ntd)
         {
-            stack = stack.WithView(BuildTypeInfoSection(node, ntd));
+            content = content.WithView(BuildTypeInfoSection(node, ntd));
         }
         // Property overview (read-only with click-to-edit)
         else if (node != null)
         {
-            stack = stack.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
+            content = content.WithView(OverviewLayoutArea.BuildPropertyOverview(host, node, canEdit));
         }
 
-        // Children
+        outer = outer.WithView(content);
+
+        // Children — full page width, outside the constrained container
         if (typeDef?.ShowChildrenInDetails ?? true)
         {
-            stack = stack.WithView(
+            outer = outer.WithView(
                 Controls.Stack
+                    .WithWidth("100%")
                     .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
                     .WithView(LayoutAreaControl.Children(host.Hub)));
         }
 
-        // Comments
+        // Comments — back in constrained width
         if (host.Hub.Configuration.HasComments())
         {
-            stack = stack.WithView(
+            outer = outer.WithView(
                 Controls.Stack
-                    .WithStyle("margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                    .WithWidth("100%")
+                    .WithStyle(GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
                     .WithView(CommentsView.BuildInlineCommentsSection(host)));
         }
 
-        return stack;
+        return outer;
     }
 
     /// <summary>
