@@ -6,6 +6,8 @@
   "isPersistent": true,
   "content": {
     "$type": "ExchangeRate",
+    "systemName": "CHF-CHF",
+    "displayName": "CHF → CHF",
     "fromCurrency": "CHF",
     "toCurrency": "CHF",
     "planRate": 1.0,

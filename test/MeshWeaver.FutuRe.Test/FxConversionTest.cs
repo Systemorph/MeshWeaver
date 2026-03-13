@@ -56,8 +56,8 @@ public class FxConversionTest
 
     private static readonly ExchangeRate[] ExchangeRates =
     [
-        new() { Id = "EUR-CHF", FromCurrency = "EUR", ToCurrency = "CHF", PlanRate = 0.94, ActualRate = 0.92 },
-        new() { Id = "USD-CHF", FromCurrency = "USD", ToCurrency = "CHF", PlanRate = 0.89, ActualRate = 0.87 }
+        new() { SystemName = "EUR-CHF", DisplayName = "EUR → CHF", FromCurrency = "EUR", ToCurrency = "CHF", PlanRate = 0.94, ActualRate = 0.92 },
+        new() { SystemName = "USD-CHF", DisplayName = "USD → CHF", FromCurrency = "USD", ToCurrency = "CHF", PlanRate = 0.89, ActualRate = 0.87 }
     ];
 
     private static readonly BusinessUnit[] BusinessUnits =

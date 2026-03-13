@@ -6,6 +6,8 @@
   "isPersistent": true,
   "content": {
     "$type": "ExchangeRate",
+    "systemName": "JPY-CHF",
+    "displayName": "JPY → CHF",
     "fromCurrency": "JPY",
     "toCurrency": "CHF",
     "planRate": 0.006,

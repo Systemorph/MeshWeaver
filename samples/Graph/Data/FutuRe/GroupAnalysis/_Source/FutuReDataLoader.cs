@@ -457,7 +457,8 @@ public static class FutuReDataLoader
 
         return new ExchangeRate
         {
-            Id = node.Id,
+            SystemName = node.Id,
+            DisplayName = node.Name ?? node.Id,
             FromCurrency = GetString(json, "fromCurrency") ?? string.Empty,
             ToCurrency = GetString(json, "toCurrency") ?? string.Empty,
             PlanRate = GetDouble(json, "planRate"),
