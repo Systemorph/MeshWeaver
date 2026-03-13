@@ -457,7 +457,7 @@ public static class ProfitabilityLayoutAreas
 
     private static UiControl RenderWaterfall(List<FutuReDataCube> allData, bool isOriginal)
     {
-        if (isOriginal)
+        if (isOriginal && allData.Select(d => d.Currency).Distinct().Count() > 1)
             return Controls.Markdown("*Waterfall chart is not available in Original Currency mode \u2014 switch to a CHF mode to view the waterfall.*");
 
         var totalPremium = allData.Where(d => d.AmountType == AmountTypes.Premium).Sum(d => d.Estimate);
@@ -494,7 +494,7 @@ public static class ProfitabilityLayoutAreas
                     .Select(data => render(data.ToList(), isOriginal, label));
             });
         return Controls.Stack.WithView((LayoutAreaHost area, RenderingContext ctx) =>
-            GetDataCube(area).Select(data => render(data.ToList(), false, "")));
+            GetDataCube(area).Select(data => render(data.ToList(), true, "")));
     }
 
     /// <summary>
@@ -522,7 +522,7 @@ public static class ProfitabilityLayoutAreas
                 return BuildStack(area, toolbar.CurrencyMode, isOriginal, label);
             });
         return Controls.Stack.WithView((LayoutAreaHost area, RenderingContext ctx) =>
-            BuildStack(area, CurrencyModes.PlanChf, false, ""));
+            BuildStack(area, CurrencyModes.PlanChf, true, ""));
     }
 
     [Display(GroupName = "Profitability", Order = 10)]
