@@ -1,8 +1,6 @@
-using MeshWeaver.AI;
-using MeshWeaver.Data;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Graph;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Graph-specific extensions for ThreadMessage node types.

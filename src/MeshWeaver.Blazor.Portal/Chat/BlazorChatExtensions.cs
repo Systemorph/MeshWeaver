@@ -16,7 +16,10 @@ public static class BlazorChatExtensions
     public static MessageHubConfiguration AddChatViews(this MessageHubConfiguration configuration)
     {
         return configuration
-            .WithTypes(typeof(ThreadChatControl))
+            .WithTypes(typeof(ThreadChatControl),
+                typeof(CreateThreadRequest), typeof(CreateThreadResponse),
+                typeof(SubmitMessageRequest), typeof(SubmitMessageResponse),
+                typeof(CancelThreadStreamRequest))
             .AddChatTypes()
             .AddViews(registry => registry
                 .WithView<ThreadChatControl, ThreadChatView>());
@@ -33,7 +36,11 @@ public static class BlazorChatExtensions
             .WithType(typeof(CreateNodeRequest), nameof(CreateNodeRequest))
             .WithType(typeof(CreateNodeResponse), nameof(CreateNodeResponse))
             .WithType(typeof(DeleteNodeRequest), nameof(DeleteNodeRequest))
-            .WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse));
+            .WithType(typeof(DeleteNodeResponse), nameof(DeleteNodeResponse))
+            .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))
+            .WithType(typeof(CreateThreadResponse), nameof(CreateThreadResponse))
+            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
+            .WithType(typeof(ThreadCellReference), nameof(ThreadCellReference));
         return config;
     }
 }

@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using Xunit;
 
 namespace MeshWeaver.Hosting.PostgreSql.Test;
@@ -54,6 +56,17 @@ public class ThreadMessageChatTests : IAsyncLifetime
         };
         _threadAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: threadPartitionDef);
         _messageAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: threadPartitionDef);
+
+        // Register Thread and ThreadMessage as public-read node types so authenticated users can query them.
+        // Must use schema-scoped data source since node_type_permissions exists in both schemas
+        // and the schema-scoped search path finds the local one first.
+        var schemaAccessControl = new PostgreSqlAccessControl(ds);
+        await schemaAccessControl.SyncNodeTypePermissionsAsync(
+            [
+                new NodeTypePermission("Thread", PublicRead: true),
+                new NodeTypePermission("ThreadMessage", PublicRead: true)
+            ],
+            TestContext.Current.CancellationToken);
     }
 
     public ValueTask DisposeAsync()
@@ -358,4 +371,145 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var count = (long)(await cmd.ExecuteScalarAsync(ct))!;
         count.Should().Be(1);
     }
+
+    #region Query tests — verifying PostgreSqlMeshQuery finds threads in satellite tables
+
+    /// <summary>
+    /// Seeds multiple threads under User/alice/_Thread and verifies that
+    /// PostgreSqlMeshQuery with "nodeType:Thread namespace:User/alice/_Thread"
+    /// returns them from the threads satellite table.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task QueryThreads_ByNamespace_FindsThreadsInSatelliteTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Seed threads
+        await _threadAdapter.WriteAsync(new MeshNode("chat-q1", "User/alice/_Thread")
+        {
+            Name = "First Chat",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        await _threadAdapter.WriteAsync(new MeshNode("chat-q2", "User/alice/_Thread")
+        {
+            Name = "Second Chat",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        // Query via PostgreSqlMeshQuery (userId required for access control)
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Thread namespace:User/alice/_Thread", userId: "alice");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().HaveCount(2, "should find both threads in the satellite table");
+        results.Should().Contain(n => n.Name == "First Chat");
+        results.Should().Contain(n => n.Name == "Second Chat");
+    }
+
+    /// <summary>
+    /// Verifies that "nodeType:Thread" (without namespace) can find all threads
+    /// across the satellite table — this is the query used by "Latest Threads".
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task QueryThreads_ByNodeTypeOnly_FindsAllThreads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Seed threads for two different users
+        await _threadAdapter.WriteAsync(new MeshNode("chat-all1", "User/alice/_Thread")
+        {
+            Name = "Alice Chat",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        await _threadAdapter.WriteAsync(new MeshNode("chat-all2", "User/bob/_Thread")
+        {
+            Name = "Bob Chat",
+            NodeType = "Thread",
+            MainNode = "User/bob/_Thread",
+            Content = new Thread { ParentPath = "User/bob" }
+        }, _options, ct);
+
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().HaveCountGreaterThanOrEqualTo(2,
+            "should find threads from multiple users");
+        results.Should().Contain(n => n.Name == "Alice Chat");
+        results.Should().Contain(n => n.Name == "Bob Chat");
+    }
+
+    /// <summary>
+    /// Verifies that querying ThreadMessage nodes within a thread's namespace
+    /// finds messages in the satellite table.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task QueryThreadMessages_ByNamespace_FindsMessagesInSatelliteTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = DateTime.UtcNow;
+
+        // Seed a thread and messages
+        await _threadAdapter.WriteAsync(new MeshNode("conv-q", "User/alice/_Thread")
+        {
+            Name = "Query Test Conv",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        await _messageAdapter.WriteAsync(new MeshNode("1", "User/alice/_Thread/conv-q")
+        {
+            Name = "Hello",
+            NodeType = "ThreadMessage",
+            MainNode = "User/alice/_Thread",
+            Order = 1,
+            Content = new ThreadMessage
+            {
+                Id = "1", Role = "user", Text = "Hello",
+                Timestamp = now, Type = ThreadMessageType.ExecutedInput
+            }
+        }, _options, ct);
+
+        await _messageAdapter.WriteAsync(new MeshNode("2", "User/alice/_Thread/conv-q")
+        {
+            Name = "Hi there",
+            NodeType = "ThreadMessage",
+            MainNode = "User/alice/_Thread",
+            Order = 2,
+            Content = new ThreadMessage
+            {
+                Id = "2", Role = "assistant", Text = "Hi there!",
+                Timestamp = now.AddSeconds(1), Type = ThreadMessageType.AgentResponse
+            }
+        }, _options, ct);
+
+        var query = new PostgreSqlMeshQuery(_messageAdapter);
+        var request = MeshQueryRequest.FromQuery(
+            "nodeType:ThreadMessage namespace:User/alice/_Thread/conv-q sort:Order-asc", userId: "alice");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().HaveCount(2, "should find both messages in the thread");
+        results[0].Order.Should().Be(1);
+        results[1].Order.Should().Be(2);
+    }
+
+    #endregion
 }

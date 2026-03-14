@@ -3,10 +3,11 @@ using MeshWeaver.Messaging;
 namespace MeshWeaver.AI;
 
 /// <summary>
-/// Request to execute an agent response for a thread message on the hub side.
-/// Posted from the GUI to the thread hub so execution survives component disposal.
+/// Request to submit a user message to a thread.
+/// The thread hub creates the user message node, response node, and streams the agent response.
+/// Thread must exist before submitting — create via IMeshService.CreateNodeAsync.
 /// </summary>
-public record ExecuteThreadMessageRequest : IRequest<ExecuteThreadMessageResponse>
+public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
 {
     public required string ThreadPath { get; init; }
     public required string UserMessageText { get; init; }
@@ -16,7 +17,7 @@ public record ExecuteThreadMessageRequest : IRequest<ExecuteThreadMessageRespons
     public IReadOnlyList<string>? Attachments { get; init; }
 }
 
-public record ExecuteThreadMessageResponse
+public record SubmitMessageResponse
 {
     public bool Success { get; init; }
     public string? Error { get; init; }

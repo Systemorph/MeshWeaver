@@ -1,19 +1,18 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
-using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Layout views for Agent nodes.
@@ -295,7 +294,8 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Name:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter display name...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) }));
 
         // Description
         stack = stack.WithView(Controls.Stack
@@ -304,7 +304,8 @@ public static class AgentView
             .WithView(new TextAreaControl(new JsonPointerReference(""))
                 .WithPlaceholder("Enter description...")
                 .WithRows(3)
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
 
         // Group Name
         stack = stack.WithView(Controls.Stack
@@ -312,7 +313,8 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Group Name:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., Insurance, Todo...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(groupNameDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(groupNameDataId) }));
 
         // Icon Name
         stack = stack.WithView(Controls.Stack
@@ -320,7 +322,8 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Icon Name:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., Compass, Shield...")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(iconNameDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(iconNameDataId) }));
 
         // Display Order
         stack = stack.WithView(Controls.Stack
@@ -328,7 +331,8 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Display Order:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("0")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
 
         // Preferred Model
         stack = stack.WithView(Controls.Stack
@@ -336,7 +340,8 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Preferred Model:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., claude-sonnet-4-5")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(preferredModelDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(preferredModelDataId) }));
 
         // Context Match Pattern
         stack = stack.WithView(Controls.Stack
@@ -344,7 +349,8 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Context Pattern:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("e.g., address.type==pricing")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(contextMatchPatternDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(contextMatchPatternDataId) }));
 
         // Boolean fields as text (true/false)
         stack = stack.WithView(Controls.Stack
@@ -352,14 +358,16 @@ public static class AgentView
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Default Agent:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("true or false")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(isDefaultDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(isDefaultDataId) }));
 
         stack = stack.WithView(Controls.Stack
             .WithStyle(formStyle)
             .WithView(Controls.Html("<label style=\"font-weight: 500;\">Exposed in Navigator:</label>"))
             .WithView(new TextFieldControl(new JsonPointerReference(""))
                 .WithPlaceholder("true or false")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(exposedInNavigatorDataId) }));
+                .WithImmediate(true) with
+            { DataContext = LayoutAreaReference.GetDataPointer(exposedInNavigatorDataId) }));
 
         // Instructions (code editor for markdown)
         stack = stack.WithView(Controls.Html("<h3 style=\"margin: 24px 0 8px 0;\">Instructions</h3>"));

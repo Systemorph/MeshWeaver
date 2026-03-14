@@ -1,7 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using MeshWeaver.AI;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Data;
@@ -9,12 +8,9 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.ShortGuid;
 using Microsoft.AspNetCore.Components;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using MeshThread = MeshWeaver.AI.Thread;
 
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Portal.SidePanel;
@@ -32,6 +28,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private bool _isDisposed;
     private IDisposable? agentSubscription;
+    private ISynchronizationStream<JsonElement>? _ownedStream;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
     // Thread state
@@ -184,7 +181,26 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         base.BindData();
         DataBind(ViewModel.ThreadPath, x => x.threadPath);
         DataBind(ViewModel.InitialContext, x => x.initialContext);
-        DataBind(ViewModel.Cells, x => x.cells);
+        DataBind(new JsonPointerReference(LayoutAreaReference.GetDataPointer("threadCells")), x => x.cells);
+    }
+
+    /// <summary>
+    /// Establishes a remote stream to the thread hub's layout area when the view
+    /// is used in the side panel (where Stream is null). This enables DataBind
+    /// for cells to work via JsonPointerReference.
+    /// </summary>
+    private void EnsureStreamForThread(string threadPath)
+    {
+        if (Stream != null) return; // Already have a stream (full-screen case)
+        _ownedStream?.Dispose();
+        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
+        if (workspace == null) return;
+        _ownedStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(threadPath),
+            new LayoutAreaReference(ThreadNodeType.ThreadArea));
+        Stream = _ownedStream;
+        BindData();
+        StateHasChanged();
     }
 
     private Task InitializeAgentAndModelSelectionsAsync()
@@ -355,14 +371,37 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             await UpdateExtractedReferencesAsync();
 
-            // Auto-create thread on first message
+            // Auto-create thread on first message via server-side CreateThreadRequest
             if (string.IsNullOrEmpty(threadPath))
             {
                 isCreatingThread = true;
                 StateHasChanged();
                 try
                 {
-                    await AutoCreateThreadAsync(userMessageText!);
+                    var ns = NavigationService.CurrentNamespace ?? initialContext ?? "";
+                    var createResponse = await Hub.AwaitResponse(
+                        new CreateThreadRequest
+                        {
+                            Namespace = ns,
+                            UserMessageText = userMessageText!,
+                            InitialContext = initialContext,
+                            ModelName = selectedModelInfo?.Name
+                        },
+                        o => o.WithTarget(new Address(ns)));
+
+                    if (!createResponse.Message.Success)
+                    {
+                        Logger.LogError("[ThreadChat:{InstanceId}] Failed to create thread: {Error}",
+                            _instanceId, createResponse.Message.Error);
+                        submissionHandler.ForceRelease();
+                        return;
+                    }
+
+                    threadPath = createResponse.Message.ThreadPath;
+                    threadName = createResponse.Message.ThreadName;
+                    SidePanelState.SetContentPath(threadPath);
+                    UpdateSidePanelTitle();
+                    EnsureStreamForThread(threadPath!);
                 }
                 finally
                 {
@@ -371,7 +410,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }
 
             // Post execution request to thread hub — hub creates both user and response nodes
-            Hub.Post(new ExecuteThreadMessageRequest
+            Hub.Post(new SubmitMessageRequest
             {
                 ThreadPath = threadPath!,
                 UserMessageText = userMessageText!,
@@ -637,6 +676,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         threadName = null;
         SidePanelState.SetContentPath(null);
         UpdateSidePanelTitle();
+        _ownedStream?.Dispose();
+        _ownedStream = null;
+        Stream = null;
+        cells = ImmutableList<LayoutAreaControl>.Empty;
         viewMode = ChatViewMode.Chat;
         StateHasChanged();
     }
@@ -674,8 +717,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }
 
             var query = string.IsNullOrWhiteSpace(searchText)
-                ? "source:activity nodeType:Thread limit:20"
-                : $"source:activity nodeType:Thread limit:20 {searchText}";
+                ? "nodeType:Thread limit:20 sort:LastModified-desc"
+                : $"nodeType:Thread limit:20 sort:LastModified-desc {searchText}";
 
             recentThreads = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
         }
@@ -704,176 +747,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         viewMode = ChatViewMode.Chat;
         SidePanelState.SetContentPath(threadPath);
         UpdateSidePanelTitle();
+        if (!string.IsNullOrEmpty(threadPath))
+            EnsureStreamForThread(threadPath);
         StateHasChanged();
         return Task.CompletedTask;
     }
 
-    // --- Auto thread creation via AI ---
-
-    /// <summary>
-    /// Creates the thread node immediately using a fallback name derived from the message text.
-    /// The ThreadNamer AI agent runs in the background to rename the thread after creation.
-    /// </summary>
-    private async Task AutoCreateThreadAsync(string userMessageText)
-    {
-        var ns = NavigationService.CurrentNamespace ?? initialContext ?? "";
-
-        // Immediate fallback: derive name and ID from message text (no AI call)
-        var name = userMessageText.Length > 60
-            ? userMessageText[..60] + "..."
-            : userMessageText;
-        var id = GenerateIdFromName(name);
-
-        // Append short random suffix to prevent path collisions
-        if (!string.IsNullOrEmpty(id))
-            id += Guid.NewGuid().ToString("N")[..4];
-
-        // Ensure we have valid values
-        if (string.IsNullOrWhiteSpace(name))
-            name = $"Chat {DateTime.UtcNow:yyyy-MM-dd HH:mm}";
-        if (string.IsNullOrWhiteSpace(id))
-            id = $"Chat{DateTime.UtcNow:yyyyMMddHHmmss}";
-
-        threadPath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
-        threadName = name;
-
-        var threadContent = new MeshThread
-        {
-            ParentPath = string.IsNullOrEmpty(ns) ? null : ns
-        };
-
-        var newNode = new MeshNode(threadPath)
-        {
-            Name = name,
-            NodeType = ThreadNodeType.NodeType,
-            Content = threadContent,
-            MainNode = string.IsNullOrEmpty(ns) ? null : ns
-        };
-
-        try
-        {
-            var nodeFactory = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var accessService = Hub.ServiceProvider.GetService<AccessService>();
-            var userId = accessService?.Context?.ObjectId;
-            var createdNode = await nodeFactory.CreateNodeAsync(newNode);
-            threadPath = createdNode.Path;
-            SidePanelState.SetContentPath(threadPath);
-            UpdateSidePanelTitle();
-            Logger.LogDebug("[ThreadChat:{InstanceId}] Auto-created thread: {Path}", _instanceId, threadPath);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Failed to auto-create thread, reusing existing: {Path}", _instanceId, threadPath);
-            SidePanelState.SetContentPath(threadPath);
-            UpdateSidePanelTitle();
-        }
-
-        // Fire-and-forget: rename thread via ThreadNamer AI in background
-        _ = RenameThreadInBackgroundAsync(threadPath!, userMessageText);
-    }
-
-    /// <summary>
-    /// Background task: uses ThreadNamer agent to generate a better name,
-    /// then updates the thread node and side panel title.
-    /// </summary>
-    private async Task RenameThreadInBackgroundAsync(string targetThreadPath, string userMessageText)
-    {
-        try
-        {
-            var nameGenChat = new AgentChatClient(Hub.ServiceProvider);
-            var model = selectedModelInfo?.Name ?? availableModels.FirstOrDefault()?.Name ?? "";
-            await nameGenChat.InitializeAsync(initialContext, model);
-            nameGenChat.SetSelectedAgent(BuiltInAgentProvider.ThreadNamerId);
-
-            var nameRequest = new ChatMessage(ChatRole.User, userMessageText);
-            var responseText = new System.Text.StringBuilder();
-
-            await foreach (var update in nameGenChat.GetStreamingResponseAsync([nameRequest], CancellationToken.None))
-            {
-                if (!string.IsNullOrEmpty(update.Text))
-                    responseText.Append(update.Text);
-            }
-
-            var response = responseText.ToString();
-            var (name, _) = ParseNameIdResponse(response);
-
-            if (string.IsNullOrWhiteSpace(name))
-                return; // Fallback name is already functional
-
-            Logger.LogDebug("[ThreadChat:{InstanceId}] Background rename to '{Name}' for {Path}",
-                _instanceId, name, targetThreadPath);
-
-            // Update the node name via UpdateNodeRequest
-            var meshQuery = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var existingNode = await meshQuery.QueryAsync<MeshNode>($"path:{targetThreadPath}").FirstOrDefaultAsync();
-            if (existingNode != null)
-            {
-                var updatedNode = existingNode with { Name = name };
-                var nodeJson = System.Text.Json.JsonSerializer.SerializeToElement(updatedNode, Hub.JsonSerializerOptions);
-                Hub.Post(new DataChangeRequest { Updates = [nodeJson] },
-                    o => o.WithTarget(new Address(targetThreadPath)));
-            }
-
-            // Update local UI state if component is still alive and on the same thread
-            if (!_isDisposed && threadPath == targetThreadPath)
-            {
-                await InvokeAsync(() =>
-                {
-                    threadName = name;
-                    UpdateSidePanelTitle();
-                    StateHasChanged();
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.LogDebug(ex, "[ThreadChat:{InstanceId}] Background thread rename failed for {Path}",
-                _instanceId, targetThreadPath);
-        }
-    }
-
-    private static (string name, string id) ParseNameIdResponse(string response)
-    {
-        string? name = null;
-        string? id = null;
-
-        foreach (var line in response.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (line.StartsWith("Name:", StringComparison.OrdinalIgnoreCase))
-                name = line["Name:".Length..].Trim();
-            else if (line.StartsWith("Id:", StringComparison.OrdinalIgnoreCase))
-                id = line["Id:".Length..].Trim();
-        }
-
-        // Clean up: remove quotes if the AI wrapped them
-        name = name?.Trim('"', '\'', '*');
-        id = id?.Trim('"', '\'', '`');
-
-        // Ensure id is actually PascalCase alphanumeric
-        if (!string.IsNullOrEmpty(id))
-            id = Regex.Replace(id, @"[^a-zA-Z0-9]", "");
-
-        // If id is empty but name exists, generate from name
-        if (string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-            id = GenerateIdFromName(name);
-
-        return (name ?? "", id ?? "");
-    }
-
-    private static string GenerateIdFromName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return "";
-
-        var words = Regex.Split(name, @"[\s\-_]+")
-            .Where(w => !string.IsNullOrEmpty(w))
-            .Select(w => char.ToUpperInvariant(w[0]) + w[1..].ToLowerInvariant());
-
-        var pascalCase = string.Join("", words);
-        pascalCase = Regex.Replace(pascalCase, @"[^a-zA-Z0-9]", "");
-
-        return string.IsNullOrEmpty(pascalCase) ? "" : pascalCase;
-    }
+    // Thread creation is handled server-side via CreateThreadRequest handler.
 
     private CompletionProviderConfig GetCompletionConfig()
     {
@@ -1040,6 +920,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
+            _ownedStream?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;

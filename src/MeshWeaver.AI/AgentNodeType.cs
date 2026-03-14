@@ -1,11 +1,8 @@
-using MeshWeaver.AI;
-using MeshWeaver.Data;
-using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Provides configuration for Agent nodes in the graph.

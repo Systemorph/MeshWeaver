@@ -1,13 +1,10 @@
-﻿using MeshWeaver.AI;
-using MeshWeaver.ContentCollections;
+﻿using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -27,16 +24,9 @@ public static class GraphConfigurationExtensions
             builder
                 .AddNodeTypeType()
                 .AddOrganizationType()
-                .AddAgentType()
                 .AddCodeType()
                 .AddMarkdownType()
                 .AddHtmlType()
-                .AddThreadType(config => config
-                    .AddThreadViews()
-                    .AddMeshDataSource(source => source
-                        .WithContentType<AI.Thread>()
-                        .WithType<ThreadMessage>(ThreadMessageNodeType.NodeType)))
-                .AddThreadMessageType()
                 .AddCommentType()
                 .AddTrackedChangeType()
                 .AddAccessAssignmentType()
@@ -75,6 +65,7 @@ public static class GraphConfigurationExtensions
 
                 return services;
             });
+
 
             // Configure mesh hub with views and hub-level services
             // Note: MeshDataSource is added automatically via NodeTypeService.WrapWithMeshDataSource

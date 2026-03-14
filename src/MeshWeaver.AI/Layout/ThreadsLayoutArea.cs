@@ -37,7 +37,7 @@ public static class ThreadsLayoutArea
         var nodePath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"source:activity nodeType:Thread namespace:{nodePath}")
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition}")
             .WithNamespace(nodePath)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCreateNodeType("Thread");

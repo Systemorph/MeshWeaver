@@ -1,5 +1,4 @@
-using MeshWeaver.AI;
-using MeshWeaver.Mesh;
+﻿using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -187,7 +186,6 @@ public class RlsNodeValidator : INodeValidator
     private static Permission GetCreatePermission(MeshNode node) => node.NodeType switch
     {
         CommentNodeType.NodeType => Permission.Comment,
-        ThreadNodeType.NodeType => Permission.Update,
         _ => Permission.Create
     };
 

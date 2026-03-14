@@ -1,11 +1,10 @@
-using MeshWeaver.AI;
-using MeshWeaver.Domain;
-using MeshWeaver.Graph;
+﻿using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 
-namespace MeshWeaver.Mesh;
+namespace MeshWeaver.Graph;
 
 /// <summary>
 /// Extension methods for MeshNode.
@@ -48,12 +47,8 @@ public static class MeshNodeExtensions
     {
         typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
         typeRegistry.WithType(typeof(CodeConfiguration), nameof(CodeConfiguration));
-        typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration));
-        typeRegistry.WithType(typeof(AgentDelegation), nameof(AgentDelegation));
         typeRegistry.WithType(typeof(Comment), nameof(Comment));
         typeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
-        typeRegistry.WithType(typeof(AI.Thread), nameof(AI.Thread));
-        typeRegistry.WithType(typeof(ThreadMessage), nameof(ThreadMessage));
         typeRegistry.WithType(typeof(AccessAssignment), nameof(AccessAssignment));
         typeRegistry.WithType(typeof(RoleAssignment), nameof(RoleAssignment));
         typeRegistry.WithType(typeof(Role), nameof(Role));
@@ -71,8 +66,6 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
-        typeRegistry.WithType(typeof(ExecuteThreadMessageRequest), nameof(ExecuteThreadMessageRequest));
-        typeRegistry.WithType(typeof(ExecuteThreadMessageResponse), nameof(ExecuteThreadMessageResponse));
         return typeRegistry;
     }
 }

@@ -10,8 +10,10 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.ShortGuid;
 using Xunit;
 using MeshThread = MeshWeaver.AI.Thread;
@@ -19,8 +21,9 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests for thread creation via IMeshService.CreateNodeAsync.
-/// Threads store messages as child MeshNodes with nodeType="ThreadMessage".
+/// Tests for thread creation via CreateThreadRequest and IMeshService.CreateNodeAsync.
+/// Threads are satellite nodes created under {namespace}/_Thread/{speakingId}.
+/// Messages are stored as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
 public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -30,6 +33,111 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // base.ConfigureMesh already calls AddGraph()
         return base.ConfigureMesh(builder);
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
+        base.ConfigureClient(configuration)
+            .WithTypes(typeof(CreateThreadResponse));
+
+    [Fact]
+    public async Task CreateThread_ViaCreateThreadRequest_UsesThreadPartitionAndSpeakingId()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Arrange — create context node so the node hub exists
+        var contextPath = "ACME";
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Organization" }, ct);
+
+        // Act — send CreateThreadRequest to the context node's hub (production path)
+        var client = GetClient();
+        var response = await client.AwaitResponse(
+            new CreateThreadRequest
+            {
+                Namespace = contextPath,
+                UserMessageText = "Hello, can you help me with this project?"
+            },
+            o => o.WithTarget(new Address(contextPath)),
+            ct);
+
+        // Assert — response
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.ThreadPath.Should().NotBeNullOrEmpty();
+        response.Message.ThreadName.Should().NotBeNullOrEmpty();
+
+        var threadPath = response.Message.ThreadPath!;
+        Output.WriteLine($"Created thread at: {threadPath}");
+
+        // Assert — path uses _Thread partition
+        threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/",
+            "thread path must use _Thread partition: {namespace}/_Thread/{speakingId}");
+        threadPath.Should().StartWith($"{contextPath}/",
+            "thread path must start with the context node path");
+
+        // Assert — speaking ID is human-readable (derived from message text)
+        var speakingId = threadPath.Split('/').Last();
+        speakingId.Should().Contain("hello",
+            "speaking ID should be derived from the message text");
+
+        // Assert — retrieve node and verify MainNode (satellite auto-set)
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+        node.Should().NotBeNull("thread node should be retrievable");
+        node!.NodeType.Should().Be(ThreadNodeType.NodeType);
+        node.MainNode.Should().Be($"{contextPath}/{ThreadNodeType.ThreadPartition}",
+            "satellite MainNode should point to the _Thread namespace, not self");
+        node.MainNode.Should().NotBe(node.Path,
+            "satellite MainNode must NOT be self-referencing");
+
+        // Assert — content (ParentPath = hub address = context path)
+        var content = node.Content.Should().BeOfType<MeshThread>().Subject;
+        content.ParentPath.Should().Be(contextPath);
+    }
+
+    [Fact]
+    public async Task CreateThread_ViaCreateThreadRequest_OnDifferentContextNode()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Arrange — create a different context node
+        var contextPath = "TestProject";
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode(contextPath) { Name = "Test Project", NodeType = "Markdown" }, ct);
+
+        // Act — send to the context node's hub
+        var client = GetClient();
+        var response = await client.AwaitResponse(
+            new CreateThreadRequest
+            {
+                Namespace = contextPath,
+                UserMessageText = "A thread on TestProject"
+            },
+            o => o.WithTarget(new Address(contextPath)),
+            ct);
+
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var threadPath = response.Message.ThreadPath!;
+        Output.WriteLine($"Created thread at: {threadPath}");
+
+        threadPath.Should().StartWith($"{contextPath}/{ThreadNodeType.ThreadPartition}/",
+            "thread should be under {contextPath}/_Thread/{speakingId}");
+    }
+
+    [Fact]
+    public async Task CreateThread_SpeakingId_IsDeterministicFromMessageText()
+    {
+        // Verify that GenerateSpeakingId produces readable slugs
+        var id1 = ThreadNodeType.GenerateSpeakingId("Hello, can you help me?");
+        var id2 = ThreadNodeType.GenerateSpeakingId("Hello, can you help me?");
+
+        // Both should contain "hello-can-you-help-me" but have unique suffixes
+        id1.Should().Contain("hello-can-you-help-me");
+        id2.Should().Contain("hello-can-you-help-me");
+        id1.Should().NotBe(id2, "each call should produce a unique suffix");
+
+        // Long messages should be truncated
+        var longMsg = new string('a', 200);
+        var longId = ThreadNodeType.GenerateSpeakingId(longMsg);
+        longId.Length.Should().BeLessThan(50, "speaking ID should be truncated for long messages");
     }
 
     [Fact]
@@ -537,4 +645,92 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         chatMessages.Should().BeEmpty();
     }
 #pragma warning restore CS0618
+}
+
+/// <summary>
+/// Tests that CreateThreadRequest is denied when the user lacks Permission.Update.
+/// Uses ConfigureMeshBase (no PublicAdminAccess) so permissions are enforced.
+/// </summary>
+public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string AdminUserId = "admin-user";
+    private const string ViewerUserId = "viewer-user";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+    {
+        // No PublicAdminAccess — permissions are enforced
+        return ConfigureMeshBase(builder);
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
+        base.ConfigureClient(configuration)
+            .WithTypes(typeof(CreateThreadResponse));
+
+    protected override async Task SetupAccessRightsAsync()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+
+        // Admin user gets full access globally
+        await securityService.AddUserRoleAsync(AdminUserId, "Admin", null, "system");
+
+        // Viewer gets only Read+Execute (no Update) at the test context
+        await securityService.AddUserRoleAsync(ViewerUserId, "Viewer", "SecureProject", "system");
+    }
+
+    [Fact]
+    public async Task CreateThread_WithUpdatePermission_Succeeds()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Login as admin
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
+
+        // Create context node
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" }, ct);
+
+        // Act — admin creates thread (has Update permission)
+        var client = GetClient();
+        var response = await client.AwaitResponse(
+            new CreateThreadRequest
+            {
+                Namespace = "SecureProject",
+                UserMessageText = "Admin creating a thread"
+            },
+            o => o.WithTarget(new Address("SecureProject")),
+            ct);
+
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.ThreadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
+    }
+
+    [Fact]
+    public async Task CreateThread_WithoutUpdatePermission_IsDenied()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Create context node as admin first
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = AdminUserId, Name = "Admin" });
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("SecureProject") { Name = "Secure Project", NodeType = "Markdown" }, ct);
+
+        // Switch to viewer (Read+Execute only, no Update)
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });
+
+        // Act — viewer tries to create thread (lacks Update permission)
+        var client = GetClient();
+        var response = await client.AwaitResponse(
+            new CreateThreadRequest
+            {
+                Namespace = "SecureProject",
+                UserMessageText = "Viewer trying to create a thread"
+            },
+            o => o.WithTarget(new Address("SecureProject")),
+            ct);
+
+        // Assert — should be denied
+        response.Message.Success.Should().BeFalse("viewer lacks Update permission");
+        response.Message.Error.Should().NotBeNullOrEmpty();
+        Output.WriteLine($"Denial message: {response.Message.Error}");
+    }
 }

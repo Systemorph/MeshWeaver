@@ -11,9 +11,12 @@ public static class AIExtensions
         => config.AddLayout(AddAILayouts)
     ;
 
-    public static LayoutDefinition AddAILayouts(this LayoutDefinition layout)
-        => layout.AddAgentDetails().AddAgentChat().AddChatNavigation();
+    extension(LayoutDefinition layout)
+    {
+        public LayoutDefinition AddAILayouts()
+            => layout.AddAgentDetails().AddAgentChat().AddChatNavigation();
 
-    private static LayoutDefinition AddChatNavigation(this LayoutDefinition layout)
-        => layout.WithNavMenu("Chat", "/chat", FluentIcons.Chat());
+        private LayoutDefinition AddChatNavigation()
+            => layout.WithNavMenu("Chat", "/chat", FluentIcons.Chat());
+    }
 }

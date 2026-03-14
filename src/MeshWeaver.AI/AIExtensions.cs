@@ -1,6 +1,7 @@
-using MeshWeaver.AI.Persistence;
+﻿using MeshWeaver.AI.Persistence;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.AI.Threading;
+using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -10,62 +11,75 @@ namespace MeshWeaver.AI;
 /// </summary>
 public static class AIExtensions
 {
-    /// <summary>
-    /// Adds the AI chat services including persistence and thread management.
-    /// Uses in-memory thread manager by default.
-    /// Call this after registering individual factory implementations (e.g., AddAzureOpenAI, AddAzureFoundryClaude).
-    /// </summary>
-    public static IServiceCollection AddAgentChatServices(this IServiceCollection services)
+    extension<TBuilder>(TBuilder builder)
+    where TBuilder : MeshBuilder
     {
-        // Ensure ChatPersistenceService is registered
-        services.AddMemoryChatPersistence();
-
-        // Add thread manager (uses in-memory by default)
-        services.AddInMemoryThreadManager();
-
-        return services;
+        public TBuilder AddAI()
+        {
+            // Register AI chat services (persistence, thread management, etc.)
+            return (TBuilder)builder
+                    .AddThreadMessageType()
+                    .AddThreadType()
+                    .AddAgentType()
+                    .ConfigureServices(services => services.AddAgentChatServices())
+                ;
+        }
     }
 
-    /// <summary>
-    /// Adds the AI chat services with MeshDataSource persistence for threads.
-    /// Stores chats in the parent object's namespace:
-    /// - Chat metadata: {scope}/chats/{userId}/{threadId}
-    /// - Messages: {scope}/chats/{userId}/{threadId}/messages/
-    /// Requires IMeshStorage to be registered.
-    /// </summary>
-    public static IServiceCollection AddAgentChatServicesWithPersistence(this IServiceCollection services)
+    private static ITypeRegistry AddAIType(this ITypeRegistry typeRegistry)
+        => typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration))
+            .WithType(typeof(AgentDelegation), nameof(AgentDelegation))
+            .WithType(typeof(AI.Thread), nameof(AI.Thread))
+            .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
+            .WithType(typeof(ThreadCellReference), nameof(ThreadCellReference))
+            .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
+            .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
+            .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))
+            .WithType(typeof(CreateThreadResponse), nameof(CreateThreadResponse))
+            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest));
+
+    extension(IServiceCollection services)
     {
-        // Ensure ChatPersistenceService is registered
-        services.AddMemoryChatPersistence();
+        /// <summary>
+        /// Adds the AI chat services including persistence and thread management.
+        /// Uses in-memory thread manager by default.
+        /// Call this after registering individual factory implementations (e.g., AddAzureOpenAI, AddAzureFoundryClaude).
+        /// </summary>
+        public IServiceCollection AddAgentChatServices()
+        {
+            // Ensure ChatPersistenceService is registered
+            services.AddMemoryChatPersistence();
 
-        // Add MeshDataSource thread manager for persistent storage
-        services.AddMeshDataSourceThreadManager();
+            // Add thread manager (uses in-memory by default)
+            services.AddInMemoryThreadManager();
 
-        return services;
-    }
+            return services;
+        }
 
-    /// <summary>
-    /// Backwards-compatible method - same as AddAgentChatServices.
-    /// </summary>
-    [Obsolete("Use AddAgentChatServices instead")]
-    public static IServiceCollection AddAgentChatFactoryProvider(this IServiceCollection services)
-    {
-        return services.AddAgentChatServices();
-    }
 
-    /// <summary>
-    /// Registers the WebSearch plugin, making SearchWeb and FetchWebPage tools
-    /// available to agents that declare "WebSearch" in their plugins frontmatter.
-    /// </summary>
-    public static IServiceCollection AddWebSearchPlugin(this IServiceCollection services, Action<WebSearchConfiguration>? configure = null)
-    {
-        if (configure != null)
-            services.Configure(configure);
-        else
-            services.AddOptions<WebSearchConfiguration>();
+        /// <summary>
+        /// Backwards-compatible method - same as AddAgentChatServices.
+        /// </summary>
+        [Obsolete("Use AddAgentChatServices instead")]
+        public IServiceCollection AddAgentChatFactoryProvider()
+        {
+            return services.AddAgentChatServices();
+        }
 
-        services.AddHttpClient<WebSearchPlugin>();
-        services.AddSingleton<IAgentPlugin, WebSearchPlugin>();
-        return services;
+        /// <summary>
+        /// Registers the WebSearch plugin, making SearchWeb and FetchWebPage tools
+        /// available to agents that declare "WebSearch" in their plugins frontmatter.
+        /// </summary>
+        public IServiceCollection AddWebSearchPlugin(Action<WebSearchConfiguration>? configure = null)
+        {
+            if (configure != null)
+                services.Configure(configure);
+            else
+                services.AddOptions<WebSearchConfiguration>();
+
+            services.AddHttpClient<WebSearchPlugin>();
+            services.AddSingleton<IAgentPlugin, WebSearchPlugin>();
+            return services;
+        }
     }
 }

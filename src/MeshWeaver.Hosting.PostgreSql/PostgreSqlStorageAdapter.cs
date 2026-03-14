@@ -370,10 +370,14 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         string? activityUserId = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, userId, activityUserId);
-
-        // Integrate scope-based path filtering
+        // Resolve the target table based on the query path or nodeType and partition definition.
+        // For satellite paths like "User/alice/_Thread", this routes to the "threads" table.
+        // For nodeType-only queries like "nodeType:Thread", resolves via nodeType-to-suffix mapping.
         var effectivePath = query.Path ?? basePath;
+        var tableName = !string.IsNullOrEmpty(effectivePath)
+            ? ResolveTable(effectivePath)
+            : _partitionDefinition?.ResolveTableByNodeType(query.ExtractNodeType()) ?? "mesh_nodes";
+        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, userId, activityUserId, tableName);
         if (!string.IsNullOrEmpty(effectivePath))
         {
             var (scopeClause, scopeParams) = _sqlGenerator.GenerateScopeClause(

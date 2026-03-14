@@ -138,7 +138,8 @@ public class PostgreSqlSqlGenerator
     }
 
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
-        ParsedQuery query, string? userId = null, string? activityUserId = null)
+        ParsedQuery query, string? userId = null, string? activityUserId = null,
+        string tableName = "mesh_nodes")
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId);
 
@@ -147,7 +148,7 @@ public class PostgreSqlSqlGenerator
 
         var sql = new StringBuilder("SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            "n.desired_id, n.main_node FROM mesh_nodes n");
+            $"n.desired_id, n.main_node FROM {tableName} n");
 
         if (isAccessedQuery)
         {

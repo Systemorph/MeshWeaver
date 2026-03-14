@@ -126,7 +126,7 @@ public static class ThreadMessageLayoutAreas
                     if (string.IsNullOrWhiteSpace(text))
                         return;
 
-                    ctx.Hub.Post(new ExecuteThreadMessageRequest
+                    ctx.Hub.Post(new SubmitMessageRequest
                     {
                         ThreadPath = threadPath,
                         UserMessageText = text
