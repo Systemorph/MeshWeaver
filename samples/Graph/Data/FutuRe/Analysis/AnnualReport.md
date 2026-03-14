@@ -1,5 +1,5 @@
 ---
-NodeType: "FutuRe/Report"
+NodeType: Markdown
 Title: "FutuRe Group Annual Profitability Report"
 Icon: /static/storage/content/FutuRe/icon.svg
 Abstract: "Comprehensive profitability analysis across EuropeRe and AmericasIns business units covering 10 group lines of business over an 18-month rolling window."

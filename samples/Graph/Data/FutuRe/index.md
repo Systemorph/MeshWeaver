@@ -1,5 +1,5 @@
 ---
-NodeType: FutuRe/Report
+NodeType: Markdown
 Name: FutuRe
 Category: Insurance & Reinsurance
 Description: Insurance group with three business units, local-to-group LoB mapping, and profitability analysis
