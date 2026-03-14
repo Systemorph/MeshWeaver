@@ -8,7 +8,6 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Graph.Test" />
-    <InternalsVisibleTo Include="MeshWeaver.Markdown.Collaboration.Test" />
   </ItemGroup>
 
   <ItemGroup>
