@@ -1007,4 +1007,348 @@ public class CommentMeshNodeTests
     }
 
     #endregion
+
+    #region Comment GUI Workflow — Selection to Comment to Reply
+
+    [Fact]
+    public void CommentWorkflow_SelectText_InsertMarker_CreateComment()
+    {
+        // Simulates the full GUI flow: user selects text → clicks Comment → marker inserted → Comment entity created
+        var rawMarkdown = "MeshWeaver is a powerful platform for building collaborative applications.";
+        var selectedText = "powerful platform";
+        var markerId = "abc123";
+        var author = "Alice";
+
+        // Step 1: Insert marker around selected text (done by CollaborativeMarkdownView.OnCommentFromSelection)
+        var idx = rawMarkdown.IndexOf(selectedText, StringComparison.Ordinal);
+        idx.Should().BeGreaterThanOrEqualTo(0);
+        var openTag = $"<!--comment:{markerId}:{author}:Mar 14-->";
+        var closeTag = $"<!--/comment:{markerId}-->";
+        var annotatedMarkdown = rawMarkdown.Insert(idx + selectedText.Length, closeTag).Insert(idx, openTag);
+
+        annotatedMarkdown.Should().Contain($"{openTag}{selectedText}{closeTag}");
+
+        // Step 2: Parse annotations from the updated markdown
+        var annotations = AnnotationParser.ExtractAnnotations(annotatedMarkdown);
+        annotations.Should().HaveCount(1);
+        annotations[0].Id.Should().Be(markerId);
+        annotations[0].HighlightedText.Should().Be(selectedText);
+        annotations[0].Author.Should().Be(author);
+        annotations[0].Type.Should().Be(MarkdownAnnotationType.Comment);
+
+        // Step 3: Create Comment entity linked to the marker
+        var docPath = "Doc/DataMesh/MyPage";
+        var commentPartition = "_Comment";
+        var comment = new Comment
+        {
+            Id = markerId,
+            PrimaryNodePath = docPath,
+            MarkerId = markerId,
+            HighlightedText = selectedText,
+            Author = author,
+            Text = "",  // Empty initially — user types text after creation
+            Status = CommentStatus.Active
+        };
+        var commentNode = new MeshNode(markerId, $"{docPath}/{commentPartition}")
+        {
+            Name = $"Comment by {author}",
+            NodeType = CommentNodeType.NodeType,
+            Content = comment
+        };
+
+        commentNode.Path.Should().Be($"{docPath}/{commentPartition}/{markerId}");
+        commentNode.NodeType.Should().Be("Comment");
+        ((Comment)commentNode.Content!).MarkerId.Should().Be(markerId);
+        ((Comment)commentNode.Content!).HighlightedText.Should().Be(selectedText);
+    }
+
+    [Fact]
+    public void CommentWorkflow_ReplyCreatedUnderParentComment_NotDocument()
+    {
+        // The Reply button creates a reply under the PARENT COMMENT, not the document.
+        // This matches BuildReplyButton: new MeshNode(replyId, hubPath)
+        // where hubPath = parent comment's address
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var commentPartition = "_Comment";
+        var parentCommentPath = $"{docPath}/{commentPartition}/c1";
+
+        var replyId = "reply-new";
+        var replyNode = new MeshNode(replyId, parentCommentPath)
+        {
+            Name = "Reply to Alice",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
+            {
+                Id = replyId,
+                PrimaryNodePath = docPath,  // Points to DOCUMENT, not parent comment
+                Author = "Bob",
+                Text = "",
+                Status = CommentStatus.Active
+            }
+        };
+
+        // Reply path should be under the parent comment
+        replyNode.Path.Should().Be($"{parentCommentPath}/{replyId}");
+        replyNode.Path.Should().StartWith(parentCommentPath);
+
+        // Reply namespace should be the parent comment path
+        replyNode.Namespace.Should().Be(parentCommentPath);
+
+        // PrimaryNodePath should always point to the original document
+        ((Comment)replyNode.Content!).PrimaryNodePath.Should().Be(docPath);
+    }
+
+    [Fact]
+    public void CommentWorkflow_ReplyDiscoverableViaNamespaceQuery()
+    {
+        // Simulates what CommentLayoutAreas.Overview does to find replies:
+        // meshQuery.ObserveQuery("namespace:{hubPath} nodeType:Comment")
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var commentPartition = "_Comment";
+        var parentCommentPath = $"{docPath}/{commentPartition}/c1";
+
+        // Parent comment
+        var parentNode = new MeshNode("c1", $"{docPath}/{commentPartition}")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "c1", Author = "Alice", Text = "Comment" }
+        };
+
+        // Reply under parent
+        var replyNode = new MeshNode("reply1", parentCommentPath)
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "reply1", Author = "Bob", Text = "Reply" }
+        };
+
+        // Simulate namespace query filtering
+        var allNodes = new List<MeshNode> { parentNode, replyNode };
+
+        // namespace:{parentCommentPath} should match nodes whose Namespace == parentCommentPath
+        var repliesQuery = allNodes.Where(n => n.Namespace == parentCommentPath).ToList();
+
+        repliesQuery.Should().HaveCount(1, "Only reply1 has namespace == parentCommentPath");
+        repliesQuery[0].Id.Should().Be("reply1");
+
+        // Parent comment has namespace = docPath/_Comment, not parentCommentPath
+        parentNode.Namespace.Should().Be($"{docPath}/{commentPartition}");
+        parentNode.Namespace.Should().NotBe(parentCommentPath);
+    }
+
+    [Fact]
+    public void CommentWorkflow_ResolveComment_RemovesMarkerKeepsText()
+    {
+        // Full resolve flow: comment is resolved → marker removed from markdown → text kept
+        var markdown = "Hello <!--comment:c1-->world<!--/comment:c1--> today!";
+
+        // Step 1: Resolve removes the marker but keeps the text
+        var resolved = AnnotationMarkdownExtension.ResolveComment(markdown, "c1");
+        resolved.Should().Be("Hello world today!");
+
+        // Step 2: No more annotations after resolve
+        var remaining = AnnotationParser.ExtractAnnotations(resolved);
+        remaining.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void CommentWorkflow_MultipleComments_IndependentResolve()
+    {
+        var markdown = "<!--comment:c1-->first<!--/comment:c1--> and <!--comment:c2-->second<!--/comment:c2-->";
+
+        // Resolve c1 only
+        var afterC1 = AnnotationMarkdownExtension.ResolveComment(markdown, "c1");
+        afterC1.Should().Contain("first");
+        afterC1.Should().NotContain("<!--comment:c1-->");
+        afterC1.Should().Contain("<!--comment:c2-->second<!--/comment:c2-->");
+
+        // Resolve c2 from the result
+        var afterBoth = AnnotationMarkdownExtension.ResolveComment(afterC1, "c2");
+        afterBoth.Should().Be("first and second");
+    }
+
+    [Fact]
+    public void CommentWorkflow_SidebarRendersCommentWithMetadata()
+    {
+        // Simulates what CollaborativeMarkdownView does:
+        // Parse annotations from markdown → render sidebar cards with comment data
+        var markdown = "<!--comment:c1:Alice:Dec 15-->highlighted text<!--/comment:c1-->";
+
+        var annotations = AnnotationParser.ExtractAnnotations(markdown);
+        annotations.Should().HaveCount(1);
+
+        var ann = annotations[0];
+        ann.Id.Should().Be("c1");
+        ann.Type.Should().Be(MarkdownAnnotationType.Comment);
+        ann.Author.Should().Be("Alice");
+        ann.Date.Should().Be("Dec 15");
+        ann.HighlightedText.Should().Be("highlighted text");
+
+        // Sidebar card would show:
+        // - Author: Alice
+        // - Time: Dec 15
+        // - Highlighted text quote: "highlighted text"
+        // - Comment text from Comment entity (loaded separately via mesh query)
+    }
+
+    [Fact]
+    public void CommentWorkflow_CommentsPartition_ContainsOnlyTopLevelComments()
+    {
+        // CommentsView.Comments queries namespace:{docPath}/_Comment
+        // This should find only top-level comments (c1, c2, etc.)
+        // NOT replies (which are in namespace:{docPath}/_Comment/c1)
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var commentPartition = "_Comment";
+        var commentNs = $"{docPath}/{commentPartition}";
+
+        var c1 = new MeshNode("c1", commentNs)
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "c1", Author = "Alice" }
+        };
+        var c2 = new MeshNode("c2", commentNs)
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "c2", Author = "Bob" }
+        };
+        var reply1 = new MeshNode("reply1", $"{commentNs}/c1")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment { Id = "reply1", Author = "Carol" }
+        };
+
+        var allNodes = new List<MeshNode> { c1, c2, reply1 };
+
+        // CommentsView query: namespace:{docPath}/_Comment
+        var topLevelComments = allNodes.Where(n => n.Namespace == commentNs).ToList();
+        topLevelComments.Should().HaveCount(2);
+        topLevelComments.Select(n => n.Id).Should().BeEquivalentTo(["c1", "c2"]);
+
+        // reply1 should NOT appear in top-level query
+        topLevelComments.Should().NotContain(n => n.Id == "reply1");
+
+        // Reply1 appears in c1's namespace query
+        var c1Replies = allNodes.Where(n => n.Namespace == $"{commentNs}/c1").ToList();
+        c1Replies.Should().HaveCount(1);
+        c1Replies[0].Id.Should().Be("reply1");
+    }
+
+    [Fact]
+    public void CommentWorkflow_IsTopLevelComment_DetectsCorrectly()
+    {
+        // Tests the IsTopLevelComment logic from CommentLayoutAreas
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var commentPartition = "_Comment";
+
+        // Top-level comment at {docPath}/_Comment/c1
+        var topLevelPath = $"{docPath}/{commentPartition}/c1";
+        var topLevelComment = new Comment
+        {
+            Id = "c1",
+            PrimaryNodePath = docPath,
+            Author = "Alice"
+        };
+
+        // Top-level comments should return true (Resolve button shows)
+        CommentLayoutAreas.IsTopLevelComment(topLevelPath, topLevelComment).Should().BeTrue(
+            "Top-level comment at {docPath}/_Comment/c1 should be detected as top-level");
+
+        // Reply at {docPath}/_Comment/c1/reply1
+        var replyPath = $"{docPath}/{commentPartition}/c1/reply1";
+        var replyComment = new Comment
+        {
+            Id = "reply1",
+            PrimaryNodePath = docPath,
+            Author = "Bob"
+        };
+
+        // Replies should return false (no Resolve button)
+        CommentLayoutAreas.IsTopLevelComment(replyPath, replyComment).Should().BeFalse(
+            "Reply at {docPath}/_Comment/c1/reply1 should NOT be detected as top-level");
+
+        // Comment with empty PrimaryNodePath should return true
+        var noPrimary = new Comment { PrimaryNodePath = "" };
+        CommentLayoutAreas.IsTopLevelComment("any/path", noPrimary).Should().BeTrue(
+            "Comment with empty PrimaryNodePath should default to top-level");
+
+        // Deeper nested reply should also return false
+        var deepReplyPath = $"{docPath}/{commentPartition}/c1/reply1/sub1";
+        CommentLayoutAreas.IsTopLevelComment(deepReplyPath, replyComment).Should().BeFalse(
+            "Deeply nested reply should NOT be detected as top-level");
+    }
+
+    #endregion
+
+    #region Collaborative Editing Sample Data
+
+    [Fact]
+    public void CollaborativeEditingSample_ReplyStructure_MatchesExpected()
+    {
+        // Verify the expected structure for the CollaborativeEditing sample data:
+        // Doc/DataMesh/CollaborativeEditing/_Comment/c1       → top-level comment by Alice
+        // Doc/DataMesh/CollaborativeEditing/_Comment/c1/reply1 → reply to c1
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var commentPartition = "_Comment";
+
+        var c1Path = $"{docPath}/{commentPartition}/c1";
+        var reply1Path = $"{c1Path}/reply1";
+
+        // c1 node
+        var c1 = new MeshNode("c1", $"{docPath}/{commentPartition}")
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
+            {
+                Id = "c1",
+                PrimaryNodePath = docPath,
+                MarkerId = "c1",
+                HighlightedText = "powerful platform",
+                Author = "Alice",
+                Text = "Can we add specific metrics here?"
+            }
+        };
+
+        // reply1 node (child of c1)
+        var reply1 = new MeshNode("reply1", c1Path)
+        {
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
+            {
+                Id = "reply1",
+                PrimaryNodePath = docPath,
+                Author = "Roland",
+                Text = "We should add benchmarks from the latest performance tests."
+            }
+        };
+
+        c1.Path.Should().Be(c1Path);
+        c1.Namespace.Should().Be($"{docPath}/{commentPartition}");
+        reply1.Path.Should().Be(reply1Path);
+        reply1.Namespace.Should().Be(c1Path);
+        reply1.Path.Should().StartWith(c1.Path!);
+
+        // PrimaryNodePath should be the same for both (the document)
+        ((Comment)c1.Content!).PrimaryNodePath.Should().Be(docPath);
+        ((Comment)reply1.Content!).PrimaryNodePath.Should().Be(docPath);
+    }
+
+    [Fact]
+    public void CollaborativeEditingSample_AllSixComments_HaveMarkers()
+    {
+        // The sample CollaborativeEditing.md has 6 inline comment markers (c1-c6)
+        var markdown = @"> MeshWeaver is a <!--comment:c1-->powerful platform<!--/comment:c1--> for building <!--comment:c2-->collaborative applications<!--/comment:c2-->. It provides real-time synchronization and <!--comment:c3-->conflict-free editing<!--/comment:c3-->.
+
+> Our team has completed the analysis of the <!--comment:c4-->market trends<!--/comment:c4-->.
+
+> The <!--comment:c5-->proposed timeline<!--/comment:c5--> for Phase 1.
+
+> - <!--comment:c6-->Additional resources<!--/comment:c6--> from the engineering team";
+
+        var annotations = AnnotationParser.ExtractAnnotations(markdown);
+        var comments = annotations.Where(a => a.Type == MarkdownAnnotationType.Comment).ToList();
+
+        comments.Should().HaveCount(6);
+        comments.Select(c => c.Id).Should().BeEquivalentTo(["c1", "c2", "c3", "c4", "c5", "c6"]);
+    }
+
+    #endregion
 }

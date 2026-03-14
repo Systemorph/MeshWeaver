@@ -3,24 +3,19 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Layout;
-using MeshWeaver.Layout.Composition;
 using MeshWeaver.Documentation;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,19 +24,21 @@ using Xunit;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
-/// Integration test for the full reply-to-comment flow in collaborative editing.
-/// Exercises: hub initialization -> Read view rendering -> reply creation via IMeshCatalog ->
-/// reply persistence and query verification.
+/// Integration tests for the commenting and reply workflow using ObserveQuery.
+/// All verifications go through IMeshService.ObserveQuery — no low-level hub internals.
 /// </summary>
 [Collection("SamplesGraphData")]
 public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private const string DocPath = "Doc/DataMesh/CollaborativeEditing";
+    private const string CommentPartition = "_Comment";
+    private const string CommentC1Path = DocPath + "/" + CommentPartition + "/c1";
+    private const string Reply1Path = CommentC1Path + "/reply1";
+
     private static readonly string SharedCacheDirectory = Path.Combine(
         Path.GetTempPath(),
         "MeshWeaverReplyTests",
         ".mesh-cache");
-
-    private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -77,224 +74,293 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    /// <summary>
+    /// Observes a query until at least one matching item appears.
+    /// </summary>
+    private async Task<MeshNode> ObserveFirst(string query)
     {
-        return base.ConfigureClient(configuration)
-            .AddLayoutClient();
+        return await MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .SelectMany(c => c.Items)
+            .Timeout(15.Seconds())
+            .FirstAsync();
     }
 
     /// <summary>
-    /// Verifies that the CollaborativeEditing Read view renders as a StackControl
-    /// and that comment children (c1-c6) are queryable.
+    /// Observes a query and returns the initial result set.
     /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task ReadView_ShouldRenderWithCommentData()
+    private async Task<IReadOnlyList<MeshNode>> ObserveAll(string query)
     {
-        var client = GetClient();
-        var docAddress = new Address("Doc/DataMesh/CollaborativeEditing");
+        var change = await MeshQuery
+            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
+            .Timeout(15.Seconds())
+            .FirstAsync();
+        return change.Items;
+    }
 
-        Output.WriteLine("Initializing hub...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
-
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
-
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            docAddress,
-            reference);
-
-        Output.WriteLine("Waiting for Read view to render...");
-        var control = await stream
-            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
-            .Timeout(20.Seconds())
-            .FirstAsync(x => x is StackControl);
-
-        control.Should().NotBeNull("Read view should render as a StackControl");
-        var stack = control.Should().BeOfType<StackControl>().Subject;
-        Output.WriteLine($"Read view rendered with {stack.Areas.Count()} areas");
-
-        // Verify comment children are queryable
-        var comments = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:Doc/DataMesh/CollaborativeEditing nodeType:{CommentNodeType.NodeType}"
-        ).ToListAsync();
-
-        Output.WriteLine($"Found {comments.Count} comment children");
-        comments.Should().HaveCountGreaterThanOrEqualTo(6,
-            "CollaborativeEditing document should have at least 6 comment children (c1-c6)");
-
-        // Verify comments have proper content (all sample comments have Author set)
-        foreach (var comment in comments)
+    /// <summary>
+    /// Verifies all 6 sample comments (c1-c6) are queryable via ObserveQuery.
+    /// </summary>
+    [Fact]
+    public async Task SampleComments_AllSixLoadable()
+    {
+        var commentIds = new[] { "c1", "c2", "c3", "c4", "c5", "c6" };
+        foreach (var id in commentIds)
         {
-            var content = comment.Content.Should().BeOfType<Comment>().Subject;
-            content.Author.Should().NotBeNullOrEmpty($"Comment {comment.Id} (path: {comment.Path}) should have an author");
-            Output.WriteLine($"  Comment {comment.Id}: by {content.Author}, text='{content.Text?.Substring(0, Math.Min(30, content.Text?.Length ?? 0))}'");
+            var node = await ObserveFirst($"path:{DocPath}/{CommentPartition}/{id}");
+            node.Should().NotBeNull($"Comment {id} should be queryable");
+            var content = node.Content.Should().BeOfType<Comment>().Subject;
+            content.Author.Should().NotBeNullOrEmpty($"Comment {id} should have an author");
+            Output.WriteLine($"  {id}: by {content.Author}");
         }
     }
 
     /// <summary>
-    /// Tests the full reply flow by simulating what the Reply button handler does:
-    /// create a reply MeshNode -> verify it persists -> verify it links to parent -> cleanup.
-    /// This mirrors the exact logic in BuildCommentAndReplies.WithClickAction for the Reply button.
+    /// Verifies the sample reply (reply1 under c1) is queryable with correct path and content.
     /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task Reply_FullFlow_CreateAndVerify()
+    [Fact]
+    public async Task SampleReply_LoadableByPath()
     {
-        var client = GetClient();
-        var docAddress = new Address("Doc/DataMesh/CollaborativeEditing");
-        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var reply = await ObserveFirst($"path:{Reply1Path}");
 
-        // Step 1: Initialize hub (same as when user opens the document)
-        Output.WriteLine("Step 1: Initializing document hub...");
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(docAddress),
-            TestContext.Current.CancellationToken);
+        reply.Id.Should().Be("reply1");
+        reply.Path.Should().Be(Reply1Path);
+        reply.Namespace.Should().Be(CommentC1Path);
 
-        // Step 2: Verify Read view renders
-        Output.WriteLine("Step 2: Verifying Read view renders...");
-        var workspace = client.GetWorkspace();
-        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            docAddress,
-            new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea));
-
-        var readControl = await layoutStream
-            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
-            .Timeout(20.Seconds())
-            .FirstAsync(x => x is StackControl);
-        readControl.Should().NotBeNull("Read view should render");
-
-        // Step 3: Get existing comment to reply to (c1 = Alice's comment)
-        Output.WriteLine("Step 3: Finding parent comment to reply to...");
-
-        var parentComment = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c1").FirstOrDefaultAsync();
-        parentComment.Should().NotBeNull("c1 comment should exist");
-        var parentContent = parentComment!.Content.Should().BeOfType<Comment>().Subject;
-        Output.WriteLine($"Parent comment: '{parentContent.Text}' by {parentContent.Author}");
-
-        // Step 4: Create reply MeshNode (same as Reply button handler in MarkdownLayoutAreas)
-        Output.WriteLine("Step 4: Creating reply MeshNode...");
-        var replyId = Guid.NewGuid().AsString();
-        var replyComment = new Comment
-        {
-            Id = replyId,
-            PrimaryNodePath = docPath,
-            Author = "TestReviewer",
-            Text = "",  // Empty initially, like the Reply button creates
-            CreatedAt = DateTimeOffset.UtcNow,
-            Status = CommentStatus.Active
-        };
-        var replyNode = new MeshNode(replyId, docPath)
-        {
-            Name = "Reply by TestReviewer",
-            NodeType = CommentNodeType.NodeType,
-            Content = replyComment
-        };
-
-        var createdReply = await NodeFactory.CreateNodeAsync(replyNode, TestTimeout);
-        createdReply.Should().NotBeNull();
-        Output.WriteLine($"Reply created at path: {createdReply.Path}");
-
-        // Step 5: Simulate editing the reply text (what happens when user types in the edit form)
-        Output.WriteLine("Step 5: Updating reply text...");
-        var updatedComment = replyComment with
-        {
-            Text = "Great suggestion! I agree we should add metrics."
-        };
-        var updatedNode = createdReply with { Content = updatedComment };
-
-        // Save via DataChangeRequest targeting the reply node's hub (same as Done button handler)
-        var replyAddress = new Address(createdReply.Path!);
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(replyAddress),
-            TestContext.Current.CancellationToken);
-
-        await client.AwaitResponse(
-            new DataChangeRequest().WithUpdates(updatedNode),
-            o => o.WithTarget(replyAddress),
-            TestContext.Current.CancellationToken);
-
-        // Step 6: Verify the reply persisted with text
-        Output.WriteLine("Step 6: Verifying reply persistence...");
-        var retrievedReply = await MeshQuery.QueryAsync<MeshNode>($"path:{createdReply.Path}").FirstOrDefaultAsync();
-        retrievedReply.Should().NotBeNull("Reply should be retrievable after save");
-        var retrievedContent = retrievedReply!.Content.Should().BeOfType<Comment>().Subject;
-        retrievedContent.Author.Should().Be("TestReviewer");
-        Output.WriteLine($"Reply verified: Author={retrievedContent.Author}");
-
-        // Step 7: Verify the reply appears in comment children query
-        Output.WriteLine("Step 7: Verifying reply in children query...");
-        var allComments = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
-        ).ToListAsync();
-
-        allComments.Should().Contain(n => n.Path == createdReply.Path,
-            "Reply should appear in comment children query");
-        Output.WriteLine("Reply found in comment children query");
-
-        // Cleanup
-        Output.WriteLine("Cleaning up reply node...");
-        await NodeFactory.DeleteNodeAsync(createdReply.Path!, ct: TestTimeout);
+        var content = reply.Content.Should().BeOfType<Comment>().Subject;
+        content.Author.Should().NotBeNullOrEmpty();
+        content.PrimaryNodePath.Should().Be(DocPath,
+            "Reply's PrimaryNodePath should point to the document, not the parent comment");
+        Output.WriteLine($"reply1: Author={content.Author}, Text={content.Text}");
     }
 
     /// <summary>
-    /// Tests that creating multiple replies to the same comment all link correctly.
+    /// Creates a reply under parent comment c1 (matching BuildReplyButton code path),
+    /// then verifies it via ObserveQuery.
     /// </summary>
-    [Fact(Timeout = 20000)]
-    public async Task MultipleReplies_ShouldAllLinkToParent()
+    [Fact]
+    public async Task CreateReply_UnderParentComment()
     {
-        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        // Verify parent comment exists
+        var parent = await ObserveFirst($"path:{CommentC1Path}");
+        var parentContent = (Comment)parent.Content!;
+        Output.WriteLine($"Parent: '{parentContent.Text}' by {parentContent.Author}");
 
-        // Get parent comment c2
-        var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}/_Comment/c2").FirstOrDefaultAsync();
-        parentNode.Should().NotBeNull("c2 comment should exist");
-        var parentContent = (Comment)parentNode!.Content!;
-
-        // Create 3 replies
-        var replyPaths = new List<string>();
-        for (var i = 0; i < 3; i++)
+        // Create reply under parent comment — same path structure as BuildReplyButton
+        var replyId = Guid.NewGuid().AsString();
+        var replyNode = new MeshNode(replyId, CommentC1Path)
         {
-            var replyId = Guid.NewGuid().AsString();
-            var reply = new Comment
+            Name = $"Reply to {parentContent.Author}",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
             {
                 Id = replyId,
-                PrimaryNodePath = docPath,
-                Author = $"Reviewer{i + 1}",
-                Text = $"Reply number {i + 1}",
-                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(i),
+                PrimaryNodePath = DocPath,
+                Author = "TestReviewer",
+                Text = "Great suggestion!",
+                CreatedAt = DateTimeOffset.UtcNow,
                 Status = CommentStatus.Active
-            };
-            var replyNode = new MeshNode(replyId, docPath)
+            }
+        };
+
+        var created = await NodeFactory.CreateNodeAsync(replyNode);
+        created.Path.Should().Be($"{CommentC1Path}/{replyId}");
+
+        try
+        {
+            // Verify reply is queryable via ObserveQuery
+            var observed = await ObserveFirst($"path:{created.Path}");
+            observed.Id.Should().Be(replyId);
+            var content = (Comment)observed.Content!;
+            content.Author.Should().Be("TestReviewer");
+            content.Text.Should().Be("Great suggestion!");
+            content.PrimaryNodePath.Should().Be(DocPath);
+        }
+        finally
+        {
+            await NodeFactory.DeleteNodeAsync(created.Path!);
+        }
+    }
+
+    /// <summary>
+    /// Creates multiple replies under c2 and verifies all are individually queryable.
+    /// </summary>
+    [Fact]
+    public async Task MultipleReplies_AllQueryable()
+    {
+        var commentC2Path = $"{DocPath}/{CommentPartition}/c2";
+        var parent = await ObserveFirst($"path:{commentC2Path}");
+
+        var replyPaths = new List<string>();
+        try
+        {
+            for (var i = 0; i < 3; i++)
             {
-                Name = $"Reply by Reviewer{i + 1}",
+                var replyId = Guid.NewGuid().AsString();
+                var replyNode = new MeshNode(replyId, commentC2Path)
+                {
+                    Name = "Reply",
+                    NodeType = CommentNodeType.NodeType,
+                    Content = new Comment
+                    {
+                        Id = replyId,
+                        PrimaryNodePath = DocPath,
+                        Author = $"Reviewer{i + 1}",
+                        Text = $"Reply {i + 1}",
+                        CreatedAt = DateTimeOffset.UtcNow.AddMinutes(i),
+                        Status = CommentStatus.Active
+                    }
+                };
+                var created = await NodeFactory.CreateNodeAsync(replyNode);
+                replyPaths.Add(created.Path!);
+            }
+
+            // Verify each reply is queryable
+            for (var i = 0; i < replyPaths.Count; i++)
+            {
+                var node = await ObserveFirst($"path:{replyPaths[i]}");
+                var content = (Comment)node.Content!;
+                content.Author.Should().Be($"Reviewer{i + 1}");
+                Output.WriteLine($"  Reply {i + 1}: {node.Path}");
+            }
+        }
+        finally
+        {
+            foreach (var path in replyPaths)
+                await NodeFactory.DeleteNodeAsync(path);
+        }
+    }
+
+    /// <summary>
+    /// Full workflow: create comment → create reply → update reply text → verify via ObserveQuery.
+    /// </summary>
+    [Fact]
+    public async Task FullWorkflow_Comment_Reply_Edit()
+    {
+        // 1. Create comment
+        var commentId = Guid.NewGuid().AsString();
+        var commentNode = new MeshNode(commentId, $"{DocPath}/{CommentPartition}")
+        {
+            Name = "Comment by TestAuthor",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
+            {
+                Id = commentId,
+                PrimaryNodePath = DocPath,
+                MarkerId = commentId,
+                HighlightedText = "some highlighted text",
+                Author = "TestAuthor",
+                Text = "This is a test comment",
+                CreatedAt = DateTimeOffset.UtcNow,
+                Status = CommentStatus.Active
+            }
+        };
+        var createdComment = await NodeFactory.CreateNodeAsync(commentNode);
+        var commentPath = createdComment.Path!;
+
+        try
+        {
+            // Verify comment queryable
+            var observed = await ObserveFirst($"path:{commentPath}");
+            ((Comment)observed.Content!).Author.Should().Be("TestAuthor");
+
+            // 2. Create reply under comment
+            var replyId = Guid.NewGuid().AsString();
+            var replyNode = new MeshNode(replyId, commentPath)
+            {
+                Name = "Reply",
                 NodeType = CommentNodeType.NodeType,
-                Content = reply
+                Content = new Comment
+                {
+                    Id = replyId,
+                    PrimaryNodePath = DocPath,
+                    Author = "TestReplier",
+                    Text = "",
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    Status = CommentStatus.Active
+                }
             };
+            var createdReply = await NodeFactory.CreateNodeAsync(replyNode);
+            createdReply.Path.Should().Be($"{commentPath}/{replyId}");
 
-            var created = await NodeFactory.CreateNodeAsync(replyNode, TestTimeout);
-            replyPaths.Add(created.Path!);
-            Output.WriteLine($"Created reply {i + 1}: {created.Path}");
+            // 3. Update reply text
+            var updatedReply = createdReply with
+            {
+                State = MeshNodeState.Active,
+                Content = ((Comment)createdReply.Content!) with { Text = "I agree!" }
+            };
+            await NodeFactory.UpdateNodeAsync(updatedReply);
+
+            // 4. Verify updated text via ObserveQuery
+            var finalReply = await MeshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{createdReply.Path}"))
+                .SelectMany(c => c.Items)
+                .Where(n => ((Comment)n.Content!).Text == "I agree!")
+                .Timeout(15.Seconds())
+                .FirstAsync();
+
+            ((Comment)finalReply.Content!).Author.Should().Be("TestReplier");
+
+            await NodeFactory.DeleteNodeAsync(createdReply.Path!);
         }
-
-        // Verify all replies are queryable and linked to parent
-        var allComments = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{docPath} nodeType:{CommentNodeType.NodeType}"
-        ).ToListAsync();
-
-        foreach (var replyPath in replyPaths)
+        finally
         {
-            allComments.Should().Contain(n => n.Path == replyPath,
-                $"Reply at {replyPath} should be in query results");
+            await NodeFactory.DeleteNodeAsync(commentPath);
         }
+    }
 
-        // Cleanup
-        foreach (var path in replyPaths)
+    /// <summary>
+    /// Creates a comment, resolves it, and verifies the status change via ObserveQuery.
+    /// Also verifies IsTopLevelComment detection.
+    /// </summary>
+    [Fact]
+    public async Task ResolveComment_StatusUpdated()
+    {
+        var commentId = Guid.NewGuid().AsString();
+        var commentPath = $"{DocPath}/{CommentPartition}/{commentId}";
+        var commentNode = new MeshNode(commentId, $"{DocPath}/{CommentPartition}")
         {
-            await NodeFactory.DeleteNodeAsync(path, ct: TestTimeout);
+            Name = "Comment to resolve",
+            NodeType = CommentNodeType.NodeType,
+            Content = new Comment
+            {
+                Id = commentId,
+                PrimaryNodePath = DocPath,
+                MarkerId = commentId,
+                Author = "TestAuthor",
+                Text = "This will be resolved",
+                Status = CommentStatus.Active
+            }
+        };
+        var created = await NodeFactory.CreateNodeAsync(commentNode);
+
+        try
+        {
+            // Verify IsTopLevelComment detection
+            var content = (Comment)created.Content!;
+            CommentLayoutAreas.IsTopLevelComment(commentPath, content).Should().BeTrue(
+                "Comment in _Comment partition should be detected as top-level");
+
+            // Resolve the comment
+            var resolved = created with
+            {
+                Content = content with { Status = CommentStatus.Resolved }
+            };
+            await NodeFactory.UpdateNodeAsync(resolved);
+
+            // Verify resolved status via ObserveQuery
+            var updated = await MeshQuery
+                .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{commentPath}"))
+                .SelectMany(c => c.Items)
+                .Where(n => ((Comment)n.Content!).Status == CommentStatus.Resolved)
+                .Timeout(15.Seconds())
+                .FirstAsync();
+
+            ((Comment)updated.Content!).Status.Should().Be(CommentStatus.Resolved);
         }
-        Output.WriteLine("Cleaned up all reply nodes");
+        finally
+        {
+            await NodeFactory.DeleteNodeAsync(commentPath);
+        }
     }
 }

@@ -522,15 +522,18 @@ public static class CommentLayoutAreas
     }
 
     /// <summary>
-    /// Returns true if this comment is a top-level comment (direct child of the document node),
+    /// Returns true if this comment is a top-level comment (direct child of the _Comment partition),
     /// false if it is a reply (child of another comment).
+    /// Top-level comments live at {PrimaryNodePath}/_Comment/{id} (parent = {PrimaryNodePath}/_Comment).
+    /// Replies live at {PrimaryNodePath}/_Comment/{commentId}/{replyId} (parent = deeper path).
     /// </summary>
-    private static bool IsTopLevelComment(string hubPath, Comment comment)
+    public static bool IsTopLevelComment(string hubPath, Comment comment)
     {
         if (string.IsNullOrEmpty(comment.PrimaryNodePath))
             return true;
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
-        return string.Equals(parentPath, comment.PrimaryNodePath, StringComparison.OrdinalIgnoreCase);
+        var expectedTopLevel = $"{comment.PrimaryNodePath}/{CommentsExtensions.CommentPartition}";
+        return string.Equals(parentPath, expectedTopLevel, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
