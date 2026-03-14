@@ -39,6 +39,25 @@ public record ParsedQuery(
     public bool HasConditions => Filter != null || !string.IsNullOrEmpty(TextSearch);
 
     /// <summary>
+    /// Extracts the nodeType value from the filter if there's a simple equality condition.
+    /// Returns null if the filter doesn't contain a nodeType condition or it's complex.
+    /// </summary>
+    public string? ExtractNodeType()
+    {
+        if (Filter == null) return null;
+        return ExtractNodeTypeFromNode(Filter);
+    }
+
+    private static string? ExtractNodeTypeFromNode(QueryNode node) => node switch
+    {
+        QueryComparison c when c.Condition.Selector.Equals("nodeType", StringComparison.OrdinalIgnoreCase)
+            && c.Condition.Operator == QueryOperator.Equals
+            && c.Condition.Values.Length == 1 => c.Condition.Values[0],
+        QueryAnd and => and.Children.Select(ExtractNodeTypeFromNode).FirstOrDefault(v => v != null),
+        _ => null
+    };
+
+    /// <summary>
     /// Projects an item down to only the requested properties.
     /// Returns a dictionary with the selected property names and their values.
     /// </summary>

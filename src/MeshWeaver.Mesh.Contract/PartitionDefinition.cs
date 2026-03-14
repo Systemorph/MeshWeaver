@@ -95,6 +95,36 @@ public record PartitionDefinition
     }
 
     /// <summary>
+    /// Standard mapping from nodeType to satellite path suffix.
+    /// Used to resolve the table when the query has nodeType but no path.
+    /// </summary>
+    private static readonly Dictionary<string, string> NodeTypeToSuffix = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Thread"] = "_Thread",
+        ["ThreadMessage"] = "_ThreadMessage",
+        ["Activity"] = "_Activity",
+        ["UserActivity"] = "_UserActivity",
+        ["AccessAssignment"] = "_Access",
+        ["Comment"] = "_Comment",
+        ["TrackedChange"] = "_Tracking",
+        ["Approval"] = "_Approval",
+    };
+
+    /// <summary>
+    /// Resolves the table name for a given node type.
+    /// Used when the query has a nodeType filter but no path to infer the satellite table from.
+    /// Returns the mapped table if a mapping exists, otherwise the primary table.
+    /// </summary>
+    public string ResolveTableByNodeType(string? nodeType)
+    {
+        if (nodeType != null && TableMappings != null &&
+            NodeTypeToSuffix.TryGetValue(nodeType, out var suffix) &&
+            TableMappings.TryGetValue(suffix, out var table))
+            return table;
+        return Table;
+    }
+
+    /// <summary>
     /// Checks if a path contains the given segment as a complete path component.
     /// The segment must appear after a '/' and be followed by '/' or end of string.
     /// </summary>

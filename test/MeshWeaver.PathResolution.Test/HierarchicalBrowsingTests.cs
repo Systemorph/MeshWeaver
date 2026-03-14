@@ -1,13 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
-using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Xunit;

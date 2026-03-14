@@ -579,7 +579,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
-            .WithHiddenQuery($"source:activity nodeType:Thread namespace:{hubPath}")
+            .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread")
             .WithNamespace(hubPath)
             .WithRenderMode(MeshSearchRenderMode.Flat);
     }

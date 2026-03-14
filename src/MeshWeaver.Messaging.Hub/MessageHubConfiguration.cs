@@ -290,6 +290,7 @@ public record MessageHubConfiguration
         TypeRegistry.WithType(type, name ?? type.FullName!);
         return this;
     }
+
 }
 
 public record AsyncPipelineConfig
