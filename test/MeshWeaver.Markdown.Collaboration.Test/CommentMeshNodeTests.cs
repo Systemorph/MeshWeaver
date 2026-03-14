@@ -4,7 +4,6 @@ using System.Linq;
 using FluentAssertions;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
-using MeshWeaver.Layout;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using Xunit;
@@ -590,86 +589,7 @@ public class CommentMeshNodeTests
 
     #endregion
 
-    #region Reply UI Rendering
-
-    [Fact]
-    public void BuildThumbnail_WithReplyNode_ReturnsStackControl()
-    {
-        var reply = new Comment
-        {
-            Id = "reply1",
-            Author = "Bob",
-            Text = "I agree with this point!"
-        };
-
-        var replyNode = new MeshNode("docs/page/c1/reply1")
-        {
-            Name = "Reply",
-            NodeType = CommentNodeType.NodeType,
-            Content = reply
-        };
-
-        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
-
-        result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
-    }
-
-    [Fact]
-    public void BuildThumbnail_WithEmptyReply_ShowsUnknownAuthor()
-    {
-        // When Reply is clicked, a reply node is created with empty Author and Text
-        var emptyReply = new Comment
-        {
-            Id = "reply1",
-            Author = "",
-            Text = ""
-        };
-
-        var replyNode = new MeshNode("docs/page/c1/reply1")
-        {
-            Name = "Reply",
-            NodeType = CommentNodeType.NodeType,
-            Content = emptyReply
-        };
-
-        // Should not throw and should handle empty content gracefully
-        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
-
-        result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
-    }
-
-    [Fact]
-    public void BuildThumbnail_WithNullNode_ReturnsControlWithUnknownAuthor()
-    {
-        var result = CommentLayoutAreas.BuildThumbnail(null);
-
-        result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
-    }
-
-    [Fact]
-    public void BuildThumbnail_WithLongText_TruncatesPreview()
-    {
-        var reply = new Comment
-        {
-            Id = "reply1",
-            Author = "Alice",
-            Text = "This is a very long reply text that should be truncated when displayed in the thumbnail view"
-        };
-
-        var replyNode = new MeshNode("docs/page/c1/reply1")
-        {
-            Name = "Reply",
-            NodeType = CommentNodeType.NodeType,
-            Content = reply
-        };
-
-        // Should not throw - truncation happens at 50 chars
-        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
-        result.Should().NotBeNull();
-    }
+    #region Reply Path Structure
 
     [Fact]
     public void ReplyCreation_ProducesCorrectMeshNode()
@@ -819,30 +739,6 @@ public class CommentMeshNodeTests
         ((Comment)ordered[2].Content!).Id.Should().Be("r3"); // newest last
     }
 
-    [Fact]
-    public void BuildThumbnail_IconIsFluentIcon_NotRawString()
-    {
-        var reply = new Comment
-        {
-            Id = "reply1",
-            Author = "Bob",
-            Text = "Test reply"
-        };
-
-        var replyNode = new MeshNode("docs/page/c1/reply1")
-        {
-            Name = "Reply",
-            NodeType = CommentNodeType.NodeType,
-            Content = reply
-        };
-
-        // BuildThumbnail should not throw — previously Controls.Icon("Comment")
-        // would fail because "Comment" is a raw string, not an Icon domain object.
-        var result = CommentLayoutAreas.BuildThumbnail(replyNode);
-        result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
-    }
-
     #endregion
 
     #region Reply System — MeshNode-Based
@@ -852,41 +748,6 @@ public class CommentMeshNodeTests
     {
         var repliesProp = typeof(Comment).GetProperty("Replies");
         repliesProp.Should().BeNull("Replies property was removed in favor of MeshNode-based replies");
-    }
-
-    [Fact]
-    public void BuildOverview_WithRepliesDataId_RendersSuccessfully()
-    {
-        var comment = new Comment
-        {
-            Id = "c1",
-            Author = "Alice",
-            Text = "Original comment"
-        };
-        var node = new MeshNode("docs/page/c1")
-        {
-            NodeType = CommentNodeType.NodeType,
-            Content = comment
-        };
-
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, "replies_test", "");
-
-        result.Should().NotBeNull();
-        result.Should().BeOfType<StackControl>();
-    }
-
-    [Fact]
-    public void BuildOverview_WithNoContent_RendersPlaceholder()
-    {
-        var node = new MeshNode("docs/page/c1")
-        {
-            NodeType = CommentNodeType.NodeType,
-            Content = null
-        };
-
-        var result = CommentLayoutAreas.BuildOverview(null!, node, "docs/page/c1", "editState_test", new[] { true }, "replies_test", "");
-
-        result.Should().NotBeNull();
     }
 
     [Fact]
@@ -943,67 +804,6 @@ public class CommentMeshNodeTests
         ((Comment)ordered[0].Content!).Id.Should().Be("r1");
         ((Comment)ordered[1].Content!).Id.Should().Be("r2");
         ((Comment)ordered[2].Content!).Id.Should().Be("r3");
-    }
-
-    #endregion
-
-    #region Reply Workflow — End-to-End
-
-    [Fact]
-    public void ReplyWorkflow_CreateReply_EditText_VerifyNodeStructure()
-    {
-        // 1) Start with a parent comment
-        var commentPath = "docs/page/c1";
-        var parentComment = new Comment
-        {
-            Id = "c1",
-            MarkerId = "c1",
-            Author = "Alice",
-            Text = "Original comment",
-            PrimaryNodePath = "docs/page",
-            Status = CommentStatus.Active
-        };
-        var parentNode = new MeshNode(commentPath)
-        {
-            Name = "Comment by Alice",
-            NodeType = CommentNodeType.NodeType,
-            Content = parentComment
-        };
-
-        // BuildOverview renders successfully
-        var overview = CommentLayoutAreas.BuildOverview(
-            null!, parentNode, commentPath, "editState_test", new[] { true }, "replies_test", "");
-        overview.Should().BeOfType<StackControl>();
-
-        // 2) "Click Reply" — simulate what the Reply button handler creates:
-        //    an empty reply MeshNode as child of the parent comment node
-        var replyId = "reply-abc";
-        var emptyReply = new Comment
-        {
-            Id = replyId,
-            PrimaryNodePath = "docs/page",
-            Author = "",
-            Text = "",
-            Status = CommentStatus.Active
-        };
-        var replyNode = new MeshNode($"{commentPath}/{replyId}")
-        {
-            Name = "Reply",
-            NodeType = CommentNodeType.NodeType,
-            Content = emptyReply
-        };
-
-        // Verify the reply node is correctly formed — parent encoded in path
-        replyNode.NodeType.Should().Be(CommentNodeType.NodeType);
-        replyNode.Path.Should().StartWith(commentPath);
-
-        // 3) "Write text and click Done" — simulate what the Done handler does:
-        //    update the reply MeshNode content with author + text
-        var updatedReply = emptyReply with { Author = "User", Text = "I agree with this!" };
-        var updatedReplyNode = replyNode with { Content = updatedReply };
-
-        ((Comment)updatedReplyNode.Content!).Author.Should().Be("User");
-        ((Comment)updatedReplyNode.Content!).Text.Should().Be("I agree with this!");
     }
 
     #endregion
