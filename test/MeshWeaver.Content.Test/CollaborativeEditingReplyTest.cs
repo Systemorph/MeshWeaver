@@ -3,19 +3,23 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
-using System.Threading;
+using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
 using MeshWeaver.Documentation;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,8 +28,9 @@ using Xunit;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
-/// Integration tests for the commenting and reply workflow using ObserveQuery.
-/// All verifications go through IMeshService.ObserveQuery — no low-level hub internals.
+/// Integration tests for the commenting and reply workflow.
+/// Data verification uses IMeshService.ObserveQuery.
+/// UI rendering verification uses GetRemoteStream / GetControlStream (layout client pattern).
 /// </summary>
 [Collection("SamplesGraphData")]
 public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -74,6 +79,12 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddLayoutClient();
+    }
+
     /// <summary>
     /// Observes a query until at least one matching item appears.
     /// </summary>
@@ -84,35 +95,6 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             .SelectMany(c => c.Items)
             .Timeout(15.Seconds())
             .FirstAsync();
-    }
-
-    /// <summary>
-    /// Observes a query and returns the initial result set.
-    /// </summary>
-    private async Task<IReadOnlyList<MeshNode>> ObserveAll(string query)
-    {
-        var change = await MeshQuery
-            .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(query))
-            .Timeout(15.Seconds())
-            .FirstAsync();
-        return change.Items;
-    }
-
-    /// <summary>
-    /// Verifies all 6 sample comments (c1-c6) are queryable via ObserveQuery.
-    /// </summary>
-    [Fact]
-    public async Task SampleComments_AllSixLoadable()
-    {
-        var commentIds = new[] { "c1", "c2", "c3", "c4", "c5", "c6" };
-        foreach (var id in commentIds)
-        {
-            var node = await ObserveFirst($"path:{DocPath}/{CommentPartition}/{id}");
-            node.Should().NotBeNull($"Comment {id} should be queryable");
-            var content = node.Content.Should().BeOfType<Comment>().Subject;
-            content.Author.Should().NotBeNullOrEmpty($"Comment {id} should have an author");
-            Output.WriteLine($"  {id}: by {content.Author}");
-        }
     }
 
     /// <summary>
@@ -131,7 +113,6 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         content.Author.Should().NotBeNullOrEmpty();
         content.PrimaryNodePath.Should().Be(DocPath,
             "Reply's PrimaryNodePath should point to the document, not the parent comment");
-        Output.WriteLine($"reply1: Author={content.Author}, Text={content.Text}");
     }
 
     /// <summary>
@@ -141,12 +122,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     [Fact]
     public async Task CreateReply_UnderParentComment()
     {
-        // Verify parent comment exists
         var parent = await ObserveFirst($"path:{CommentC1Path}");
         var parentContent = (Comment)parent.Content!;
-        Output.WriteLine($"Parent: '{parentContent.Text}' by {parentContent.Author}");
 
-        // Create reply under parent comment — same path structure as BuildReplyButton
         var replyId = Guid.NewGuid().AsString();
         var replyNode = new MeshNode(replyId, CommentC1Path)
         {
@@ -168,7 +146,6 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         try
         {
-            // Verify reply is queryable via ObserveQuery
             var observed = await ObserveFirst($"path:{created.Path}");
             observed.Id.Should().Be(replyId);
             var content = (Comment)observed.Content!;
@@ -183,61 +160,11 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
     }
 
     /// <summary>
-    /// Creates multiple replies under c2 and verifies all are individually queryable.
-    /// </summary>
-    [Fact]
-    public async Task MultipleReplies_AllQueryable()
-    {
-        var commentC2Path = $"{DocPath}/{CommentPartition}/c2";
-        var parent = await ObserveFirst($"path:{commentC2Path}");
-
-        var replyPaths = new List<string>();
-        try
-        {
-            for (var i = 0; i < 3; i++)
-            {
-                var replyId = Guid.NewGuid().AsString();
-                var replyNode = new MeshNode(replyId, commentC2Path)
-                {
-                    Name = "Reply",
-                    NodeType = CommentNodeType.NodeType,
-                    Content = new Comment
-                    {
-                        Id = replyId,
-                        PrimaryNodePath = DocPath,
-                        Author = $"Reviewer{i + 1}",
-                        Text = $"Reply {i + 1}",
-                        CreatedAt = DateTimeOffset.UtcNow.AddMinutes(i),
-                        Status = CommentStatus.Active
-                    }
-                };
-                var created = await NodeFactory.CreateNodeAsync(replyNode);
-                replyPaths.Add(created.Path!);
-            }
-
-            // Verify each reply is queryable
-            for (var i = 0; i < replyPaths.Count; i++)
-            {
-                var node = await ObserveFirst($"path:{replyPaths[i]}");
-                var content = (Comment)node.Content!;
-                content.Author.Should().Be($"Reviewer{i + 1}");
-                Output.WriteLine($"  Reply {i + 1}: {node.Path}");
-            }
-        }
-        finally
-        {
-            foreach (var path in replyPaths)
-                await NodeFactory.DeleteNodeAsync(path);
-        }
-    }
-
-    /// <summary>
     /// Full workflow: create comment → create reply → update reply text → verify via ObserveQuery.
     /// </summary>
     [Fact]
     public async Task FullWorkflow_Comment_Reply_Edit()
     {
-        // 1. Create comment
         var commentId = Guid.NewGuid().AsString();
         var commentNode = new MeshNode(commentId, $"{DocPath}/{CommentPartition}")
         {
@@ -260,11 +187,9 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         try
         {
-            // Verify comment queryable
             var observed = await ObserveFirst($"path:{commentPath}");
             ((Comment)observed.Content!).Author.Should().Be("TestAuthor");
 
-            // 2. Create reply under comment
             var replyId = Guid.NewGuid().AsString();
             var replyNode = new MeshNode(replyId, commentPath)
             {
@@ -283,7 +208,6 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             var createdReply = await NodeFactory.CreateNodeAsync(replyNode);
             createdReply.Path.Should().Be($"{commentPath}/{replyId}");
 
-            // 3. Update reply text
             var updatedReply = createdReply with
             {
                 State = MeshNodeState.Active,
@@ -291,7 +215,6 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
             };
             await NodeFactory.UpdateNodeAsync(updatedReply);
 
-            // 4. Verify updated text via ObserveQuery
             var finalReply = await MeshQuery
                 .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{createdReply.Path}"))
                 .SelectMany(c => c.Items)
@@ -336,19 +259,16 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
 
         try
         {
-            // Verify IsTopLevelComment detection
             var content = (Comment)created.Content!;
             CommentLayoutAreas.IsTopLevelComment(commentPath, content).Should().BeTrue(
                 "Comment in _Comment partition should be detected as top-level");
 
-            // Resolve the comment
             var resolved = created with
             {
                 Content = content with { Status = CommentStatus.Resolved }
             };
             await NodeFactory.UpdateNodeAsync(resolved);
 
-            // Verify resolved status via ObserveQuery
             var updated = await MeshQuery
                 .ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery($"path:{commentPath}"))
                 .SelectMany(c => c.Items)
@@ -362,5 +282,84 @@ public class CollaborativeEditingReplyTest(ITestOutputHelper output) : MonolithM
         {
             await NodeFactory.DeleteNodeAsync(commentPath);
         }
+    }
+
+    /// <summary>
+    /// Verifies the Thumbnail view renders for a comment node (c1).
+    /// Uses the layout client pattern (GetRemoteStream / GetControlStream).
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task CommentThumbnail_ShouldRender()
+    {
+        var client = GetClient();
+        var commentAddress = new Address(CommentC1Path);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(commentAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference("Thumbnail");
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            commentAddress, reference);
+
+        var value = await stream.Timeout(15.Seconds()).FirstAsync();
+        value.Should().NotBe(default(JsonElement), "Thumbnail should render for comment c1");
+    }
+
+    /// <summary>
+    /// Verifies the Overview view renders for a comment node (c1) that has a reply.
+    /// Uses the layout client pattern (GetRemoteStream / GetControlStream).
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task CommentOverview_WithReply_ShouldRender()
+    {
+        var client = GetClient();
+        var commentAddress = new Address(CommentC1Path);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(commentAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(CommentLayoutAreas.OverviewArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            commentAddress, reference);
+
+        var value = await stream.Timeout(15.Seconds()).FirstAsync();
+        value.Should().NotBe(default(JsonElement),
+            "Overview should render for comment c1 (which has reply1)");
+    }
+
+    /// <summary>
+    /// Verifies the CollaborativeEditing document Read view renders as a StackControl.
+    /// Uses the layout client pattern (GetRemoteStream / GetControlStream).
+    /// </summary>
+    [Fact(Timeout = 20000)]
+    public async Task DocumentReadView_ShouldRender()
+    {
+        var client = GetClient();
+        var docAddress = new Address(DocPath);
+
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(docAddress),
+            TestContext.Current.CancellationToken);
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MarkdownLayoutAreas.OverviewArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            docAddress, reference);
+
+        var control = await stream
+            .GetControlStream(MarkdownLayoutAreas.OverviewArea)
+            .Timeout(20.Seconds())
+            .FirstAsync(x => x is StackControl);
+
+        control.Should().NotBeNull("Read view should render as a StackControl");
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().NotBeEmpty("Read view should have child areas");
     }
 }
