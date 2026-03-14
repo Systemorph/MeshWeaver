@@ -51,7 +51,7 @@ public record ParsedQuery(
     private static string? ExtractNodeTypeFromNode(QueryNode node) => node switch
     {
         QueryComparison c when c.Condition.Selector.Equals("nodeType", StringComparison.OrdinalIgnoreCase)
-            && c.Condition.Operator == QueryOperator.Equals
+            && c.Condition.Operator == QueryOperator.Equal
             && c.Condition.Values.Length == 1 => c.Condition.Values[0],
         QueryAnd and => and.Children.Select(ExtractNodeTypeFromNode).FirstOrDefault(v => v != null),
         _ => null
