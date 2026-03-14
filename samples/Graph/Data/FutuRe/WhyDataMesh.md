@@ -1,5 +1,5 @@
 ---
-NodeType: "FutuRe/Report"
+NodeType: Markdown
 Title: "Why Data Mesh?"
 Icon: /static/storage/content/FutuRe/icon.svg
 Tags:

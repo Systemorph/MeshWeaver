@@ -1,5 +1,5 @@
 ---
-NodeType: "FutuRe/Report"
+NodeType: Markdown
 Title: "AsiaRe Profitability Report"
 Icon: /static/storage/content/FutuRe/icon.svg
 Abstract: "Local profitability analysis for AsiaRe (APAC, JPY), covering local lines of business over an 18-month rolling window."

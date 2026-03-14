@@ -1,5 +1,5 @@
 ---
-NodeType: "FutuRe/Report"
+NodeType: Markdown
 Title: "Multi-Currency Consolidation"
 Icon: /static/storage/content/FutuRe/icon.svg
 Tags:
