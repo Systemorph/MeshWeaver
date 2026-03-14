@@ -113,11 +113,13 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Build fan-out query: search full partition trees and exclude satellite nodes
+        // Build fan-out query: search full partition trees.
+        // Exclude satellite nodes (is:main) unless the query has a specific filter
+        // (e.g., nodeType:Thread) — filtered queries need to find satellites.
         var fanOutQuery = request.Query ?? "";
         if (parsed.Scope == QueryScope.Exact)
             fanOutQuery += " scope:descendants";
-        if (parsed.IsMain != true)
+        if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
         // Fan out: query accessible partitions in parallel, each scoped to its own namespace
@@ -286,11 +288,13 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             return provider.ObserveQuery<T>(request, options);
         }
 
-        // Build fan-out query: search full partition trees and exclude satellite nodes
+        // Build fan-out query: search full partition trees.
+        // Exclude satellite nodes (is:main) unless the query has a specific filter
+        // (e.g., nodeType:Thread) — filtered queries need to find satellites.
         var fanOutQuery = request.Query ?? "";
         if (parsed.Scope == QueryScope.Exact)
             fanOutQuery += " scope:descendants";
-        if (parsed.IsMain != true)
+        if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
         // Fan out to all partitions (known + newly discovered), merge observables

@@ -123,10 +123,6 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         var children = _nodes.Values
             .Where(n =>
             {
-                // Exclude satellite nodes (MainNode != Path) — they are stored
-                // in _-prefixed subdirectories and are not logical children.
-                if (n.MainNode != n.Path)
-                    return false;
 
                 var nodeSegments = n.Segments;
                 if (nodeSegments.Count != expectedDepth)
@@ -162,17 +158,13 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         IEnumerable<MeshNode> descendants;
         if (string.IsNullOrEmpty(normalizedParent))
         {
-            // Exclude satellite nodes (MainNode != Path)
-            descendants = _nodes.Values.Where(n => n.MainNode == n.Path);
+            descendants = _nodes.Values;
         }
         else
         {
             descendants = _nodes.Values
                 .Where(n =>
                 {
-                    // Exclude satellite nodes (MainNode != Path)
-                    if (n.MainNode != n.Path)
-                        return false;
                     var nodePath = NormalizePath(n.Path);
                     return nodePath.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase);
                 });
