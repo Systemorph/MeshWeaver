@@ -92,22 +92,7 @@ public static class ThreadNodeType
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             HubConfiguration = config => config
                 .AddThreadLayoutAreas()
-                .AddMeshDataSource(source =>
-                {
-                    var workspace = source.Workspace;
-                    return source
-                        .WithContentType<Thread>()
-                        .WithType<ThreadMessage>(ThreadMessageNodeType.NodeType)
-                        .WithType((TypeSourceWithType<ThreadCellReference> ts) => ts
-                            .WithKey(e => e.Path)
-                            .WithInitialData(async ct =>
-                            {
-                                var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                                var hubPath = workspace.Hub.Address.ToString();
-                                var children = await meshQuery.QueryAsync<MeshNode>(
-                                    $"namespace:{hubPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Order-asc", ct: ct).ToListAsync(ct);
-                                return children.Select(n => new ThreadCellReference { Path = n.Path, Order = n.Order ?? 0 });
-                            }));
-                })
+                .AddMeshDataSource(source => source
+                    .WithContentType<Thread>())
         };
 }

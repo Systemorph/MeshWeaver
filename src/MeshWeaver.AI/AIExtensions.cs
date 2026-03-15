@@ -2,6 +2,7 @@
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.AI.Threading;
 using MeshWeaver.Domain;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -16,22 +17,24 @@ public static class AIExtensions
     {
         public TBuilder AddAI()
         {
-            // Register AI chat services (persistence, thread management, etc.)
+            // Register AI types in type registry and chat services
             return (TBuilder)builder
                     .AddThreadMessageType()
                     .AddThreadType()
                     .AddAgentType()
                     .ConfigureServices(services => services.AddAgentChatServices())
+                    .ConfigureHub(config => { config.TypeRegistry.AddAIType(); return config; })
+                    .ConfigureDefaultNodeHub(config => config.AddThreadSupport())
                 ;
         }
     }
 
-    private static ITypeRegistry AddAIType(this ITypeRegistry typeRegistry)
+    internal static ITypeRegistry AddAIType(this ITypeRegistry typeRegistry)
         => typeRegistry.WithType(typeof(AgentConfiguration), nameof(AgentConfiguration))
             .WithType(typeof(AgentDelegation), nameof(AgentDelegation))
             .WithType(typeof(AI.Thread), nameof(AI.Thread))
             .WithType(typeof(ThreadMessage), nameof(ThreadMessage))
-            .WithType(typeof(ThreadCellReference), nameof(ThreadCellReference))
+            // MessageViewModel is not registered — handled as JsonElement on the wire
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
             .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))

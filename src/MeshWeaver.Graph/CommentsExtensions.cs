@@ -35,12 +35,7 @@ public static class CommentsExtensions
     /// </summary>
     public static TBuilder WithCommentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
-        builder.ConfigureServices(services =>
-        {
-            var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
-            typeRegistry?.WithType(typeof(Comment), nameof(Comment));
-            return services;
-        });
+        builder.ConfigureHub(config => config.WithType<Comment>(nameof(Comment)));
         return builder;
     }
 

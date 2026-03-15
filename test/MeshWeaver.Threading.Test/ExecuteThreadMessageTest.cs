@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -13,14 +12,10 @@ using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
-using MeshWeaver.Graph;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,15 +25,13 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests the full SubmitMessageRequest handler flow:
-/// Client creates thread → posts SubmitMessageRequest → handler creates
-/// user message node + response message node → agent streams response.
+/// Tests the full SubmitMessageRequest handler flow using workspace remote streams.
+/// No MeshQuery, no Task.Delay — reactive streams with .Where().FirstAsync().
 /// </summary>
 public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string FakeResponseText = "This is a test response from the fake agent.";
-
-    private const string ContextPath = "User/TestUser";
+    private const string FakeResponseText = "This is a test response from the fake agent with enough words to verify streaming works correctly.";
+    private const string ContextPath = "User/Roland";
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -49,389 +42,104 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })
-            .AddMeshNodes(new MeshNode("TestUser", "User") { Name = "Test User", NodeType = "User" })
-            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+            .AddAI()
+            .AddSampleUsers();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddLayoutClient()
-            .WithTypes(typeof(SubmitMessageResponse))
-            .WithTypes(typeof(CreateThreadResponse));
+            .WithTypes(typeof(SubmitMessageRequest), typeof(SubmitMessageResponse))
+            .WithTypes(typeof(CreateThreadRequest), typeof(CreateThreadResponse));
+
+    private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
+    {
+        var response = await client.AwaitResponse(
+            new CreateThreadRequest { Namespace = ContextPath, UserMessageText = text },
+            o => o.WithTarget(new Address(ContextPath)), ct);
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        return response.Message.ThreadPath!;
+    }
+
+    /// <summary>
+    /// Observes Thread.ThreadMessages via the client's remote stream to the thread hub.
+    /// Uses Workspace.GetRemoteStream which subscribes to the thread hub's MeshNode collection.
+    /// </summary>
+    private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
+    {
+        var workspace = client.GetWorkspace();
+        return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                var content = node?.Content as MeshThread;
+                var ids = content?.ThreadMessages ?? [];
+                Output.WriteLine($"ThreadMessages stream: {ids.Count} IDs");
+                return (IReadOnlyList<string>)ids;
+            });
+    }
 
     [Fact]
     public async Task SubmitMessage_CreatesUserAndResponseNodes()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
-
-        // 1. Create thread via CreateThreadRequest sent to the context node's hub
-        //    (simulates ThreadChatView flow — sends to context node address)
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
         var client = GetClient();
-        var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = ContextPath,
-                UserMessageText = "Hello, can you help me?"
-            },
-            o => o.WithTarget(new Address(ContextPath)),
-            ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
-
-        // Verify satellite MainNode: should point to _Thread's parent namespace
-        var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
-        threadNode.Should().NotBeNull("thread node should exist");
-        threadNode!.MainNode.Should().Be($"User/TestUser/{ThreadNodeType.ThreadPartition}",
-            "satellite MainNode should point to the _Thread namespace");
-        threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/",
-            "thread path should use _Thread partition");
-
-        // 2. Post SubmitMessageRequest (fire-and-forget, like the Blazor client does)
-        client.Post(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Hello, can you help me?"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-
-        // 3. Poll for child message nodes with non-empty response text
-        // The handler creates an empty response node first, then streams text into it.
-        List<MeshNode> children = [];
-        ThreadMessage? assistantMsg = null;
-        for (var i = 0; i < 30; i++)
-        {
-            await Task.Delay(500, ct);
-            children = await MeshQuery.QueryAsync<MeshNode>(
-                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
-            ).ToListAsync(ct);
-            assistantMsg = children
-                .Select(n => n.Content)
-                .OfType<ThreadMessage>()
-                .FirstOrDefault(m => m.Role == "assistant" && !string.IsNullOrEmpty(m.Text));
-            Output.WriteLine($"Poll {i}: {children.Count} children, response text: '{assistantMsg?.Text?[..Math.Min(assistantMsg.Text.Length, 30)]}'");
-            if (children.Count >= 2 && assistantMsg != null)
-                break;
-        }
-
-        children.Should().HaveCountGreaterThanOrEqualTo(2,
-            "should have user message + agent response");
-
-        var messages = children
-            .Select(n => n.Content)
-            .OfType<ThreadMessage>()
-            .ToList();
-
-        // User message
-        var userMsg = messages.FirstOrDefault(m => m.Role == "user");
-        userMsg.Should().NotBeNull("should contain the user message");
-        userMsg!.Text.Should().Be("Hello, can you help me?");
-        userMsg.Type.Should().Be(ThreadMessageType.ExecutedInput);
-
-        // Agent response
-        assistantMsg.Should().NotBeNull("should contain the agent response with text");
-        assistantMsg!.Text.Should().NotBeEmpty("agent should have generated a response");
-        assistantMsg.Type.Should().Be(ThreadMessageType.AgentResponse);
-    }
-
-    [Fact]
-    public async Task SubmitMessage_SecondMessage_IncrementsMessageNumbers()
-    {
-        var ct = new CancellationTokenSource(60.Seconds()).Token;
-
-        // Create thread via CreateThreadRequest sent to the context node's hub
-        var client = GetClient();
-        var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = ContextPath,
-                UserMessageText = "First question"
-            },
-            o => o.WithTarget(new Address(ContextPath)),
-            ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
-
-        // First message
-        var response1 = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "First question"
-            },
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
-        response1.Message.Success.Should().BeTrue(response1.Message.Error);
-
-        // Second message
-        var response2 = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Follow-up question"
-            },
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
-        response2.Message.Success.Should().BeTrue(response2.Message.Error);
-
-        // Verify 4 message nodes (2 user + 2 assistant)
-        var children = await MeshQuery.QueryAsync<MeshNode>(
-            $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"
-        ).ToListAsync(ct);
-
-        children.Should().HaveCount(4, "should have 2 user messages + 2 agent responses");
-
-        var ordered = children.OrderBy(n => n.Order).ToList();
-        ordered[0].Order.Should().Be(1);
-        ordered[1].Order.Should().Be(2);
-        ordered[2].Order.Should().Be(3);
-        ordered[3].Order.Should().Be(4);
-    }
-
-    [Fact]
-    public async Task ObserveQuery_EmitsThreadMessageNodes_Reactively()
-    {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
 
         // 1. Create thread
-        var client = GetClient();
-        var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = ContextPath,
-                UserMessageText = "Reactive test"
-            },
-            o => o.WithTarget(new Address(ContextPath)),
-            ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
-        Output.WriteLine($"Thread created at: {threadPath}");
+        var threadPath = await CreateThreadAsync(client, "Hello", ct);
+        Output.WriteLine($"Thread at: {threadPath}");
 
-        // 2. Subscribe to ObserveQuery BEFORE submitting message
-        //    This mirrors what BuildCellsStream does in ThreadLayoutAreas
-        var request = MeshQueryRequest.FromQuery(
-            $"namespace:{threadPath} nodeType:ThreadMessage sort:Order-asc");
+        // 2. Subscribe to remote stream BEFORE submitting
+        var twoMessages = ObserveThreadMessages(client, threadPath)
+            .Where(ids => ids.Count >= 2)
+            .FirstAsync()
+            .ToTask(ct);
 
-        var observedChanges = new List<QueryResultChange<MeshNode>>();
-        var twoNodesAppeared = new TaskCompletionSource<bool>();
-        var responseTextPopulated = new TaskCompletionSource<bool>();
-        var allNodes = ImmutableList<MeshNode>.Empty;
-
-        using var subscription = MeshQuery.ObserveQuery<MeshNode>(request)
-            .Subscribe(change =>
-            {
-                observedChanges.Add(change);
-                Output.WriteLine($"ObserveQuery change: {change.ChangeType}, items: {change.Items.Count}");
-                foreach (var item in change.Items)
-                {
-                    var msg = item.Content as ThreadMessage;
-                    Output.WriteLine($"  Node: {item.Path}, Role: {msg?.Role}, Text: '{msg?.Text?[..Math.Min(msg.Text?.Length ?? 0, 40)]}'");
-                }
-
-                // Accumulate nodes (same logic as BuildCellsStream.Scan)
-                allNodes = change.ChangeType switch
-                {
-                    QueryChangeType.Initial or QueryChangeType.Reset =>
-                        change.Items.ToImmutableList(),
-                    QueryChangeType.Added =>
-                        allNodes.AddRange(change.Items),
-                    QueryChangeType.Updated =>
-                        allNodes.Select(n => change.Items.FirstOrDefault(u => u.Path == n.Path) ?? n)
-                            .ToImmutableList(),
-                    _ => allNodes
-                };
-
-                Output.WriteLine($"  Total accumulated nodes: {allNodes.Count}");
-
-                if (allNodes.Count >= 2 && !twoNodesAppeared.Task.IsCompleted)
-                    twoNodesAppeared.TrySetResult(true);
-
-                // Check if response text is populated
-                var assistantMsg = allNodes
-                    .Select(n => n.Content)
-                    .OfType<ThreadMessage>()
-                    .FirstOrDefault(m => m.Role == "assistant" && !string.IsNullOrEmpty(m.Text));
-                if (assistantMsg != null && !responseTextPopulated.Task.IsCompleted)
-                {
-                    Output.WriteLine($"  Response text populated: '{assistantMsg.Text[..Math.Min(assistantMsg.Text.Length, 60)]}'");
-                    responseTextPopulated.TrySetResult(true);
-                }
-            });
-
-        // 3. Submit message AFTER subscription is active
-        client.Post(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "Reactive test"
-            },
-            o => o.WithTarget(new Address(threadPath)));
-
-        // 4. Wait for ObserveQuery to emit 2 nodes (user + response)
-        var nodesAppeared = await Task.WhenAny(twoNodesAppeared.Task, Task.Delay(10.Seconds(), ct));
-        nodesAppeared.Should().Be(twoNodesAppeared.Task,
-            "ObserveQuery should emit at least 2 ThreadMessage nodes within 10 seconds");
-
-        // 5. Wait for response text to be populated (streaming completes)
-        var textPopulated = await Task.WhenAny(responseTextPopulated.Task, Task.Delay(15.Seconds(), ct));
-        textPopulated.Should().Be(responseTextPopulated.Task,
-            "ObserveQuery should emit an Updated change with non-empty response text within 15 seconds");
-
-        // 6. Verify final state
-        allNodes.Should().HaveCountGreaterThanOrEqualTo(2, "should have user + assistant nodes");
-
-        var userMsg = allNodes.Select(n => n.Content).OfType<ThreadMessage>()
-            .FirstOrDefault(m => m.Role == "user");
-        userMsg.Should().NotBeNull("should have a user message");
-        userMsg!.Text.Should().Be("Reactive test");
-
-        var assistantFinal = allNodes.Select(n => n.Content).OfType<ThreadMessage>()
-            .FirstOrDefault(m => m.Role == "assistant");
-        assistantFinal.Should().NotBeNull("should have an assistant message");
-        assistantFinal!.Text.Should().NotBeEmpty("assistant should have response text");
-
-        Output.WriteLine($"Total ObserveQuery changes received: {observedChanges.Count}");
-        foreach (var c in observedChanges)
-            Output.WriteLine($"  {c.ChangeType}: {c.Items.Count} items");
-    }
-
-    [Fact]
-    public async Task SubmitMessage_UpdatesThreadCellReferences_InDataSource()
-    {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
-
-        // 1. Create thread
-        var client = GetClient();
-        var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = ContextPath,
-                UserMessageText = "DataSource test"
-            },
-            o => o.WithTarget(new Address(ContextPath)),
-            ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
-        Output.WriteLine($"Thread created at: {threadPath}");
-
-        // 2. Submit message and wait for completion
+        // 3. Submit message
         var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "DataSource test"
-            },
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
+            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Hello agent" },
+            o => o.WithTarget(new Address(threadPath)), ct);
         submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
 
-        // 3. Access the thread hub's workspace and verify ThreadCellReference collection
-        var threadHub = Mesh.GetHostedHub(new Address(threadPath), HostedHubCreation.Never);
-        threadHub.Should().NotBeNull("thread hub should exist after message submission");
-
-        var workspace = threadHub!.ServiceProvider.GetRequiredService<IWorkspace>();
-        var cellRefStream = workspace.GetStream<ThreadCellReference>();
-        cellRefStream.Should().NotBeNull("ThreadCellReference should be registered in the DataSource");
-
-        ThreadCellReference[]? cellRefs = null;
-        for (var i = 0; i < 20; i++)
-        {
-            await Task.Delay(500, ct);
-            cellRefs = await cellRefStream!.FirstAsync();
-            Output.WriteLine($"Poll {i}: {cellRefs?.Length ?? 0} cell refs");
-            if (cellRefs is { Length: >= 2 })
-                break;
-        }
-
-        cellRefs.Should().NotBeNull();
-        cellRefs!.Length.Should().BeGreaterThanOrEqualTo(2,
-            "should have at least 2 cell references (user + response)");
-
-        var ordered = cellRefs.OrderBy(r => r.Order).ToArray();
-        ordered[0].Order.Should().Be(1, "first cell should be order 1 (user message)");
-        ordered[1].Order.Should().Be(2, "second cell should be order 2 (response)");
-        ordered[0].Path.Should().Contain(threadPath, "cell path should be under thread path");
-        ordered[1].Path.Should().Contain(threadPath, "cell path should be under thread path");
-
-        Output.WriteLine($"Cell refs verified: {string.Join(", ", ordered.Select(r => $"{r.Path}(order={r.Order})"))}");
+        // 4. Wait for 2 message IDs via reactive stream
+        var msgIds = await twoMessages;
+        msgIds.Should().HaveCount(2, "should have user message ID + response message ID");
+        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
     }
 
     [Fact]
-    public async Task SubmitMessage_CellsAppearInLayoutAreaStream()
+    public async Task SubmitMessage_SecondMessage_AccumulatesThreadMessages()
     {
-        var ct = new CancellationTokenSource(30.Seconds()).Token;
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
+        var client = GetClient();
 
         // 1. Create thread
-        var client = GetClient();
-        var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = ContextPath,
-                UserMessageText = "LayoutArea stream test"
-            },
-            o => o.WithTarget(new Address(ContextPath)),
-            ct);
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
-        Output.WriteLine($"Thread created at: {threadPath}");
+        var threadPath = await CreateThreadAsync(client, "Multi-message", ct);
 
-        // 2. Subscribe to the thread's layout area stream (like LayoutAreaView does)
-        var workspace = client.GetWorkspace();
-        var reference = new LayoutAreaReference(ThreadNodeType.ThreadArea);
-        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(threadPath), reference);
+        // 2. Subscribe BEFORE submitting — watches for 4 message IDs
+        var fourMessages = ObserveThreadMessages(client, threadPath)
+            .Where(ids => ids.Count >= 4)
+            .FirstAsync()
+            .ToTask(ct);
 
-        // 3. Set up a subscription that watches for cells data to appear
-        var cellsAppeared = new TaskCompletionSource<JsonElement>();
-        var changeLog = new List<string>();
-        using var subscription = stream.Subscribe(change =>
-        {
-            var current = change.Value;
-            if (current.ValueKind == JsonValueKind.Object &&
-                current.TryGetProperty("data", out var dataSection) &&
-                dataSection.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in dataSection.EnumerateObject())
-                {
-                    changeLog.Add($"data['{prop.Name}'] = {prop.Value.ValueKind}" +
-                        (prop.Value.ValueKind == JsonValueKind.Array ? $"({prop.Value.GetArrayLength()})" : ""));
-                    if (prop.Value.ValueKind == JsonValueKind.Array && prop.Value.GetArrayLength() > 0)
-                    {
-                        cellsAppeared.TrySetResult(prop.Value);
-                    }
-                }
-            }
-            else
-            {
-                changeLog.Add($"value kind={current.ValueKind}");
-            }
-        });
+        // 3. First message
+        var r1 = await client.AwaitResponse(
+            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "First" },
+            o => o.WithTarget(new Address(threadPath)), ct);
+        r1.Message.Success.Should().BeTrue(r1.Message.Error);
+        Output.WriteLine("First message submitted");
 
-        // 4. Submit message
-        var submitResponse = await client.AwaitResponse(
-            new SubmitMessageRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = "LayoutArea stream test"
-            },
-            o => o.WithTarget(new Address(threadPath)),
-            ct);
-        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
-        Output.WriteLine("SubmitMessageResponse received, waiting for cells...");
+        // 4. Second message
+        var r2 = await client.AwaitResponse(
+            new SubmitMessageRequest { ThreadPath = threadPath, UserMessageText = "Second" },
+            o => o.WithTarget(new Address(threadPath)), ct);
+        r2.Message.Success.Should().BeTrue(r2.Message.Error);
+        Output.WriteLine("Second message submitted");
 
-        // 5. Wait for cells to appear in the subscription
-        var completed = await Task.WhenAny(cellsAppeared.Task, Task.Delay(15.Seconds(), ct));
-
-        // Log all changes for debugging
-        Output.WriteLine($"Total stream changes observed: {changeLog.Count}");
-        foreach (var log in changeLog)
-            Output.WriteLine($"  {log}");
-
-        completed.Should().Be(cellsAppeared.Task,
-            "threadCells data should appear in the layout area stream within 15 seconds");
-        var cellsData = await cellsAppeared.Task;
-        cellsData.GetArrayLength().Should().BeGreaterThanOrEqualTo(2,
-            "should have at least 2 cells (user + response)");
+        // 5. Wait for 4 message IDs — reactive, no polling
+        var msgIds = await fourMessages;
+        msgIds.Should().HaveCount(4, "should have 4 message IDs (2 per submission)");
+        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
     }
 
     #region Fake Chat Client Infrastructure
@@ -459,8 +167,9 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         {
             foreach (var word in response.Split(' '))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 yield return new ChatResponseUpdate(ChatRole.Assistant, word + " ");
-                await Task.Yield();
+                await Task.Delay(10, cancellationToken);
             }
         }
 

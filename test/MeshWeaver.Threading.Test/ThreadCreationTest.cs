@@ -31,8 +31,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // base.ConfigureMesh already calls AddGraph()
-        return base.ConfigureMesh(builder);
+        return base.ConfigureMesh(builder)
+            .AddAI();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
@@ -659,7 +659,8 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         // No PublicAdminAccess — permissions are enforced
-        return ConfigureMeshBase(builder);
+        return ConfigureMeshBase(builder)
+            .AddAI();
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>

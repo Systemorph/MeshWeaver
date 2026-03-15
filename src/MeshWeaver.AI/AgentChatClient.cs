@@ -43,6 +43,9 @@ public class AgentChatClient : IAgentChat
     // Tracks the first agent found in @references in the user's message text (for selection override)
     private string? firstMessageAgentPath;
 
+    // Conversation history loaded from persisted ThreadMessage nodes for resume
+    private IReadOnlyList<ThreadMessage>? conversationHistory;
+
     public AgentChatClient(IServiceProvider serviceProvider)
     {
         hub = serviceProvider.GetRequiredService<IMessageHub>();
@@ -83,6 +86,16 @@ public class AgentChatClient : IAgentChat
     public void SetAttachments(IReadOnlyList<string>? paths)
     {
         currentAttachments = paths is { Count: > 0 } ? paths : null;
+    }
+
+    /// <summary>
+    /// Sets conversation history from persisted ThreadMessage nodes.
+    /// Injected once into the next message context, then cleared (the AgentSession
+    /// accumulates subsequent messages going forward).
+    /// </summary>
+    public void SetConversationHistory(IReadOnlyList<ThreadMessage> history)
+    {
+        conversationHistory = history is { Count: > 0 } ? history : null;
     }
 
     private async Task<AgentSession> GetOrCreateThreadAsync(ChatClientAgent agent)
@@ -283,10 +296,28 @@ public class AgentChatClient : IAgentChat
             }
         }
 
-        // Add user messages
+        // Inject conversation history from persisted ThreadMessage nodes (resume scenario)
+        if (conversationHistory is { Count: > 0 })
+        {
+            messageText.AppendLine("# Conversation History");
+            messageText.AppendLine();
+            messageText.AppendLine("Previous messages in this thread:");
+            messageText.AppendLine();
+            foreach (var histMsg in conversationHistory)
+            {
+                var roleName = histMsg.Role.Equals("user", StringComparison.OrdinalIgnoreCase) ? "User" : "Assistant";
+                messageText.AppendLine($"**{roleName}:** {histMsg.Text}");
+                messageText.AppendLine();
+            }
+            conversationHistory = null; // Only inject once; AgentSession accumulates subsequent messages
+        }
+
+        // Add user messages (with @@ inline reference resolution)
         foreach (var message in messages)
         {
-            messageText.Append(ExtractTextFromMessage(message));
+            var text = ExtractTextFromMessage(message);
+            text = await InlineReferenceResolver.ResolveAsync(text, hub, this);
+            messageText.Append(text);
         }
 
         return messageText.ToString();

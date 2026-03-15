@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -64,7 +65,6 @@ internal class InMemoryMeshQuery(
         }
 
         // Both source:activity and source:accessed restrict to main nodes only (main_node = path).
-        // In-memory doesn't support the JOIN — returns main nodes without activity ordering.
         if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
         {
             parsedQuery = parsedQuery with { IsMain = true };
@@ -125,6 +125,23 @@ internal class InMemoryMeshQuery(
             }
 
             matched.Add(node);
+        }
+
+        // For source:activity, filter to nodes that actually have _activity children.
+        // Scan all descendants for Activity satellite nodes and collect their MainNode paths.
+        if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
+        {
+            var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await foreach (var actNode in persistence.GetAllDescendantsAsync(basePath, options)
+                .WithCancellation(ct))
+            {
+                if (actNode.NodeType == ActivityNodeType.NodeType
+                    && !string.IsNullOrEmpty(actNode.MainNode))
+                    activityMainPaths.Add(actNode.MainNode);
+            }
+            matched = matched
+                .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
+                .ToList();
         }
 
         // Apply sort
@@ -362,8 +379,21 @@ internal class InMemoryMeshQuery(
 
         var suggestions = new List<QuerySuggestion>();
 
-        // Search descendants for matching nodes (with security filtering)
-        await foreach (var node in persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
+        // Search the root node itself + descendants for matching nodes (with security filtering)
+        // The root node (e.g., "ACME") is not a descendant of itself, so check it explicitly.
+        async IAsyncEnumerable<MeshNode> GetNodesForAutocomplete()
+        {
+            if (!string.IsNullOrEmpty(normalizedPath))
+            {
+                var rootNode = await persistence.GetNodeSecureAsync(normalizedPath, userId, options, ct);
+                if (rootNode != null)
+                    yield return rootNode;
+            }
+            await foreach (var node in persistence.GetDescendantsSecureAsync(normalizedPath, userId, options).WithCancellation(ct))
+                yield return node;
+        }
+
+        await foreach (var node in GetNodesForAutocomplete())
         {
             // Skip node types excluded from autocomplete (configured via AddAutocompleteExcludedTypes)
             if (meshConfiguration?.AutocompleteExcludedNodeTypes.Contains(node.NodeType ?? "") == true)

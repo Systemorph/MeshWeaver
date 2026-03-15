@@ -28,11 +28,17 @@ public static class ActivityTrackingExtensions
                 var persistence = sp.GetRequiredService<IMeshStorage>();
                 return new ActivityLogBundler(hub, async log =>
                 {
+                    // Skip activity tracking for satellite node hubs (MainNode != Path).
+                    // Only main entities should have activity records.
+                    var hubNode = log.HubPath != null ? await persistence.GetNodeAsync(log.HubPath) : null;
+                    if (hubNode != null && hubNode.MainNode != hubNode.Path)
+                        return;
+
                     var node = MeshNode.FromPath($"{log.HubPath}/_activity/{log.Id}") with
                     {
                         NodeType = ActivityNodeType.NodeType,
                         Name = $"{log.Category}: {log.Messages.FirstOrDefault()?.Message ?? "Activity"}",
-                        MainNode = log.HubPath,
+                        MainNode = log.HubPath!,
                         State = MeshNodeState.Active,
                         Content = log
                     };

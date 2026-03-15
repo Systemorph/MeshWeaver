@@ -78,6 +78,21 @@ public class ThreadSession : IDisposable
             {
                 _chatClient.SetPersistentThreadId(threadContent.PersistentThreadId);
             }
+
+            // Load existing ThreadMessage children for conversation history resume
+            var messageNodes = await meshQuery.QueryAsync<MeshNode>(
+                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType} sort:Order-asc")
+                .ToListAsync();
+            var history = messageNodes
+                .Select(n => n.Content)
+                .OfType<ThreadMessage>()
+                .Where(m => m.Type != ThreadMessageType.EditingPrompt && !string.IsNullOrEmpty(m.Text))
+                .ToList();
+            if (history.Count > 0)
+            {
+                _logger.LogInformation("Resuming thread {ThreadPath} with {Count} history messages", threadPath, history.Count);
+                _chatClient.SetConversationHistory(history);
+            }
         }
 
         _streamingSession = new StreamingChatSession(_chatClient,
@@ -136,17 +151,7 @@ public class ThreadSession : IDisposable
             };
             var responsePath = await CreateMessageNodeAsync(hub, request.ThreadPath, responseNumber, responseMessage);
 
-            // Update the ThreadCellReference collection in the DataSource
-            // so the layout area picks up the new cells via GetStream<ThreadCellReference>()
-            hub.Post(new DataChangeRequest
-            {
-                Creations =
-                [
-                    new ThreadCellReference { Path = userNodePath, Order = nextNumber },
-                    new ThreadCellReference { Path = responsePath, Order = responseNumber }
-                ]
-            });
-
+            // Note: Thread.ThreadMessages is updated by HandleSubmitMessage in the execution block.
             // Start streaming on background task
             _activeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var streamCts = _activeCts;
@@ -174,6 +179,66 @@ public class ThreadSession : IDisposable
     /// <summary>
     /// Cancels the currently active streaming response.
     /// </summary>
+    /// <summary>
+    /// Streams the agent response for a StartStreamingRequest.
+    /// Called from the _Exec sub-hub handler — runs on a background thread.
+    /// Only posts updates back to the thread hub via hub.Post (no AwaitResponse).
+    /// </summary>
+    public async Task StreamAsync(StartStreamingRequest request, IMessageHub hub)
+    {
+        await _queueLock.WaitAsync();
+        try
+        {
+            CancelCurrentStreamInternal();
+
+            // Initialize agent if needed
+            await EnsureInitializedAsync(request.ThreadPath, null, null, null);
+
+            _activeCts = new CancellationTokenSource();
+            var ct = _activeCts.Token;
+
+            var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
+            var responseText = new StringBuilder();
+            var lastUpdate = DateTimeOffset.MinValue;
+
+            try
+            {
+                await foreach (var update in _chatClient!.GetStreamingResponseAsync([chatMessage], ct))
+                {
+                    if (!string.IsNullOrEmpty(update.Text))
+                    {
+                        responseText.Append(update.Text);
+
+                        if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
+                        {
+                            UpdateResponseNode(hub, request.ResponsePath, responseText.ToString());
+                            lastUpdate = DateTimeOffset.UtcNow;
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogInformation("Stream cancelled for thread {ThreadPath}", request.ThreadPath);
+            }
+
+            // Final update with complete text
+            UpdateResponseNode(hub, request.ResponsePath, responseText.ToString());
+            await TouchThreadLastModifiedAsync(hub, request.ThreadPath);
+        }
+        finally
+        {
+            _queueLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Exposes the agent's streaming response. Must call EnsureInitializedAsync first.
+    /// </summary>
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IReadOnlyCollection<ChatMessage> messages, CancellationToken ct)
+        => _chatClient!.GetStreamingResponseAsync(messages, ct);
+
     public void CancelCurrentStream()
     {
         CancelCurrentStreamInternal();

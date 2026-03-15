@@ -2,6 +2,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -15,7 +16,7 @@ namespace MeshWeaver.Query.Test;
 public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder);
+        => base.ConfigureMesh(builder).AddAI();
 
     // Use unique prefixes per test to avoid cross-test contamination (shared mesh instance)
     private static string P([CallerMemberName] string name = "") => name;

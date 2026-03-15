@@ -70,6 +70,14 @@ public record Thread
     /// The primary node path — permissions are checked against the parent node.
     /// </summary>
     public string? PrimaryNodePath => ParentPath;
+
+    /// <summary>
+    /// Ordered list of child message node IDs (e.g., "1", "2", "3").
+    /// Updated when messages are created via SubmitMessageRequest.
+    /// The layout area maps these to full paths ({threadPath}/{id}) for LayoutAreaControl cells.
+    /// IDs survive serialization events; full paths are derived at render time.
+    /// </summary>
+    public IReadOnlyList<string> ThreadMessages { get; init; } = [];
 }
 
 /// <summary>

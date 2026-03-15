@@ -52,6 +52,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
                 return services;
             })
             .AddGraph()
+            .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

@@ -53,6 +53,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
                 return services;
             })
             .AddGraph()
+            .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

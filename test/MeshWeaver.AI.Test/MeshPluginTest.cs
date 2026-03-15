@@ -45,6 +45,7 @@ public class MeshPluginTest : MonolithMeshTestBase
                 return services;
             })
             .AddGraph()
+            .AddAI()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 

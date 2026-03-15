@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text;
 using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -9,6 +10,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshThread = MeshWeaver.AI.Thread;
@@ -39,6 +41,7 @@ public static class ThreadLayoutAreas
             })
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
             .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
+            .AddDefaultMeshMenu()
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)
             .AddLayout(layout => layout
@@ -46,7 +49,6 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
                 .WithView(MeshNodeLayoutAreas.OverviewArea, ThreadView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
-                .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
@@ -82,59 +84,6 @@ public static class ThreadLayoutAreas
         return segments.Length > 0 ? segments[^1] : path;
     }
 
-    /// <summary>
-    /// Renders the Create area for Thread nodes.
-    /// Confirms the transient node and redirects to the default area.
-    /// </summary>
-    public static IObservable<UiControl?> CreateView(LayoutAreaHost host, RenderingContext _)
-    {
-        var currentPath = host.Hub.Address.ToString();
-
-        return Observable.FromAsync(async () =>
-        {
-            var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-            var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
-            MeshNode? existingNode = null;
-            if (meshQuery != null)
-            {
-                await foreach (var n in meshQuery.QueryAsync<MeshNode>($"path:{currentPath}"))
-                {
-                    existingNode = n;
-                    break;
-                }
-            }
-
-            if (existingNode == null)
-            {
-                return (UiControl?)Controls.Html(
-                    "<p style=\"color: var(--error-foreground); padding: 24px;\">Thread node not found.</p>");
-            }
-
-            // Ensure ParentPath is set on the thread content
-            var content = existingNode.Content as MeshThread ?? new MeshThread();
-            var parentPath = existingNode.GetParentPath();
-            if (string.IsNullOrEmpty(content.ParentPath) && !string.IsNullOrEmpty(parentPath))
-            {
-                content = content with { ParentPath = parentPath };
-            }
-
-            var confirmedNode = existingNode with
-            {
-                Content = content,
-                State = MeshNodeState.Active
-            };
-
-            try
-            {
-                var createdNode = await nodeFactory.CreateNodeAsync(confirmedNode).ConfigureAwait(false);
-                return (UiControl?)new RedirectControl(MeshNodeLayoutAreas.BuildContentUrl(createdNode.Path!, ThreadNodeType.ThreadArea));
-            }
-            catch (Exception ex)
-            {
-                return (UiControl?)Controls.Html($"<p style=\"color: var(--error-foreground);\">Failed to create thread: {ex.Message}</p>");
-            }
-        });
-    }
 
     /// <summary>
     /// Overrides the default Threads catalog view to add a "Create Thread" button.
@@ -183,23 +132,27 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         // Node stream — drives the observable title and chat control context
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+        var stream = host.Workspace.GetStream<MeshNode>();
+        var nodeStream = stream!.Select(nodes => nodes ?? Array.Empty<MeshNode>());
 
-        // Message cells stream — subscribes to ThreadCellReference collection in the DataSource.
-        // The collection is initialized from a one-shot IMeshQuery on hub startup and
-        // updated by the SubmitMessageRequest handler via DataChangeRequest.
-        var cellRefStream = host.Workspace.GetStream<ThreadCellReference>()
-            ?.Select(refs => (refs ?? [])
-                .OrderBy(r => r.Order)
-                .Select(r => new LayoutAreaControl(
-                    r.Path,
-                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
+        // Message cells — derived from Thread.ThreadMessages on the node stream.
+        // IDs are prefixed with hubPath to get full paths for LayoutAreaControl cells.
+        var cellsStream = nodeStream.Select(nodes =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var threadContent = node?.Content as MeshThread;
+            var ids = threadContent?.ThreadMessages ?? [];
+            var logger = host.Hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
+            logger.LogInformation("ThreadView cellsStream: {Count} message IDs: [{Ids}]",
+                ids.Count, string.Join(", ", ids));
+            return ids
+                .Select(id => new LayoutAreaControl(
+                    $"{hubPath}/{id}", new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
                     .WithShowProgress(false))
-                .ToImmutableList())
-            ?? Observable.Return(ImmutableList<LayoutAreaControl>.Empty);
+                .ToImmutableList();
+        });
         host.RegisterForDisposal(ThreadNodeType.ThreadArea,
-            cellRefStream.Subscribe(cells => host.UpdateData(ThreadCellsDataKey, cells)));
+            cellsStream.Subscribe(cells => host.UpdateData(ThreadCellsDataKey, cells)));
 
         // Static container — emits once, not rebuilt on every node update
         var container = Controls.Stack
@@ -431,40 +384,187 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Handles SubmitMessageRequest by delegating to the per-hub ThreadSession.
-    /// The ThreadSession owns the AgentChatClient and manages cancellation/interruption.
-    ///
-    /// IMPORTANT: The async work runs on a background task (Task.Run) to avoid deadlock.
-    /// The hub's execution block processes messages sequentially. If we await
-    /// nodeFactory.CreateNodeAsync() (which uses hub.AwaitResponse internally) from
-    /// within a handler, the response callback can't be processed because the execution
-    /// block is occupied by the waiting handler — classic deadlock.
+    /// Handles SubmitMessageRequest in the Thread hub's execution block.
+    /// Creates message nodes and updates Thread.MessagePaths (triggers GUI update),
+    /// then delegates streaming to the _Exec sub-hub which has its own execution queue.
+    /// No Task.Run — all operations use hub.Post (fire-and-forget) to avoid deadlocks.
     /// </summary>
-    private static Task<IMessageDelivery> HandleSubmitMessage(
+    private static IMessageDelivery HandleSubmitMessage(
         IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery,
+        IMessageDelivery<SubmitMessageRequest> delivery)
+    {
+        var request = delivery.Message;
+        var threadPath = request.ThreadPath;
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
+        logger.LogInformation("HandleSubmitMessage: threadPath={ThreadPath}", threadPath);
+
+        // Compute next message number from Thread.ThreadMessages
+        var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+        var nodes = workspace.GetStream<MeshNode>()?.FirstAsync().GetAwaiter().GetResult();
+        var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
+        var threadContent = threadNode?.Content as MeshThread ?? new MeshThread();
+        var nextNumber = threadContent.ThreadMessages.Count + 1;
+        var responseNumber = nextNumber + 1;
+        var userMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+
+        var userNodePath = $"{threadPath}/{userMsgId}";
+        var responsePath = $"{threadPath}/{responseMsgId}";
+
+        // 1. Create message nodes via IMeshService.CreateNodeAsync (no await, ContinueWith for errors)
+        logger.LogInformation("HandleSubmitMessage: creating nodes userMsgId={UserMsgId}, responseMsgId={ResponseMsgId}", userMsgId, responseMsgId);
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var userNode = new MeshNode(userMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            Order = nextNumber,
+            Content = new ThreadMessage
+            {
+                Id = userMsgId,
+                Role = "user",
+                Text = request.UserMessageText,
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput
+            }
+        };
+        meshService.CreateNodeAsync(userNode).ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                logger.LogError(t.Exception, "Failed to create user message node at {Path}", userNodePath);
+        }, TaskContinuationOptions.OnlyOnFaulted);
+
+        var responseNode = new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            Order = responseNumber,
+            Content = new ThreadMessage
+            {
+                Id = responseMsgId,
+                Role = "assistant",
+                Text = "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
+        };
+        meshService.CreateNodeAsync(responseNode).ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                logger.LogError(t.Exception, "Failed to create response node at {Path}", responsePath);
+        }, TaskContinuationOptions.OnlyOnFaulted);
+
+        // 2. Update Thread.ThreadMessages on the MeshNode — DataChangeRequest to own hub
+        if (threadNode != null)
+        {
+            var updatedContent = threadContent with
+            {
+                ThreadMessages = threadContent.ThreadMessages
+                    .Concat([userMsgId, responseMsgId]).ToList()
+            };
+            var updatedNode = threadNode with { Content = updatedContent };
+            hub.Post(new DataChangeRequest { Updates = [updatedNode] });
+        }
+
+        // 3. Send response immediately
+        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+
+        // 4. Delegate streaming to _Exec sub-hub (has its own execution queue).
+        // The sub-hub owns the ThreadSession and can safely await streaming.
+        // Updates are posted to thread message node addresses via hub routing.
+        var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
+        var execHub = hub.GetHostedHub(
+            new Address($"{threadPath}/_Exec"),
+            config => config
+                .WithServices(services =>
+                {
+                    services.AddSingleton(session);
+                    return services;
+                })
+                .WithHandler<StartStreamingRequest>(HandleExecStreaming),
+            HostedHubCreation.Always);
+
+        execHub!.Post(new StartStreamingRequest
+        {
+            ThreadPath = threadPath,
+            UserMessageText = request.UserMessageText,
+            UserMessagePath = userNodePath,
+            ResponsePath = responsePath,
+            ResponseOrder = responseNumber
+        });
+
+        return delivery.Processed();
+    }
+
+    /// <summary>
+    /// Async handler running in the _Exec sub-hub's execution queue.
+    /// Can safely await streaming without blocking the Thread hub.
+    /// Updates are posted to the thread message node address (routed through hub hierarchy).
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleExecStreaming(
+        IMessageHub hub,
+        IMessageDelivery<StartStreamingRequest> delivery,
         CancellationToken ct)
     {
         var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
+        var request = delivery.Message;
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
 
-        // Schedule on background task to avoid deadlocking the execution block.
-        _ = Task.Run(async () =>
+        try
         {
-            try
-            {
-                await session.SubmitMessageAsync(delivery.Message, hub, delivery, ct);
-            }
-            catch (Exception ex)
-            {
-                var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
-                logger.LogError(ex, "Error handling SubmitMessageRequest for thread {ThreadPath}",
-                    delivery.Message.ThreadPath);
-                hub.Post(new SubmitMessageResponse { Success = false, Error = ex.Message },
-                    o => o.ResponseFor(delivery));
-            }
-        }, CancellationToken.None);
+            // Initialize agent
+            await session.EnsureInitializedAsync(request.ThreadPath, null, null, null);
 
-        return Task.FromResult<IMessageDelivery>(delivery.Processed());
+            // Stream and post throttled updates to the response message node address
+            var responseText = new StringBuilder();
+            var lastUpdate = DateTimeOffset.MinValue;
+            var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
+
+            await foreach (var update in session.GetStreamingResponseAsync([chatMessage], ct))
+            {
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    responseText.Append(update.Text);
+
+                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
+                    {
+                        PostResponseUpdate(hub, request.ThreadPath, request.ResponsePath, responseText.ToString());
+                        lastUpdate = DateTimeOffset.UtcNow;
+                    }
+                }
+            }
+
+            // Final update with complete text
+            PostResponseUpdate(hub, request.ThreadPath, request.ResponsePath, responseText.ToString());
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogInformation("Stream cancelled for thread {ThreadPath}", request.ThreadPath);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error streaming for thread {ThreadPath}", request.ThreadPath);
+        }
+
+        return delivery.Processed();
+    }
+
+    /// <summary>
+    /// Posts a throttled response text update to the thread hub.
+    /// The thread hub's workspace has ThreadMessage registered and handles the DataChangeRequest.
+    /// </summary>
+    private static void PostResponseUpdate(IMessageHub hub, string threadPath, string responsePath, string text)
+    {
+        var nodeId = responsePath.Split('/').Last();
+        var updatedMessage = new ThreadMessage
+        {
+            Id = nodeId,
+            Role = "assistant",
+            Text = text,
+            Timestamp = DateTime.UtcNow,
+            Type = ThreadMessageType.AgentResponse
+        };
+        hub.Post(new DataChangeRequest { Updates = [updatedMessage] },
+            o => o.WithTarget(new Address(threadPath)));
     }
 
     /// <summary>
