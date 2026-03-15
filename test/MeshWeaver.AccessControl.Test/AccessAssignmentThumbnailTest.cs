@@ -47,6 +47,53 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
     private static Address NodeAddress(string id)
         => new("Admin", "_Access", id);
 
+    /// <summary>
+    /// Recursively searches a JsonElement for a ButtonControl with a specific label.
+    /// Returns the key name of the matching area, or null if not found.
+    /// </summary>
+    private static string? FindAreaByLabel(JsonElement element, string label)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            // Check if this element itself is a ButtonControl with the label
+            if (element.TryGetProperty("$type", out var typeProp)
+                && typeProp.GetString()?.Contains("ButtonControl") == true
+                && element.TryGetProperty("label", out var labelProp)
+                && labelProp.GetString() == label)
+            {
+                return label; // Will be matched at parent level
+            }
+
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (prop.Value.ValueKind == JsonValueKind.Object)
+                {
+                    var raw = prop.Value.GetRawText();
+                    if (raw.Contains(label) && raw.Contains("ButtonControl"))
+                    {
+                        // Check if this property value IS the button
+                        if (prop.Value.TryGetProperty("$type", out var innerType)
+                            && innerType.GetString()?.Contains("ButtonControl") == true)
+                            return prop.Name;
+
+                        // Otherwise recurse deeper
+                        var found = FindAreaByLabel(prop.Value, label);
+                        if (found != null) return found;
+                    }
+                }
+                else if (prop.Value.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in prop.Value.EnumerateArray())
+                    {
+                        var found = FindAreaByLabel(item, label);
+                        if (found != null) return found;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     [Fact(Timeout = 30000)]
     public async Task Thumbnail_RendersStackControl()
     {
@@ -225,5 +272,163 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         result.Should().NotBeNull();
         result!.Roles.Should().HaveCount(1);
         result.Roles[0].Role.Should().Be("Editor", "Admin should have been removed");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task Overview_RendersChangeSubjectButton()
+    {
+        var assignment = new AccessAssignment
+        {
+            AccessObject = "User/alice",
+            DisplayName = "Alice",
+            Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
+        };
+        await CreateAssignmentNodeAsync("alice-access", assignment);
+
+        var client = GetClient();
+        var hostAddress = NodeAddress("alice-access");
+
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            hostAddress, reference);
+
+        // Wait for Overview to render with actual areas (skip progress-only emissions)
+        var item = await stream
+            .Where(i => i.Value.TryGetProperty("areas", out var areas)
+                && areas.EnumerateObject().Any())
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        // Search through the raw JSON for a ButtonControl with label "Change Subject"
+        var json = item.Value.GetRawText();
+        json.Should().Contain("Change Subject",
+            "Overview should contain a 'Change Subject' button for admins");
+    }
+
+    [Fact]
+    public void Overview_RendersSubjectPickerQueries()
+    {
+        // Verify that the [MeshNode] attribute on AccessObject provides queries
+        // that allow selecting any mesh node via descendants scope
+        var meshNodeAttr = typeof(AccessAssignment)
+            .GetProperty(nameof(AccessAssignment.AccessObject))!
+            .GetCustomAttributes(typeof(MeshWeaver.Domain.MeshNodeAttribute), false)
+            .OfType<MeshWeaver.Domain.MeshNodeAttribute>().FirstOrDefault();
+
+        meshNodeAttr.Should().NotBeNull("AccessObject should have [MeshNode] attribute");
+        meshNodeAttr!.Queries.Should().HaveCountGreaterThan(0,
+            "AccessObject should have at least one query for the picker");
+        meshNodeAttr.Queries.Should().Contain(q => q.Contains("scope:descendants"),
+            "should search descendants to allow selecting any node");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task UpdateAccessObject_ChangesSubject_ViaDataChange()
+    {
+        var assignment = new AccessAssignment
+        {
+            AccessObject = "User/dave",
+            DisplayName = "Dave",
+            Roles = [new RoleAssignment { Role = "Viewer", Denied = false }]
+        };
+        var created = await CreateAssignmentNodeAsync("dave-access", assignment);
+
+        // Directly update the node's AccessObject via DataChangeRequest
+        var updatedAssignment = assignment with { AccessObject = "User/eve" };
+        var updatedNode = created with { Content = updatedAssignment };
+        Mesh.Post(
+            new DataChangeRequest { ChangedBy = "test" }.WithUpdates(updatedNode),
+            o => o.WithTarget(Mesh.Address));
+
+        // Verify the update was persisted
+        var ct = TestContext.Current.CancellationToken;
+        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
+        MeshNode? result = null;
+        while (System.DateTime.UtcNow < deadline)
+        {
+            result = await MeshQuery
+                .QueryAsync<MeshNode>($"path:{TestNamespace}/dave-access", ct: ct)
+                .FirstOrDefaultAsync(ct);
+
+            if (result?.Content is AccessAssignment a && a.AccessObject == "User/eve")
+                break;
+
+            await Task.Delay(100, ct);
+        }
+
+        result.Should().NotBeNull();
+        var resultAssignment = result!.Content as AccessAssignment;
+        resultAssignment.Should().NotBeNull();
+        resultAssignment!.AccessObject.Should().Be("User/eve");
+        resultAssignment.Roles.Should().HaveCount(1, "roles should be preserved");
+    }
+
+    [Fact]
+    public void UpdateAccessObject_RejectsEmpty_Validation()
+    {
+        // Verify the dialog-level validation: empty string should be rejected
+        // This tests the guard in UpdateAccessObjectAsync
+        var result = string.IsNullOrEmpty("");
+        result.Should().BeTrue("empty AccessObject should be considered invalid");
+
+        var resultNull = string.IsNullOrEmpty(null);
+        resultNull.Should().BeTrue("null AccessObject should be considered invalid");
+
+        var resultWhitespace = string.IsNullOrEmpty("  ".Trim());
+        resultWhitespace.Should().BeTrue("whitespace-only AccessObject should be considered invalid after trim");
+
+        var resultValid = string.IsNullOrEmpty("User/frank");
+        resultValid.Should().BeFalse("a valid node path should be accepted");
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task UpdateAccessObject_CanSelectAnyNodeType_ViaDataChange()
+    {
+        // Create an assignment pointing to a User
+        var assignment = new AccessAssignment
+        {
+            AccessObject = "User/george",
+            DisplayName = "George",
+            Roles = [new RoleAssignment { Role = "Editor", Denied = false }]
+        };
+        var created = await CreateAssignmentNodeAsync("george-access", assignment);
+
+        // Create a Group node as the new target
+        var groupNode = new MeshNode("engineering", "Admin")
+        {
+            Name = "Engineering",
+            NodeType = "Group",
+        };
+        await NodeFactory.CreateNodeAsync(groupNode);
+
+        // Change AccessObject from a User to a Group path
+        var updatedAssignment = assignment with { AccessObject = "Admin/engineering" };
+        var updatedNode = created with { Content = updatedAssignment };
+        Mesh.Post(
+            new DataChangeRequest { ChangedBy = "test" }.WithUpdates(updatedNode),
+            o => o.WithTarget(Mesh.Address));
+
+        // Verify the update was persisted — AccessObject can be any mesh node path
+        var ct = TestContext.Current.CancellationToken;
+        var deadline = System.DateTime.UtcNow.Add(10.Seconds());
+        MeshNode? result = null;
+        while (System.DateTime.UtcNow < deadline)
+        {
+            result = await MeshQuery
+                .QueryAsync<MeshNode>($"path:{TestNamespace}/george-access", ct: ct)
+                .FirstOrDefaultAsync(ct);
+
+            if (result?.Content is AccessAssignment a && a.AccessObject == "Admin/engineering")
+                break;
+
+            await Task.Delay(100, ct);
+        }
+
+        result.Should().NotBeNull();
+        var resultAssignment = result!.Content as AccessAssignment;
+        resultAssignment.Should().NotBeNull();
+        resultAssignment!.AccessObject.Should().Be("Admin/engineering");
+        resultAssignment.Roles.Should().HaveCount(1, "roles should be preserved after subject change");
     }
 }

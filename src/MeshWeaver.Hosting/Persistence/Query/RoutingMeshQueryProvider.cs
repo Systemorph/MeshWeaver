@@ -72,6 +72,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 accessible.Add(partitionKey);
         }
 
+        // Always include the User partition — users can access their own subtree
+        // via RLS self-access and SatelliteAccessRule. Per-node filtering is handled
+        // by the node type access rules, not at the partition level.
+        if (!accessible.Contains("User") && _router.QueryProviders.ContainsKey("User"))
+            accessible.Add("User");
+
         _accessCache.Set(cacheKey, accessible, CacheOptions);
         return accessible;
     }
@@ -122,7 +128,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
-        // Fan out: query accessible partitions in parallel, each scoped to its own namespace
+        // Fan out: query accessible partitions in parallel, each scoped to its own namespace.
         var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var channel = Channel.CreateUnbounded<object>();

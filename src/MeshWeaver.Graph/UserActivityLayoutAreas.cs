@@ -119,7 +119,7 @@ public static class UserActivityLayoutAreas
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var recentlyChangedNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity limit:30 scope:subtree"))
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity limit:30 scope:subtree is:main"))
             recentlyChangedNodes.Add(n);
 
         var grid = Controls.LayoutGrid.WithStyle("gap: 8px; width: 100%;");
@@ -186,7 +186,7 @@ public static class UserActivityLayoutAreas
 
         var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var recentNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:accessed limit:10 scope:subtree"))
+        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:accessed limit:10 scope:subtree is:main"))
             recentNodes.Add(n);
 
         if (recentNodes.Count == 0)
@@ -222,8 +222,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Latest Threads</div>"));
 
         section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:Thread")
-            .WithNamespace(nodePath)
+            .WithHiddenQuery("nodeType:Thread sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
@@ -246,7 +245,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">My Items</div>"));
 
         section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{nodePath} is:main context:search")
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)

@@ -260,6 +260,19 @@ public static class AccessAssignmentLayoutAreas
             }
         }
 
+        // Change Subject button (admin only)
+        if (canEdit)
+        {
+            stack = stack.WithView(Controls.Button("Change Subject")
+                .WithAppearance(Appearance.Neutral)
+                .WithStyle("align-self: flex-start; margin-top: 8px;")
+                .WithClickAction(ctx =>
+                {
+                    ShowChangeAccessObjectDialog(ctx, hubPath);
+                    return Task.CompletedTask;
+                }));
+        }
+
         // Roles section — LayoutGrid, 3 per row
         stack = stack.WithView(Controls.H3("Roles").WithStyle("margin: 32px 0 16px 0;"));
 
@@ -472,5 +485,78 @@ public static class AccessAssignmentLayoutAreas
 
         ctx.Host.UpdateArea(DialogControl.DialogArea,
             Controls.Dialog(formContent, "Add Role").WithSize("M").WithActions(actions));
+    }
+
+    private static void ShowChangeAccessObjectDialog(UiActionContext ctx, string nodePath)
+    {
+        var formId = $"change_subject_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["accessObject"] = "" });
+
+        // Resolve queries for AccessObject from [MeshNode] attribute
+        var meshNodeAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.AccessObject))!
+            .GetCustomAttributes(typeof(MeshNodeAttribute), false)
+            .OfType<MeshNodeAttribute>().First();
+        var subjectQueries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodePath, nodePath);
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("accessObject"))
+            {
+                Queries = subjectQueries,
+                Label = "Subject (User or Group)",
+                Required = true,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            });
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Save")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async saveCtx =>
+                {
+                    var formValues = await saveCtx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+
+                    var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                    if (string.IsNullOrEmpty(selectedSubject))
+                    {
+                        var errorDialog = Controls.Dialog(
+                            Controls.Markdown("Please select a **Subject**."),
+                            "Validation Error"
+                        ).WithSize("S").WithClosable(true);
+                        saveCtx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+                        return;
+                    }
+
+                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    await UpdateAccessObjectAsync(saveCtx.Host, nodePath, selectedSubject);
+                }));
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea,
+            Controls.Dialog(formContent, "Change Subject").WithSize("M").WithActions(actions));
+    }
+
+    /// <summary>
+    /// Updates the AccessObject on the assignment node.
+    /// </summary>
+    internal static async Task UpdateAccessObjectAsync(LayoutAreaHost host, string nodePath, string newAccessObject)
+    {
+        if (string.IsNullOrEmpty(newAccessObject)) return;
+
+        var node = await GetCurrentNodeAsync(host, nodePath);
+        if (node == null) return;
+
+        var assignment = AccessControlLayoutArea.DeserializeAssignment(node);
+        if (assignment == null) return;
+
+        var updated = node with { Content = assignment with { AccessObject = newAccessObject } };
+        host.Workspace.RequestChange(DataChangeRequest.Update([updated]), null, null);
     }
 }
