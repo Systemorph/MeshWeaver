@@ -37,6 +37,9 @@ public static class UserNodeType
         {
             services.AddSingleton<IStaticNodeProvider, UserNodeProvider>();
             services.AddSingleton<INodeTypeAccessRule, UserAccessRule>();
+            services.AddSingleton<INodePostCreationHandler>(sp =>
+                new UserScopeGrantHandler(
+                    sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             return services;
         });
         return builder;
@@ -135,4 +138,26 @@ public static class UserNodeType
         return innerAddress.StartsWith(PortalNamespace + "/", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Post-creation handler that grants the user Read access on their own User/{userId} scope.
+    /// Materialized into user_effective_permissions so the standard access control SQL
+    /// handles visibility for all satellite nodes (threads, activities, etc.) under the user.
+    /// </summary>
+    private class UserScopeGrantHandler(ISecurityService securityService) : INodePostCreationHandler
+    {
+        public string NodeType => UserNodeType.NodeType;
+
+        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        {
+            // Grant the user Viewer role on their own User node path.
+            // This materializes into user_effective_permissions as Read on User/{userId}/...
+            // so all satellite nodes (threads, activities) are visible to the user.
+            var userId = createdNode.Id;
+            if (string.IsNullOrEmpty(userId))
+                return;
+
+            var userPath = createdNode.Path ?? $"User/{userId}";
+            await securityService.AddUserRoleAsync(userId, Role.Viewer.Id, userPath, assignedBy: "system", ct);
+        }
+    }
 }

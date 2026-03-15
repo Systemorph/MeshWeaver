@@ -123,6 +123,35 @@ public partial class MeshSearchView : IDisposable
     private SectionConfig? BoundSections => ViewModel?.Sections;
     private GridConfig BoundGrid => ViewModel?.Grid ?? new GridConfig();
 
+    /// <summary>
+    /// "Show all" href — auto-generated from the query when ItemLimit is set.
+    /// Passes hidden query as hq= and visible query as q= to the Search page.
+    /// </summary>
+    private string? BoundShowAllHref
+    {
+        get
+        {
+            // Explicit href takes priority
+            if (!string.IsNullOrEmpty(BoundSections?.ShowAllHref))
+                return BoundSections.ShowAllHref;
+
+            // Auto-derive when there's an item limit (meaning results are truncated)
+            if (BoundSections?.ItemLimit > 0)
+            {
+                var parts = new List<string>();
+                var hidden = BoundHiddenQuery;
+                if (!string.IsNullOrWhiteSpace(hidden))
+                    parts.Add($"hq={Uri.EscapeDataString(hidden)}");
+                if (!string.IsNullOrWhiteSpace(_currentValue))
+                    parts.Add($"q={Uri.EscapeDataString(_currentValue.Trim())}");
+                if (parts.Count > 0)
+                    return $"/search?{string.Join("&", parts)}";
+            }
+
+            return null;
+        }
+    }
+
     // Pre-computed groups (from ViewModel)
     private GroupedSearchResult? BoundPrecomputedGroups => ViewModel?.PrecomputedGroups;
 

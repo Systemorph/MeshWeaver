@@ -1,409 +1,65 @@
 @page "/search"
-@using System.Text.Json
-@using MeshWeaver.Mesh
-@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Components
 @using MeshWeaver.Messaging
 @using Microsoft.FluentUI.AspNetCore.Components
-@using Microsoft.JSInterop
-@inject IMeshService? MeshQuery
-@inject INavigationService NavigationService
 @inject IMessageHub Hub
-@inject IJSRuntime JS
 
 <PageTitle>Search - Memex</PageTitle>
 
-<div class="search-page" style="padding: 24px; max-width: 1400px; margin: 0 auto;">
-    <h1 style="margin: 0 0 16px 0;">Search</h1>
-
-    <!-- Search input with query -->
-    <div style="display: flex; gap: 8px; margin-bottom: 24px; align-items: center; width: 100%;">
-        <FluentTextField @bind-Value="searchInput"
-                         Placeholder="Search..."
-                         Style="flex: 1;"
-                         @onkeyup="HandleKeyUp" />
-        <FluentButton Appearance="Appearance.Accent" OnClick="ExecuteSearch">Search</FluentButton>
-    </div>
-
-    @if (!string.IsNullOrWhiteSpace(Query))
-    {
-        <p style="color: var(--neutral-foreground-hint); margin-bottom: 16px;">
-            Showing results for: <strong>@Query</strong>
-        </p>
-    }
-
-    @if (isLoading)
-    {
-        <FluentProgressRing />
-    }
-    else if (results == null || results.Length == 0)
-    {
-        <div style="color: var(--neutral-foreground-hint); padding: 24px 0;">
-            @if (string.IsNullOrWhiteSpace(Query))
-            {
-                <p>Enter a search query to find items.</p>
-            }
-            else
-            {
-                <p>No results found for "<strong>@Query</strong>"</p>
-                <p style="margin-top: 12px; font-size: 14px;">
-                    Try different keywords or use search syntax:
-                    <br /><code>name:*claims*</code> - Search by name
-                    <br /><code>nodeType:Markdown</code> - Filter by type
-                    <br /><code>namespace:MeshWeaver</code> - Search within namespace
-                    <br /><code>scope:descendants</code> - Include all descendants
-                </p>
-            }
-        </div>
-    }
-    else
-    {
-        <p style="color: var(--neutral-foreground-hint); margin-bottom: 16px;">Found @results.Length item@(results.Length != 1 ? "s" : "")</p>
-
-        @foreach (var group in GetHierarchicalGroups())
-        {
-            <h3 style="margin: 24px 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--neutral-stroke-rest);">@group.Category (@group.RootNodes.Count)</h3>
-
-            @foreach (var rootNode in group.RootNodes)
-            {
-                @RenderNodeWithChildren(rootNode, 0)
-            }
-        }
-    }
+<div style="max-width: 1400px; margin: 0 auto; padding: 24px; width: 100%;">
+    <MeshSearchView ViewModel="@searchControl" />
 </div>
 
 @code {
+    /// <summary>Visible query — editable in the search box.</summary>
     [SupplyParameterFromQuery(Name = "q")]
     public string? Query { get; set; }
 
+    /// <summary>Hidden query parts — always appended. Supports multiple ?hq=...&amp;hq=... values.</summary>
+    [SupplyParameterFromQuery(Name = "hq")]
+    public string[]? HiddenQueries { get; set; }
+
+    /// <summary>Namespace scope for search.</summary>
     [SupplyParameterFromQuery(Name = "ns")]
-    public string? ExcludeNamespace { get; set; }
+    public string? Namespace { get; set; }
 
-    private string? searchInput;
-    private string? lastExecutedQuery;
-    private MeshNode[]? results;
-    private bool isLoading;
-    private bool isInitialized;
-    private int selectedIndex = -1;
-    private MeshNode[]? flatResults;
+    /// <summary>Render mode: Flat, Grouped, Hierarchical.</summary>
+    [SupplyParameterFromQuery(Name = "mode")]
+    public string? Mode { get; set; }
 
-    protected override async Task OnParametersSetAsync()
+    /// <summary>Max items per section (default 50).</summary>
+    [SupplyParameterFromQuery(Name = "limit")]
+    public int? Limit { get; set; }
+
+    private MeshSearchControl searchControl = new();
+
+    protected override void OnParametersSet()
     {
-        // Only update searchInput from URL on initial load or when URL changes externally
-        if (!isInitialized || (Query != lastExecutedQuery && Query != searchInput))
+        var control = Controls.MeshSearch
+            .WithVisibleQuery(Query ?? "")
+            .WithPlaceholder("Search... (e.g. nodeType:Thread, namespace:ACME scope:descendants)")
+            .WithSectionCounts(true)
+            .WithCollapsibleSections(true)
+            .WithItemLimit(Limit ?? 50);
+
+        var hiddenQuery = HiddenQueries != null
+            ? string.Join(" ", HiddenQueries.Where(q => !string.IsNullOrWhiteSpace(q)))
+            : null;
+        if (!string.IsNullOrWhiteSpace(hiddenQuery))
+            control = control.WithHiddenQuery(hiddenQuery);
+
+        if (!string.IsNullOrWhiteSpace(Namespace))
+            control = control.WithNamespace(Namespace);
+
+        var renderMode = Mode?.ToLowerInvariant() switch
         {
-            searchInput = Query;
-            isInitialized = true;
-        }
+            "flat" => MeshSearchRenderMode.Flat,
+            "hierarchical" => MeshSearchRenderMode.Hierarchical,
+            _ => MeshSearchRenderMode.Grouped
+        };
+        control = control.WithRenderMode(renderMode);
 
-        // Only search if query changed
-        if (Query != lastExecutedQuery)
-        {
-            lastExecutedQuery = Query;
-            await SearchAsync(Query);
-        }
-    }
-
-    private RenderFragment RenderNodeWithChildren(MeshNode node, int indentLevel) => __builder =>
-    {
-        var marginLeft = indentLevel * 32;
-        <div style="margin-left: @(marginLeft)px; margin-bottom: 12px;">
-            <div class="thumbnail-card" id="search-result-@GetFlatIndex(node)" @onclick="@(() => NavigateToNode(node))"
-                 style="display: flex; gap: 12px; padding: 16px; background: var(--neutral-layer-card-container); border: 1px solid @(IsSelected(node) ? "var(--accent-fill-rest)" : "var(--neutral-stroke-rest)"); border-radius: 8px; cursor: pointer; transition: all 0.15s ease; @(IsSelected(node) ? "box-shadow: 0 2px 8px rgba(0,0,0,0.1);" : "")"
-                 onmouseover="this.style.borderColor='var(--accent-fill-rest)'; this.style.boxShadow='0 2px 8px rgba(0,0,0,0.1)';"
-                 onmouseout="this.style.borderColor='@(IsSelected(node) ? "var(--accent-fill-rest)" : "var(--neutral-stroke-rest)")'; this.style.boxShadow='@(IsSelected(node) ? "0 2px 8px rgba(0,0,0,0.1)" : "none")';">
-
-                <!-- Image/Icon -->
-                <div style="width: 48px; height: 48px; flex-shrink: 0; border-radius: 8px; overflow: hidden; background: var(--neutral-layer-floating); display: flex; align-items: center; justify-content: center;">
-                    @if (!string.IsNullOrEmpty(GetImageUrl(node)))
-                    {
-                        <img src="@GetImageUrl(node)" alt="@node.Name" style="width: 100%; height: 100%; object-fit: cover;" />
-                    }
-                    else
-                    {
-                        <span style="font-size: 20px; font-weight: 600; color: var(--accent-fill-rest);">@GetInitial(node)</span>
-                    }
-                </div>
-
-                <!-- Text content -->
-                <div style="flex: 1; min-width: 0; overflow: hidden;">
-                    <div style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--neutral-foreground-rest);">@node.Name</div>
-                    @if (!string.IsNullOrEmpty(node.NodeType))
-                    {
-                        <div style="font-size: 13px; color: var(--neutral-foreground-hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px;">@node.NodeType</div>
-                    }
-                    <div style="font-size: 12px; color: var(--neutral-foreground-hint); opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px;">@node.Path</div>
-                </div>
-            </div>
-        </div>
-
-        @foreach (var child in FindDirectChildren(node))
-        {
-            @RenderNodeWithChildren(child, indentLevel + 1)
-        }
-    };
-
-    private record CategoryGroup(string Category, List<MeshNode> RootNodes);
-
-    private List<CategoryGroup> GetHierarchicalGroups()
-    {
-        if (results == null || results.Length == 0)
-            return new List<CategoryGroup>();
-
-        var allPaths = results.Select(n => n.Path).ToHashSet();
-
-        // Find root nodes - those that have no parent in the result set
-        var rootNodes = results
-            .Where(n => !HasParentInSet(n.Path, allPaths))
-            .ToList();
-
-        // Group by category, order by path length, then Order (if set), then name
-        return rootNodes
-            .GroupBy(n => n.Category ?? n.NodeType ?? "Other")
-            .OrderBy(g => g.Key)
-            .Select(g => new CategoryGroup(g.Key, g
-                .OrderBy(n => n.Path.Length)
-                .ThenBy(n => n.Order ?? int.MaxValue)
-                .ThenBy(n => n.Name)
-                .ToList()))
-            .ToList();
-    }
-
-    private bool HasParentInSet(string path, HashSet<string> allPaths)
-    {
-        var pathNormalized = path.Trim('/');
-        var lastSlash = pathNormalized.LastIndexOf('/');
-        while (lastSlash > 0)
-        {
-            var parentPath = pathNormalized.Substring(0, lastSlash);
-            if (allPaths.Contains(parentPath))
-                return true;
-            lastSlash = parentPath.LastIndexOf('/');
-        }
-        return false;
-    }
-
-    private List<MeshNode> FindDirectChildren(MeshNode parent)
-    {
-        if (results == null) return new List<MeshNode>();
-
-        var parentPath = parent.Path + "/";
-        var allPaths = results.Select(n => n.Path).ToHashSet();
-
-        return results
-            .Where(n => n.Path.StartsWith(parentPath) && !HasIntermediateParent(n.Path, parent.Path, allPaths))
-            .OrderBy(n => n.Path.Length)
-            .ThenBy(n => n.Order ?? int.MaxValue)
-            .ThenBy(n => n.Name)
-            .ToList();
-    }
-
-    private bool HasIntermediateParent(string childPath, string parentPath, HashSet<string> allPaths)
-    {
-        var childNormalized = childPath.Trim('/');
-        var parentNormalized = parentPath.Trim('/');
-
-        var lastSlash = childNormalized.LastIndexOf('/');
-        while (lastSlash > parentNormalized.Length)
-        {
-            var intermediatePath = childNormalized.Substring(0, lastSlash);
-            if (allPaths.Contains(intermediatePath))
-                return true;
-            lastSlash = intermediatePath.LastIndexOf('/');
-        }
-        return false;
-    }
-
-    private async Task SearchAsync(string? query)
-    {
-        if (string.IsNullOrWhiteSpace(query) || MeshQuery == null)
-        {
-            results = [];
-            return;
-        }
-
-        isLoading = true;
-        StateHasChanged();
-
-        try
-        {
-            var fullQuery = $"{query} is:main context:search";
-            var request = new MeshQueryRequest
-            {
-                Query = fullQuery,
-                Limit = 100
-            };
-
-            var searchResults = await MeshQuery.QueryAsync<MeshNode>(request).ToArrayAsync();
-
-            // Filter out the excluded namespace (the parent node itself)
-            if (!string.IsNullOrWhiteSpace(ExcludeNamespace))
-            {
-                var excludePath = ExcludeNamespace.Trim('/');
-                searchResults = searchResults.Where(n => n.Path != excludePath).ToArray();
-            }
-
-            // Order by path length, then Order (if set), then name
-            results = searchResults
-                .OrderBy(n => n.Path.Length)
-                .ThenBy(n => n.Order ?? int.MaxValue)
-                .ThenBy(n => n.Name)
-                .ToArray();
-            flatResults = null;
-            selectedIndex = -1;
-        }
-        catch
-        {
-            results = [];
-        }
-        finally
-        {
-            isLoading = false;
-        }
-    }
-
-    private async Task ExecuteSearch()
-    {
-        if (!string.IsNullOrWhiteSpace(searchInput))
-        {
-            // Execute search with the user's query
-            lastExecutedQuery = searchInput;
-            Query = searchInput;
-            await SearchAsync(searchInput);
-
-            // Update URL for bookmarking without forcing a full reload
-            var encodedQuery = Uri.EscapeDataString(searchInput);
-            NavigationService.NavigateTo($"/search?q={encodedQuery}");
-        }
-    }
-
-    private async Task HandleKeyUp(KeyboardEventArgs e)
-    {
-        var flat = GetFlatResults();
-
-        switch (e.Key)
-        {
-            case "ArrowDown":
-                if (flat.Length > 0)
-                {
-                    selectedIndex = selectedIndex < flat.Length - 1 ? selectedIndex + 1 : 0;
-                    await ScrollToSelected();
-                }
-                break;
-
-            case "ArrowUp":
-                if (flat.Length > 0)
-                {
-                    selectedIndex = selectedIndex > 0 ? selectedIndex - 1 : flat.Length - 1;
-                    await ScrollToSelected();
-                }
-                break;
-
-            case "Enter":
-                if (selectedIndex >= 0 && selectedIndex < flat.Length)
-                {
-                    NavigateToNode(flat[selectedIndex]);
-                }
-                else
-                {
-                    await ExecuteSearch();
-                }
-                break;
-
-            case "Escape":
-                selectedIndex = -1;
-                break;
-        }
-    }
-
-    private async Task ScrollToSelected()
-    {
-        await JS.InvokeVoidAsync("eval", $"document.getElementById('search-result-{selectedIndex}')?.scrollIntoView({{block:'nearest'}})");
-    }
-
-    private MeshNode[] GetFlatResults()
-    {
-        if (flatResults != null)
-            return flatResults;
-
-        if (results == null || results.Length == 0)
-            return [];
-
-        var flat = new List<MeshNode>();
-        foreach (var group in GetHierarchicalGroups())
-        {
-            foreach (var rootNode in group.RootNodes)
-                FlattenNode(rootNode, flat);
-        }
-        flatResults = flat.ToArray();
-        return flatResults;
-    }
-
-    private void FlattenNode(MeshNode node, List<MeshNode> flat)
-    {
-        flat.Add(node);
-        foreach (var child in FindDirectChildren(node))
-            FlattenNode(child, flat);
-    }
-
-    private int GetFlatIndex(MeshNode node)
-    {
-        var flat = GetFlatResults();
-        return Array.IndexOf(flat, node);
-    }
-
-    private bool IsSelected(MeshNode node) => selectedIndex >= 0 && GetFlatIndex(node) == selectedIndex;
-
-    private void NavigateToNode(MeshNode node)
-    {
-        NavigationService.NavigateTo($"/{node.Path}");
-    }
-
-    private string GetInitial(MeshNode node)
-    {
-        return !string.IsNullOrEmpty(node.Name) ? node.Name[0].ToString().ToUpper() : "?";
-    }
-
-    private string? GetImageUrl(MeshNode? node)
-    {
-        if (node == null)
-            return null;
-
-        // First check content properties (avatar, logo)
-        if (node.Content != null)
-        {
-            if (node.Content is System.Text.Json.JsonElement jsonElement)
-            {
-                if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var avatar = avatarProp.GetString();
-                    if (!string.IsNullOrEmpty(avatar))
-                        return avatar;
-                }
-                if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var avatar = avatarPascalProp.GetString();
-                    if (!string.IsNullOrEmpty(avatar))
-                        return avatar;
-                }
-                if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var logo = logoProp.GetString();
-                    if (!string.IsNullOrEmpty(logo))
-                        return logo;
-                }
-                if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    var logo = logoPascalProp.GetString();
-                    if (!string.IsNullOrEmpty(logo))
-                        return logo;
-                }
-            }
-        }
-
-        // Fall back to node.Icon
-        if (!string.IsNullOrEmpty(node.Icon))
-            return node.Icon;
-
-        return null;
+        searchControl = control;
     }
 }

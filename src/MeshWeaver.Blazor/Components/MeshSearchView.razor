@@ -167,8 +167,12 @@
 
                         @if (group.Items.Count < group.TotalCount)
                         {
-                            <div class="mesh-search-show-more">
+                            <div class="mesh-search-show-more" style="display: flex; align-items: center; gap: 12px; padding-top: 4px;">
                                 <span style="color: var(--neutral-foreground-hint);">Showing @group.Items.Count of @group.TotalCount</span>
+                                @if (!string.IsNullOrEmpty(BoundShowAllHref))
+                                {
+                                    <a href="@BoundShowAllHref" style="color: var(--accent-foreground-rest); text-decoration: none; font-size: 0.85rem; font-weight: 500;">Show all &rarr;</a>
+                                }
                             </div>
                         }
                     }

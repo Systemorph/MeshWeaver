@@ -115,8 +115,14 @@ internal class SecurePersistenceServiceDecorator : IStorageService
     public IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options)
         => _inner.GetChildrenAsync(parentPath, options);
 
+    public IAsyncEnumerable<MeshNode> GetAllChildrenAsync(string? parentPath, JsonSerializerOptions options)
+        => _inner.GetAllChildrenAsync(parentPath, options);
+
     public IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
         => _inner.GetDescendantsAsync(parentPath, options);
+
+    public IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
+        => _inner.GetAllDescendantsAsync(parentPath, options);
 
     public Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
         => _inner.SaveNodeAsync(node, options, ct);

@@ -181,6 +181,9 @@ public record MeshSearchControl()
     public MeshSearchControl WithCollapsibleSections(bool collapsible) =>
         this with { Sections = (Sections ?? new SectionConfig()) with { Collapsible = collapsible } };
 
+    public MeshSearchControl WithShowAllHref(string href) =>
+        this with { Sections = (Sections ?? new SectionConfig()) with { ShowAllHref = href } };
+
     // Sorting fluent methods
     public MeshSearchControl WithSortBy(string property, bool ascending = true) =>
         this with { Sorting = (Sorting ?? new SortConfig()) with { SortByProperty = property, Ascending = ascending } };

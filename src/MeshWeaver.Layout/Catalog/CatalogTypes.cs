@@ -38,6 +38,12 @@ public record SectionConfig
     /// Whether sections can be collapsed/expanded (default true).
     /// </summary>
     public bool Collapsible { get; init; } = true;
+
+    /// <summary>
+    /// When set, a "Show all" link is rendered next to "Showing X of Y"
+    /// that navigates to this URL (typically a full search page with the query pre-populated).
+    /// </summary>
+    public string? ShowAllHref { get; init; }
 }
 
 /// <summary>

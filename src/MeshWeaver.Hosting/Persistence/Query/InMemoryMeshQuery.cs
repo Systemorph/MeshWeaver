@@ -177,10 +177,14 @@ internal class InMemoryMeshQuery(
         }
 
         // Children scope
+        // When the query has conditions (e.g., nodeType:Thread), include satellite children.
         if (effectiveScope == QueryScope.Children)
         {
-            await foreach (var child in persistence.GetChildrenSecureAsync(basePath, userId, options)
-                .WithCancellation(ct))
+            var source = parsedQuery.HasConditions
+                ? persistence.GetAllChildrenAsync(basePath, options)
+                : persistence.GetChildrenSecureAsync(basePath, userId, options);
+
+            await foreach (var child in source.WithCancellation(ct))
             {
                 if (_evaluator.Matches(child, parsedQuery) && !IsExcludedByContext(child, context)
                     && !IsExcludedByIsMain(child, parsedQuery))
@@ -210,12 +214,17 @@ internal class InMemoryMeshQuery(
         }
 
         // Descendants scope
+        // When the query has conditions (e.g., nodeType:Thread), use GetAllDescendantsAsync
+        // to include satellite nodes. Otherwise use GetDescendantsSecureAsync (excludes satellites).
         if (effectiveScope == QueryScope.Descendants
             || effectiveScope == QueryScope.Hierarchy
             || effectiveScope == QueryScope.Subtree)
         {
-            await foreach (var descendant in persistence.GetDescendantsSecureAsync(
-                basePath, userId, options).WithCancellation(ct))
+            var source = parsedQuery.HasConditions
+                ? persistence.GetAllDescendantsAsync(basePath, options)
+                : persistence.GetDescendantsSecureAsync(basePath, userId, options);
+
+            await foreach (var descendant in source.WithCancellation(ct))
             {
                 if (_evaluator.Matches(descendant, parsedQuery)
                     && !IsExcludedByContext(descendant, context)

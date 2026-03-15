@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
+using MeshThread = MeshWeaver.AI.Thread;
 using FluentAssertions;
 using MeshWeaver.AI;
 using MeshWeaver.Mesh;
@@ -89,7 +91,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "My First Chat",
             NodeType = "Thread",
             MainNode = "User/alice",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         };
         await _threadAdapter.WriteAsync(thread, _options, ct);
 
@@ -118,7 +120,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Message Test Chat",
             NodeType = "Thread",
             MainNode = "User/alice",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         // Post user message
@@ -175,7 +177,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Round Trip Chat",
             NodeType = "Thread",
             MainNode = "User/bob",
-            Content = new Thread
+            Content = new MeshThread
             {
                 ParentPath = "User/bob",
                 ProviderType = "TestProvider"
@@ -386,7 +388,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "First Chat",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("chat-q2", "User/alice/_Thread")
@@ -394,8 +396,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Second Chat",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
+
+        // Grant alice access to her own scope
+        await GrantUserScopeAsync("alice", ct);
 
         // Query via PostgreSqlMeshQuery (userId required for access control)
         var query = new PostgreSqlMeshQuery(_threadAdapter);
@@ -411,11 +416,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     /// <summary>
-    /// Verifies that "nodeType:Thread" (without namespace) can find all threads
-    /// across the satellite table — this is the query used by "Latest Threads".
+    /// Verifies that "nodeType:Thread" (without namespace) finds threads in
+    /// the satellite table — each user sees their own threads only.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task QueryThreads_ByNodeTypeOnly_FindsAllThreads()
+    public async Task QueryThreads_ByNodeTypeOnly_FindsOwnThreads()
     {
         var ct = TestContext.Current.CancellationToken;
 
@@ -425,7 +430,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Alice Chat",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("chat-all2", "User/bob/_Thread")
@@ -433,20 +438,31 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Bob Chat",
             NodeType = "Thread",
             MainNode = "User/bob/_Thread",
-            Content = new Thread { ParentPath = "User/bob" }
+            Content = new MeshThread { ParentPath = "User/bob" }
         }, _options, ct);
 
+        // Grant both users access to their own scopes
+        await GrantUserScopeAsync("alice", ct);
+        await GrantUserScopeAsync("bob", ct);
+
+        // Alice sees her own thread
         var query = new PostgreSqlMeshQuery(_threadAdapter);
-        var request = MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice");
+        var aliceResults = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(
+            MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice"), _options, ct))
+            aliceResults.Add((MeshNode)item);
 
-        var results = new List<MeshNode>();
-        await foreach (var item in query.QueryAsync(request, _options, ct))
-            results.Add((MeshNode)item);
+        aliceResults.Should().Contain(n => n.Name == "Alice Chat");
+        aliceResults.Should().NotContain(n => n.Name == "Bob Chat");
 
-        results.Should().HaveCountGreaterThanOrEqualTo(2,
-            "should find threads from multiple users");
-        results.Should().Contain(n => n.Name == "Alice Chat");
-        results.Should().Contain(n => n.Name == "Bob Chat");
+        // Bob sees his own thread
+        var bobResults = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(
+            MeshQueryRequest.FromQuery("nodeType:Thread", userId: "bob"), _options, ct))
+            bobResults.Add((MeshNode)item);
+
+        bobResults.Should().Contain(n => n.Name == "Bob Chat");
+        bobResults.Should().NotContain(n => n.Name == "Alice Chat");
     }
 
     /// <summary>
@@ -465,7 +481,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Query Test Conv",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         await _messageAdapter.WriteAsync(new MeshNode("1", "User/alice/_Thread/conv-q")
@@ -512,6 +528,16 @@ public class ThreadMessageChatTests : IAsyncLifetime
     #region User scope visibility tests — users see own threads, not others'
 
     /// <summary>
+    /// Grants a user Viewer (Read) access on their own User/{userId} scope
+    /// in the effective permissions table — same as UserScopeGrantHandler does at runtime.
+    /// </summary>
+    private async Task GrantUserScopeAsync(string userId, CancellationToken ct)
+    {
+        var schemaAc = new PostgreSqlAccessControl(_schemaDs);
+        await schemaAc.GrantAsync($"User/{userId}", userId, "Read", isAllow: true, ct);
+    }
+
+    /// <summary>
     /// Alice can see her own threads via the user scope access rule.
     /// </summary>
     [Fact(Timeout = 30000)]
@@ -519,12 +545,15 @@ public class ThreadMessageChatTests : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
 
+        // Grant alice Read on her own scope (simulates UserScopeGrantHandler)
+        await GrantUserScopeAsync("alice", ct);
+
         await _threadAdapter.WriteAsync(new MeshNode("alice-thread", "User/alice/_Thread")
         {
             Name = "Alice Thread",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         var query = new PostgreSqlMeshQuery(_threadAdapter);
@@ -553,7 +582,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Alice Private Thread",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         // Query as bob — should NOT see alice's thread
@@ -578,12 +607,15 @@ public class ThreadMessageChatTests : IAsyncLifetime
     {
         var ct = TestContext.Current.CancellationToken;
 
+        // Grant alice Read on her scope (bob gets no grant)
+        await GrantUserScopeAsync("alice", ct);
+
         await _threadAdapter.WriteAsync(new MeshNode("alice-global", "User/alice/_Thread")
         {
             Name = "Alice Global",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new Thread { ParentPath = "User/alice" }
+            Content = new MeshThread { ParentPath = "User/alice" }
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("bob-global", "User/bob/_Thread")
@@ -591,7 +623,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Bob Global",
             NodeType = "Thread",
             MainNode = "User/bob/_Thread",
-            Content = new Thread { ParentPath = "User/bob" }
+            Content = new MeshThread { ParentPath = "User/bob" }
         }, _options, ct);
 
         // Query as alice

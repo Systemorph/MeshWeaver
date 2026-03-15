@@ -29,12 +29,28 @@ internal interface IStorageService
     IAsyncEnumerable<MeshNode> GetChildrenAsync(string? parentPath, JsonSerializerOptions options);
 
     /// <summary>
+    /// Gets ALL child nodes including satellites (MainNode != Path).
+    /// Used by filtered queries (e.g., nodeType:Thread) that need to find satellite children.
+    /// Default implementation delegates to GetChildrenAsync (excludes satellites).
+    /// </summary>
+    IAsyncEnumerable<MeshNode> GetAllChildrenAsync(string? parentPath, JsonSerializerOptions options)
+        => GetChildrenAsync(parentPath, options);
+
+    /// <summary>
     /// Gets all descendant nodes under the specified path.
     /// </summary>
     /// <param name="parentPath">Parent path</param>
     /// <param name="options">JSON serializer options for type polymorphism</param>
     /// <returns>Async enumerable of all descendant nodes</returns>
     IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options);
+
+    /// <summary>
+    /// Gets ALL descendant nodes including satellites (MainNode != Path).
+    /// Used by filtered queries (e.g., nodeType:Thread) that need to find satellite nodes.
+    /// Default implementation delegates to GetDescendantsAsync (excludes satellites).
+    /// </summary>
+    IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
+        => GetDescendantsAsync(parentPath, options);
 
     /// <summary>
     /// Creates or updates a node.
