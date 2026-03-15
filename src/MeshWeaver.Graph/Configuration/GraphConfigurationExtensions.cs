@@ -48,16 +48,12 @@ public static class GraphConfigurationExtensions
                 .AddPartitionType()
                 .AddGlobalSettingsType();
 
+            // Register Graph content types in the hub's type registry for polymorphic JSON serialization
+            builder.ConfigureHub(config => config.WithGraphTypes());
+
             // Register services that don't need hub-level dependencies at the mesh level
             builder.ConfigureServices(services =>
             {
-                // Register Graph configuration types in the mesh-level ITypeRegistry
-                // for polymorphic JSON deserialization by FileSystemStorageAdapter.
-                // This must happen at mesh level so the types are available before any hub is created.
-                // All content types are registered centrally via WithGraphTypes().
-                var typeRegistry = services.BuildServiceProvider().GetService<ITypeRegistry>();
-                typeRegistry?.WithGraphTypes();
-
                 // Register compilation cache options
                 services.AddOptions<CompilationCacheOptions>();
 

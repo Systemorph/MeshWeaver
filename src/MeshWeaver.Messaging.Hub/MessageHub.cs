@@ -512,14 +512,20 @@ public sealed class MessageHub : IMessageHub
                 combinedCts.Dispose();
                 if (d.Message is DeliveryFailure failure)
                 {
-                    tcs.SetException(new DeliveryFailureException(failure));
+                    tcs.TrySetException(new DeliveryFailureException(failure));
                     return d.Failed(failure.Message ?? "Delivery failed");
                 }
 
                 combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
                 var ret = await callback(d, combinedCts.Token);
-                tcs.SetResult(ret);
+                tcs.TrySetResult(ret);
                 return ret;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "ResolveCallback failed for message {MessageId} in hub {Address}", messageId, Address);
+                tcs.TrySetException(ex);
+                throw;
             }
             finally
             {

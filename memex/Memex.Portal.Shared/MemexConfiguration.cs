@@ -315,7 +315,7 @@ public static class MemexConfiguration
                             .MapContentCollection("attachments", contentStorageConfig.Name, $"attachments/{nodePath}");
                     }
 
-                    return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab().AddThreadSupport();
+                    return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })
                 // Add activity tracking to record user access patterns via ActivityLogBundler
                 .AddActivityTracking();

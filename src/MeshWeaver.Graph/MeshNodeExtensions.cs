@@ -3,6 +3,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
@@ -43,6 +44,12 @@ public static class MeshNodeExtensions
     /// This is the global registry for content types — used by the import tool, persistence layer,
     /// and runtime serialization. All built-in content types must be registered here.
     /// </summary>
+    public static MessageHubConfiguration WithGraphTypes(this MessageHubConfiguration config)
+    {
+        config.TypeRegistry.WithGraphTypes();
+        return config;
+    }
+
     public static ITypeRegistry WithGraphTypes(this ITypeRegistry typeRegistry)
     {
         typeRegistry.WithType(typeof(NodeTypeDefinition), nameof(NodeTypeDefinition));
