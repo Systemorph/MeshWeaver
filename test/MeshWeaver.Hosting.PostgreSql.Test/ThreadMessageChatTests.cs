@@ -525,6 +525,50 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     #endregion
 
+    #region Sort order tests
+
+    /// <summary>
+    /// Verifies sort:LastModified-desc returns newest threads first in PostgreSQL.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task QueryThreads_SortByLastModifiedDesc_NewestFirst()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await GrantUserScopeAsync("alice", ct);
+
+        await _threadAdapter.WriteAsync(new MeshNode("sort-old", "User/alice/_Thread")
+        {
+            Name = "Old Thread",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            LastModified = DateTimeOffset.UtcNow.AddDays(-10),
+            Content = new MeshThread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        await _threadAdapter.WriteAsync(new MeshNode("sort-new", "User/alice/_Thread")
+        {
+            Name = "New Thread",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            LastModified = DateTimeOffset.UtcNow,
+            Content = new MeshThread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+        var request = MeshQueryRequest.FromQuery(
+            "nodeType:Thread sort:LastModified-desc namespace:User/alice/_Thread", userId: "alice");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().HaveCountGreaterThanOrEqualTo(2);
+        results[0].Name.Should().Be("New Thread", "newest thread should be first");
+        results[1].Name.Should().Be("Old Thread", "oldest thread should be last");
+    }
+
+    #endregion
+
     #region User scope visibility tests — users see own threads, not others'
 
     /// <summary>

@@ -44,6 +44,7 @@ public static class ThreadLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
+                .WithView(MeshNodeLayoutAreas.OverviewArea, ThreadView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.CreateNodeArea, CreateView)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)

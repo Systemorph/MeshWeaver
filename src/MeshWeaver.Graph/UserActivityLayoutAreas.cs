@@ -68,12 +68,12 @@ public static class UserActivityLayoutAreas
 
             // Activity Feed — 2/3 width on desktop, full on mobile
             content = content.WithView(
-                await BuildActivityFeed(host),
+                BuildActivityFeed(),
                 skin => skin.WithXs(12).WithSm(8));
 
             // Recently Viewed — 1/3 width on desktop, full on mobile
             content = content.WithView(
-                await BuildRecentActivity(host, userId),
+                BuildRecentActivity(),
                 skin => skin.WithXs(12).WithSm(4));
 
             dashboard = dashboard.WithView(content);
@@ -104,34 +104,28 @@ public static class UserActivityLayoutAreas
     /// Activity timeline — shows main content nodes with recent changes, plus a pinned docs card.
     /// source:activity JOINs with Activity satellites and orders by most recent activity.
     /// </summary>
-    private static async Task<UiControl> BuildActivityFeed(LayoutAreaHost host)
+    private static UiControl BuildActivityFeed()
     {
         var section = Controls.Stack;
 
-        // Section header
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Activity Feed</div>"));
 
-        var feed = Controls.Stack.WithVerticalGap(12);
+        // Pinned documentation card
+        section = section.WithView(BuildDocumentationCard());
 
-        // Pinned documentation card — always first
-        feed = feed.WithView(BuildDocumentationCard());
+        // Activity feed — 2 items per row, ~4 rows visible, scrollable
+        section = section.WithView(Controls.Stack
+            .WithStyle("max-height: 480px; overflow-y: auto;")
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery("source:activity scope:subtree is:main sort:LastModified-desc")
+                .WithShowSearchBox(false)
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithCollapsibleSections(false)
+                .WithSectionCounts(false)
+                .WithMaxColumns(2)
+                .WithItemLimit(8)));
 
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var recentlyChangedNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:activity limit:30 scope:subtree is:main"))
-            recentlyChangedNodes.Add(n);
-
-        var grid = Controls.LayoutGrid.WithStyle("gap: 8px; width: 100%;");
-        foreach (var node in recentlyChangedNodes)
-        {
-            grid = grid.WithView(
-                MeshNodeCardControl.FromNode(node, node.Path ?? ""),
-                skin => skin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
-        }
-
-        feed = feed.WithView(grid);
-        section = section.WithView(feed);
         return section;
     }
 
@@ -176,38 +170,26 @@ public static class UserActivityLayoutAreas
     /// Recently Viewed panel — compact card grid, max 10 items, fixed height with scroll.
     /// Resolves full MeshNode for each item to get proper icon/thumbnail.
     /// </summary>
-    private static async Task<UiControl> BuildRecentActivity(LayoutAreaHost host, string _)
+    private static UiControl BuildRecentActivity()
     {
         var section = Controls.Stack;
 
-        // Section header
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recently Viewed</div>"));
 
-        var meshQuery = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var recentNodes = new List<MeshNode>();
-        await foreach (var n in meshQuery.QueryAsync<MeshNode>("source:accessed limit:10 scope:subtree is:main"))
-            recentNodes.Add(n);
+        // Recently viewed — 1 item per row (full width for readability), ~4 rows, scrollable
+        section = section.WithView(Controls.Stack
+            .WithStyle("max-height: 400px; overflow-y: auto;")
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery("source:accessed scope:subtree is:main sort:LastModified-desc")
+                .WithShowSearchBox(false)
+                .WithShowEmptyMessage(true)
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithCollapsibleSections(false)
+                .WithSectionCounts(false)
+                .WithMaxColumns(1)
+                .WithItemLimit(4)));
 
-        if (recentNodes.Count == 0)
-        {
-            section = section.WithView(Controls.Html(
-                "<div style=\"padding: 48px 24px; text-align: center; border: 1px dashed var(--neutral-stroke-divider-rest); border-radius: 12px; margin-top: 8px;\">" +
-                "<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Items you visit will appear here.</div>" +
-                "</div>"));
-            return section;
-        }
-
-        var grid = Controls.LayoutGrid.WithStyle("gap: 8px; width: 100%;");
-
-        foreach (var node in recentNodes)
-        {
-            grid = grid.WithView(
-                MeshNodeCardControl.FromNode(node, node.Path ?? ""),
-                skin => skin.WithXs(12).WithSm(6).WithMd(4).WithLg(3));
-        }
-
-        section = section.WithView(grid);
         return section;
     }
 
@@ -227,7 +209,7 @@ public static class UserActivityLayoutAreas
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            .WithItemLimit(5)
+            .WithItemLimit(6)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(nodePath));
 
@@ -245,7 +227,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">My Items</div>"));
 
         section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants")
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)

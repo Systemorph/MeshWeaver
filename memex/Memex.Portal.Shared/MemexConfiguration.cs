@@ -285,6 +285,7 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                .AddAI()
                 .AddSelfRegistry()
                 .AddDocumentation()
                 // Register Azure Blob support for content collections.

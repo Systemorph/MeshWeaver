@@ -116,15 +116,13 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
         logger.LogDebug("GetHubConfiguration for node {NodePath}, NodeType: {NodeType}, HasNodeHubConfig: {HasNodeHubConfig}, HasDefaultConfig: {HasDefaultConfig}, NodeTypeService: {HasNodeTypeService}",
             node?.Path, node?.NodeType, node?.HubConfiguration != null, defaultConfig != null, nodeTypeService != null);
 
-        // If node has its own HubConfiguration, combine with default
+        // If node has its own HubConfiguration, use it directly.
+        // When set by NodeTypeService.EnrichWithNodeType, it already includes defaultConfig.
+        // Re-wrapping would cause defaultConfig to run twice, overriding node-type-specific
+        // area registrations (e.g., Thread's OverviewArea).
         if (node?.HubConfiguration != null)
         {
             logger.LogDebug("Using node's own HubConfiguration for {NodePath}", node.Path);
-            if (defaultConfig != null)
-            {
-                var nodeConfig = node.HubConfiguration;
-                return config => nodeConfig(defaultConfig(config));
-            }
             return node.HubConfiguration;
         }
 

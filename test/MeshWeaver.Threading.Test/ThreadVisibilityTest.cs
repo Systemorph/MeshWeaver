@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -144,6 +145,44 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         threads.Should().Contain(n => n.Id == "getting-started-a1b2",
             "Roland's thread should appear in global thread search");
+    }
+
+    [Fact]
+    public async Task QueryThreads_SortByLastModifiedDesc_NewestFirst()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Create threads with different timestamps
+        var oldThread = new MeshNode("old-thread", $"User/{RolandId}/_Thread")
+        {
+            Name = "Old thread",
+            NodeType = ThreadNodeType.NodeType,
+            MainNode = $"User/{RolandId}/_Thread",
+            LastModified = DateTimeOffset.UtcNow.AddDays(-10),
+            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+        };
+        await NodeFactory.CreateNodeAsync(oldThread, ct);
+
+        var newThread = new MeshNode("new-thread", $"User/{RolandId}/_Thread")
+        {
+            Name = "New thread",
+            NodeType = ThreadNodeType.NodeType,
+            MainNode = $"User/{RolandId}/_Thread",
+            LastModified = DateTimeOffset.UtcNow,
+            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+        };
+        await NodeFactory.CreateNodeAsync(newThread, ct);
+
+        // Query with sort:LastModified-desc
+        var threads = await MeshQuery.QueryAsync<MeshNode>(
+            "nodeType:Thread sort:LastModified-desc scope:descendants").ToListAsync(ct);
+
+        threads.Should().HaveCountGreaterThanOrEqualTo(2);
+
+        var oldIdx = threads.FindIndex(t => t.Name == "Old thread");
+        var newIdx = threads.FindIndex(t => t.Name == "New thread");
+        oldIdx.Should().BeGreaterThan(newIdx,
+            "New thread should appear before Old thread with sort:LastModified-desc");
     }
 
     [Fact]
