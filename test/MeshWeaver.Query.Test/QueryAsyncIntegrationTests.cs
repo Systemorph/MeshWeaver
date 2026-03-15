@@ -183,7 +183,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     {
         var p = P();
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme") with { Name = "Acme Corp", NodeType = "Markdown" });
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Code" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project") with { Name = "Project X", NodeType = "Markdown" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/acme/project/task") with { Name = "Task A", NodeType = "Notification" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("other_nsDesc/company") with { Name = "Other Company", NodeType = "Markdown" });
 

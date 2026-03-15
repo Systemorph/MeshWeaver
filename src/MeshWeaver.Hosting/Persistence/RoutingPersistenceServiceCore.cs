@@ -276,6 +276,18 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield return child;
     }
 
+    public async IAsyncEnumerable<MeshNode> GetAllChildrenAsync(
+        string? parentPath,
+        JsonSerializerOptions options)
+    {
+        var segment = PathPartition.GetFirstSegment(parentPath);
+        if (segment == null) yield break;
+
+        var core = await GetOrCreateStoreAsync(segment, default);
+        await foreach (var child in core.GetAllChildrenAsync(parentPath, options))
+            yield return child;
+    }
+
     public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(
         string? parentPath,
         JsonSerializerOptions options)
@@ -299,6 +311,31 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
         var core = await GetOrCreateStoreAsync(segment, default);
         await foreach (var desc in core.GetDescendantsAsync(parentPath, options))
+            yield return desc;
+    }
+
+    public async IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(
+        string? parentPath,
+        JsonSerializerOptions options)
+    {
+        var segment = PathPartition.GetFirstSegment(parentPath);
+
+        if (segment == null)
+        {
+            foreach (var (seg, store) in _stores)
+            {
+                var rootNode = await store.GetNodeAsync(seg, options);
+                if (rootNode != null)
+                    yield return rootNode;
+
+                await foreach (var desc in store.GetAllDescendantsAsync(seg, options))
+                    yield return desc;
+            }
+            yield break;
+        }
+
+        var core = await GetOrCreateStoreAsync(segment, default);
+        await foreach (var desc in core.GetAllDescendantsAsync(parentPath, options))
             yield return desc;
     }
 

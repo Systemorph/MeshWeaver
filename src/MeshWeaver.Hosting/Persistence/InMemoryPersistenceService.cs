@@ -123,6 +123,10 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         var children = _nodes.Values
             .Where(n =>
             {
+                // Exclude satellite nodes (MainNode != Path) from browsing.
+                // Satellite queries go through FindMatchingNodesAsync which scans _nodes directly.
+                if (n.MainNode != null && n.MainNode != n.Path)
+                    return false;
 
                 var nodeSegments = n.Segments;
                 if (nodeSegments.Count != expectedDepth)
@@ -148,6 +152,36 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         }
     }
 
+    public async IAsyncEnumerable<MeshNode> GetAllChildrenAsync(string? parentPath, JsonSerializerOptions options)
+    {
+        await EnsureChildrenLoadedAsync(parentPath, options);
+
+        var normalizedParent = NormalizePath(parentPath);
+        var parentSegments = string.IsNullOrEmpty(normalizedParent)
+            ? Array.Empty<string>()
+            : normalizedParent.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var expectedDepth = parentSegments.Length + 1;
+
+        var children = _nodes.Values
+            .Where(n =>
+            {
+                var nodeSegments = n.Segments;
+                if (nodeSegments.Count != expectedDepth)
+                    return false;
+                for (int i = 0; i < parentSegments.Length; i++)
+                {
+                    if (!nodeSegments[i].Equals(parentSegments[i], StringComparison.OrdinalIgnoreCase))
+                        return false;
+                }
+                return true;
+            })
+            .OrderBy(n => n.Order ?? int.MaxValue)
+            .ThenBy(n => n.Name);
+
+        foreach (var child in children)
+            yield return child;
+    }
+
     public async IAsyncEnumerable<MeshNode> GetDescendantsAsync(string? parentPath, JsonSerializerOptions options)
     {
         // Ensure descendants are loaded from storage adapter
@@ -158,13 +192,17 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         IEnumerable<MeshNode> descendants;
         if (string.IsNullOrEmpty(normalizedParent))
         {
-            descendants = _nodes.Values;
+            // Exclude satellite nodes from browsing
+            descendants = _nodes.Values.Where(n => n.MainNode == n.Path);
         }
         else
         {
             descendants = _nodes.Values
                 .Where(n =>
                 {
+                    // Exclude satellite nodes from browsing
+                    if (n.MainNode != null && n.MainNode != n.Path)
+                        return false;
                     var nodePath = NormalizePath(n.Path);
                     return nodePath.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase);
                 });
@@ -174,6 +212,23 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         {
             yield return descendant;
         }
+    }
+
+    public async IAsyncEnumerable<MeshNode> GetAllDescendantsAsync(string? parentPath, JsonSerializerOptions options)
+    {
+        await EnsureDescendantsLoadedAsync(parentPath, options);
+        var normalizedParent = NormalizePath(parentPath);
+
+        var descendants = string.IsNullOrEmpty(normalizedParent)
+            ? _nodes.Values
+            : _nodes.Values.Where(n =>
+            {
+                var nodePath = NormalizePath(n.Path);
+                return nodePath.StartsWith(normalizedParent + "/", StringComparison.OrdinalIgnoreCase);
+            });
+
+        foreach (var descendant in descendants.OrderBy(n => n.Path))
+            yield return descendant;
     }
 
     /// <summary>
