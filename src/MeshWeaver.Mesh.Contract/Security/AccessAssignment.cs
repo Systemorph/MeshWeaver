@@ -1,4 +1,4 @@
-using MeshWeaver.Domain;
+﻿using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Mesh.Security;
@@ -12,7 +12,7 @@ namespace MeshWeaver.Mesh.Security;
 public record AccessAssignment
 {
     /// <summary>Subject identifier (User or Group path) for this assignment.</summary>
-    [MeshNode("namespace:User nodeType:User", "namespace:{node.namespace} nodeType:Group scope:selfAndAncestors")]
+    [MeshNode("is:main scope:descendants")]
     public string AccessObject { get; init; } = "";
 
     /// <summary>Optional display name for the subject.</summary>

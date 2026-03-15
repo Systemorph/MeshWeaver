@@ -552,10 +552,16 @@ public class PostgreSqlSqlGenerator
                                        WHERE ntp.node_type = n.node_type AND ntp.public_read = true)
             """;
 
+        // User scope: users can see all nodes under their own User/{userId}/... namespace
+        var userScopeParamName = $"@acUserScope{_paramIndex++}";
+        _parameters[userScopeParamName] = $"User/{userId}/";
+        var userScopeClause = userId == WellKnownUsers.Anonymous
+            ? ""
+            : $"\n                OR n.path LIKE {userScopeParamName} || '%'";
+
         return $"""
             (
-                n.node_type = 'NodeType'
-                OR n.main_node = {paramName}{publicReadClause}
+                n.main_node = {paramName}{publicReadClause}{userScopeClause}
                 OR
                 (SELECT uep.is_allow
                  FROM user_effective_permissions uep

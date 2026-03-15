@@ -57,15 +57,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
         _threadAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: threadPartitionDef);
         _messageAdapter = new PostgreSqlStorageAdapter(ds, partitionDefinition: threadPartitionDef);
 
-        // Register Thread and ThreadMessage as public-read node types so authenticated users can query them.
-        // Must use schema-scoped data source since node_type_permissions exists in both schemas
-        // and the schema-scoped search path finds the local one first.
+        // Register ThreadMessage as public-read (visible to all authenticated users).
+        // Thread is NOT public-read — visibility is via user scope (path LIKE 'User/{userId}/%').
         var schemaAccessControl = new PostgreSqlAccessControl(ds);
         await schemaAccessControl.SyncNodeTypePermissionsAsync(
-            [
-                new NodeTypePermission("Thread", PublicRead: true),
-                new NodeTypePermission("ThreadMessage", PublicRead: true)
-            ],
+            [new NodeTypePermission("ThreadMessage", PublicRead: true)],
             TestContext.Current.CancellationToken);
     }
 
@@ -509,6 +505,107 @@ public class ThreadMessageChatTests : IAsyncLifetime
         results.Should().HaveCount(2, "should find both messages in the thread");
         results[0].Order.Should().Be(1);
         results[1].Order.Should().Be(2);
+    }
+
+    #endregion
+
+    #region User scope visibility tests — users see own threads, not others'
+
+    /// <summary>
+    /// Alice can see her own threads via the user scope access rule.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task UserScope_AliceSeesOwnThreads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        await _threadAdapter.WriteAsync(new MeshNode("alice-thread", "User/alice/_Thread")
+        {
+            Name = "Alice Thread",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+        var request = MeshQueryRequest.FromQuery(
+            "nodeType:Thread namespace:User/alice/_Thread", userId: "alice");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().Contain(n => n.Name == "Alice Thread",
+            "alice should see her own thread via user scope");
+    }
+
+    /// <summary>
+    /// Bob cannot see Alice's threads — the user scope clause restricts visibility
+    /// to User/{userId}/... paths.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task UserScope_BobCannotSeeAlicesThreads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        await _threadAdapter.WriteAsync(new MeshNode("alice-private", "User/alice/_Thread")
+        {
+            Name = "Alice Private Thread",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        // Query as bob — should NOT see alice's thread
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+        var request = MeshQueryRequest.FromQuery(
+            "nodeType:Thread namespace:User/alice/_Thread", userId: "bob");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().NotContain(n => n.Name == "Alice Private Thread",
+            "bob should NOT see alice's thread");
+    }
+
+    /// <summary>
+    /// Global thread search: alice sees her own threads, not bob's.
+    /// Uses the same query pattern as "Latest Threads".
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task UserScope_GlobalSearch_ShowsOnlyOwnThreads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        await _threadAdapter.WriteAsync(new MeshNode("alice-global", "User/alice/_Thread")
+        {
+            Name = "Alice Global",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new Thread { ParentPath = "User/alice" }
+        }, _options, ct);
+
+        await _threadAdapter.WriteAsync(new MeshNode("bob-global", "User/bob/_Thread")
+        {
+            Name = "Bob Global",
+            NodeType = "Thread",
+            MainNode = "User/bob/_Thread",
+            Content = new Thread { ParentPath = "User/bob" }
+        }, _options, ct);
+
+        // Query as alice
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Thread", userId: "alice");
+
+        var results = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(request, _options, ct))
+            results.Add((MeshNode)item);
+
+        results.Should().Contain(n => n.Name == "Alice Global",
+            "alice should see her own thread in global search");
+        results.Should().NotContain(n => n.Name == "Bob Global",
+            "alice should NOT see bob's thread in global search");
     }
 
     #endregion

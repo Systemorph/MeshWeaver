@@ -59,7 +59,6 @@ public static class OrganizationNodeType
                 new OrganizationCreatorAdminHandler(
                     sp.GetService<ISecurityService>() ?? new NullSecurityService(),
                     sp.GetRequiredService<ILogger<OrganizationCreatorAdminHandler>>()));
-            services.AddSingleton(new NodeTypePermission(NodeType, PublicRead: true));
             return services;
         });
         return builder;
