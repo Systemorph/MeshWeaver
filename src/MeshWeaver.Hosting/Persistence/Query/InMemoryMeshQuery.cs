@@ -96,10 +96,8 @@ internal class InMemoryMeshQuery(
         // Context-based exclusion
         var context = request.Context ?? parsedQuery.Context;
 
-        // Stream results immediately as they are found — no buffering.
-        // Skip/limit are applied as inline counters.
-        int skipped = 0;
-        int yielded = 0;
+        // Collect matched + access-filtered results, then sort.
+        var matched = new List<object>();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
         await foreach (var node in FindMatchingNodesAsync(
@@ -108,17 +106,7 @@ internal class InMemoryMeshQuery(
             if (!seen.Add(node))
                 continue;
 
-            // Apply skip
-            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
-            {
-                skipped++;
-                continue;
-            }
-
             // Apply access control filtering.
-            // For MeshNode items, rely solely on INodeValidator (which handles custom access
-            // rules, self-access, and standard RLS). For non-MeshNode items (partition objects),
-            // use inline permission check since validators only apply to MeshNodes.
             if (node is MeshNode meshNode)
             {
                 if (!await ValidateReadAsync(meshNode, userId, ct))
@@ -136,11 +124,33 @@ internal class InMemoryMeshQuery(
                 }
             }
 
+            matched.Add(node);
+        }
+
+        // Apply sort
+        IEnumerable<object> sorted = matched;
+        if (parsedQuery.OrderBy != null)
+        {
+            sorted = parsedQuery.OrderBy.Descending
+                ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
+                : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
+        }
+
+        // Apply skip/limit and project
+        int skipped = 0;
+        int yielded = 0;
+        foreach (var node in sorted)
+        {
+            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
+            {
+                skipped++;
+                continue;
+            }
+
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
                 : node;
 
-            // Apply limit
             yielded++;
             if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0
                 && yielded >= parsedQuery.Limit.Value)
@@ -248,6 +258,27 @@ internal class InMemoryMeshQuery(
             return pathProp.GetValue(item) as string;
 
         return null;
+    }
+
+    /// <summary>
+    /// Gets a sortable value from a node for the given property name.
+    /// Maps common property names to MeshNode fields.
+    /// </summary>
+    private static object? GetSortableValue(object item, string property)
+    {
+        if (item is not MeshNode node) return null;
+        return property.ToLowerInvariant() switch
+        {
+            "lastmodified" or "last_modified" => node.LastModified,
+            "name" => node.Name,
+            "order" or "display_order" => node.Order,
+            "path" => node.Path,
+            "nodetype" or "node_type" => node.NodeType,
+            "category" => node.Category,
+            "state" => node.State,
+            "version" => node.Version,
+            _ => node.Name
+        };
     }
 
     /// <summary>
