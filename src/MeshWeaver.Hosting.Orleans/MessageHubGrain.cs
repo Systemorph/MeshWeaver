@@ -62,11 +62,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
             );
 
 
-        var hubConfig = node.HubConfiguration;
-        if (hubConfig is null)
+        var nodeConfig = node.HubConfiguration;
+        if (nodeConfig is null)
             throw new ArgumentException(
                 $"No hub configuration is specified for {node.Path}."
             );
+
+        // Compose with DefaultNodeHubConfiguration (same as MonolithRoutingService)
+        var meshConfig = meshHub.ServiceProvider.GetRequiredService<MeshConfiguration>();
+        var defaultConfig = meshConfig.DefaultNodeHubConfiguration;
+        var hubConfig = defaultConfig != null
+            ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config => nodeConfig(defaultConfig(config)))
+            : nodeConfig;
 
         return meshHub.GetHostedHub(address, hubConfig)!;
     }
