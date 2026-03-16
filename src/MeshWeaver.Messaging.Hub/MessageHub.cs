@@ -59,6 +59,11 @@ public sealed class MessageHub : IMessageHub
         hasStarted.TrySetException(error);
     }
 
+    public void CancelCurrentExecution()
+    {
+        messageService.CancelExecution();
+    }
+
     /// <summary>
     /// Starts message processing and posts the initialization request.
     /// Called from Build() after SyncBuildupActions complete.

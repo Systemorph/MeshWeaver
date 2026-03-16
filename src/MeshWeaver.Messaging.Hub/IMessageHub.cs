@@ -133,4 +133,11 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// Called when a stream errors during initialization (e.g., access denied).
     /// </summary>
     void FailStartup(Exception error);
+
+    /// <summary>
+    /// Cancels the currently executing handler's CancellationToken and creates a fresh one
+    /// for subsequent messages. Use this to abort long-running handlers (e.g., streaming)
+    /// without disposing the hub.
+    /// </summary>
+    void CancelCurrentExecution();
 }
