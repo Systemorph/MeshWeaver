@@ -35,9 +35,11 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
             .AddAI();
     }
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        base.ConfigureClient(configuration)
-            .WithTypes(typeof(CreateThreadResponse));
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.AddAITypes();
+        return base.ConfigureClient(configuration);
+    }
 
     [Fact]
     public async Task CreateThread_ViaCreateThreadRequest_UsesThreadPartitionAndSpeakingId()
@@ -663,9 +665,11 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
             .AddAI();
     }
 
-    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        base.ConfigureClient(configuration)
-            .WithTypes(typeof(CreateThreadResponse));
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.AddAITypes();
+        return base.ConfigureClient(configuration);
+    }
 
     protected override async Task SetupAccessRightsAsync()
     {

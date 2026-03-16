@@ -1,3 +1,4 @@
+using MeshWeaver.AI;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Security;
 using MeshWeaver.Mesh;
@@ -5,12 +6,13 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace MeshWeaver.Blazor.Portal;
 
 /// <summary>
 /// Provides configuration for Portal session nodes in the graph.
 /// Portal nodes are ephemeral satellite nodes created when a portal session starts
 /// and deleted when it ends. Access is delegated to the MainNode (parent) via SatelliteAccessRule.
+/// Lives in Blazor.Portal so the HubConfiguration can reference AI types.
 /// </summary>
 public static class PortalNodeType
 {
@@ -31,8 +33,8 @@ public static class PortalNodeType
 
     /// <summary>
     /// Creates the Portal satellite type MeshNode definition.
-    /// HubConfiguration provides standard portal services (content collections).
-    /// PortalApplication may add additional configuration (navigation, routing) at hub creation time.
+    /// HubConfiguration provides standard portal services (content collections)
+    /// and registers AI types so the portal hub can deserialize AI messages.
     /// </summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
@@ -40,7 +42,10 @@ public static class PortalNodeType
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "search", "create" },
         AssemblyLocation = typeof(PortalNodeType).Assembly.Location,
-        HubConfiguration = config => config
-            .AddContentCollections()
+        HubConfiguration = config =>
+        {
+            config.TypeRegistry.AddAITypes();
+            return config.AddContentCollections();
+        }
     };
 }

@@ -176,8 +176,7 @@ public class AgentChatClient : IAgentChat
             };
 
             var updatedNode = node with { Content = updatedContent };
-            var nodeJson = System.Text.Json.JsonSerializer.SerializeToElement(updatedNode, hub.JsonSerializerOptions);
-            hub.Post(new Data.DataChangeRequest { Updates = [nodeJson] }, o => o.WithTarget(new Messaging.Address(threadNodePath)));
+            hub.Post(new Data.DataChangeRequest { Updates = [updatedNode] }, o => o.WithTarget(new Messaging.Address(threadNodePath)));
 
             logger.LogInformation("Updated thread {Path} with PersistentThreadId={PersistentThreadId}",
                 threadNodePath, persistentThreadId);

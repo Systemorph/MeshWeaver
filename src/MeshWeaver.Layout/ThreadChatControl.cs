@@ -8,12 +8,12 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
 {
     /// <summary>
     /// The path to the thread being viewed/edited.
+    /// Set directly when creating the control outside layout areas (side panel, dashboard).
     /// </summary>
     public string? ThreadPath { get; init; }
 
     /// <summary>
     /// The initial context path for reference chips.
-    /// This is typically the node where the chat was initiated from.
     /// </summary>
     public string? InitialContext { get; init; }
 
@@ -30,8 +30,8 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
 
     /// <summary>
     /// Data-bound thread view model (via JsonPointerReference).
-    /// Points to Thread.ThreadMessages in the data section — Blazor resolves
-    /// this to IReadOnlyList&lt;string&gt; of message IDs.
+    /// Contains ThreadPath, InitialContext, Messages — all thread state.
+    /// Null when control is created directly (side panel, dashboard).
     /// </summary>
     public object? ThreadViewModel { get; init; }
 

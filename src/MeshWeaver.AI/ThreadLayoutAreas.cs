@@ -1,13 +1,12 @@
 ﻿using System.Reactive.Linq;
 using System.Text;
-using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -15,7 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using MeshThread = MeshWeaver.AI.Thread;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Provides dedicated views for Thread nodes with a conversation-focused layout.
@@ -123,22 +122,32 @@ public static class ThreadLayoutAreas
     /// separately via host.UpdateData() and data-bound on the control to avoid
     /// re-creating it (and thus re-rendering the Monaco editor) on every change.
     /// </summary>
-    public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
+    public static UiControl? ThreadView(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
         // Node stream — drives the observable title and chat control context
         var stream = host.Workspace.GetStream<MeshNode>();
-        var nodeStream = stream!.Select(nodes => nodes ?? Array.Empty<MeshNode>());
 
-        // Push Thread content to data section — Blazor view reads ThreadMessages from it.
-        var threadStream = nodeStream.Select(nodes =>
+        // Push ThreadViewModel to data section — contains all thread state for the Blazor view.
+        // Wrapped in an object (not raw array) so GetStream<object> can deserialize it.
+        var vmStream = stream.Select(nodes =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            return node?.Content as MeshThread;
+            var node = nodes!.First(n => n.Path == hubPath);
+            var threadContent = node?.Content as MeshThread;
+            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? threadContent.ParentPath : hubPath;
+            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
+            return new ThreadViewModel
+            {
+                Messages = threadContent?.ThreadMessages ?? [],
+                ThreadPath = hubPath,
+                InitialContext = contextPath,
+                InitialContextDisplayName = contextDisplayName
+            };
         });
-        host.RegisterForDisposal(ThreadNodeType.ThreadArea,
-            threadStream.Subscribe(thread => host.UpdateData(ThreadDataKey, thread)));
+        host.RegisterForDisposal(vmStream.Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
         // Static container — emits once, not rebuilt on every node update
         var container = Controls.Stack
@@ -147,37 +156,21 @@ public static class ThreadLayoutAreas
             .WithStyle("display: flex; flex-direction: column;");
 
         // 1. Title — observable sub-view bound to meshNode.Name
-        container = container.WithView(nodeStream.Select(nodes =>
+        container = container.WithView(stream.Select(nodes =>
         {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var node = nodes!.First(n => n.Path == hubPath);
             var title = GetThreadTitle(node);
             return (UiControl?)Controls.Html(
                 $"<h2 style=\"margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>");
         }));
 
-        // 2. ThreadChatControl — emitted once with context from first node emission.
-        // Thread content is data-bound via JsonPointerReference to ThreadDataKey.
-        container = container.WithView(nodeStream.Take(1).Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var threadContent = node?.Content as MeshThread;
+        // 2. ThreadChatControl — emitted once, all state data-bound via ThreadViewModel.
+        container = container.WithView(
+            (UiControl?)new ThreadChatControl()
+                .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
+                .WithStyle("flex: 1; overflow: hidden;"));
 
-            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? threadContent.ParentPath
-                : hubPath;
-            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? GetContextDisplayName(threadContent.ParentPath)
-                : GetThreadTitle(node);
-
-            return (UiControl?)new ThreadChatControl()
-                .WithThreadPath(hubPath)
-                .WithInitialContext(contextPath)
-                .WithInitialContextDisplayName(contextDisplayName)
-                .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey, "threadMessages")))
-                .WithStyle("flex: 1; overflow: hidden;");
-        }));
-
-        return Observable.Return<UiControl?>(container);
+        return container;
     }
 
     /// <summary>
@@ -385,27 +378,36 @@ public static class ThreadLayoutAreas
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
         logger.LogInformation("HandleSubmitMessage: threadPath={ThreadPath}", threadPath);
 
-        // Compute next message number from Thread.ThreadMessages
-        var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-        var nodes = workspace.GetStream<MeshNode>()?.FirstAsync().GetAwaiter().GetResult();
-        var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
-        var threadContent = threadNode?.Content as MeshThread ?? new MeshThread();
-        var nextNumber = threadContent.ThreadMessages.Count + 1;
-        var responseNumber = nextNumber + 1;
+        // Generate message IDs
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-
         var userNodePath = $"{threadPath}/{userMsgId}";
         var responsePath = $"{threadPath}/{responseMsgId}";
 
-        // 1. Create message nodes via IMeshService.CreateNodeAsync (no await, ContinueWith for errors)
         logger.LogInformation("HandleSubmitMessage: creating nodes userMsgId={UserMsgId}, responseMsgId={ResponseMsgId}", userMsgId, responseMsgId);
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var userNode = new MeshNode(userMsgId, threadPath)
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
+
+        // 1. Update Thread.ThreadMessages IMMEDIATELY (in the handler, serialized).
+        // Subscribe fires synchronously if stream already has data (hub is initialized).
+        // This ensures sequential submits accumulate correctly (no race condition).
+        hub.ServiceProvider.GetRequiredService<IWorkspace>()
+            .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+        {
+            var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
+            var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
+            var updatedMsgList = currentContent.ThreadMessages.Concat([userMsgId, responseMsgId]).ToList();
+            var newContent = currentContent with { ThreadMessages = updatedMsgList };
+            var updatedNode = (threadNode ?? new MeshNode(threadPath)) with { Content = newContent };
+            hub.Post(new DataChangeRequest { Updates = [updatedNode] });
+        });
+
+        // 2. Create message nodes — fire-and-forget via meshService.
+        // When both complete, start streaming (nodes must exist before streaming updates them).
+        var userNodeTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            Order = nextNumber,
             Content = new ThreadMessage
             {
                 Id = userMsgId,
@@ -414,17 +416,11 @@ public static class ThreadLayoutAreas
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.ExecutedInput
             }
-        };
-        meshService.CreateNodeAsync(userNode).ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-                logger.LogError(t.Exception, "Failed to create user message node at {Path}", userNodePath);
-        }, TaskContinuationOptions.OnlyOnFaulted);
+        });
 
-        var responseNode = new MeshNode(responseMsgId, threadPath)
+        var responseNodeTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
-            Order = responseNumber,
             Content = new ThreadMessage
             {
                 Id = responseMsgId,
@@ -433,51 +429,41 @@ public static class ThreadLayoutAreas
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse
             }
-        };
-        meshService.CreateNodeAsync(responseNode).ContinueWith(t =>
+        });
+
+        Task.WhenAll(userNodeTask, responseNodeTask).ContinueWith(t =>
         {
             if (t.IsFaulted)
-                logger.LogError(t.Exception, "Failed to create response node at {Path}", responsePath);
-        }, TaskContinuationOptions.OnlyOnFaulted);
-
-        // 2. Update Thread.ThreadMessages on the MeshNode — DataChangeRequest to own hub
-        if (threadNode != null)
-        {
-            var updatedContent = threadContent with
             {
-                ThreadMessages = threadContent.ThreadMessages
-                    .Concat([userMsgId, responseMsgId]).ToList()
-            };
-            var updatedNode = threadNode with { Content = updatedContent };
-            hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-        }
+                logger.LogError(t.Exception, "Failed to create message nodes for {ThreadPath}", threadPath);
+                return;
+            }
 
-        // 3. Send response immediately
-        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            // 3. Start streaming — safe now, both nodes exist in persistence
+            var execHub = hub.GetHostedHub(
+                new Address($"{threadPath}/_Exec"),
+                config => config
+                    .AddMeshDataSource()
+                    .WithServices(services =>
+                    {
+                        services.AddSingleton(session);
+                        return services;
+                    })
+                    .WithHandler<StartStreamingRequest>(HandleExecStreaming),
+                HostedHubCreation.Always);
 
-        // 4. Delegate streaming to _Exec sub-hub (has its own execution queue).
-        // The sub-hub owns the ThreadSession and can safely await streaming.
-        // Updates are posted to thread message node addresses via hub routing.
-        var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
-        var execHub = hub.GetHostedHub(
-            new Address($"{threadPath}/_Exec"),
-            config => config
-                .WithServices(services =>
-                {
-                    services.AddSingleton(session);
-                    return services;
-                })
-                .WithHandler<StartStreamingRequest>(HandleExecStreaming),
-            HostedHubCreation.Always);
-
-        execHub!.Post(new StartStreamingRequest
-        {
-            ThreadPath = threadPath,
-            UserMessageText = request.UserMessageText,
-            UserMessagePath = userNodePath,
-            ResponsePath = responsePath,
-            ResponseOrder = responseNumber
+            execHub!.Post(new StartStreamingRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = request.UserMessageText,
+                UserMessagePath = userNodePath,
+                ResponsePath = responsePath,
+                ResponseOrder = 0
+            });
         });
+
+        // 4. Send response immediately — don't wait for node creation or streaming
+        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
 
         return delivery.Processed();
     }
@@ -536,21 +522,28 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Posts a throttled response text update to the ThreadMessage node hub.
-    /// Routes through the hub hierarchy to reach the correct ThreadMessage hub.
+    /// Posts a response text update to the ThreadMessage hub via DataChangeRequest.
+    /// The ThreadMessage hub has AddMeshDataSource — its MeshNodeTypeSource handles
+    /// debounced persistence. No IMeshService/UpdateNodeAsync — that bypasses the hub
+    /// and causes file access races with CreateNodeAsync.
     /// </summary>
     private static void PostResponseUpdate(IMessageHub hub, string threadPath, string responsePath, string text)
     {
         var nodeId = responsePath.Split('/').Last();
-        var updatedMessage = new ThreadMessage
+        var updatedNode = new MeshNode(nodeId, threadPath)
         {
-            Id = nodeId,
-            Role = "assistant",
-            Text = text,
-            Timestamp = DateTime.UtcNow,
-            Type = ThreadMessageType.AgentResponse
+            NodeType = ThreadMessageNodeType.NodeType,
+            Content = new ThreadMessage
+            {
+                Id = nodeId,
+                Role = "assistant",
+                Text = text,
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
         };
-        hub.Post(new DataChangeRequest { Updates = [updatedMessage] },
+        // Post to the ThreadMessage hub's own address — it manages persistence exclusively
+        hub.Post(new DataChangeRequest { Updates = [updatedNode] },
             o => o.WithTarget(new Address(responsePath)));
     }
 

@@ -1,19 +1,17 @@
-﻿using System.Reactive.Linq;
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.AI;
+using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Components.Monaco;
+using MeshWeaver.Blazor.Portal.SidePanel;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
-using MeshWeaver.Messaging;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-
-using MeshWeaver.Blazor.Components;
-using MeshWeaver.Blazor.Portal.SidePanel;
-using MeshWeaver.ContentCollections;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -35,24 +33,31 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? threadName;
     private string? initialContext; // Backing field for agent initialization
 
-    // Data-bound thread message IDs from the Thread.ThreadMessages JSON path.
-    // Each ID maps to a LayoutAreaView pointing to the ThreadMessage node's Overview.
-    private IReadOnlyList<string> _threadMessages = [];
-    private IReadOnlyList<string> threadMessages
+
+    private ThreadViewModel? _threadViewModel;
+    private ThreadViewModel? ThreadViewModel
     {
-        get => _threadMessages;
+        get => _threadViewModel;
         set
         {
-            var previousCount = _threadMessages.Count;
-            _threadMessages = value ?? [];
-            // Release submission handler when new messages appear after a submit
-            if (_threadMessages.Count > previousCount &&
+            var oldCount = _threadViewModel?.Messages?.Count ?? 0;
+            _threadViewModel = value;
+            // Sync threadPath and initialContext from the view model
+            if (value != null)
+            {
+                threadPath = value.ThreadPath ?? threadPath;
+                initialContext = value.InitialContext ?? initialContext;
+            }
+            // Release submission handler when new messages appear
+            var newCount = value?.Messages?.Count ?? 0;
+            if (newCount > oldCount &&
                 submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
             {
                 submissionHandler.OnResponseAppeared();
             }
         }
     }
+    private IReadOnlyList<string> ThreadMessages => ThreadViewModel?.Messages ?? [];
     private string? lastContextUrl; // Track URL for context change detection
 
     // Input state
@@ -85,6 +90,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override async Task OnInitializedAsync()
     {
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitializedAsync started", _instanceId);
+
+        // Initialize from direct ViewModel properties (side panel / dashboard case)
+        threadPath ??= ViewModel.ThreadPath;
+        initialContext ??= ViewModel.InitialContext;
 
         // Subscribe to side panel menu actions
         SidePanelState.OnActionRequested += OnSidePanelAction;
@@ -179,9 +188,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.ThreadPath, x => x.threadPath);
-        DataBind(ViewModel.InitialContext, x => x.initialContext);
-        DataBind(ViewModel.ThreadViewModel, x => x.threadMessages, ConvertThreadMessages);
+        DataBind(ViewModel.ThreadViewModel, x => x.ThreadViewModel, ConvertThreadViewModel);
     }
 
     /// <summary>
@@ -679,7 +686,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         _ownedStream?.Dispose();
         _ownedStream = null;
         Stream = null;
-        threadMessages = [];
+        ThreadViewModel = null;
         viewMode = ChatViewMode.Chat;
         StateHasChanged();
     }
@@ -908,14 +915,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return items;
     }
 
-    private IReadOnlyList<string>? ConvertThreadMessages(object? value, IReadOnlyList<string>? _)
-        => value switch
-        {
-            IReadOnlyList<string> list => list,
-            JsonElement je when je.ValueKind == JsonValueKind.Array =>
-                je.EnumerateArray().Select(e => e.GetString()!).ToList(),
-            _ => null
-        };
+    /// <summary>
+    /// Converts the data-bound ThreadViewModel to a message ID list.
+    /// GetStream&lt;object&gt; deserializes the ThreadViewModel (has $type), so we get the typed object.
+    /// </summary>
+    private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? _)
+        => value switch { null => null, JsonElement je => je.Deserialize<ThreadViewModel?>(Hub.JsonSerializerOptions), AI.ThreadViewModel m => m, _ => throw new ArgumentException("Cannot convert type.") };
 
     /// <summary>
     /// Creates a LayoutAreaControl pointing to a ThreadMessage node's Overview layout area.

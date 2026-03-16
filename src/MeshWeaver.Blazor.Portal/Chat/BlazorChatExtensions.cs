@@ -15,6 +15,7 @@ public static class BlazorChatExtensions
     /// </summary>
     public static MessageHubConfiguration AddChatViews(this MessageHubConfiguration configuration)
     {
+        configuration.TypeRegistry.AddAITypes();
         return configuration
             .AddViews(registry => registry
                 .WithView<ThreadChatControl, ThreadChatView>());

@@ -278,4 +278,19 @@ public class PartitionSchemaInitTests
         partitions.Should().Contain("portal");
         partitions.Should().Contain("kernel");
     }
+
+    /// <summary>
+    /// Verifies that PostgreSqlSchemaInitializer.InitializeAsync (called by the migration project)
+    /// creates node_type_permissions in the public schema, so per-partition queries have a fallback.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task MigrationInitialize_CreatesNodeTypePermissionsInPublicSchema()
+    {
+        // InitializeAsync is called by the fixture, simulating the migration.
+        // Verify node_type_permissions exists in the public schema.
+        await using var cmd = _fixture.DataSource.CreateCommand(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'node_type_permissions'");
+        var exists = await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+        exists.Should().NotBeNull("node_type_permissions must exist in public schema after migration");
+    }
 }

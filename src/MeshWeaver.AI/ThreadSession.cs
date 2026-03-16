@@ -352,8 +352,7 @@ public class ThreadSession : IDisposable
             NodeType = ThreadMessageNodeType.NodeType,
             Content = updatedMessage
         };
-        var nodeJson = JsonSerializer.SerializeToElement(node, hub.JsonSerializerOptions);
-        hub.Post(new DataChangeRequest { Updates = [nodeJson] },
+        hub.Post(new DataChangeRequest { Updates = [node] },
             o => o.WithTarget(new Address(responsePath)));
     }
 
@@ -375,8 +374,7 @@ public class ThreadSession : IDisposable
             if (existingNode != null)
             {
                 var updatedNode = existingNode with { LastModified = DateTime.UtcNow };
-                var nodeJson = JsonSerializer.SerializeToElement(updatedNode, hub.JsonSerializerOptions);
-                hub.Post(new DataChangeRequest { Updates = [nodeJson] },
+                hub.Post(new DataChangeRequest { Updates = [updatedNode] },
                     o => o.WithTarget(new Address(threadPath)));
             }
         }

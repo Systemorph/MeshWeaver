@@ -14,17 +14,18 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
-        var jsonObject = new JsonObject(
-            instances.Instances.Select(x => new KeyValuePair<string, JsonNode?>(
-                ConvertKeyToString(x.Key, options),
-                JsonSerializer.SerializeToNode(x.Value, options)
-            ))
-        );
+        var jsonObject = new JsonObject();
 
-        // Include collection name as $type if present
+        // $type MUST be the first property — STJ polymorphic deserializer requires it
         if (instances.CollectionName != null)
         {
             jsonObject[CollectionProperty] = instances.CollectionName;
+        }
+
+        foreach (var x in instances.Instances)
+        {
+            jsonObject[ConvertKeyToString(x.Key, options)] =
+                JsonSerializer.SerializeToNode(x.Value, options);
         }
 
         return jsonObject;

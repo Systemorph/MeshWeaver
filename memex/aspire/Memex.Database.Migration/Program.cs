@@ -29,11 +29,10 @@ var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions
 
 logger.LogInformation("Running database migration...");
 
-// In partitioned mode, only create the vector extension. Schema/table creation
-// is handled per-partition by PostgreSqlPartitionedStoreFactory at app startup.
-await using (var cmd = dataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector"))
-{
-    await cmd.ExecuteNonQueryAsync();
-}
+// Initialize the full schema in the public schema (vector extension + all tables).
+// Per-partition schemas are created by PostgreSqlPartitionedStoreFactory at app startup,
+// but the public schema serves as a fallback since partition data sources use
+// SearchPath = "{schemaName},public".
+await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options.Value);
 
-logger.LogInformation("Database migration completed successfully (vector extension ready).");
+logger.LogInformation("Database migration completed successfully.");

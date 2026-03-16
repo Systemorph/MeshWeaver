@@ -11,6 +11,7 @@ using MeshWeaver.AI.Persistence;
 using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.GoogleMaps;
 using MeshWeaver.Blazor.Graph;
+using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
@@ -285,6 +286,7 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                .AddPortalType()
                 .AddAI()
                 .AddSelfRegistry()
                 .AddDocumentation()
