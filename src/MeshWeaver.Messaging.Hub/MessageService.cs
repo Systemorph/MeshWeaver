@@ -357,17 +357,20 @@ public class MessageService : IMessageService
         return delivery;
     }
 
-    private readonly CancellationTokenSource cancellationTokenSource = new();
+    private volatile CancellationTokenSource cancellationTokenSource = new();
 
     public void CancelExecution()
     {
         try
         {
-            if (!cancellationTokenSource.IsCancellationRequested)
+            var old = cancellationTokenSource;
+            cancellationTokenSource = new CancellationTokenSource();
+            if (!old.IsCancellationRequested)
             {
-                logger.LogDebug("Cancelling execution pipeline for hub {Address} to unblock shutdown", Address);
-                cancellationTokenSource.Cancel();
+                logger.LogDebug("Cancelling execution pipeline for hub {Address}", Address);
+                old.Cancel();
             }
+            old.Dispose();
         }
         catch (ObjectDisposedException)
         {

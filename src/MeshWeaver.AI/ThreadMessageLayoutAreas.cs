@@ -28,6 +28,8 @@ public static class ThreadMessageLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
+                .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
+                .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
     /// <summary>

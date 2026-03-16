@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.AI;
 using MeshWeaver.Blazor.Components.Monaco;
@@ -36,17 +35,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private string? threadName;
     private string? initialContext; // Backing field for agent initialization
 
-    // Data-bound message cells from server-side layout
-    private ImmutableList<LayoutAreaControl> _cells = ImmutableList<LayoutAreaControl>.Empty;
-    private ImmutableList<LayoutAreaControl> cells
+    // Data-bound thread message IDs from the Thread.ThreadMessages JSON path.
+    // Each ID maps to a LayoutAreaView pointing to the ThreadMessage node's Overview.
+    private IReadOnlyList<string> _threadMessages = [];
+    private IReadOnlyList<string> threadMessages
     {
-        get => _cells;
+        get => _threadMessages;
         set
         {
-            var previousCount = _cells.Count;
-            _cells = value ?? ImmutableList<LayoutAreaControl>.Empty;
-            // Release submission handler when new cells appear after a submit
-            if (_cells.Count > previousCount &&
+            var previousCount = _threadMessages.Count;
+            _threadMessages = value ?? [];
+            // Release submission handler when new messages appear after a submit
+            if (_threadMessages.Count > previousCount &&
                 submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
             {
                 submissionHandler.OnResponseAppeared();
@@ -181,7 +181,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         base.BindData();
         DataBind(ViewModel.ThreadPath, x => x.threadPath);
         DataBind(ViewModel.InitialContext, x => x.initialContext);
-        DataBind(new JsonPointerReference(LayoutAreaReference.GetDataPointer("threadCells")), x => x.cells);
+        DataBind(ViewModel.ThreadViewModel, x => x.threadMessages, ConvertThreadMessages);
     }
 
     /// <summary>
@@ -679,7 +679,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         _ownedStream?.Dispose();
         _ownedStream = null;
         Stream = null;
-        cells = ImmutableList<LayoutAreaControl>.Empty;
+        threadMessages = [];
         viewMode = ChatViewMode.Chat;
         StateHasChanged();
     }
@@ -907,6 +907,24 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         return items;
     }
+
+    private IReadOnlyList<string>? ConvertThreadMessages(object? value, IReadOnlyList<string>? _)
+        => value switch
+        {
+            IReadOnlyList<string> list => list,
+            JsonElement je when je.ValueKind == JsonValueKind.Array =>
+                je.EnumerateArray().Select(e => e.GetString()!).ToList(),
+            _ => null
+        };
+
+    /// <summary>
+    /// Creates a LayoutAreaControl pointing to a ThreadMessage node's Overview layout area.
+    /// </summary>
+    private LayoutAreaControl GetMessageCell(string msgId)
+        => new LayoutAreaControl(
+            $"{threadPath}/{msgId}",
+            new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
+            .WithShowProgress(false);
 
     private static string TruncateText(string text, int maxLength)
     {

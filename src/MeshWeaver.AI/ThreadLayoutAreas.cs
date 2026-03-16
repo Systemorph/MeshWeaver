@@ -1,5 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
@@ -8,6 +7,7 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -47,10 +47,7 @@ public static class ThreadLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
-                .WithView(MeshNodeLayoutAreas.OverviewArea, ThreadView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
-                .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
-                .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
 
@@ -112,20 +109,19 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Data key for pushing message cells to the ThreadChatControl via data binding.
-    /// Cells are decoupled from the control record to prevent re-emitting the entire
-    /// ThreadChatControl on every cells change (which was causing Monaco editor disposal crashes).
+    /// Data key for pushing Thread content to the layout area data section.
+    /// The ThreadChatControl data-binds this via JsonPointerReference.
     /// </summary>
-    internal const string ThreadCellsDataKey = "threadCells";
+    internal const string ThreadDataKey = "thread";
 
     /// <summary>
     /// Renders the Thread area — the default view for threads.
     /// Shows the thread title (observable, bound to meshNode.Name) and a
-    /// ThreadChatControl with data-bound message cells.
+    /// ThreadChatControl with data-bound Thread content.
     ///
-    /// IMPORTANT: The ThreadChatControl is emitted ONCE. Message cells are pushed
-    /// separately via host.UpdateData() to avoid re-creating the control (and thus
-    /// re-rendering the Monaco editor) on every cells change.
+    /// IMPORTANT: The ThreadChatControl is emitted ONCE. Thread content is pushed
+    /// separately via host.UpdateData() and data-bound on the control to avoid
+    /// re-creating it (and thus re-rendering the Monaco editor) on every change.
     /// </summary>
     public static IObservable<UiControl?> ThreadView(LayoutAreaHost host, RenderingContext _)
     {
@@ -135,24 +131,14 @@ public static class ThreadLayoutAreas
         var stream = host.Workspace.GetStream<MeshNode>();
         var nodeStream = stream!.Select(nodes => nodes ?? Array.Empty<MeshNode>());
 
-        // Message cells — derived from Thread.ThreadMessages on the node stream.
-        // IDs are prefixed with hubPath to get full paths for LayoutAreaControl cells.
-        var cellsStream = nodeStream.Select(nodes =>
+        // Push Thread content to data section — Blazor view reads ThreadMessages from it.
+        var threadStream = nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var threadContent = node?.Content as MeshThread;
-            var ids = threadContent?.ThreadMessages ?? [];
-            var logger = host.Hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
-            logger.LogInformation("ThreadView cellsStream: {Count} message IDs: [{Ids}]",
-                ids.Count, string.Join(", ", ids));
-            return ids
-                .Select(id => new LayoutAreaControl(
-                    $"{hubPath}/{id}", new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
-                    .WithShowProgress(false))
-                .ToImmutableList();
+            return node?.Content as MeshThread;
         });
         host.RegisterForDisposal(ThreadNodeType.ThreadArea,
-            cellsStream.Subscribe(cells => host.UpdateData(ThreadCellsDataKey, cells)));
+            threadStream.Subscribe(thread => host.UpdateData(ThreadDataKey, thread)));
 
         // Static container — emits once, not rebuilt on every node update
         var container = Controls.Stack
@@ -170,7 +156,7 @@ public static class ThreadLayoutAreas
         }));
 
         // 2. ThreadChatControl — emitted once with context from first node emission.
-        // Cells are data-bound separately via ThreadCellsDataKey.
+        // Thread content is data-bound via JsonPointerReference to ThreadDataKey.
         container = container.WithView(nodeStream.Take(1).Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
@@ -187,6 +173,7 @@ public static class ThreadLayoutAreas
                 .WithThreadPath(hubPath)
                 .WithInitialContext(contextPath)
                 .WithInitialContextDisplayName(contextDisplayName)
+                .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey, "threadMessages")))
                 .WithStyle("flex: 1; overflow: hidden;");
         }));
 
@@ -549,8 +536,8 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Posts a throttled response text update to the thread hub.
-    /// The thread hub's workspace has ThreadMessage registered and handles the DataChangeRequest.
+    /// Posts a throttled response text update to the ThreadMessage node hub.
+    /// Routes through the hub hierarchy to reach the correct ThreadMessage hub.
     /// </summary>
     private static void PostResponseUpdate(IMessageHub hub, string threadPath, string responsePath, string text)
     {
@@ -564,17 +551,19 @@ public static class ThreadLayoutAreas
             Type = ThreadMessageType.AgentResponse
         };
         hub.Post(new DataChangeRequest { Updates = [updatedMessage] },
-            o => o.WithTarget(new Address(threadPath)));
+            o => o.WithTarget(new Address(responsePath)));
     }
 
     /// <summary>
-    /// Handles CancelThreadStreamRequest — cancels the active streaming response.
+    /// Handles CancelThreadStreamRequest — cancels the _Exec sub-hub's execution token,
+    /// which breaks the streaming loop in HandleExecStreaming.
     /// </summary>
     private static IMessageDelivery HandleCancelStream(
         IMessageHub hub, IMessageDelivery<CancelThreadStreamRequest> delivery)
     {
-        var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
-        session.CancelCurrentStream();
+        var threadPath = delivery.Message.ThreadPath;
+        var execHub = hub.GetHostedHub(new Address($"{threadPath}/_Exec"), HostedHubCreation.Never);
+        execHub?.CancelCurrentExecution();
         return delivery.Processed();
     }
 

@@ -685,4 +685,56 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     #endregion
+
+    #region Path resolution — FindBestPrefixMatchAsync for ThreadMessage
+
+    /// <summary>
+    /// Verifies that FindBestPrefixMatchAsync resolves a ThreadMessage path
+    /// to the exact ThreadMessage node (not the parent Thread with remainder).
+    /// This is critical for LayoutAreaView routing — the message hub must be
+    /// created with ThreadMessage configuration, not Thread configuration.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task FindBestPrefixMatch_ThreadMessagePath_ResolvesToExactMessage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // Create Thread
+        await _threadAdapter.WriteAsync(new MeshNode("resolve-thread", "User/alice/_Thread")
+        {
+            Name = "Resolve Test",
+            NodeType = "Thread",
+            MainNode = "User/alice/_Thread",
+            Content = new MeshThread { ParentPath = "User/alice", ThreadMessages = ["r1"] }
+        }, _options, ct);
+
+        // Create ThreadMessage child
+        await _messageAdapter.WriteAsync(new MeshNode("r1", "User/alice/_Thread/resolve-thread")
+        {
+            Name = "Message 1",
+            NodeType = "ThreadMessage",
+            MainNode = "User/alice/_Thread",
+            Order = 1,
+            Content = new ThreadMessage
+            {
+                Id = "r1",
+                Role = "user",
+                Text = "Hello",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput
+            }
+        }, _options, ct);
+
+        // FindBestPrefixMatchAsync for the full message path
+        var (node, segments) = await _messageAdapter.FindBestPrefixMatchAsync(
+            "User/alice/_Thread/resolve-thread/r1", _options, ct);
+
+        node.Should().NotBeNull("ThreadMessage node should be found");
+        node!.Path.Should().Be("User/alice/_Thread/resolve-thread/r1",
+            "should resolve to the exact ThreadMessage path, not the Thread");
+        node.NodeType.Should().Be("ThreadMessage");
+        segments.Should().Be(5, "all 5 path segments should be matched");
+    }
+
+    #endregion
 }

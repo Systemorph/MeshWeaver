@@ -62,11 +62,12 @@ else
     @if (!ViewModel.HideEmptyState)
     {
         <div class="thread-chat-messages">
-            @if (cells.Count > 0)
+            @if (threadMessages.Count > 0)
             {
-                @foreach (var cell in cells)
+                @foreach (var msgId in threadMessages)
                 {
-                    <LayoutAreaView ViewModel="@cell" Stream="@Stream" Area="@($"msg-{cell.Address}")" />
+                    var cell = GetMessageCell(msgId);
+                    <LayoutAreaView ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
                 }
             }
             else if (isCreatingThread)

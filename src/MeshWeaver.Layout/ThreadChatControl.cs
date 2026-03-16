@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-
 namespace MeshWeaver.Layout;
 
 /// <summary>
@@ -31,15 +29,15 @@ public record ThreadChatControl() : UiControl<ThreadChatControl>(ModuleSetup.Mod
     public bool HideEmptyState { get; init; }
 
     /// <summary>
-    /// Data-bound list of message cells. Each cell is a LayoutAreaControl
-    /// pointing to the message node's OverviewArea. Populated server-side
-    /// by the thread's layout function.
+    /// Data-bound thread view model (via JsonPointerReference).
+    /// Points to Thread.ThreadMessages in the data section — Blazor resolves
+    /// this to IReadOnlyList&lt;string&gt; of message IDs.
     /// </summary>
-    public ImmutableList<LayoutAreaControl> Cells { get; init; } = ImmutableList<LayoutAreaControl>.Empty;
+    public object? ThreadViewModel { get; init; }
 
     public ThreadChatControl WithThreadPath(string threadPath) => this with { ThreadPath = threadPath };
     public ThreadChatControl WithInitialContext(string context) => this with { InitialContext = context };
     public ThreadChatControl WithInitialContextDisplayName(string displayName) => this with { InitialContextDisplayName = displayName };
     public ThreadChatControl WithHideEmptyState(bool hide = true) => this with { HideEmptyState = hide };
-    public ThreadChatControl WithCells(ImmutableList<LayoutAreaControl> cells) => this with { Cells = cells };
+    public ThreadChatControl WithThreadViewModel(object? threadViewModel) => this with { ThreadViewModel = threadViewModel };
 }
