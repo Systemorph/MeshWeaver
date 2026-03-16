@@ -314,8 +314,7 @@ public static class MemexConfiguration
                     {
                         var nodePath = config.Address.ToString();
                         config = config
-                            .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}")
-                            .MapContentCollection("attachments", contentStorageConfig.Name, $"attachments/{nodePath}");
+                            .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();

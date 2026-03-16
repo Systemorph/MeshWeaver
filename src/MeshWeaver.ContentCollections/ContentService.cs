@@ -141,6 +141,7 @@ public class ContentService : IContentService
             Name = mappedConfig.Name,
             BasePath = fullPath,
             Address = mappedConfig.Address,
+            IsEditable = mappedConfig.IsEditable,
             Settings = new Dictionary<string, string>(sourceConfig.Settings ?? new Dictionary<string, string>())
             {
                 ["BasePath"] = fullPath
