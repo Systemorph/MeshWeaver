@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
-using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -319,7 +318,7 @@ public static class MeshNodeLayoutAreas
     /// <param name="area">The layout area to navigate to</param>
     /// <param name="queryString">Optional query string (without leading ?)</param>
     /// <returns>The full URL path</returns>
-    public static string BuildContentUrl(string nodePath, string area, string? queryString = null)
+    public static string BuildUrl(string nodePath, string area, string? queryString = null)
     {
         var url = $"/{nodePath}/{area}";
         if (!string.IsNullOrEmpty(queryString))
@@ -725,7 +724,7 @@ public static class MeshNodeLayoutAreas
     public static UiControl Files(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var backHref = BuildContentUrl(hubPath, OverviewArea);
+        var backHref = BuildUrl(hubPath, OverviewArea);
 
         var stack = Controls.Stack
             .WithView(Controls.Button("Back")

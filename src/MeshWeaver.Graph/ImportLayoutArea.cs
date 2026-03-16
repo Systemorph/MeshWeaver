@@ -104,7 +104,7 @@ public static class ImportLayoutArea
                 }));
 
         // Cancel button
-        var cancelUrl = MeshNodeLayoutAreas.BuildContentUrl(currentPath, MeshNodeLayoutAreas.OverviewArea);
+        var cancelUrl = MeshNodeLayoutAreas.BuildUrl(currentPath, MeshNodeLayoutAreas.OverviewArea);
         stack = stack.WithView(Controls.Button("Cancel")
             .WithAppearance(Appearance.Neutral)
             .WithNavigateToHref(cancelUrl)
@@ -178,8 +178,8 @@ public static class ImportLayoutArea
                     ).WithSize("M").WithClosable(true).WithCloseAction(ctx =>
                     {
                         var overviewUrl = string.IsNullOrEmpty(targetNs)
-                            ? MeshNodeLayoutAreas.BuildContentUrl(sourceNode.Split('/').Last(), MeshNodeLayoutAreas.OverviewArea)
-                            : MeshNodeLayoutAreas.BuildContentUrl(targetNs, MeshNodeLayoutAreas.OverviewArea);
+                            ? MeshNodeLayoutAreas.BuildUrl(sourceNode.Split('/').Last(), MeshNodeLayoutAreas.OverviewArea)
+                            : MeshNodeLayoutAreas.BuildUrl(targetNs, MeshNodeLayoutAreas.OverviewArea);
                         actx.NavigateTo(overviewUrl);
                         return Task.CompletedTask;
                     });

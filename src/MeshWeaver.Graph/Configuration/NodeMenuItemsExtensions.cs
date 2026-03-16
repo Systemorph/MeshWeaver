@@ -85,7 +85,7 @@ public static class NodeMenuItemsExtensions
         var node = nodes.FirstOrDefault(n => n.Path == hubPath);
 
         var nodeName = node?.Name ?? "";
-        string Href(string area, string? qs = null) => MeshNodeLayoutAreas.BuildContentUrl(hubPath, area, qs);
+        string Href(string area, string? qs = null) => MeshNodeLayoutAreas.BuildUrl(hubPath, area, qs);
 
         if (perms.HasFlag(Permission.Update))
         {

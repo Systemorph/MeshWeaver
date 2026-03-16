@@ -43,7 +43,7 @@ public static class VersionLayoutArea
             var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
             // Back button
-            var backHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, MeshNodeLayoutAreas.OverviewArea);
+            var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.OverviewArea);
             stack = stack.WithView(
                 Controls.Stack.WithOrientation(Orientation.Horizontal)
                     .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px;")
@@ -67,7 +67,7 @@ public static class VersionLayoutArea
                 var changedBy = version.ChangedBy ?? "—";
                 var name = version.Name ?? "";
 
-                var compareHref = MeshNodeLayoutAreas.BuildContentUrl(
+                var compareHref = MeshNodeLayoutAreas.BuildUrl(
                     hubPath, MeshNodeLayoutAreas.VersionDiffArea, $"version={version.Version}");
 
                 var row = Controls.Stack
@@ -131,7 +131,7 @@ public static class VersionLayoutArea
             var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
             // Back button
-            var backHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, MeshNodeLayoutAreas.VersionsArea);
+            var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea);
             stack = stack.WithView(
                 Controls.Stack.WithOrientation(Orientation.Horizontal)
                     .WithStyle("align-items: center; gap: 8px; margin-bottom: 16px;")
