@@ -248,7 +248,16 @@ internal class RoutingPersistenceServiceCore : IStorageService
         if (segment == null) return null;
 
         if (_stores.TryGetValue(segment, out var store))
-            return await store.GetNodeAsync(path, options, ct);
+        {
+            var node = await store.GetNodeAsync(path, options, ct);
+            if (node != null) return node;
+        }
+
+        // Fallback: root-level Organization nodes are stored in Admin but their
+        // partition name matches a store — check Admin if the resolved store missed.
+        if (path != null && !path.Contains('/') && segment != "Admin"
+            && _stores.TryGetValue("Admin", out var adminStore))
+            return await adminStore.GetNodeAsync(path, options, ct);
 
         return null;
     }

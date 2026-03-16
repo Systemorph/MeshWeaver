@@ -42,6 +42,7 @@ public static class UserNodeType
                     sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             return services;
         });
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

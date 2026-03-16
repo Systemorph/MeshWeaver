@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using Memex.Portal.Shared;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Security;
@@ -23,7 +24,8 @@ public class OrganizationNodeCreationTest(ITestOutputHelper output) : MonolithMe
     private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder);
+        => base.ConfigureMesh(builder)
+            .AddOrganizationType();
 
     [Fact(Timeout = 15000)]
     public async Task Admin_CanCreateOrganization()

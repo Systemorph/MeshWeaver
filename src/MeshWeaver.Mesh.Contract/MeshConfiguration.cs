@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Connection.Orleans")]
@@ -14,7 +15,8 @@ public class MeshConfiguration(
     IReadOnlyDictionary<string, MeshNode> meshNodes,
     Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null,
     IReadOnlyList<string>? globalCreatableTypes = null,
-    IReadOnlySet<string>? autocompleteExcludedNodeTypes = null)
+    IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
+    IReadOnlyList<NodeTypePermission>? nodeTypePermissions = null)
 {
     /// <summary>
     /// Registered mesh nodes by their key/path.
@@ -41,6 +43,12 @@ public class MeshConfiguration(
     /// Typically includes satellite types (Comment, Thread) and internal types (AccessAssignment, GroupMembership).
     /// </summary>
     public IReadOnlySet<string> AutocompleteExcludedNodeTypes { get; } = autocompleteExcludedNodeTypes ?? new HashSet<string>();
+
+    /// <summary>
+    /// Node type permissions configured via ConfigureNodeTypeAccess.
+    /// Read by the persistence layer to sync to the database.
+    /// </summary>
+    public IReadOnlyList<NodeTypePermission> NodeTypePermissions { get; } = nodeTypePermissions ?? [];
 
     /// <summary>
     /// Default global creatable types: Markdown, Thread, Agent, NodeType.

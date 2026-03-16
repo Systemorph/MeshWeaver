@@ -286,6 +286,7 @@ public static class MemexConfiguration
                 .AddRowLevelSecurity()
                 // Configure graph from the same base path
                 .AddGraph()
+                .AddOrganizationType()
                 .AddPortalType()
                 .AddAI()
                 .AddSelfRegistry()
