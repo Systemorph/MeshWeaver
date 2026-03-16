@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MeshWeaver.Hosting.PostgreSql;
+using MeshWeaver.Mesh;
 using Npgsql;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -34,5 +35,11 @@ logger.LogInformation("Running database migration...");
 // but the public schema serves as a fallback since partition data sources use
 // SearchPath = "{schemaName},public".
 await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options.Value);
+
+// Create satellite tables (threads, annotations, etc.) in the public schema as well.
+// These are needed as fallback when partition-specific schemas haven't been created yet.
+var satelliteTableNames = MeshWeaver.Mesh.PartitionDefinition.StandardTableMappings.Values;
+await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
+    dataSource, options.Value, satelliteTableNames);
 
 logger.LogInformation("Database migration completed successfully.");

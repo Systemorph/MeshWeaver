@@ -44,6 +44,7 @@ public class PartitionSchemaInitTests
             Namespace = "Admin",
             DataSource = "default",
             Schema = "admin",
+            TableMappings = PartitionDefinition.StandardTableMappings,
             Description = "System administration"
         };
         yield return new PartitionDefinition
@@ -59,6 +60,7 @@ public class PartitionSchemaInitTests
             Namespace = "Portal",
             DataSource = "default",
             Schema = "portal",
+            TableMappings = PartitionDefinition.StandardTableMappings,
             Description = "Portal sessions"
         };
         yield return new PartitionDefinition
@@ -66,6 +68,7 @@ public class PartitionSchemaInitTests
             Namespace = "Kernel",
             DataSource = "default",
             Schema = "kernel",
+            TableMappings = PartitionDefinition.StandardTableMappings,
             Description = "Kernel sessions"
         };
     }
@@ -138,21 +141,21 @@ public class PartitionSchemaInitTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task AdminSchema_HasNoSatelliteTables()
+    public async Task AdminSchema_HasSatelliteTables()
     {
         var factory = CreateFactory();
         await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(),
             TestContext.Current.CancellationToken);
 
-        // Admin partition has no TableMappings, so no satellite tables
-        var satelliteTables = PartitionDefinition.StandardTableMappings.Values.ToList();
+        // All partitions now have StandardTableMappings — same schema everywhere
+        var satelliteTables = PartitionDefinition.StandardTableMappings.Values.Distinct().ToList();
 
         foreach (var table in satelliteTables)
         {
             await using var cmd = _fixture.DataSource.CreateCommand(
                 $"SELECT 1 FROM information_schema.tables WHERE table_schema = 'admin' AND table_name = '{table}'");
             var exists = await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken);
-            exists.Should().BeNull($"satellite table '{table}' should NOT exist in 'admin' schema");
+            exists.Should().NotBeNull($"satellite table '{table}' should exist in 'admin' schema");
         }
     }
 

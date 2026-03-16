@@ -738,6 +738,167 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     #endregion
 
+    #region End-to-end chat flow — simulates HandleSubmitMessage persistence
+
+    /// <summary>
+    /// Simulates the full HandleSubmitMessage persistence flow:
+    /// 1. Create Thread node with empty ThreadMessages
+    /// 2. Create user ThreadMessage node
+    /// 3. Create response ThreadMessage node
+    /// 4. Update Thread.ThreadMessages with the new IDs
+    /// 5. Update response node with streamed text
+    /// 6. Verify ALL nodes in correct table with correct content
+    /// This catches PostgreSQL-specific issues like missing satellite tables,
+    /// wrong table routing, or serialization problems.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task EndToEnd_ChatFlow_WritesAndReadsCorrectly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadNs = "User/alice/_Thread";
+        var threadId = "e2e-chat";
+        var threadPath = $"{threadNs}/{threadId}";
+        var userMsgId = "u1";
+        var responseMsgId = "r1";
+
+        await GrantUserScopeAsync("alice", ct);
+
+        // 1. Create Thread node with empty messages
+        await _threadAdapter.WriteAsync(new MeshNode(threadId, threadNs)
+        {
+            Name = "E2E Chat",
+            NodeType = "Thread",
+            MainNode = threadNs,
+            Content = new MeshThread { ParentPath = "User/alice", ThreadMessages = [] }
+        }, _options, ct);
+
+        // 2. Create user message node
+        await _messageAdapter.WriteAsync(new MeshNode(userMsgId, threadPath)
+        {
+            Name = "User msg",
+            NodeType = "ThreadMessage",
+            MainNode = threadNs,
+            Order = 1,
+            Content = new ThreadMessage
+            {
+                Id = userMsgId, Role = "user", Text = "Hello from e2e",
+                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput
+            }
+        }, _options, ct);
+
+        // 3. Create empty response message node
+        await _messageAdapter.WriteAsync(new MeshNode(responseMsgId, threadPath)
+        {
+            Name = "Response msg",
+            NodeType = "ThreadMessage",
+            MainNode = threadNs,
+            Order = 2,
+            Content = new ThreadMessage
+            {
+                Id = responseMsgId, Role = "assistant", Text = "",
+                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse
+            }
+        }, _options, ct);
+
+        // 4. Update Thread.ThreadMessages (simulates DataChangeRequest in HandleSubmitMessage)
+        await _threadAdapter.WriteAsync(new MeshNode(threadId, threadNs)
+        {
+            Name = "E2E Chat",
+            NodeType = "Thread",
+            MainNode = threadNs,
+            Content = new MeshThread
+            {
+                ParentPath = "User/alice",
+                ThreadMessages = [userMsgId, responseMsgId]
+            }
+        }, _options, ct);
+
+        // 5. Update response with streamed text (simulates PostResponseUpdate)
+        await _messageAdapter.WriteAsync(new MeshNode(responseMsgId, threadPath)
+        {
+            Name = "Response msg",
+            NodeType = "ThreadMessage",
+            MainNode = threadNs,
+            Order = 2,
+            Content = new ThreadMessage
+            {
+                Id = responseMsgId, Role = "assistant",
+                Text = "This is the streamed response.",
+                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse
+            }
+        }, _options, ct);
+
+        // 6. Verify Thread in threads table
+        await using var threadCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
+        threadCmd.Parameters.AddWithValue(threadNs);
+        threadCmd.Parameters.AddWithValue(threadId);
+        ((long)(await threadCmd.ExecuteScalarAsync(ct))!).Should().Be(1,
+            "Thread should be in 'threads' table");
+
+        // 7. Verify user message in threads table
+        await using var userCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
+        userCmd.Parameters.AddWithValue(threadPath);
+        userCmd.Parameters.AddWithValue(userMsgId);
+        ((long)(await userCmd.ExecuteScalarAsync(ct))!).Should().Be(1,
+            "User ThreadMessage should be in 'threads' table");
+
+        // 8. Verify response message in threads table
+        await using var respCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
+        respCmd.Parameters.AddWithValue(threadPath);
+        respCmd.Parameters.AddWithValue(responseMsgId);
+        ((long)(await respCmd.ExecuteScalarAsync(ct))!).Should().Be(1,
+            "Response ThreadMessage should be in 'threads' table");
+
+        // 9. Verify NOT in mesh_nodes
+        await using var mainCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM mesh_nodes WHERE path LIKE $1");
+        mainCmd.Parameters.AddWithValue($"{threadNs}/%");
+        ((long)(await mainCmd.ExecuteScalarAsync(ct))!).Should().Be(0,
+            "Thread and messages should NOT be in mesh_nodes");
+
+        // 10. Read back and verify content via query
+        var query = new PostgreSqlMeshQuery(_threadAdapter);
+
+        // Thread content
+        var threadResults = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(
+            MeshQueryRequest.FromQuery($"path:{threadPath}", userId: "alice"), _options, ct))
+            threadResults.Add((MeshNode)item);
+        threadResults.Should().HaveCount(1);
+        var threadJson = threadResults[0].Content is JsonElement tje ? tje
+            : JsonSerializer.SerializeToElement(threadResults[0].Content, _options);
+        var threadMsgs = threadJson.TryGetProperty("threadMessages", out var msgsEl)
+            ? msgsEl : threadJson.GetProperty("ThreadMessages");
+        threadMsgs.GetArrayLength().Should().Be(2, "Thread should have 2 message IDs");
+
+        // User message content
+        var userResults = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(
+            MeshQueryRequest.FromQuery($"path:{threadPath}/{userMsgId}", userId: "alice"), _options, ct))
+            userResults.Add((MeshNode)item);
+        userResults.Should().HaveCount(1);
+        var userJson = userResults[0].Content is JsonElement uje ? uje
+            : JsonSerializer.SerializeToElement(userResults[0].Content, _options);
+        GetJsonProp(userJson, "role").Should().Be("user");
+        GetJsonProp(userJson, "text").Should().Be("Hello from e2e");
+
+        // Response message content — should have streamed text
+        var respResults = new List<MeshNode>();
+        await foreach (var item in query.QueryAsync(
+            MeshQueryRequest.FromQuery($"path:{threadPath}/{responseMsgId}", userId: "alice"), _options, ct))
+            respResults.Add((MeshNode)item);
+        respResults.Should().HaveCount(1);
+        var respJson = respResults[0].Content is JsonElement rje ? rje
+            : JsonSerializer.SerializeToElement(respResults[0].Content, _options);
+        GetJsonProp(respJson, "role").Should().Be("assistant");
+        GetJsonProp(respJson, "text").Should().Be("This is the streamed response.");
+    }
+
+    #endregion
+
     /// <summary>Helper: gets a JSON property by trying camelCase then PascalCase.</summary>
     private static string? GetJsonProp(JsonElement el, string name)
     {

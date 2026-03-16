@@ -53,6 +53,7 @@ public static class OrganizationNodeType
     public static TBuilder AddOrganizationType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.WithMeshType<Organization>();
         builder.ConfigureServices(services =>
         {
             services.AddSingleton<IStaticNodeProvider, OrganizationNodeProvider>();
