@@ -1,14 +1,17 @@
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
+using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
-namespace MeshWeaver.Graph.Configuration;
+namespace Memex.Portal.Shared;
 
 /// <summary>
 /// Represents a company, team, or organizational unit.
@@ -56,11 +59,12 @@ public static class OrganizationNodeType
             services.AddSingleton<INodeTypeAccessRule>(sp =>
                 new OrganizationAccessRule(sp.GetService<ISecurityService>() ?? new NullSecurityService()));
             services.AddSingleton<INodePostCreationHandler>(sp =>
-                new OrganizationCreatorAdminHandler(
+                new OrganizationPostCreationHandler(
                     sp.GetService<ISecurityService>() ?? new NullSecurityService(),
-                    sp.GetRequiredService<ILogger<OrganizationCreatorAdminHandler>>()));
+                    sp.GetService<ILoggerFactory>()?.CreateLogger<OrganizationPostCreationHandler>()));
             return services;
         });
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 
@@ -90,6 +94,62 @@ public static class OrganizationNodeType
     };
 
     /// <summary>
+    /// Post-creation handler: creates partition, grants admin role, and creates markdown page.
+    /// Triggered implicitly by RunPostCreationHandlersAsync when an Organization is created
+    /// via normal CreateNodeRequest.
+    /// </summary>
+    private class OrganizationPostCreationHandler(
+        ISecurityService securityService,
+        ILogger<OrganizationPostCreationHandler>? logger) : INodePostCreationHandler
+    {
+        public string NodeType => OrganizationNodeType.NodeType;
+
+        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
+        {
+            if (string.IsNullOrEmpty(createdBy))
+            {
+                logger?.LogWarning("Cannot assign Admin role: no creator identity for Organization at {Path}", createdNode.Path);
+                return;
+            }
+
+            logger?.LogInformation("Granting Admin role to {User} on Organization {Path}", createdBy, createdNode.Path);
+            await securityService.AddUserRoleAsync(createdBy, Role.Admin.Id, createdNode.Id, assignedBy: "system", ct);
+        }
+
+        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
+        {
+            // Partition node at Admin/Partition/{OrgId}
+            yield return new MeshNode(createdNode.Id, PartitionNodeType.Namespace)
+            {
+                NodeType = PartitionNodeType.NodeType,
+                Name = createdNode.Name ?? createdNode.Id,
+                State = MeshNodeState.Active,
+                Content = new PartitionDefinition
+                {
+                    Namespace = createdNode.Id,
+                    DataSource = "default",
+                    Schema = createdNode.Id.ToLowerInvariant(),
+                    TableMappings = PartitionDefinition.StandardTableMappings,
+                    Description = $"Partition for organization {createdNode.Name ?? createdNode.Id}"
+                }
+            };
+
+            // Markdown overview page at {OrgId}/Overview
+            yield return new MeshNode("Overview", createdNode.Id)
+            {
+                Name = "Overview",
+                NodeType = "Markdown",
+                MainNode = createdNode.Id,
+                State = MeshNodeState.Active,
+                Content = new MarkdownContent
+                {
+                    Content = $"# {createdNode.Name ?? createdNode.Id}\n\nWelcome to **{createdNode.Name ?? createdNode.Id}**.\n"
+                }
+            };
+        }
+    }
+
+    /// <summary>
     /// DI-registered access rule for Organization nodes.
     /// Read: all authenticated users. Update: requires Admin role (via ISecurityService).
     /// </summary>
@@ -102,7 +162,6 @@ public static class OrganizationNodeType
 
         public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            // Read: all users including anonymous
             if (context.Operation == NodeOperation.Read)
                 return true;
 
@@ -121,51 +180,4 @@ public static class OrganizationNodeType
             return false;
         }
     }
-
-    /// <summary>
-    /// Grants the creator Admin role on the newly created Organization
-    /// and creates a Partition node for the organization's storage partition.
-    /// </summary>
-    private class OrganizationCreatorAdminHandler(
-        ISecurityService securityService,
-        ILogger<OrganizationCreatorAdminHandler> logger) : INodePostCreationHandler
-    {
-        public string NodeType => OrganizationNodeType.NodeType;
-
-        public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
-        {
-            if (string.IsNullOrEmpty(createdBy))
-            {
-                logger.LogWarning("Cannot assign Admin role: no creator identity for Organization at {Path}", createdNode.Path);
-                return;
-            }
-
-            // Grant Admin role to creator on the organization
-            logger.LogInformation("Granting Admin role to {User} on Organization {Path}", createdBy, createdNode.Path);
-            await securityService.AddUserRoleAsync(createdBy, Role.Admin.Id, createdNode.Path, assignedBy: "system", ct);
-        }
-
-        /// <summary>
-        /// Returns a Partition node to be created alongside the Organization.
-        /// Persisted directly by RunPostCreationHandlersAsync (bypasses hub pipeline).
-        /// </summary>
-        public IEnumerable<MeshNode> GetAdditionalNodes(MeshNode createdNode)
-        {
-            yield return new MeshNode(createdNode.Id, PartitionNodeType.Namespace)
-            {
-                NodeType = PartitionNodeType.NodeType,
-                Name = createdNode.Name ?? createdNode.Id,
-                State = MeshNodeState.Active,
-                Content = new PartitionDefinition
-                {
-                    Namespace = createdNode.Id,
-                    DataSource = "default",
-                    Schema = createdNode.Id.ToLowerInvariant(),
-                    TableMappings = PartitionDefinition.StandardTableMappings,
-                    Description = $"Partition for organization {createdNode.Name ?? createdNode.Id}"
-                }
-            };
-        }
-    }
 }
-

@@ -24,7 +24,6 @@ public static class GraphConfigurationExtensions
         {
             builder
                 .AddNodeTypeType()
-                .AddOrganizationType()
                 .AddCodeType()
                 .AddMarkdownType()
                 .AddHtmlType()
@@ -58,27 +57,6 @@ public static class GraphConfigurationExtensions
 
                 // Register compilation cache service
                 services.AddSingleton<ICompilationCacheService, CompilationCacheService>();
-
-                // Public-read node type permissions for all built-in platform types.
-                // Centralized here so all types are registered in one place.
-                // Satellite types (Thread, Activity, etc.) are NOT public-read —
-                // their visibility is controlled by user scope and RLS.
-                foreach (var nodeType in new[]
-                {
-                    "NodeType",                      // NodeType definitions
-                    UserNodeType.NodeType,           // User
-                    VUserNodeType.NodeType,           // VUser
-                    OrganizationNodeType.NodeType,   // Organization
-                    PartitionNodeType.NodeType,      // Partition
-                    RoleNodeType.NodeType,           // Role
-                    GroupNodeType.NodeType,           // Group
-                    MarkdownNodeType.NodeType,       // Markdown
-                    CodeNodeType.NodeType,           // Code
-                    HtmlNodeType.NodeType,           // Html
-                })
-                {
-                    services.AddSingleton(new NodeTypePermission(nodeType, PublicRead: true));
-                }
 
                 return services;
             });

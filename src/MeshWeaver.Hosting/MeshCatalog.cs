@@ -330,7 +330,10 @@ internal sealed class MeshCatalog(
         var segments = path.Split('/');
 
         // 1. Try configuration first (existing behavior)
+        // Skip satellite types (e.g., Portal) — they are local-only ephemeral hubs
+        // and should never be routing targets for grain activation.
         var configMatch = Configuration.Nodes.Values
+            .Where(node => !node.IsSatelliteType)
             .Select(node => (Node: node, Score: ScoreMatch(node, segments)))
             .Where(m => m.Score > 0)
             .OrderByDescending(m => m.Score)

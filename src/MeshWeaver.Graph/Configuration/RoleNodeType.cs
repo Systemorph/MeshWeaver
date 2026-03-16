@@ -27,6 +27,7 @@ public static class RoleNodeType
         builder.AddMeshNodes(CreateMeshNode());
         builder.ConfigureServices(services =>
             services.AddSingleton<IStaticNodeProvider, BuiltInRolesProvider>());
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         return builder;
     }
 

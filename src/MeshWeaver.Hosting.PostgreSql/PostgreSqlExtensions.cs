@@ -1,4 +1,5 @@
 using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -185,13 +186,13 @@ public static class PostgreSqlExtensions
 
         await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options, ct);
 
-        // Sync DI-registered NodeTypePermission records to the database
-        var nodeTypePermissions = serviceProvider.GetServices<NodeTypePermission>();
-        if (nodeTypePermissions.Any())
+        // Sync node type permissions from MeshConfiguration to the database
+        var meshConfig = serviceProvider.GetService<MeshConfiguration>();
+        if (meshConfig?.NodeTypePermissions is { Count: > 0 } permissions)
         {
             var ac = serviceProvider.GetService<PostgreSqlAccessControl>()
                 ?? new PostgreSqlAccessControl(dataSource);
-            await ac.SyncNodeTypePermissionsAsync(nodeTypePermissions, ct);
+            await ac.SyncNodeTypePermissionsAsync(permissions, ct);
         }
     }
 
@@ -227,7 +228,7 @@ public static class PostgreSqlExtensions
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetServices<NodeTypePermission>(),
+                sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
                 configureDataSource));
 
         services.AddPartitionedCoreAndWrapperServices();
@@ -269,7 +270,7 @@ public static class PostgreSqlExtensions
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<IEmbeddingProvider>(),
                 sp.GetService<AccessService>(),
-                sp.GetServices<NodeTypePermission>(),
+                sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
                 configureDataSource);
         });
 

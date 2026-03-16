@@ -21,20 +21,17 @@ internal class RoutingGrain(
         var resolution = await pathResolver.ResolvePathAsync(address.ToString());
         var grainKey = resolution?.Prefix;
 
-        if (grainKey != null)
-        {
-            var grain = GrainFactory.GetGrain<IMessageHubGrain>(grainKey);
-            return await grain.DeliverMessage(delivery);
-        }
+        var targetKey = grainKey ?? address.ToString();
 
         try
         {
-            var grain = GrainFactory.GetGrain<IMessageHubGrain>(address.ToString());
+            var grain = GrainFactory.GetGrain<IMessageHubGrain>(targetKey);
             return await grain.DeliverMessage(delivery);
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "Grain delivery failed for {Address}, falling back to stream", address);
+            logger.LogDebug(ex, "Grain delivery failed for {Address} (key={Key}), falling back to stream",
+                address, targetKey);
             var stream = this.GetStreamProvider(StreamProviders.Memory)
                 .GetStream<IMessageDelivery>(address.ToString());
             await stream.OnNextAsync(delivery);

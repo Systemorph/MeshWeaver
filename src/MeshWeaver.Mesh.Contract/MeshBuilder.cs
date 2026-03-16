@@ -136,6 +136,7 @@ public record MeshBuilder
         var defaultNodeHubConfigs = DefaultNodeHubConfiguration;
         var meshTypeRegs = MeshTypeRegistrations;
         var excludedTypes = AutocompleteExcludedTypes;
+        var accessConfig = NodeTypeAccessConfig;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -148,7 +149,8 @@ public record MeshBuilder
                 return new MeshConfiguration(
                     MeshNodes.GroupBy(x => x.Path).ToDictionary(g => g.Key, g => g.Last()),
                     combinedDefaultConfig,
-                    autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null);
+                    autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
+                    nodeTypePermissions: accessConfig.Build());
             })
             .AddSingleton<ITypeRegistry>(_ =>
             {
@@ -258,4 +260,15 @@ public record MeshBuilder
     }
 
     private HashSet<string> AutocompleteExcludedTypes { get; } = new();
+
+    /// <summary>
+    /// Configures node type access permissions (e.g., public-read types).
+    /// </summary>
+    public MeshBuilder ConfigureNodeTypeAccess(Action<NodeTypeAccessBuilder> configure)
+    {
+        configure(NodeTypeAccessConfig);
+        return this;
+    }
+
+    internal NodeTypeAccessBuilder NodeTypeAccessConfig { get; } = new();
 }
