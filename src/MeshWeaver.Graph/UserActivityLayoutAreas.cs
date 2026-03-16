@@ -207,7 +207,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Latest Threads</div>"));
 
         section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery("nodeType:Thread sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath} scope:descendants sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)

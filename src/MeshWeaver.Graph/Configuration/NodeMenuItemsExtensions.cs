@@ -5,6 +5,8 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -69,7 +71,11 @@ public static class NodeMenuItemsExtensions
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DefaultMenuProvider");
+        logger?.LogInformation("DefaultMenuProvider evaluating for hubPath={HubPath}, area={Area}", hubPath, ctx.Area);
+
         var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+        logger?.LogInformation("DefaultMenuProvider permissions for {HubPath}: {Perms}", hubPath, perms);
 
         // Get the current node to determine name and type
         var nodes = await (host.Workspace.GetStream<MeshNode>()
