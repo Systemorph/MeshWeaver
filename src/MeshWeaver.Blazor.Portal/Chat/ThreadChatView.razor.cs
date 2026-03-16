@@ -40,7 +40,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         get => _threadViewModel;
         set
         {
-            var oldCount = _threadViewModel?.Messages?.Count ?? 0;
+            var old = _threadViewModel;
             _threadViewModel = value;
             // Sync threadPath and initialContext from the view model
             if (value != null)
@@ -48,12 +48,17 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
             }
-            // Release submission handler when new messages appear
-            var newCount = value?.Messages?.Count ?? 0;
-            if (newCount > oldCount &&
-                submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
+            // If messages changed, force re-render and release submission handler
+            if (!Equals(old, value))
             {
-                submissionHandler.OnResponseAppeared();
+                var oldCount = old?.Messages?.Count ?? 0;
+                var newCount = value?.Messages?.Count ?? 0;
+                if (newCount > oldCount &&
+                    submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
+                {
+                    submissionHandler.OnResponseAppeared();
+                }
+                InvokeAsync(StateHasChanged);
             }
         }
     }

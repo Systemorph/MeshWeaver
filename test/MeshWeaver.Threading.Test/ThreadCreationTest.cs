@@ -49,7 +49,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange — create context node so the node hub exists
         var contextPath = "ACME";
         await NodeFactory.CreateNodeAsync(
-            new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Organization" }, ct);
+            new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Markdown" }, ct);
 
         // Act — send CreateThreadRequest to the context node's hub (production path)
         var client = GetClient();

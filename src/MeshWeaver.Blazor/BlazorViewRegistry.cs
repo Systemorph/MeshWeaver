@@ -110,6 +110,7 @@ public static class BlazorViewRegistry
                 MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
                 MeshNodeCardControl card => StandardView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
                 AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
+                ThreadMessageBubbleControl bubble => StandardView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
                 _ => DelegateToDotnetInteractive(instance, stream, area),
             };
         }

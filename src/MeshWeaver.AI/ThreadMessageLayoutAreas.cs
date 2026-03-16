@@ -35,31 +35,45 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Returns a STATIC control with data-bound content — no IObservable, no control rebuild.
-    /// During streaming, only the data section updates (via DataChangeRequest); the control tree stays the same.
+    /// Emits ThreadMessageBubbleControl ONCE (Take(1)) based on initial role/author.
+    /// Text is data-bound via JsonPointerReference — only text updates during streaming,
+    /// the control tree stays the same (no flicker).
     /// </summary>
-    public static UiControl Overview(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        // Push ThreadMessage content to data section — Blazor data-binds to it
         var nodeStream = host.Workspace.GetStream<MeshNode>();
+
+        // Push ThreadMessage text to data section for data-bound rendering
         host.RegisterForDisposal(nodeStream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var msg = node?.Content as ThreadMessage;
+                return msg?.Text ?? "";
+            })
+            .DistinctUntilChanged()
+            .Subscribe(text => host.UpdateData("text", text)));
+
+        // Emit the bubble control ONCE — role/author are fixed, text is data-bound
+        return nodeStream!
             .Select(nodes =>
             {
                 var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
                 return node?.Content as ThreadMessage;
             })
-            .DistinctUntilChanged()
-            .Subscribe(msg => host.UpdateData(MessageDataKey, msg)));
+            .Where(msg => msg != null)
+            .Take(1)
+            .Select(msg =>
+            {
+                var isUser = msg!.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+                var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
 
-        // Static control — MarkdownControl data-bound to the message text pointer
-        var textPointer = new JsonPointerReference(LayoutAreaReference.GetDataPointer(MessageDataKey, "text"));
-        var rolePointer = new JsonPointerReference(LayoutAreaReference.GetDataPointer(MessageDataKey, "role"));
-
-        // Return a simple markdown view data-bound to the text — no control tree rebuild during streaming
-        return new MarkdownControl(textPointer)
-            .WithStyle("padding: 12px 16px; margin-bottom: 8px;");
+                return (UiControl?)new ThreadMessageBubbleControl()
+                    .WithRole(msg.Role)
+                    .WithAuthorName(authorName)
+                    .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")));
+            });
     }
 
     /// <summary>

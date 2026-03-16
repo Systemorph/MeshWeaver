@@ -132,6 +132,7 @@ var portal = builder
     .WithEnvironment("Anthropic__ApiKey", azureFoundryKey)
     .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
     .WithEnvironment("Anthropic__Models__1", "claude-opus-4-6")
+    .WithEnvironment("Anthropic__Models__2", "claude-haiku-4-5")
     // LLM: Azure OpenAI
     .WithEnvironment("AzureOpenAIS__Endpoint", "https://s-meshweaver.cognitiveservices.azure.com")
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
