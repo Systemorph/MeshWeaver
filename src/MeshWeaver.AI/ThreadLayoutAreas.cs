@@ -147,30 +147,28 @@ public static class ThreadLayoutAreas
                 InitialContextDisplayName = contextDisplayName
             };
         });
-        host.RegisterForDisposal(vmStream.Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
-        // Static container — emits once, not rebuilt on every node update
-        var container = Controls.Stack
-            .WithWidth("100%")
-            .WithHeight("100%")
-            .WithStyle("display: flex; flex-direction: column;");
-
-        // 1. Title — observable sub-view bound to meshNode.Name
-        container = container.WithView(stream.Select(nodes =>
+        // Push title to data section — data-bound, no observable control rebuild
+        var titleStream = stream.Select(nodes =>
         {
             var node = nodes!.First(n => n.Path == hubPath);
-            var title = GetThreadTitle(node);
-            return (UiControl?)Controls.Html(
-                $"<h2 style=\"margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h2>");
-        }));
+            return GetThreadTitle(node);
+        }).DistinctUntilChanged();
+        host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
-        // 2. ThreadChatControl — emitted once, all state data-bound via ThreadViewModel.
-        container = container.WithView(
-            (UiControl?)new ThreadChatControl()
+        // Static container — never rebuilt
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithHeight("100%")
+            .WithStyle("display: flex; flex-direction: column;")
+            // 1. Title — data-bound, not observable control rebuild
+            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
+                .WithStyle("margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0; font-size: 1.5rem; font-weight: bold;"))
+            // 2. ThreadChatControl — all state data-bound via ThreadViewModel
+            .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
                 .WithStyle("flex: 1; overflow: hidden;"));
-
-        return container;
     }
 
     /// <summary>
@@ -458,7 +456,11 @@ public static class ThreadLayoutAreas
                 UserMessageText = request.UserMessageText,
                 UserMessagePath = userNodePath,
                 ResponsePath = responsePath,
-                ResponseOrder = 0
+                ResponseOrder = 0,
+                ContextPath = request.ContextPath,
+                AgentName = request.AgentName,
+                ModelName = request.ModelName,
+                Attachments = request.Attachments
             });
         });
 
@@ -469,54 +471,70 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Async handler running in the _Exec sub-hub's execution queue.
-    /// Can safely await streaming without blocking the Thread hub.
-    /// Updates are posted to the thread message node address (routed through hub hierarchy).
+    /// Sync handler on the _Exec sub-hub.
+    /// EnsureInitializedAsync runs on a thread pool thread (ContinueWith) since it uses
+    /// await internally (IMeshQuery). The streaming loop runs via hub.InvokeAsync where
+    /// the only await is the streaming enumeration itself. All updates are fire-and-forget Post.
     /// </summary>
-    private static async Task<IMessageDelivery> HandleExecStreaming(
+    private static IMessageDelivery HandleExecStreaming(
         IMessageHub hub,
-        IMessageDelivery<StartStreamingRequest> delivery,
-        CancellationToken ct)
+        IMessageDelivery<StartStreamingRequest> delivery)
     {
         var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
         var request = delivery.Message;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
 
-        try
-        {
-            // Initialize agent
-            await session.EnsureInitializedAsync(request.ThreadPath, null, null, null);
-
-            // Stream and post throttled updates to the response message node address
-            var responseText = new StringBuilder();
-            var lastUpdate = DateTimeOffset.MinValue;
-            var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
-
-            await foreach (var update in session.GetStreamingResponseAsync([chatMessage], ct))
+        // EnsureInitializedAsync uses await IMeshQuery internally — must run off the hub's
+        // execution block to avoid deadlock. ContinueWith runs on thread pool.
+        session.EnsureInitializedAsync(request.ThreadPath, request.ContextPath, request.ModelName, request.AgentName)
+            .ContinueWith(initTask =>
             {
-                if (!string.IsNullOrEmpty(update.Text))
+                if (initTask.IsFaulted)
                 {
-                    responseText.Append(update.Text);
-
-                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
-                    {
-                        PostResponseUpdate(hub, request.ThreadPath, request.ResponsePath, responseText.ToString());
-                        lastUpdate = DateTimeOffset.UtcNow;
-                    }
+                    logger.LogError(initTask.Exception, "Failed to initialize agent for {ThreadPath}", request.ThreadPath);
+                    return;
                 }
-            }
 
-            // Final update with complete text
-            PostResponseUpdate(hub, request.ThreadPath, request.ResponsePath, responseText.ToString());
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogInformation("Stream cancelled for thread {ThreadPath}", request.ThreadPath);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Error streaming for thread {ThreadPath}", request.ThreadPath);
-        }
+                // Set attachments after initialization (chatClient is now created)
+                if (request.Attachments is { Count: > 0 })
+                    session.SetAttachments(request.Attachments);
+
+                // Streaming loop via InvokeAsync — only awaits the chat stream enumeration
+                hub.InvokeAsync(async ct =>
+                {
+                    var responseText = new StringBuilder();
+                    var lastUpdate = DateTimeOffset.MinValue;
+                    var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
+
+                    try
+                    {
+                        await foreach (var update in session.GetStreamingResponseAsync([chatMessage], ct))
+                        {
+                            if (!string.IsNullOrEmpty(update.Text))
+                            {
+                                responseText.Append(update.Text);
+
+                                if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
+                                {
+                                    PostResponseUpdate(hub, request.ThreadPath, request.ResponsePath, responseText.ToString());
+                                    lastUpdate = DateTimeOffset.UtcNow;
+                                }
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        logger.LogInformation("Stream cancelled for thread {ThreadPath}", request.ThreadPath);
+                    }
+
+                    // Final update
+                    PostResponseUpdate(hub, request.ThreadPath, request.ResponsePath, responseText.ToString());
+                }, ex =>
+                {
+                    logger.LogError(ex, "Error streaming for thread {ThreadPath}", request.ThreadPath);
+                    return Task.CompletedTask;
+                });
+            });
 
         return delivery.Processed();
     }

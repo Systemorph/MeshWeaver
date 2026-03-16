@@ -1,15 +1,14 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using Humanizer;
-using MeshWeaver.AI;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
-using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
-namespace MeshWeaver.Graph;
+namespace MeshWeaver.AI;
 
 /// <summary>
 /// Provides dedicated views for ThreadMessage nodes.
@@ -32,29 +31,41 @@ public static class ThreadMessageLayoutAreas
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
+    private const string MessageDataKey = "msg";
+
     /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Switches on message.Type to return appropriate control.
+    /// Returns a STATIC control with data-bound content — no IObservable, no control rebuild.
+    /// During streaming, only the data section updates (via DataChangeRequest); the control tree stays the same.
     /// </summary>
-    public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
+    public static UiControl Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
-            ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
+        // Push ThreadMessage content to data section — Blazor data-binds to it
+        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        host.RegisterForDisposal(nodeStream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                return node?.Content as ThreadMessage;
+            })
+            .DistinctUntilChanged()
+            .Subscribe(msg => host.UpdateData(MessageDataKey, msg)));
 
-        return nodeStream.Select(nodes =>
-        {
-            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var isLast = node != null && !nodes.Any(n => n.Order > node.Order);
-            return BuildMessageView(host, node, hubPath, isLast);
-        });
+        // Static control — MarkdownControl data-bound to the message text pointer
+        var textPointer = new JsonPointerReference(LayoutAreaReference.GetDataPointer(MessageDataKey, "text"));
+        var rolePointer = new JsonPointerReference(LayoutAreaReference.GetDataPointer(MessageDataKey, "role"));
+
+        // Return a simple markdown view data-bound to the text — no control tree rebuild during streaming
+        return new MarkdownControl(textPointer)
+            .WithStyle("padding: 12px 16px; margin-bottom: 8px;");
     }
 
     /// <summary>
     /// Builds the appropriate view for a ThreadMessage based on its Type.
     /// </summary>
-    private static UiControl BuildMessageView(LayoutAreaHost host, MeshNode? node, string messagePath, bool isLast)
+    private static UiControl BuildMessageView(LayoutAreaHost host, MeshNode? node, string messagePath)
     {
         var message = node?.Content as ThreadMessage;
         if (message == null)
@@ -71,7 +82,7 @@ public static class ThreadMessageLayoutAreas
 
         return message.Type switch
         {
-            ThreadMessageType.EditingPrompt => BuildEditingPromptView(host, message, messagePath, isLast),
+            ThreadMessageType.EditingPrompt => BuildEditingPromptView(host, message, messagePath),
             ThreadMessageType.ExecutedInput => BuildUserMessageView(message),
             ThreadMessageType.AgentResponse => BuildAgentResponseView(message),
             _ => BuildUserMessageView(message) // Default fallback
@@ -82,7 +93,7 @@ public static class ThreadMessageLayoutAreas
     /// Builds an editing view with MarkdownEditorControl for EditingPrompt messages.
     /// When isLast is true, adds a Submit button to execute the prompt.
     /// </summary>
-    private static UiControl BuildEditingPromptView(LayoutAreaHost host, ThreadMessage message, string messagePath, bool isLast)
+    private static UiControl BuildEditingPromptView(LayoutAreaHost host, ThreadMessage message, string messagePath)
     {
         var container = Controls.Stack
             .WithWidth("100%")
@@ -105,38 +116,6 @@ public static class ThreadMessageLayoutAreas
             .WithPlaceholder("Type your message...");
 
         container = container.WithView(editor);
-
-        // Submit button when this is the last cell in the thread
-        if (isLast)
-        {
-            var threadPath = messagePath.Contains('/')
-                ? messagePath[..messagePath.LastIndexOf('/')]
-                : messagePath;
-
-            var buttonRow = Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("justify-content: flex-end; margin-top: 8px;");
-
-            buttonRow = buttonRow.WithView(Controls.Button("Submit")
-                .WithAppearance(Appearance.Accent)
-                .WithIconStart(FluentIcons.Send(IconSize.Size16))
-                .WithClickAction(async ctx =>
-                {
-                    var text = await ctx.Host.Stream
-                        .GetDataStream<string>(textDataId).FirstAsync();
-
-                    if (string.IsNullOrWhiteSpace(text))
-                        return;
-
-                    ctx.Hub.Post(new SubmitMessageRequest
-                    {
-                        ThreadPath = threadPath,
-                        UserMessageText = text
-                    }, o => o.WithTarget(new Address(threadPath)));
-                }));
-
-            container = container.WithView(buttonRow);
-        }
 
         return container;
     }

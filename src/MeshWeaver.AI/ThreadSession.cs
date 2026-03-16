@@ -239,6 +239,9 @@ public class ThreadSession : IDisposable
         IReadOnlyCollection<ChatMessage> messages, CancellationToken ct)
         => _chatClient!.GetStreamingResponseAsync(messages, ct);
 
+    public void SetAttachments(IReadOnlyList<string> attachments)
+        => _chatClient?.SetAttachments(attachments);
+
     public void CancelCurrentStream()
     {
         CancelCurrentStreamInternal();

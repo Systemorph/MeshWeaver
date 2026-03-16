@@ -13,6 +13,10 @@ public record StartStreamingRequest : IRequest<StartStreamingResponse>
     public required string UserMessagePath { get; init; }
     public required string ResponsePath { get; init; }
     public int ResponseOrder { get; init; }
+    public string? ContextPath { get; init; }
+    public string? AgentName { get; init; }
+    public string? ModelName { get; init; }
+    public IReadOnlyList<string>? Attachments { get; init; }
 }
 
 public record StartStreamingResponse

@@ -174,13 +174,13 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public async Task SubmitMessage_ResponseNodeGetsNonEmptyText()
+    public async Task SubmitMessage_BothNodesGetCorrectContentViaGetDataRequest()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
 
         // 1. Create thread and submit
-        var threadPath = await CreateThreadAsync(client, "Streaming test", ct);
+        var threadPath = await CreateThreadAsync(client, "Content verification", ct);
         var twoMessages = ObserveThreadMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
@@ -192,14 +192,42 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var msgIds = await twoMessages;
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-        // 2. Wait for streaming to complete, then verify response content via GetDataRequest
-        await Task.Delay(3000, ct);
-        var responseContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
+        // 2. Verify USER message node via GetDataRequest — should be populated immediately
+        var userContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
+        userContent.Should().NotBeNull("user message hub should return ThreadMessage content");
+        userContent!.Role.Should().Be("user");
+        userContent.Text.Should().Be("Tell me something");
+        userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
+        Output.WriteLine($"User node: role={userContent.Role}, text='{userContent.Text}'");
+
+        // 3. Verify RESPONSE message node via GetDataRequest — poll until streaming completes.
+        // Wait for text to stabilize (same length on two consecutive polls = streaming done).
+        ThreadMessage? responseContent = null;
+        var previousLength = 0;
+        var stableCount = 0;
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            responseContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
+            var currentLength = responseContent?.Text?.Length ?? 0;
+            if (currentLength > 0 && currentLength == previousLength)
+            {
+                if (++stableCount >= 2)
+                    break; // Text hasn't changed for 2 polls — streaming is done
+            }
+            else
+            {
+                stableCount = 0;
+            }
+            previousLength = currentLength;
+            await Task.Delay(200, ct);
+        }
+
         responseContent.Should().NotBeNull("response message hub should return ThreadMessage content");
         responseContent!.Role.Should().Be("assistant");
+        responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
         responseContent.Text.Should().NotBeNullOrEmpty("agent should have streamed a non-empty response");
         responseContent.Text.Length.Should().BeGreaterThan(10, "response should have meaningful content");
-        Output.WriteLine($"Response ({responseContent.Text.Length} chars): '{responseContent.Text}'");
+        Output.WriteLine($"Response node: role={responseContent.Role}, text='{responseContent.Text}' ({responseContent.Text.Length} chars)");
     }
 
     [Fact]

@@ -48,12 +48,7 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
-            // Ensure ChatPersistenceService is registered
             services.AddMemoryChatPersistence();
-
-            // Add thread manager (uses in-memory by default)
-            services.AddInMemoryThreadManager();
-
             return services;
         }
 
