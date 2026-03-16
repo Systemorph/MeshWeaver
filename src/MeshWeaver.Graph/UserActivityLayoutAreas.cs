@@ -73,7 +73,7 @@ public static class UserActivityLayoutAreas
 
             // Recently Viewed — 1/3 width on desktop, full on mobile
             content = content.WithView(
-                BuildRecentActivity(),
+                BuildRecentActivity(nodePath),
                 skin => skin.WithXs(12).WithSm(4));
 
             dashboard = dashboard.WithView(content);
@@ -170,24 +170,27 @@ public static class UserActivityLayoutAreas
     /// Recently Viewed panel — compact card grid, max 10 items, fixed height with scroll.
     /// Resolves full MeshNode for each item to get proper icon/thumbnail.
     /// </summary>
-    private static UiControl BuildRecentActivity()
+    private static UiControl BuildRecentActivity(string nodePath)
     {
-        var section = Controls.Stack;
+        var section = Controls.Stack.WithWidth("100%");
 
         section = section.WithView(Controls.Html(
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recently Viewed</div>"));
 
         // Recently viewed — 1 item per row (full width for readability), ~4 rows, scrollable
+        // Exclude the user's own node from results (we're already on their page)
         section = section.WithView(Controls.Stack
+            .WithWidth("100%")
             .WithStyle("max-height: 400px; overflow-y: auto;")
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery("source:accessed scope:subtree is:main sort:LastModified-desc")
+                .WithHiddenQuery($"source:accessed scope:subtree is:main sort:LastModified-desc -path:{nodePath}")
                 .WithShowSearchBox(false)
                 .WithShowEmptyMessage(true)
                 .WithRenderMode(MeshSearchRenderMode.Flat)
                 .WithCollapsibleSections(false)
                 .WithSectionCounts(false)
                 .WithMaxColumns(1)
+                .WithGridBreakpoints(12, 12, 12, 12)
                 .WithItemLimit(4)));
 
         return section;

@@ -61,13 +61,13 @@ else
     <!-- Message history display (hidden in compact/dashboard mode) -->
     @if (!ViewModel.HideEmptyState)
     {
-        <div class="thread-chat-messages">
+        <div class="thread-chat-messages" @key="@ThreadMessages.Count">
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)
                 {
                     var cell = GetMessageCell(msgId);
-                    <LayoutAreaView ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
+                    <LayoutAreaView @key="@msgId" ViewModel="@cell" Stream="@Stream" Area="@($"msg-{msgId}")" />
                 }
             }
             else if (isCreatingThread)

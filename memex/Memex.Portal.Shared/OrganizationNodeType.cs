@@ -1,5 +1,5 @@
-using System.ComponentModel.DataAnnotations;
-using MeshWeaver.Data;
+﻿using System.ComponentModel.DataAnnotations;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -44,7 +44,7 @@ public record Organization
 
 /// <summary>
 /// Provides configuration for Organization nodes in the graph.
-/// Access rules: public read. Update/Create/Delete fall through to standard RLS.
+/// Access rules: public read. Create/Update/Delete require Admin role via ISecurityService.
 /// </summary>
 public static class OrganizationNodeType
 {
@@ -88,9 +88,10 @@ public static class OrganizationNodeType
             .AddMeshDataSource(source => source
                 .WithContentType<Organization>())
             .WithPublicRead()
-            .Set(new NodeTypeCatalogMode())
+            .AddContentCollections()
             .AddDefaultLayoutAreas()
             .AddLayout(layout => layout
+                .WithView(MeshNodeLayoutAreas.OverviewArea, OrganizationLayoutAreas.Overview)
                 .WithDefaultArea(MeshNodeLayoutAreas.SearchArea))
     };
 
@@ -140,7 +141,6 @@ public static class OrganizationNodeType
             {
                 Name = "Overview",
                 NodeType = "Markdown",
-                MainNode = createdNode.Id,
                 State = MeshNodeState.Active,
                 Content = new MarkdownContent
                 {
@@ -152,14 +152,14 @@ public static class OrganizationNodeType
 
     /// <summary>
     /// DI-registered access rule for Organization nodes.
-    /// Read: all authenticated users. Update: requires Admin role (via ISecurityService).
+    /// Read: all authenticated users. Create/Update/Delete: requires appropriate permission (via ISecurityService).
     /// </summary>
     private class OrganizationAccessRule(ISecurityService securityService) : INodeTypeAccessRule
     {
         public string NodeType => OrganizationNodeType.NodeType;
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations =>
-            [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update];
+            [NodeOperation.Read, NodeOperation.Create, NodeOperation.Update, NodeOperation.Delete];
 
         public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
@@ -175,7 +175,7 @@ public static class OrganizationNodeType
                 return await securityService.HasPermissionAsync(parentPath, userId, Permission.Create, ct);
             }
 
-            if (context.Operation == NodeOperation.Update)
+            if (context.Operation is NodeOperation.Update or NodeOperation.Delete)
                 return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Update, ct);
 
             return false;

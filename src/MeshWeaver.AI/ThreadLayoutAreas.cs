@@ -387,22 +387,9 @@ public static class ThreadLayoutAreas
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
 
-        // 1. Update Thread.ThreadMessages IMMEDIATELY (in the handler, serialized).
-        // Subscribe fires synchronously if stream already has data (hub is initialized).
-        // This ensures sequential submits accumulate correctly (no race condition).
-        hub.ServiceProvider.GetRequiredService<IWorkspace>()
-            .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-        {
-            var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
-            var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-            var updatedMsgList = currentContent.ThreadMessages.Concat([userMsgId, responseMsgId]).ToList();
-            var newContent = currentContent with { ThreadMessages = updatedMsgList };
-            var updatedNode = (threadNode ?? new MeshNode(threadPath)) with { Content = newContent };
-            hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-        });
-
-        // 2. Create message nodes — fire-and-forget via meshService.
-        // When both complete, start streaming (nodes must exist before streaming updates them).
+        // 1. Create message nodes FIRST — they must exist in persistence before
+        // the Blazor client tries to subscribe (Orleans needs the grain to activate).
+        // When both complete, update ThreadMessages and start streaming.
         var userNodeTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
@@ -436,6 +423,24 @@ public static class ThreadLayoutAreas
                 logger.LogError(t.Exception, "Failed to create message nodes for {ThreadPath}", threadPath);
                 return;
             }
+
+            // 2. Update Thread.ThreadMessages AFTER nodes exist in persistence.
+            // The Blazor client subscribes to message hubs as soon as it receives the IDs —
+            // in Orleans, the grain must be activatable (node in persistence) by that time.
+            // Use InvokeAsync to run on the hub's execution block where the workspace stream has data.
+            hub.InvokeAsync(() =>
+            {
+                hub.ServiceProvider.GetRequiredService<IWorkspace>()
+                    .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+                {
+                    var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                    var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
+                    var updatedMsgList = currentContent.ThreadMessages.Concat([userMsgId, responseMsgId]).ToList();
+                    var newContent = currentContent with { ThreadMessages = updatedMsgList };
+                    var updatedNode = (threadNode ?? new MeshNode(threadPath)) with { Content = newContent };
+                    hub.Post(new DataChangeRequest { Updates = [updatedNode] });
+                });
+            });
 
             // 3. Start streaming — safe now, both nodes exist in persistence
             var execHub = hub.GetHostedHub(

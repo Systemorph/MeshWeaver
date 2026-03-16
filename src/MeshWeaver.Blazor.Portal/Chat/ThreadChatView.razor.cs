@@ -42,22 +42,37 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         {
             var old = _threadViewModel;
             _threadViewModel = value;
+
+            var oldMsgs = old?.Messages ?? (IReadOnlyList<string>)[];
+            var newMsgs = value?.Messages ?? (IReadOnlyList<string>)[];
+
+            Logger.LogDebug("[ThreadChat:{InstanceId}] ThreadViewModel setter: old={OldCount} msgs, new={NewCount} msgs, equal={Equal}, stream={HasStream}",
+                _instanceId, oldMsgs.Count, newMsgs.Count, Equals(old, value), Stream != null);
+
             // Sync threadPath and initialContext from the view model
             if (value != null)
             {
                 threadPath = value.ThreadPath ?? threadPath;
                 initialContext = value.InitialContext ?? initialContext;
             }
+
             // If messages changed, force re-render and release submission handler
             if (!Equals(old, value))
             {
-                var oldCount = old?.Messages?.Count ?? 0;
-                var newCount = value?.Messages?.Count ?? 0;
+                Logger.LogDebug("[ThreadChat:{InstanceId}] ThreadViewModel CHANGED: [{OldIds}] -> [{NewIds}]",
+                    _instanceId,
+                    string.Join(",", oldMsgs),
+                    string.Join(",", newMsgs));
+
+                var oldCount = oldMsgs.Count;
+                var newCount = newMsgs.Count;
                 if (newCount > oldCount &&
                     submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
                 {
                     submissionHandler.OnResponseAppeared();
                 }
+                // Force re-render — DataBind's RequestStateChange may not trigger
+                // if the setter is called from a non-UI synchronization context
                 InvokeAsync(StateHasChanged);
             }
         }
@@ -193,6 +208,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override void BindData()
     {
         base.BindData();
+        Logger.LogDebug("[ThreadChat:{InstanceId}] BindData called, ViewModel.ThreadViewModel={VmType}, Stream={HasStream}",
+            _instanceId, ViewModel.ThreadViewModel?.GetType().Name ?? "null", Stream != null);
         DataBind(ViewModel.ThreadViewModel, x => x.ThreadViewModel, ConvertThreadViewModel);
     }
 
@@ -925,7 +942,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// GetStream&lt;object&gt; deserializes the ThreadViewModel (has $type), so we get the typed object.
     /// </summary>
     private ThreadViewModel? ConvertThreadViewModel(object? value, ThreadViewModel? _)
-        => value switch { null => null, JsonElement je => je.Deserialize<ThreadViewModel?>(Hub.JsonSerializerOptions), AI.ThreadViewModel m => m, _ => throw new ArgumentException("Cannot convert type.") };
+    {
+        var result = value switch
+        {
+            null => null,
+            JsonElement je => je.Deserialize<ThreadViewModel?>(Hub.JsonSerializerOptions),
+            AI.ThreadViewModel m => m,
+            _ => throw new ArgumentException($"Cannot convert type {value.GetType().Name}.")
+        };
+        Logger.LogDebug("[ThreadChat:{InstanceId}] ConvertThreadViewModel: input={InputType}, msgs={MsgCount}",
+            _instanceId, value?.GetType().Name ?? "null", result?.Messages?.Count ?? 0);
+        return result;
+    }
 
     /// <summary>
     /// Creates a LayoutAreaControl pointing to a ThreadMessage node's Overview layout area.
