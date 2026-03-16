@@ -24,7 +24,7 @@ public static class DeleteLayoutArea
     public static IObservable<UiControl?> Delete(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var backHref = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+        var backHref = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 
         // Count descendants and check permissions asynchronously
@@ -149,7 +149,7 @@ public static class DeleteLayoutArea
                         // Navigate to parent on success
                         var parentPath = GetParentPath(nodePath);
                         var parentHref = !string.IsNullOrEmpty(parentPath)
-                            ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
+                            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
                             : "/";
 
                         ShowDialog(ctx, "Deleted",

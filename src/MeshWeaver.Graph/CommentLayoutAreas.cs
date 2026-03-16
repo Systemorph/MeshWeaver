@@ -561,7 +561,7 @@ public static class CommentLayoutAreas
         // Edit option (requires Comment permission)
         if (canComment)
         {
-            var editHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, EditArea);
+            var editHref = MeshNodeLayoutAreas.BuildUrl(hubPath, EditArea);
             menu = menu.WithView(new NavLinkControl("Edit", FluentIcons.Edit(IconSize.Size16), editHref));
         }
 
@@ -602,7 +602,7 @@ public static class CommentLayoutAreas
                 .WithView(Controls.Button("Back")
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
-                    .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(hubPath, OverviewArea)));
+                    .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, OverviewArea)));
         }
 
         // Author check — only the author can edit (when AuthorEditOnly is enabled)
@@ -613,11 +613,11 @@ public static class CommentLayoutAreas
                 .WithView(Controls.Button("Back")
                     .WithAppearance(Appearance.Lightweight)
                     .WithIconStart(FluentIcons.ArrowLeft())
-                    .WithNavigateToHref(MeshNodeLayoutAreas.BuildContentUrl(hubPath, OverviewArea)));
+                    .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, OverviewArea)));
         }
 
         // Header with Done button
-        var doneHref = MeshNodeLayoutAreas.BuildContentUrl(hubPath, OverviewArea);
+        var doneHref = MeshNodeLayoutAreas.BuildUrl(hubPath, OverviewArea);
 
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)

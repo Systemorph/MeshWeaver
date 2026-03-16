@@ -114,8 +114,8 @@ public static class CreateLayoutArea
         }
 
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
-            ? MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-            : MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
+            : MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
@@ -347,7 +347,7 @@ public static class CreateLayoutArea
                 if (task.IsCompletedSuccessfully)
                 {
                     logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
-                    var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+                    var overviewUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
                     ctx.NavigateTo(overviewUrl, replace: true);
                 }
                 else if (task.IsFaulted)
@@ -413,7 +413,7 @@ public static class CreateLayoutArea
                     });
 
                     // Navigate to the new node
-                    var overviewUrl = MeshNodeLayoutAreas.BuildContentUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
+                    var overviewUrl = MeshNodeLayoutAreas.BuildUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
                     ctx.NavigateTo(overviewUrl, replace: true);
                 }
                 else if (task.IsFaulted)
@@ -647,7 +647,7 @@ public static class CreateLayoutArea
         }
 
         // 8. Button row: Cancel on left, Create on right
-        var cancelUrl = MeshNodeLayoutAreas.BuildContentUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);
+        var cancelUrl = MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea);
         var buttonRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
@@ -727,7 +727,7 @@ public static class CreateLayoutArea
                     await nodeFactory.CreateTransientAsync(newNode, CancellationToken.None);
                     logger?.LogInformation("Successfully created transient node at {NodePath}", nodePath);
 
-                    var createUrl = MeshNodeLayoutAreas.BuildContentUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
+                    var createUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.CreateNodeArea);
                     actx.NavigateTo(createUrl);
                 }
                 catch (Exception ex)

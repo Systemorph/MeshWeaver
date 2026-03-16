@@ -383,18 +383,12 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             : _partitionDefinition?.ResolveTableByNodeType(query.ExtractNodeType()) ?? "mesh_nodes";
 
         // When the path resolves to mesh_nodes but nodeType maps to a satellite table,
-        // also check the satellite table (data may be in either location).
-        string? fallbackTable = null;
+        // use the satellite table instead. Satellite tables are the source of truth.
         if (tableName == "mesh_nodes" && _partitionDefinition != null)
         {
             var satelliteTable = _partitionDefinition.ResolveTableByNodeType(query.ExtractNodeType());
             if (satelliteTable != null && satelliteTable != "mesh_nodes")
-                fallbackTable = satelliteTable;
-        }
-        else if (tableName != "mesh_nodes")
-        {
-            // Querying a satellite table — also check mesh_nodes as fallback
-            fallbackTable = "mesh_nodes";
+                tableName = satelliteTable;
         }
         // Resolve satellite table names for source:activity and source:accessed JOINs.
         // Non-partitioned setups store everything in mesh_nodes (no satellite tables).
@@ -421,7 +415,6 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             }
         }
 
-        var yielded = false;
         await using var cmd = _dataSource.CreateCommand(sql);
         foreach (var (name, value) in parameters)
         {
@@ -432,41 +425,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            yielded = true;
             yield return ReadMeshNode(reader, options);
         }
 
-        // Fallback: if primary table returned no results and a fallback table exists,
-        // query the fallback table too. This handles the case where data may be in
-        // mesh_nodes (legacy) or in the satellite table (after migration).
-        if (!yielded && fallbackTable != null)
-        {
-            var (fbSql, fbParams) = _sqlGenerator.GenerateSelectQuery(query, userId, activityUserId, fallbackTable,
-                activityTable, userActivityTable);
-            if (!string.IsNullOrEmpty(effectivePath))
-            {
-                var (scopeClause2, scopeParams2) = _sqlGenerator.GenerateScopeClause(effectivePath, query.Scope);
-                if (!string.IsNullOrEmpty(scopeClause2))
-                {
-                    foreach (var (k, v) in scopeParams2)
-                        fbParams[k] = v;
-                    if (fbSql.Contains("WHERE"))
-                        fbSql = fbSql.Replace("WHERE", $"WHERE {scopeClause2} AND");
-                    else if (fbSql.Contains("ORDER BY"))
-                        fbSql = fbSql.Replace("ORDER BY", $"WHERE {scopeClause2} ORDER BY");
-                    else
-                        fbSql += $" WHERE {scopeClause2}";
-                }
-            }
-
-            await using var fbCmd = _dataSource.CreateCommand(fbSql);
-            foreach (var (name, value) in fbParams)
-                fbCmd.Parameters.Add(new NpgsqlParameter(name, value ?? DBNull.Value));
-
-            await using var fbReader = await fbCmd.ExecuteReaderAsync(ct);
-            while (await fbReader.ReadAsync(ct))
-                yield return ReadMeshNode(fbReader, options);
-        }
     }
 
     /// <summary>

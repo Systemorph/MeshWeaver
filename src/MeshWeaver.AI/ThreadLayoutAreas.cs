@@ -71,7 +71,7 @@ public static class ThreadLayoutAreas
         await Task.CompletedTask;
         var hubPath = host.Hub.Address.ToString();
         yield return new("Delegations", ThreadNodeType.HistoryArea, Order: 12,
-            Href: MeshNodeLayoutAreas.BuildContentUrl(hubPath, ThreadNodeType.HistoryArea));
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, ThreadNodeType.HistoryArea));
     }
 
     private static string GetContextDisplayName(string path)

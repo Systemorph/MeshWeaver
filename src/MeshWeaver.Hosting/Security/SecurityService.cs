@@ -187,7 +187,7 @@ internal class SecurityService : ISecurityService
             var childScopes = new[] { scope, string.IsNullOrEmpty(scope) ? "_Access" : $"{scope}/_Access" };
             foreach (var childScope in childScopes)
             {
-                await foreach (var node in _persistenceCore.GetChildrenAsync(childScope, Options).WithCancellation(ct))
+                await foreach (var node in _persistenceCore.GetAllChildrenAsync(childScope, Options).WithCancellation(ct))
                 {
                     if (node.Content == null)
                         continue;
@@ -324,7 +324,7 @@ internal class SecurityService : ISecurityService
         }
 
         // Check persisted access assignments at Admin scope
-        await foreach (var node in _persistenceCore.GetChildrenAsync(adminScope, Options).WithCancellation(ct))
+        await foreach (var node in _persistenceCore.GetAllChildrenAsync(adminScope, Options).WithCancellation(ct))
         {
             if (node.NodeType != "AccessAssignment" || node.Content == null)
                 continue;

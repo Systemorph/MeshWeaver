@@ -47,7 +47,9 @@ public class ExternalAuthController : ControllerBase
     [HttpGet("callback/{provider}")]
     public async Task<IActionResult> Callback(string provider, [FromQuery] string? returnUrl)
     {
-        var result = await HttpContext.AuthenticateAsync(provider);
+        // The OIDC middleware already processed the auth code at CallbackPath (/signin-microsoft)
+        // and signed in via the cookie scheme. Read the authenticated user from cookies.
+        var result = await HttpContext.AuthenticateAsync();
         if (!result.Succeeded || result.Principal == null)
             return Redirect("/login?error=auth_failed");
 

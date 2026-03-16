@@ -60,6 +60,6 @@ public static class ApprovalExtensions
         var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
         if (perms.HasFlag(Permission.Update))
             yield return new NodeMenuItemDefinition("Request Approval", "RequestApproval",
-                Order: 30, Href: MeshNodeLayoutAreas.BuildContentUrl(hubPath, "RequestApproval"));
+                Order: 30, Href: MeshNodeLayoutAreas.BuildUrl(hubPath, "RequestApproval"));
     }
 }
