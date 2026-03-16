@@ -737,4 +737,135 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     #endregion
+
+    /// <summary>Helper: gets a JSON property by trying camelCase then PascalCase.</summary>
+    private static string? GetJsonProp(JsonElement el, string name)
+    {
+        if (el.TryGetProperty(name, out var v)) return v.GetString();
+        // Try PascalCase
+        var pascal = char.ToUpperInvariant(name[0]) + name[1..];
+        if (el.TryGetProperty(pascal, out v)) return v.GetString();
+        return null;
+    }
+
+    #region Table routing — Thread and ThreadMessage nodes go to the "threads" table
+
+    /// <summary>
+    /// Verifies that both Thread and ThreadMessage nodes are written to the "threads"
+    /// satellite table (not mesh_nodes). The _Thread table mapping covers both because
+    /// ThreadMessage paths contain _Thread as a segment.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task ThreadAndMessages_WrittenToCorrectTable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var threadNs = "User/alice/_Thread";
+        var threadId = "table-test";
+        var threadPath = $"{threadNs}/{threadId}";
+
+        // Create Thread node
+        await _threadAdapter.WriteAsync(new MeshNode(threadId, threadNs)
+        {
+            Name = "Table Test Thread",
+            NodeType = "Thread",
+            MainNode = threadNs,
+            Content = new MeshThread
+            {
+                ParentPath = "User/alice",
+                ThreadMessages = ["m1", "m2"]
+            }
+        }, _options, ct);
+
+        // Create ThreadMessage nodes
+        await _messageAdapter.WriteAsync(new MeshNode("m1", threadPath)
+        {
+            Name = "User msg",
+            NodeType = "ThreadMessage",
+            MainNode = threadNs,
+            Order = 1,
+            Content = new ThreadMessage
+            {
+                Id = "m1", Role = "user", Text = "Hello",
+                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput
+            }
+        }, _options, ct);
+
+        await _messageAdapter.WriteAsync(new MeshNode("m2", threadPath)
+        {
+            Name = "Assistant msg",
+            NodeType = "ThreadMessage",
+            MainNode = threadNs,
+            Order = 2,
+            Content = new ThreadMessage
+            {
+                Id = "m2", Role = "assistant", Text = "Hi there!",
+                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse
+            }
+        }, _options, ct);
+
+        // Verify Thread is in the "threads" table (not mesh_nodes)
+        await using var threadCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
+        threadCmd.Parameters.AddWithValue(threadNs);
+        threadCmd.Parameters.AddWithValue(threadId);
+        var threadCount = (long)(await threadCmd.ExecuteScalarAsync(ct))!;
+        threadCount.Should().Be(1, "Thread should be in the 'threads' table");
+
+        // Verify ThreadMessages are in the "threads" table too
+        await using var msg1Cmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
+        msg1Cmd.Parameters.AddWithValue(threadPath);
+        msg1Cmd.Parameters.AddWithValue("m1");
+        var msg1Count = (long)(await msg1Cmd.ExecuteScalarAsync(ct))!;
+        msg1Count.Should().Be(1, "ThreadMessage m1 should be in the 'threads' table");
+
+        await using var msg2Cmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
+        msg2Cmd.Parameters.AddWithValue(threadPath);
+        msg2Cmd.Parameters.AddWithValue("m2");
+        var msg2Count = (long)(await msg2Cmd.ExecuteScalarAsync(ct))!;
+        msg2Count.Should().Be(1, "ThreadMessage m2 should be in the 'threads' table");
+
+        // Verify they are NOT in mesh_nodes
+        await using var mainCmd = _schemaDs.CreateCommand(
+            "SELECT COUNT(*) FROM mesh_nodes WHERE namespace = $1 AND id = $2");
+        mainCmd.Parameters.AddWithValue(threadNs);
+        mainCmd.Parameters.AddWithValue(threadId);
+        var mainCount = (long)(await mainCmd.ExecuteScalarAsync(ct))!;
+        mainCount.Should().Be(0, "Thread should NOT be in mesh_nodes");
+
+        // Read back and verify content (Content arrives as JsonElement since _options
+        // doesn't have the MeshWeaver type registry — extract properties directly)
+        var readThread = await _threadAdapter.ReadAsync(
+            $"{threadNs}/{threadId}", _options, ct);
+        readThread.Should().NotBeNull();
+        readThread!.NodeType.Should().Be("Thread");
+        readThread.Content.Should().NotBeNull("Thread node should have content");
+        var threadJson = readThread.Content is JsonElement tje
+            ? tje : JsonSerializer.SerializeToElement(readThread.Content, _options);
+        // Property name depends on serializer — try camelCase and PascalCase
+        var hasMsgs = threadJson.TryGetProperty("threadMessages", out var msgsEl)
+                      || threadJson.TryGetProperty("ThreadMessages", out msgsEl);
+        hasMsgs.Should().BeTrue("Thread content should have threadMessages/ThreadMessages property");
+        msgsEl.GetArrayLength().Should().Be(2);
+
+        var readMsg1 = await _messageAdapter.ReadAsync(
+            $"{threadPath}/m1", _options, ct);
+        readMsg1.Should().NotBeNull();
+        readMsg1!.NodeType.Should().Be("ThreadMessage");
+        var msg1Json = readMsg1.Content is JsonElement m1je
+            ? m1je : JsonSerializer.SerializeToElement(readMsg1.Content, _options);
+        GetJsonProp(msg1Json, "role").Should().Be("user");
+        GetJsonProp(msg1Json, "text").Should().Be("Hello");
+
+        var readMsg2 = await _messageAdapter.ReadAsync(
+            $"{threadPath}/m2", _options, ct);
+        readMsg2.Should().NotBeNull();
+        var msg2Json = readMsg2!.Content is JsonElement m2je
+            ? m2je : JsonSerializer.SerializeToElement(readMsg2.Content, _options);
+        GetJsonProp(msg2Json, "role").Should().Be("assistant");
+        GetJsonProp(msg2Json, "text").Should().Be("Hi there!");
+    }
+
+    #endregion
 }

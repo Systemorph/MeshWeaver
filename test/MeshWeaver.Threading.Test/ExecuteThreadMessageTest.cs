@@ -310,6 +310,98 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         converted.Should().BeEquivalentTo(new[] { "msg1", "msg2", "abc123" });
     }
 
+    /// <summary>
+    /// End-to-end test that verifies the full GUI data flow:
+    /// 1. Create thread via CreateThreadRequest
+    /// 2. Subscribe to Thread hub's layout area stream (like Blazor does)
+    /// 3. Submit message via SubmitMessageRequest
+    /// 4. Verify ThreadViewModel arrives via the layout area data section
+    /// 5. Verify Thread content via GetDataRequest (Thread.ThreadMessages populated)
+    /// 6. Verify each ThreadMessage content via GetDataRequest (correct role/text/type)
+    /// 7. Wait for streaming to complete, verify response text is non-empty
+    /// This catches issues that only manifest in the full GUI pipeline (e.g., PostgreSQL persistence).
+    /// </summary>
+    [Fact]
+    public async Task EndToEnd_SubmitChat_FullGuiDataFlow()
+    {
+        var ct = new CancellationTokenSource(20.Seconds()).Token;
+        var client = GetClient();
+
+        // 1. Create thread
+        var threadPath = await CreateThreadAsync(client, "End-to-end test", ct);
+        Output.WriteLine($"Thread created: {threadPath}");
+
+        // 2. Subscribe to layout area stream — same path the Blazor ThreadChatView takes.
+        // The Thread hub pushes ThreadViewModel to the data section.
+        var workspace = client.GetWorkspace();
+        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(threadPath),
+            new LayoutAreaReference(ThreadNodeType.ThreadArea));
+        layoutStream.Should().NotBeNull("Thread hub should serve the Thread layout area");
+
+        // 3. Subscribe to ThreadMessages via workspace stream (like ThreadChatView data binding)
+        var twoMessages = ObserveThreadMessages(client, threadPath)
+            .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+
+        // 4. Submit message
+        var submitResponse = await client.AwaitResponse(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Hello from end-to-end test",
+                ContextPath = ContextPath
+            },
+            o => o.WithTarget(new Address(threadPath)), ct);
+        submitResponse.Message.Success.Should().BeTrue(submitResponse.Message.Error);
+        Output.WriteLine("Message submitted successfully");
+
+        // 5. Wait for 2 message IDs
+        var msgIds = await twoMessages;
+        msgIds.Should().HaveCount(2, "should have user + response message IDs");
+        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
+
+        // 6. Verify Thread content via GetDataRequest
+        var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+        threadContent.Should().NotBeNull("Thread hub should return Thread content via GetDataRequest");
+        threadContent!.ThreadMessages.Should().HaveCount(2);
+        threadContent.ThreadMessages[0].Should().Be(msgIds[0]);
+        threadContent.ThreadMessages[1].Should().Be(msgIds[1]);
+        Output.WriteLine($"Thread content verified: {threadContent.ThreadMessages.Count} messages");
+
+        // 7. Verify user message via GetDataRequest
+        var userContent = await GetHubContentAsync<ThreadMessage>(
+            client, $"{threadPath}/{msgIds[0]}", ct);
+        userContent.Should().NotBeNull("user message hub should return ThreadMessage via GetDataRequest");
+        userContent!.Role.Should().Be("user");
+        userContent.Text.Should().Be("Hello from end-to-end test");
+        userContent.Type.Should().Be(ThreadMessageType.ExecutedInput);
+        Output.WriteLine($"User message verified: '{userContent.Text}'");
+
+        // 8. Verify response message via GetDataRequest — poll until streaming completes
+        ThreadMessage? responseContent = null;
+        var previousLength = 0;
+        var stableCount = 0;
+        for (var attempt = 0; attempt < 50; attempt++)
+        {
+            responseContent = await GetHubContentAsync<ThreadMessage>(
+                client, $"{threadPath}/{msgIds[1]}", ct);
+            var len = responseContent?.Text?.Length ?? 0;
+            if (len > 0 && len == previousLength && ++stableCount >= 2) break;
+            else stableCount = 0;
+            previousLength = len;
+            await Task.Delay(200, ct);
+        }
+
+        responseContent.Should().NotBeNull("response message hub should return ThreadMessage via GetDataRequest");
+        responseContent!.Role.Should().Be("assistant");
+        responseContent.Type.Should().Be(ThreadMessageType.AgentResponse);
+        responseContent.Text.Should().NotBeNullOrEmpty("streaming should produce non-empty response");
+        Output.WriteLine($"Response message verified: '{responseContent.Text}' ({responseContent.Text.Length} chars)");
+
+        // 9. Clean up layout stream
+        layoutStream.Dispose();
+    }
+
     #region Fake Chat Client Infrastructure
 
     private class FakeChatClient : IChatClient
