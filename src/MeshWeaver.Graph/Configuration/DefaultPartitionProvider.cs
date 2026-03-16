@@ -17,16 +17,16 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
     public IEnumerable<MeshNode> GetStaticNodes()
     {
         yield return CreatePartition("Admin", "admin", "System administration",
-            tableMappings: null);
+            tableMappings: PartitionDefinition.StandardTableMappings);
 
         yield return CreatePartition("User", "user", "User profiles, settings, and user-scoped data",
             tableMappings: PartitionDefinition.StandardTableMappings);
 
         yield return CreatePartition("Portal", "portal", "Portal sessions",
-            tableMappings: null, versioned: false);
+            tableMappings: PartitionDefinition.StandardTableMappings, versioned: false);
 
         yield return CreatePartition("Kernel", "kernel", "Kernel sessions",
-            tableMappings: null, versioned: false);
+            tableMappings: PartitionDefinition.StandardTableMappings, versioned: false);
 
         // Grant Public (all authenticated users) Viewer role on non-admin partitions
         foreach (var ns in new[] { "User", "Portal", "Kernel" })
