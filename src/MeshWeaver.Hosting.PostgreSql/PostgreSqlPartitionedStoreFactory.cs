@@ -23,6 +23,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private readonly IReadOnlyList<NodeTypePermission> _nodeTypePermissions;
     private readonly string _baseConnectionString;
     private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
+    private List<PartitionDefinition>? _partitionDefinitions;
 
     public PostgreSqlPartitionedStoreFactory(
         NpgsqlDataSource baseDataSource,
@@ -113,8 +114,30 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             await ac.SyncNodeTypePermissionsAsync(_nodeTypePermissions, ct);
         }
 
-        // Create the storage adapter using the schema-specific data source
-        var adapter = new PostgreSqlStorageAdapter(schemaDataSource, _embeddingProvider);
+        // Look up the PartitionDefinition for this partition to enable satellite table routing.
+        // If no pre-existing definition, create one with StandardTableMappings for content partitions.
+        var partitionDef = _partitionDefinitions?.FirstOrDefault(
+            p => p.Namespace.Equals(firstSegment, StringComparison.OrdinalIgnoreCase));
+        if (partitionDef == null)
+        {
+            partitionDef = new PartitionDefinition
+            {
+                Namespace = firstSegment,
+                Schema = schemaName,
+                DataSource = "default",
+                TableMappings = PartitionDefinition.StandardTableMappings,
+            };
+        }
+
+        // Ensure satellite tables exist for this partition
+        if (partitionDef.TableMappings is { Count: > 0 })
+        {
+            await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
+                schemaDataSource, _options, partitionDef.TableMappings.Values, ct);
+        }
+
+        // Create the storage adapter with partition definition for satellite table routing
+        var adapter = new PostgreSqlStorageAdapter(schemaDataSource, _embeddingProvider, partitionDef);
 
         // Create query provider — RoutingPersistenceServiceCore creates the persistence core internally
         var queryProvider = new PostgreSqlMeshQuery(adapter, _changeNotifier, _accessService);
@@ -132,11 +155,15 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     public async Task InitializeDefaultPartitionsAsync(
         IEnumerable<PartitionDefinition> partitions, CancellationToken ct = default)
     {
+        // Store partition definitions for satellite table routing in CreateStoreAsync
+        var partitionList = partitions.ToList();
+        _partitionDefinitions = partitionList;
+
         // Ensure vector extension exists first
         await using var extCmd = _baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector");
         await extCmd.ExecuteNonQueryAsync(ct);
 
-        foreach (var partition in partitions)
+        foreach (var partition in partitionList)
         {
             var schemaName = partition.Schema ?? SanitizeSchemaName(partition.Namespace);
 

@@ -139,7 +139,9 @@ public class PostgreSqlSqlGenerator
 
     public (string Sql, Dictionary<string, object> Parameters) GenerateSelectQuery(
         ParsedQuery query, string? userId = null, string? activityUserId = null,
-        string tableName = "mesh_nodes")
+        string tableName = "mesh_nodes",
+        string activityTable = "activities",
+        string userActivityTable = "user_activities")
     {
         var (whereClause, parameters) = GenerateWhereClause(query, userId);
 
@@ -152,17 +154,16 @@ public class PostgreSqlSqlGenerator
 
         if (isAccessedQuery)
         {
-            // JOIN with UserActivity MeshNodes stored at User/{userId}/_UserActivity/{encodedPath}
-            // where encodedPath = node.path with / replaced by _
+            // JOIN with UserActivity nodes stored in the user_activities satellite table
             parameters["@actUserNs"] = $"User/{activityUserId}/_UserActivity";
-            sql.Append(" INNER JOIN mesh_nodes ua ON ua.namespace = @actUserNs" +
+            sql.Append($" INNER JOIN {userActivityTable} ua ON ua.namespace = @actUserNs" +
                         " AND ua.node_type = 'UserActivity'" +
                         " AND REPLACE(n.path, '/', '_') = ua.id");
         }
         else if (isActivityQuery)
         {
-            // JOIN with Activity satellites to find main nodes with recent activity
-            sql.Append(" INNER JOIN mesh_nodes act ON act.main_node = n.path" +
+            // JOIN with Activity satellites stored in the activities satellite table
+            sql.Append($" INNER JOIN {activityTable} act ON act.main_node = n.path" +
                         " AND act.node_type = 'Activity'");
         }
 

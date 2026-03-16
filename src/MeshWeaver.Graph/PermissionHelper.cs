@@ -2,6 +2,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -17,16 +18,33 @@ public static class PermissionHelper
     /// </summary>
     public static async Task<Permission> GetEffectivePermissionsAsync(IMessageHub hub, string nodePath)
     {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PermissionHelper");
         var securityService = hub.ServiceProvider.GetService<ISecurityService>();
         if (securityService == null)
+        {
+            logger?.LogWarning("No ISecurityService registered — returning Permission.All for {Path}", nodePath);
             return Permission.All;
+        }
+
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var context = accessService?.Context;
+        logger?.LogInformation(
+            "GetEffectivePermissionsAsync for path={Path}, user={User}, roles=[{Roles}], securityService={Type}",
+            nodePath,
+            context?.ObjectId ?? "(null)",
+            context?.Roles != null ? string.Join(",", context.Roles) : "(null)",
+            securityService.GetType().Name);
 
         try
         {
-            return await securityService.GetEffectivePermissionsAsync(nodePath);
+            var perms = await securityService.GetEffectivePermissionsAsync(nodePath);
+            logger?.LogInformation("Effective permissions for {User} on {Path}: {Perms}",
+                context?.ObjectId ?? "(null)", nodePath, perms);
+            return perms;
         }
-        catch
+        catch (Exception ex)
         {
+            logger?.LogWarning(ex, "GetEffectivePermissionsAsync failed for {Path} — returning Permission.All", nodePath);
             return Permission.All; // Fallback: allow on error
         }
     }
