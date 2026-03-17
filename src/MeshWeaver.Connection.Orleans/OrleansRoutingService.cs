@@ -90,7 +90,11 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 }
 
                 var grain = grainFactory.GetGrain<IRoutingGrain>("default");
-                await grain.RouteMessage(delivery);
+                logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
+                    delivery.Message.GetType().Name, address, delivery.Sender, delivery.Target);
+                var result = await grain.RouteMessage(delivery);
+                logger.LogDebug("Orleans: delivered {MessageType} to {Address}, result={State}",
+                    delivery.Message.GetType().Name, address, result.State);
                 return;
             }
             catch (Exception ex) when (attempt < maxRetries && IsTransientFailure(ex))
@@ -104,8 +108,32 @@ public class OrleansRoutingService : IRoutingService, IDisposable
             {
                 logger.LogError(ex, "Failed to deliver to {Address} after {Attempts} attempts",
                     address, attempt + 1);
+                SendDeliveryFailure(delivery, $"Failed to deliver to {address}: {ex.Message}");
                 return;
             }
+        }
+    }
+
+    private void SendDeliveryFailure(IMessageDelivery delivery, string message)
+    {
+        try
+        {
+            // Route the failure back through the mesh hub so AwaitResponse gets it
+            var meshHub = serviceProvider.GetService<IMessageHub>();
+            if (meshHub != null)
+            {
+                meshHub.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = ErrorType.Failed,
+                        Message = message
+                    },
+                    o => o.WithTarget(delivery.Sender));
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to send delivery failure for {MessageId}", delivery.Id);
         }
     }
 
