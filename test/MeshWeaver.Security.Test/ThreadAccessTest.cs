@@ -34,6 +34,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     {
         // No PublicAdminAccess — use ConfigureMeshBase for real RLS enforcement
         return ConfigureMeshBase(builder)
+            .AddThreadMessageType()
             .AddThreadType();
     }
 
@@ -328,15 +329,13 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
         try
         {
-            // User namespace has public Viewer access, so other users CAN read
-            var node = await MeshQuery.QueryAsync<MeshNode>(
-                $"path:{threadPath}"
-            ).FirstOrDefaultAsync(TestTimeout);
-
-            node.Should().NotBeNull("User namespace has public read access");
-
-            // But other users CANNOT update the thread (no write permission)
+            // Thread children under User namespace are NOT publicly readable.
+            // Only User/{name} nodes (the User node itself) have public read via INodeTypeAccessRule.
+            // Children like User/{name}/{threadId} require explicit access grants.
             var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+            var canRead = await securityService.HasPermissionAsync(threadPath, "reader-no-access", Permission.Read, TestTimeout);
+            canRead.Should().BeFalse("Other user should NOT be able to read threads under someone else's User namespace");
+
             var canUpdate = await securityService.HasPermissionAsync(threadPath, "reader-no-access", Permission.Update, TestTimeout);
             canUpdate.Should().BeFalse("Other user should NOT be able to update someone else's thread");
         }

@@ -1,5 +1,6 @@
 ﻿using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
@@ -32,9 +33,19 @@ builder.UseMeshWeaver(
     AddressExtensions.CreateMeshAddress(),
     config =>
     {
+        // Read storage config for static file serving
+        var storageConfig = builder.Configuration.GetSection("Storage").Get<ContentCollectionConfig>();
+
         config = config
             .ConfigureMemexPortal()
             .ConfigureMemexMesh(builder.Configuration, builder.Environment.IsDevelopment());
+
+        // Register storage collection at mesh level for static file serving (monolith only)
+        if (storageConfig != null)
+        {
+            storageConfig = storageConfig with { IsEditable = true, IsStatic = true };
+            config.ConfigureHub(hub => hub.AddContentCollection(_ => storageConfig));
+        }
 
         // Register sample data source repositories (file system only)
         if (!string.IsNullOrEmpty(graphBasePath))
