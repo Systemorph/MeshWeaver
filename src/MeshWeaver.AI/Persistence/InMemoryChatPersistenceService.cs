@@ -15,7 +15,7 @@ public class InMemoryChatPersistenceService(IServiceProvider serviceProvider, Ac
 
     private string GetCurrentUserId()
     {
-        var context = accessService.Context;
+        var context = accessService.Context ?? accessService.CircuitContext;
         return context?.ObjectId ?? "anonymous";
     }
 

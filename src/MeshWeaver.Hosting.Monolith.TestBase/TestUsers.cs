@@ -90,7 +90,7 @@ public static class TestUsers
             NodeType = "AccessAssignment",
             Name = "Public Access",
             Content = assignment,
-            MainNode = ns.Length > 0 ? ns : null,
+            MainNode = ns.Length > 0 ? ns : null!,
         };
 
     /// <summary>

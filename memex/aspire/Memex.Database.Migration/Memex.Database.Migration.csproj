@@ -13,5 +13,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.PostgreSql\MeshWeaver.Hosting.PostgreSql.csproj" />
+    <ProjectReference Include="..\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
   </ItemGroup>
 </Project>

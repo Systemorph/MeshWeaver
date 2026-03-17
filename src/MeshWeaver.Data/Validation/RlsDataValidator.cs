@@ -42,7 +42,7 @@ public class RlsDataValidator : IDataValidator
         // Build access restriction context
         var accessRestrictionContext = new AccessRestrictionContext
         {
-            UserContext = context.AccessContext ?? _accessService.Context,
+            UserContext = context.AccessContext ?? _accessService.Context ?? _accessService.CircuitContext,
             ServiceProvider = _workspace.Hub.ServiceProvider
         };
 
@@ -119,7 +119,7 @@ public class RlsDataValidator : IDataValidator
 
         var accessRestrictionContext = new AccessRestrictionContext
         {
-            UserContext = _accessService.Context,
+            UserContext = _accessService.Context ?? _accessService.CircuitContext,
             ServiceProvider = _workspace.Hub.ServiceProvider
         };
 

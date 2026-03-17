@@ -309,7 +309,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task CreateThread_WithParentPath_PreservesParentPath()
     {
         // Arrange - Threads are stored as direct children: {parentPath}/{threadId}
-        var userId = "TestUser";
         var parentPath = "ACME/ProductLaunch";
         var threadContent = new MeshThread
         {
@@ -343,7 +342,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     {
         // Arrange - Verifies the flat thread pattern: {parentPath}/{threadId}
         // This is the pattern used by CreateNodeDialog and ThreadChatView
-        var userId = "TestUser";
         var parentPath = "TestProject";
         var threadId = Guid.NewGuid().ToString("N");
 
@@ -390,7 +388,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Arrange - Test creating thread as direct child of a parent node
         // This tests the pattern used by ThreadChatView where threads are
         // created under the current navigation context
-        var userId = "TestUser";
         var parentPath = $"TestParent_{Guid.NewGuid()}";
         var threadId = Guid.NewGuid().ToString();
 

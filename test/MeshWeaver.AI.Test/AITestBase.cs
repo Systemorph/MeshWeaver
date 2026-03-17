@@ -10,6 +10,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public abstract class AITestBase(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddAI();
 }

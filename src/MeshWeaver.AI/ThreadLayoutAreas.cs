@@ -131,7 +131,7 @@ public static class ThreadLayoutAreas
 
         // Push ThreadViewModel to data section — contains all thread state for the Blazor view.
         // Wrapped in an object (not raw array) so GetStream<object> can deserialize it.
-        var vmStream = stream.Select(nodes =>
+        var vmStream = stream!.Select(nodes =>
         {
             var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
@@ -150,7 +150,7 @@ public static class ThreadLayoutAreas
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
 
         // Push title to data section — data-bound, no observable control rebuild
-        var titleStream = stream.Select(nodes =>
+        var titleStream = stream!.Select(nodes =>
         {
             var node = nodes!.First(n => n.Path == hubPath);
             return GetThreadTitle(node);

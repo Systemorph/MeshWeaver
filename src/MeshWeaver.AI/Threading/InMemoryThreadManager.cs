@@ -24,7 +24,7 @@ public class InMemoryThreadManager : IThreadManager
 
     private string GetCurrentUserId()
     {
-        var context = _accessService.Context;
+        var context = _accessService.Context ?? _accessService.CircuitContext;
         return context?.ObjectId ?? "anonymous";
     }
 

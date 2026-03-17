@@ -16,6 +16,7 @@ public record MeshDataSourceProviderDefinition(
 public record MeshDataSourceProviderRegistry(
     IReadOnlyList<MeshDataSourceProviderDefinition> Providers)
 {
+    /// <summary>Adds a provider definition to the registry.</summary>
     public MeshDataSourceProviderRegistry Add(MeshDataSourceProviderDefinition provider)
         => new(Providers.Append(provider).ToList());
 }

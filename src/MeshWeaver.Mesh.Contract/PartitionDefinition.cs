@@ -48,6 +48,7 @@ public record PartitionDefinition
     /// </summary>
     public string? Description { get; init; }
 
+    /// <summary>When this partition was created.</summary>
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 
     /// <summary>

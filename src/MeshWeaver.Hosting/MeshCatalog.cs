@@ -134,7 +134,7 @@ internal sealed class MeshCatalog(
         {
             Operation = NodeOperation.Read,
             Node = node,
-            AccessContext = accessService?.Context
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
         // Run unified validators from DI

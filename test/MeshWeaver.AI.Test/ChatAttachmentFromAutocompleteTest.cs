@@ -11,6 +11,7 @@ namespace MeshWeaver.AI.Test;
 /// </summary>
 public class ChatAttachmentFromAutocompleteTest
 {
+    /// <summary>Tests that removing a reference by path leaves a clean message.</summary>
     [Theory]
     [InlineData("ask about @ACME/Reports", "ACME/Reports", "ask about")]
     [InlineData("@ACME/Reports details", "ACME/Reports", "details")]
@@ -23,6 +24,7 @@ public class ChatAttachmentFromAutocompleteTest
         result.Should().Be(expectedOutput);
     }
 
+    /// <summary>Tests content: prefix extraction.</summary>
     [Fact]
     public void ContentReference_ExtractedCorrectly()
     {
@@ -34,6 +36,7 @@ public class ChatAttachmentFromAutocompleteTest
         refs.Should().Contain(r => r.Contains("content"));
     }
 
+    /// <summary>Tests that lowercase agent/ paths are filtered as commands.</summary>
     [Fact]
     public void AgentPaths_FilteredAsCommands()
     {
@@ -42,6 +45,7 @@ public class ChatAttachmentFromAutocompleteTest
         paths.Should().BeEmpty("lowercase @agent/ is a command, not a reference");
     }
 
+    /// <summary>Tests that uppercase Agent/ paths are kept as references.</summary>
     [Fact]
     public void AgentNamespacePaths_NotFiltered()
     {
@@ -51,6 +55,7 @@ public class ChatAttachmentFromAutocompleteTest
             .Which.Should().Be("Agent/Research");
     }
 
+    /// <summary>Tests case-insensitive deduplication of references.</summary>
     [Fact]
     public void DuplicateReferences_DeduplicatedCaseInsensitive()
     {
@@ -58,6 +63,7 @@ public class ChatAttachmentFromAutocompleteTest
         paths.Should().HaveCount(1, "same path with different case should be deduplicated");
     }
 
+    /// <summary>Tests extraction of multiple references.</summary>
     [Fact]
     public void MultipleReferences_AllExtracted()
     {
@@ -69,6 +75,7 @@ public class ChatAttachmentFromAutocompleteTest
         paths.Should().Contain("Systemorph/Docs");
     }
 
+    /// <summary>Tests removal of content-prefixed references.</summary>
     [Fact]
     public void RemoveReference_WithContentPrefix_Works()
     {
@@ -77,6 +84,7 @@ public class ChatAttachmentFromAutocompleteTest
         result.Should().Be("see here");
     }
 
+    /// <summary>Tests graceful handling of empty/null input.</summary>
     [Fact]
     public void EmptyOrNullText_HandledGracefully()
     {
@@ -87,6 +95,7 @@ public class ChatAttachmentFromAutocompleteTest
         MarkdownReferenceExtractor.RemoveReferenceByPath("", "path").Should().Be("");
     }
 
+    /// <summary>Tests extraction of paths with hyphens and dots.</summary>
     [Fact]
     public void PathWithHyphensAndDots_ExtractedCorrectly()
     {
@@ -96,6 +105,7 @@ public class ChatAttachmentFromAutocompleteTest
             .Which.Should().Be("content:my-docs/report-2024.v2.md");
     }
 
+    /// <summary>Tests extraction of unified path with address prefix.</summary>
     [Fact]
     public void UnifiedPathWithAddress_ExtractedCorrectly()
     {
@@ -106,6 +116,7 @@ public class ChatAttachmentFromAutocompleteTest
             .Which.Should().Be("ACME/content:readme.md");
     }
 
+    /// <summary>Tests removal of unified path with address prefix.</summary>
     [Fact]
     public void UnifiedPathWithAddress_RemovedCorrectly()
     {

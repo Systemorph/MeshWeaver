@@ -1,3 +1,4 @@
+using Memex.Portal.ServiceDefaults;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -7,6 +8,7 @@ using MeshWeaver.Mesh;
 using Npgsql;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.AddServiceDefaults();
 
 var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
 if (connectionString.Contains("database.azure.com"))

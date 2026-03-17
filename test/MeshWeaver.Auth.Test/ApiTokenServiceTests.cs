@@ -67,7 +67,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
             "user1", "Test User", "test@example.com", "Test");
 
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
-        var stored = await meshQuery.QueryAsync<MeshNode>($"path:{node.Path}").FirstOrDefaultAsync();
+        var stored = await meshQuery.QueryAsync<MeshNode>($"path:{node.Path}", ct: TestContext.Current.CancellationToken).FirstOrDefaultAsync(TestContext.Current.CancellationToken);
         stored.Should().NotBeNull();
         stored!.NodeType.Should().Be("ApiToken");
     }
@@ -139,7 +139,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
         await service.RevokeTokenAsync(node.Path);
 
         // Give the hub a moment to process the UpdateNodeRequest
-        await Task.Delay(100);
+        await Task.Delay(100, TestContext.Current.CancellationToken);
 
         var result = await service.ValidateTokenAsync(rawToken);
 

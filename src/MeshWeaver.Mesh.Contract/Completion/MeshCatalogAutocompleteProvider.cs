@@ -15,6 +15,7 @@ public class MeshCatalogAutocompleteProvider : IAutocompleteProvider
     private readonly IMeshCatalog? meshCatalog;
     private const int PrefixCategoryPriority = 1800;
 
+    /// <inheritdoc cref="MeshCatalogAutocompleteProvider"/>
     public MeshCatalogAutocompleteProvider(IServiceProvider serviceProvider)
     {
         meshCatalog = serviceProvider.GetService<IMeshCatalog>();

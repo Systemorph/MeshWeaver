@@ -312,7 +312,7 @@ internal class InMemoryMeshQuery(
         // to prevent admin context from leaking into public queries.
         var accessContext = !string.IsNullOrEmpty(userId) && userId != WellKnownUsers.Anonymous
             ? new AccessContext { ObjectId = userId }
-            : accessService?.Context;
+            : accessService?.Context ?? accessService?.CircuitContext;
 
         var context = new NodeValidationContext
         {
