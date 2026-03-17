@@ -260,6 +260,19 @@ public static class PostgreSqlExtensions
             var config = sp.GetService<IConfiguration>();
             var connectionString = config?.GetConnectionString("memex")
                                    ?? baseDataSource.ConnectionString;
+
+            // Ensure username from the Aspire-configured data source is included
+            // (Azure PostgreSQL AAD auth requires the managed identity name as username)
+            var baseCsb = new NpgsqlConnectionStringBuilder(baseDataSource.ConnectionString);
+            if (!string.IsNullOrEmpty(baseCsb.Username))
+            {
+                var csb = new NpgsqlConnectionStringBuilder(connectionString);
+                if (string.IsNullOrEmpty(csb.Username))
+                {
+                    csb.Username = baseCsb.Username;
+                    connectionString = csb.ConnectionString;
+                }
+            }
             var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
             configure?.Invoke(opts);
 

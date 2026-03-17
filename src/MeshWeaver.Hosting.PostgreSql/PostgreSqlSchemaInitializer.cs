@@ -280,20 +280,20 @@ public static class PostgreSqlSchemaInitializer
             -- Shadow table for atomic rebuild
             CREATE TABLE IF NOT EXISTS user_effective_permissions_shadow (LIKE user_effective_permissions INCLUDING ALL);
 
-            -- Rebuild function: reads AccessAssignment and GroupMembership MeshNodes from mesh_nodes
+            -- Rebuild function: reads AccessAssignment from access satellite table, GroupMembership from mesh_nodes
             -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
                 TRUNCATE user_effective_permissions_shadow;
 
-                -- Direct entries from AccessAssignment MeshNodes
+                -- Direct entries from AccessAssignment nodes (access satellite table)
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 SELECT
                     aa.content->>'accessObject' AS user_id,
-                    aa.namespace AS node_path_prefix,
+                    COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
                     perm.permission,
                     NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM mesh_nodes aa
+                FROM access aa
                 CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
                 CROSS JOIN LATERAL (
                     SELECT COALESCE(
@@ -320,8 +320,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
-                WHERE aa.node_type = 'AccessAssignment'
-                  AND aa.content->>'accessObject' IS NOT NULL
+                WHERE aa.content->>'accessObject' IS NOT NULL
                   AND aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
@@ -351,9 +350,9 @@ public static class PostgreSqlSchemaInitializer
                           AND g2->>'group' = all_members.member_id
                     )
                 )
-                SELECT lm.member_id, aa.namespace, perm.permission,
+                SELECT lm.member_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
                        NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM mesh_nodes aa
+                FROM access aa
                 JOIN leaf_members lm ON aa.content->>'accessObject' = lm.group_path
                 CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
                 CROSS JOIN LATERAL (
@@ -381,8 +380,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
-                WHERE aa.node_type = 'AccessAssignment'
-                  AND aa.content->'roles' IS NOT NULL
+                WHERE aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
@@ -437,29 +435,49 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Trigger function: fires when AccessAssignment, GroupMembership, or PartitionAccessPolicy nodes change
-            CREATE OR REPLACE FUNCTION trg_mesh_node_access_changed() RETURNS TRIGGER AS $$
+            -- Access satellite table (must exist before trigger creation)
+            CREATE TABLE IF NOT EXISTS access (
+                namespace       TEXT        NOT NULL DEFAULT '',
+                id              TEXT        NOT NULL,
+                path            TEXT        GENERATED ALWAYS AS (
+                                    CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
+                                ) STORED,
+                name            TEXT,
+                node_type       TEXT,
+                description     TEXT,
+                category        TEXT,
+                icon            TEXT,
+                display_order   INTEGER,
+                last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                version         BIGINT      NOT NULL DEFAULT 0,
+                state           SMALLINT    NOT NULL DEFAULT 0,
+                content         JSONB,
+                desired_id      TEXT,
+                main_node       TEXT,
+                embedding       vector({{dim}}),
+                PRIMARY KEY (namespace, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_access_path ON access (path);
+            CREATE INDEX IF NOT EXISTS idx_access_main_node ON access (main_node);
+            CREATE INDEX IF NOT EXISTS idx_access_node_type ON access (node_type);
+            CREATE INDEX IF NOT EXISTS idx_access_last_modified ON access (last_modified DESC);
+
+            -- Trigger function: fires on any change to the access satellite table
+            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
             BEGIN
-                IF (TG_OP = 'DELETE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
-                   OR (TG_OP IN ('INSERT', 'UPDATE') AND NEW.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
-                   OR (TG_OP = 'UPDATE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
-                THEN
-                    PERFORM rebuild_user_effective_permissions();
-                END IF;
+                PERFORM rebuild_user_effective_permissions();
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Trigger on mesh_nodes for access changes
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_access_changed') THEN
-                    CREATE TRIGGER mesh_node_access_changed
-                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_access_changed();
-                END IF;
-            END;
-            $$;
+            -- Drop old trigger on mesh_nodes if it exists
+            DROP TRIGGER IF EXISTS mesh_node_access_changed ON mesh_nodes;
+
+            -- Trigger on access table for access changes
+            DROP TRIGGER IF EXISTS access_changed ON access;
+            CREATE TRIGGER access_changed
+                AFTER INSERT OR UPDATE OR DELETE ON access
+                FOR EACH STATEMENT EXECUTE FUNCTION trg_access_changed();
 
             -- Simple access_control and group_members tables used by convenience methods
             CREATE TABLE IF NOT EXISTS access_control (
@@ -652,21 +670,21 @@ public static class PostgreSqlSchemaInitializer
             -- Shadow table for atomic rebuild
             CREATE TABLE IF NOT EXISTS user_effective_permissions_shadow (LIKE user_effective_permissions INCLUDING ALL);
 
-            -- Rebuild function: reads AccessAssignment and GroupMembership MeshNodes from mesh_nodes
+            -- Rebuild function: reads AccessAssignment from access satellite table, GroupMembership from mesh_nodes
             -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
                 TRUNCATE user_effective_permissions_shadow;
 
-                -- Direct entries from AccessAssignment MeshNodes
+                -- Direct entries from AccessAssignment nodes (access satellite table)
                 -- Unnest the roles[] array to get each role assignment
                 INSERT INTO user_effective_permissions_shadow (user_id, node_path_prefix, permission, is_allow)
                 SELECT
                     aa.content->>'accessObject' AS user_id,
-                    aa.namespace AS node_path_prefix,
+                    COALESCE(aa.main_node, aa.namespace) AS node_path_prefix,
                     perm.permission,
                     NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM mesh_nodes aa
+                FROM access aa
                 CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
                 CROSS JOIN LATERAL (
                     SELECT COALESCE(
@@ -694,8 +712,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
-                WHERE aa.node_type = 'AccessAssignment'
-                  AND aa.content->>'accessObject' IS NOT NULL
+                WHERE aa.content->>'accessObject' IS NOT NULL
                   AND aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
@@ -726,9 +743,9 @@ public static class PostgreSqlSchemaInitializer
                           AND g2->>'group' = all_members.member_id
                     )
                 )
-                SELECT lm.member_id, aa.namespace, perm.permission,
+                SELECT lm.member_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
                        NOT COALESCE((role_entry->>'denied')::boolean, false) AS is_allow
-                FROM mesh_nodes aa
+                FROM access aa
                 JOIN leaf_members lm ON aa.content->>'accessObject' = lm.group_path
                 CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
                 CROSS JOIN LATERAL (
@@ -756,8 +773,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
-                WHERE aa.node_type = 'AccessAssignment'
-                  AND aa.content->'roles' IS NOT NULL
+                WHERE aa.content->'roles' IS NOT NULL
                 ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
                     SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions_shadow.is_allow END;
 
@@ -815,29 +831,49 @@ public static class PostgreSqlSchemaInitializer
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Trigger function: fires when AccessAssignment, GroupMembership, or PartitionAccessPolicy nodes change
-            CREATE OR REPLACE FUNCTION trg_mesh_node_access_changed() RETURNS TRIGGER AS $$
+            -- Access satellite table (must exist before trigger creation)
+            CREATE TABLE IF NOT EXISTS access (
+                namespace       TEXT        NOT NULL DEFAULT '',
+                id              TEXT        NOT NULL,
+                path            TEXT        GENERATED ALWAYS AS (
+                                    CASE WHEN namespace = '' THEN id ELSE namespace || '/' || id END
+                                ) STORED,
+                name            TEXT,
+                node_type       TEXT,
+                description     TEXT,
+                category        TEXT,
+                icon            TEXT,
+                display_order   INTEGER,
+                last_modified   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                version         BIGINT      NOT NULL DEFAULT 0,
+                state           SMALLINT    NOT NULL DEFAULT 0,
+                content         JSONB,
+                desired_id      TEXT,
+                main_node       TEXT,
+                embedding       vector({{dim}}),
+                PRIMARY KEY (namespace, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_access_path ON access (path);
+            CREATE INDEX IF NOT EXISTS idx_access_main_node ON access (main_node);
+            CREATE INDEX IF NOT EXISTS idx_access_node_type ON access (node_type);
+            CREATE INDEX IF NOT EXISTS idx_access_last_modified ON access (last_modified DESC);
+
+            -- Trigger function: fires on any change to the access satellite table
+            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
             BEGIN
-                IF (TG_OP = 'DELETE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
-                   OR (TG_OP IN ('INSERT', 'UPDATE') AND NEW.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
-                   OR (TG_OP = 'UPDATE' AND OLD.node_type IN ('AccessAssignment', 'GroupMembership', 'PartitionAccessPolicy'))
-                THEN
-                    PERFORM rebuild_user_effective_permissions();
-                END IF;
+                PERFORM rebuild_user_effective_permissions();
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
 
-            -- Trigger on mesh_nodes for access changes
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'mesh_node_access_changed') THEN
-                    CREATE TRIGGER mesh_node_access_changed
-                        AFTER INSERT OR UPDATE OR DELETE ON mesh_nodes
-                        FOR EACH ROW EXECUTE FUNCTION trg_mesh_node_access_changed();
-                END IF;
-            END;
-            $$;
+            -- Drop old trigger on mesh_nodes if it exists
+            DROP TRIGGER IF EXISTS mesh_node_access_changed ON mesh_nodes;
+
+            -- Trigger on access table for access changes
+            DROP TRIGGER IF EXISTS access_changed ON access;
+            CREATE TRIGGER access_changed
+                AFTER INSERT OR UPDATE OR DELETE ON access
+                FOR EACH STATEMENT EXECUTE FUNCTION trg_access_changed();
 
             -- Simple access_control and group_members tables used by convenience methods
             CREATE TABLE IF NOT EXISTS access_control (

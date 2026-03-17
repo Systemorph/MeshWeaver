@@ -30,6 +30,16 @@ var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions
 
 logger.LogInformation("Running database migration...");
 
+// Grant CREATE on database to azure_pg_admin role so managed identities
+// (portal, migration) can create per-organization schemas at runtime.
+if (connectionString.Contains("database.azure.com"))
+{
+    await using var grantCmd = dataSource.CreateCommand(
+        "GRANT CREATE ON DATABASE memex TO azure_pg_admin");
+    await grantCmd.ExecuteNonQueryAsync();
+    logger.LogInformation("Granted CREATE ON DATABASE to azure_pg_admin.");
+}
+
 // Initialize the full schema in the public schema (vector extension + all tables).
 // Per-partition schemas are created by PostgreSqlPartitionedStoreFactory at app startup,
 // but the public schema serves as a fallback since partition data sources use
