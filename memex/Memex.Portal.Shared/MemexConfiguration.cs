@@ -62,6 +62,13 @@ public static class MemexConfiguration
 
         var services = builder.Services;
 
+        // Trust forwarded headers from Azure Container Apps reverse proxy
+        services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+        {
+            options.KnownIPNetworks.Clear();
+            options.KnownProxies.Clear();
+        });
+
         services.AddRazorPages();
 
         services.AddRazorComponents()
@@ -358,6 +365,14 @@ public static class MemexConfiguration
             // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
             app.UseHsts();
         }
+
+        // Forward headers from reverse proxy (Azure Container Apps) so OIDC
+        // middleware constructs redirect URIs with the correct scheme and host.
+        app.UseForwardedHeaders(new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+                             | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+        });
 
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();
