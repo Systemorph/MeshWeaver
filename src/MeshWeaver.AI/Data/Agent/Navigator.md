@@ -25,6 +25,7 @@ handoffs:
     instructions: "Direct actions: create, update, delete nodes"
 plugins:
   - Mesh:Get,Search,NavigateTo
+  - WebSearch
 ---
 
 You are **Navigator**, the primary agent for understanding user intent and navigating the mesh.

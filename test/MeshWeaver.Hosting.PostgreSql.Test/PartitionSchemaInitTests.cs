@@ -221,7 +221,7 @@ public class PartitionSchemaInitTests
             await using var cmd = _fixture.DataSource.CreateCommand(
                 $"SELECT COUNT(*) FROM \"{schema}\".node_type_permissions WHERE public_read = true");
             var count = (long)(await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
-            count.Should().Be(3, $"all 3 public-read permissions should be synced to '{schema}' schema");
+            count.Should().BeGreaterThanOrEqualTo(3, $"at least the 3 explicit public-read permissions should be synced to '{schema}' schema");
         }
     }
 

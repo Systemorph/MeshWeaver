@@ -857,8 +857,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     }
 
     /// <summary>
-    /// Queries content collection files and returns matching completion items.
+    /// Queries content collection files and folders and returns matching completion items.
     /// Uses Unified Path format: {address}/{collectionName}:{filePath}
+    /// Supports browsing into folders when prefix contains collectionName:subpath/
     /// </summary>
     private async Task<List<CompletionItem>> GetContentCompletionsAsync(string prefix)
     {
@@ -870,12 +871,76 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (contentService == null)
                 return items;
 
-            // The node address forms the first part of the unified path
             var nodeAddress = initialContext ?? "";
-
             var configs = contentService.GetAllCollectionConfigs();
+
+            // Parse prefix to detect collectionName:subpath pattern
+            var colonIndex = prefix.IndexOf(':');
+            string? targetCollection = null;
+            string browsePath = "/";
+            string filterText = "";
+
+            if (colonIndex >= 0)
+            {
+                // User typed something like "content:subfolder/" or "content:read"
+                // Extract the collection name (may include address prefix)
+                var beforeColon = prefix[..colonIndex];
+                var afterColon = colonIndex < prefix.Length - 1 ? prefix[(colonIndex + 1)..] : "";
+
+                // The collection name is the last segment before the colon
+                var lastSlash = beforeColon.LastIndexOf('/');
+                targetCollection = lastSlash >= 0 ? beforeColon[(lastSlash + 1)..] : beforeColon;
+
+                if (afterColon.EndsWith("/"))
+                {
+                    // Browsing inside a folder: content:images/
+                    browsePath = "/" + afterColon.TrimEnd('/');
+                }
+                else if (afterColon.Contains('/'))
+                {
+                    // Partial path: content:images/log → browse "images", filter "log"
+                    var pathSlash = afterColon.LastIndexOf('/');
+                    browsePath = "/" + afterColon[..pathSlash];
+                    filterText = afterColon[(pathSlash + 1)..];
+                }
+                else
+                {
+                    // Filter at root: content:read → browse "/", filter "read"
+                    filterText = afterColon;
+                }
+            }
+
             foreach (var config in configs)
             {
+                // If user typed a collection prefix, only show that collection
+                if (targetCollection != null &&
+                    !config.Name.Equals(targetCollection, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                // If no colon yet, show collection names as suggestions
+                if (colonIndex < 0)
+                {
+                    var collPath = string.IsNullOrEmpty(nodeAddress)
+                        ? $"{config.Name}:"
+                        : $"{nodeAddress}/{config.Name}:";
+
+                    if (!string.IsNullOrEmpty(prefix) &&
+                        !config.Name.Contains(prefix, StringComparison.OrdinalIgnoreCase) &&
+                        !collPath.Contains(prefix, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    items.Add(new CompletionItem
+                    {
+                        Label = $"{config.Name}:",
+                        InsertText = $"@{collPath}",
+                        Description = config.DisplayName ?? config.Name,
+                        Path = collPath,
+                        Category = "Content",
+                        Kind = CompletionItemKind.Module
+                    });
+                    continue;
+                }
+
                 ContentCollection? collection;
                 try
                 {
@@ -889,43 +954,68 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 if (collection == null)
                     continue;
 
-                IReadOnlyCollection<FileItem>? files;
+                var collectionName = collection.Collection;
+
+                // Add folders
                 try
                 {
-                    files = await collection.GetFilesAsync("/");
+                    var folders = await collection.GetFoldersAsync(browsePath);
+                    foreach (var folder in folders)
+                    {
+                        if (!string.IsNullOrEmpty(filterText) &&
+                            !folder.Name.Contains(filterText, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        var folderSubPath = (browsePath.TrimStart('/') + "/" + folder.Name).TrimStart('/');
+                        var unifiedPath = string.IsNullOrEmpty(nodeAddress)
+                            ? $"{collectionName}:{folderSubPath}/"
+                            : $"{nodeAddress}/{collectionName}:{folderSubPath}/";
+
+                        items.Add(new CompletionItem
+                        {
+                            Label = folder.Name + "/",
+                            InsertText = $"@{unifiedPath}",
+                            Description = $"{folder.ItemCount} items",
+                            Path = unifiedPath,
+                            Category = "Content",
+                            Kind = CompletionItemKind.Module
+                        });
+                    }
+                }
+                catch
+                {
+                    // Skip folders that fail to enumerate
+                }
+
+                // Add files
+                try
+                {
+                    var files = await collection.GetFilesAsync(browsePath);
+                    foreach (var file in files)
+                    {
+                        if (!string.IsNullOrEmpty(filterText) &&
+                            !file.Name.Contains(filterText, StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        var filePath = file.Path.TrimStart('/');
+                        var unifiedPath = string.IsNullOrEmpty(nodeAddress)
+                            ? $"{collectionName}:{filePath}"
+                            : $"{nodeAddress}/{collectionName}:{filePath}";
+
+                        items.Add(new CompletionItem
+                        {
+                            Label = file.Name,
+                            InsertText = $"@{unifiedPath}",
+                            Description = collection.DisplayName,
+                            Path = unifiedPath,
+                            Category = "Content",
+                            Kind = CompletionItemKind.File
+                        });
+                    }
                 }
                 catch
                 {
                     continue; // Skip collections that fail to enumerate
-                }
-
-                if (files == null)
-                    continue;
-
-                var collectionName = collection.Collection;
-                foreach (var file in files)
-                {
-                    var filePath = file.Path.TrimStart('/');
-                    // Unified path: {address}/{collectionName}:{filePath}
-                    var unifiedPath = string.IsNullOrEmpty(nodeAddress)
-                        ? $"{collectionName}:{filePath}"
-                        : $"{nodeAddress}/{collectionName}:{filePath}";
-
-                    // Filter by prefix if one was typed
-                    if (!string.IsNullOrEmpty(prefix) &&
-                        !file.Name.Contains(prefix, StringComparison.OrdinalIgnoreCase) &&
-                        !unifiedPath.Contains(prefix, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    items.Add(new CompletionItem
-                    {
-                        Label = file.Name,
-                        InsertText = $"@{unifiedPath}",
-                        Description = collection.DisplayName,
-                        Path = unifiedPath,
-                        Category = "Content",
-                        Kind = CompletionItemKind.File
-                    });
                 }
             }
         }

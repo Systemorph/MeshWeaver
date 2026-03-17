@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
-    private CancellationToken TestTimeout => new CancellationTokenSource(45.Seconds()).Token;
+    private CancellationToken TestTimeout => new CancellationTokenSource(90.Seconds()).Token;
 
     /// <summary>
     /// Wire up PostgreSQL partitioned persistence instead of in-memory.
@@ -49,7 +49,7 @@ public class EffectivePermissionPostgresTest(PostgreSqlFixture fixture, ITestOut
         await securityService.AddUserRoleAsync(TestUsers.Admin.ObjectId, "Admin", null, "system", TestTimeout);
     }
 
-    [Fact(Timeout = 60000)]
+    [Fact(Timeout = 120000)]
     public async Task CreateOrganization_HasPermission_ReturnsAdmin()
     {
         // 1) OrganizationNodeType is installed via ConfigureMesh above

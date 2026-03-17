@@ -110,7 +110,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "Get Test Node",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
         await plugin.Create(createJson);
 
@@ -173,7 +173,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "At Prefix Test",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
         await plugin.Create(createJson);
 
@@ -260,7 +260,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "Test Created Node",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
 
         var result = await plugin.Create(nodeJson);
@@ -312,7 +312,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "Original Name",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
         await plugin.Create(createJson);
 
@@ -324,7 +324,7 @@ public class MeshPluginTest : MonolithMeshTestBase
                 id = uniqueId,
                 @namespace = "ACME",
                 name = "Updated Name",
-                nodeType = "Organization"
+                nodeType = "Markdown"
             }
         });
 
@@ -377,7 +377,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "Node To Delete",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
         await plugin.Create(createJson);
 
@@ -428,7 +428,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "Node With At Prefix",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
         await plugin.Create(createJson);
 
@@ -490,7 +490,7 @@ public class MeshPluginTest : MonolithMeshTestBase
             id = uniqueId,
             @namespace = "ACME",
             name = "CRUD Test Node",
-            nodeType = "Organization"
+            nodeType = "Markdown"
         });
         var createResult = await plugin.Create(createJson);
         createResult.Should().StartWith("Created:");
@@ -508,7 +508,7 @@ public class MeshPluginTest : MonolithMeshTestBase
                 id = uniqueId,
                 @namespace = "ACME",
                 name = "Updated CRUD Test Node",
-                nodeType = "Organization"
+                nodeType = "Markdown"
             }
         });
         var updateResult = await plugin.Update(updateJson);

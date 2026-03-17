@@ -32,6 +32,11 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 | `Get('@path/model:')` | Full data model with all registered types |
 | `Get('@path/layoutAreas:')` | List of available layout areas (reports, charts) |
 | `Get('@path/area:AreaName')` | Download a layout area's data for analysis |
+| `Get('@path/content:file.txt')` | File content from the "content" collection |
+| `Get('@path/content:folder/file.png')` | File from a subfolder in a collection |
+| `Get('@path/assets:logo.svg')` | File from the "assets" collection (any collection name works) |
+| `Get('@path/collection:')` | All content collection configs (names, types, editability) |
+| `Get('@path/collection:content,assets')` | Specific collection configs |
 
 #### Unified Path Reference
 
@@ -329,6 +334,38 @@ Use `@@` syntax to embed a layout area inline in markdown responses:
 2. **Analyze**: `Get('@path/area:AreaName')` — download area data
 3. **Display**: `NavigateTo('@path/AreaName')` — show visual chart/report
 4. **Embed**: `@@path/AreaName` — inline in markdown
+
+## Content Collections
+
+Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. Any Unified Path prefix that is **not a reserved keyword** is treated as a content collection name.
+
+### Discovering Collections
+
+List all available content collections for a node:
+```
+Get('@ACME/collection:')
+```
+Returns an array of collection configs with `name`, `sourceType`, `isEditable`, and other metadata.
+
+### Reading Files
+
+Access files using the collection name as the prefix:
+```
+Get('@ACME/content:readme.md')              -- File from "content" collection
+Get('@ACME/content:images/logo.png')        -- File from subfolder
+Get('@ACME/assets:report.pdf')              -- File from "assets" collection
+Get('@Doc/Architecture/content:diagram.svg') -- File from doc node's collection
+```
+
+The format is: `@{address}/{collectionName}:{filePath}`
+
+### Embedding Content Files
+
+Use `@@` syntax to embed content files inline in markdown:
+```
+@@ACME/content:images/logo.svg              -- Embed image inline
+@@ACME/content:notes.md                     -- Embed markdown inline
+```
 
 ## Reading Documentation
 

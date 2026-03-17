@@ -562,9 +562,11 @@ public class ThreadMessageChatTests : IAsyncLifetime
         await foreach (var item in query.QueryAsync(request, _options, ct))
             results.Add((MeshNode)item);
 
-        results.Should().HaveCountGreaterThanOrEqualTo(2);
-        results[0].Name.Should().Be("New Thread", "newest thread should be first");
-        results[1].Name.Should().Be("Old Thread", "oldest thread should be last");
+        // Filter to just the sort-test threads (shared fixture may have others)
+        var sortTestResults = results.Where(n => n.Id is "sort-old" or "sort-new").ToList();
+        sortTestResults.Should().HaveCount(2);
+        sortTestResults[0].Name.Should().Be("New Thread", "newest thread should be first");
+        sortTestResults[1].Name.Should().Be("Old Thread", "oldest thread should be last");
     }
 
     #endregion

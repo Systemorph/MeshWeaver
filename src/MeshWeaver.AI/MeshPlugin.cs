@@ -16,7 +16,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     private readonly MeshOperations ops = new(hub);
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
 
-    [Description("Retrieves a node from the mesh by path. Supports Unified Path prefixes (schema:, model:, data:).")]
+    [Description("Retrieves a node or content from the mesh by path. Supports Unified Path prefixes (schema:, model:, data:, content:, collection:, area:, layoutAreas:).")]
     public Task<string> Get(
         [Description("Path to data (e.g., @graph/org1, @NodeType/*, @ACME/schema:, @ACME/model:)")] string path)
         => ops.Get(path);
