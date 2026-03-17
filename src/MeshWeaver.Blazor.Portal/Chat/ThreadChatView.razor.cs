@@ -860,6 +860,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Queries content collection files and folders and returns matching completion items.
     /// Uses Unified Path format: {address}/{collectionName}:{filePath}
     /// Supports browsing into folders when prefix contains collectionName:subpath/
+    /// Gets the content service from the current navigation address hub (not the portal hub).
     /// </summary>
     private async Task<List<CompletionItem>> GetContentCompletionsAsync(string prefix)
     {
@@ -867,11 +868,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            var contentService = Hub.ServiceProvider.GetService<IContentService>();
+            // Use NavigationService to get the current address — content collections
+            // are registered on node hubs, not on the portal hub.
+            var nodeAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
+
+            IContentService? contentService = null;
+            if (!string.IsNullOrEmpty(nodeAddress))
+            {
+                var nodeHub = Hub.GetHostedHub(new Address(nodeAddress), HostedHubCreation.Never);
+                contentService = nodeHub?.ServiceProvider.GetService<IContentService>();
+            }
+            // Fallback to portal hub's content service
+            contentService ??= Hub.ServiceProvider.GetService<IContentService>();
             if (contentService == null)
                 return items;
-
-            var nodeAddress = initialContext ?? "";
             var configs = contentService.GetAllCollectionConfigs();
 
             // Parse prefix to detect collectionName:subpath pattern

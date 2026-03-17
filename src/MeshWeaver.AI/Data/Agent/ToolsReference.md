@@ -337,27 +337,37 @@ Use `@@` syntax to embed a layout area inline in markdown responses:
 
 ## Content Collections
 
-Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. Any Unified Path prefix that is **not a reserved keyword** is treated as a content collection name.
+Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. The `content:` prefix accesses the default "content" collection. Other collection names use `collection:` for discovery.
 
-### Discovering Collections
+### Workflow: Browsing and Downloading Files
 
-List all available content collections for a node:
+When you need to work with files in a content collection, follow this sequence:
+
+1. **Discover collections**: `Get('@path/collection:')` — lists all available collection configs (names, types, editability)
+2. **List files in collection root**: `Get('@path/content:')` — returns files and folders in the default "content" collection root
+3. **List files in a named collection**: `Get('@path/content:collectionName/')` — returns files and folders in the named collection root (note the trailing `/`)
+4. **List files in a subfolder**: `Get('@path/content:collectionName/subfolder/')` — returns files and folders in a subfolder (note the trailing `/`)
+5. **Download a specific file**: `Get('@path/content:filename.md')` — downloads the file from the default "content" collection
+6. **Download from a named collection**: `Get('@path/content:collectionName/filename.md')` — downloads the file from the named collection
+
+**Key rule**: A trailing `/` means "list contents" (browse). No trailing `/` means "download file".
+
+### Examples
+
 ```
-Get('@ACME/collection:')
-```
-Returns an array of collection configs with `name`, `sourceType`, `isEditable`, and other metadata.
-
-### Reading Files
-
-Access files using the collection name as the prefix:
-```
-Get('@ACME/content:readme.md')              -- File from "content" collection
-Get('@ACME/content:images/logo.png')        -- File from subfolder
-Get('@ACME/assets:report.pdf')              -- File from "assets" collection
-Get('@Doc/Architecture/content:diagram.svg') -- File from doc node's collection
+Get('@ACME/collection:')                    -- List all collection configs
+Get('@ACME/content:')                       -- List files/folders in default "content" collection
+Get('@ACME/content:attachments/')           -- List files/folders in "attachments" collection root
+Get('@ACME/content:attachments/reports/')   -- List files in "attachments/reports" subfolder
+Get('@ACME/content:readme.md')             -- Download readme.md from default "content" collection
+Get('@ACME/content:attachments/report.pdf') -- Download report.pdf from "attachments" collection
+Get('@Doc/Architecture/content:diagram.svg') -- Download from doc node's collection
 ```
 
-The format is: `@{address}/{collectionName}:{filePath}`
+The format is: `@{address}/content:{collectionOrFile}` where `{collectionOrFile}` is either:
+- A file path (downloads the file from default collection)
+- `collectionName/filePath` (downloads from named collection)
+- Empty or ending with `/` (lists files and folders)
 
 ### Embedding Content Files
 

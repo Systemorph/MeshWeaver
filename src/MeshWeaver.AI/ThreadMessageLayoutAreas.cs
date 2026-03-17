@@ -35,13 +35,19 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Emits ThreadMessageBubbleControl ONCE (Take(1)) based on initial role/author.
-    /// Text is data-bound via JsonPointerReference — only text updates during streaming,
-    /// the control tree stays the same (no flicker).
+    /// Emits control ONCE (Take(1)) based on initial role/author/type.
+    /// - EditingPrompt: inline editor with Submit/Cancel buttons
+    /// - ExecutedInput: bubble + Edit/Resubmit/Delete action buttons
+    /// - AgentResponse: bubble + Delete action button
+    /// Text is data-bound via JsonPointerReference — only text updates during streaming.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var lastSlash = hubPath.LastIndexOf('/');
+        var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
+        var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
+
         var nodeStream = host.Workspace.GetStream<MeshNode>();
 
         // Push ThreadMessage text to data section for data-bound rendering
@@ -55,7 +61,7 @@ public static class ThreadMessageLayoutAreas
             .DistinctUntilChanged()
             .Subscribe(text => host.UpdateData("text", text)));
 
-        // Emit the bubble control ONCE — role/author are fixed, text is data-bound
+        // Emit control ONCE — role/author/type are fixed, text is data-bound
         return nodeStream!
             .Select(nodes =>
             {
@@ -66,14 +72,134 @@ public static class ThreadMessageLayoutAreas
             .Take(1)
             .Select(msg =>
             {
-                var isUser = msg!.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
-                var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
+                if (msg!.Type == ThreadMessageType.EditingPrompt)
+                    return (UiControl?)BuildEditingOverview(host, msg, threadPath, messageId);
 
-                return (UiControl?)new ThreadMessageBubbleControl()
-                    .WithRole(msg.Role)
-                    .WithAuthorName(authorName)
-                    .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")));
+                return (UiControl?)BuildMessageOverview(host, msg, threadPath, messageId);
             });
+    }
+
+    /// <summary>
+    /// Builds the Overview for ExecutedInput/AgentResponse messages:
+    /// ThreadMessageBubbleControl + action buttons (Edit, Resubmit, Delete).
+    /// </summary>
+    private static UiControl BuildMessageOverview(
+        LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId)
+    {
+        var isUser = msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+        var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
+
+        var bubble = new ThreadMessageBubbleControl()
+            .WithRole(msg.Role)
+            .WithAuthorName(authorName)
+            .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")));
+
+        // Action buttons — small stealth icon buttons
+        var actionRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 2px; justify-content: " + (isUser ? "flex-end" : "flex-start") + "; margin-top: -4px; margin-bottom: 4px; opacity: 0.6;");
+
+        if (isUser)
+        {
+            actionRow = actionRow
+                .WithView(Controls.Button("")
+                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
+                    .WithAppearance(Appearance.Stealth)
+                    .WithLabel("Edit")
+                    .WithClickAction(_ =>
+                    {
+                        host.Hub.Post(new EditMessageRequest
+                        {
+                            ThreadPath = threadPath,
+                            MessageId = messageId,
+                            MessageText = msg.Text
+                        }, o => o.WithTarget(new Address(threadPath)));
+                    }))
+                .WithView(Controls.Button("")
+                    .WithIconStart(FluentIcons.ArrowSync(IconSize.Size16))
+                    .WithAppearance(Appearance.Stealth)
+                    .WithLabel("Resubmit")
+                    .WithClickAction(_ =>
+                    {
+                        host.Hub.Post(new ResubmitMessageRequest
+                        {
+                            ThreadPath = threadPath,
+                            MessageId = messageId,
+                            UserMessageText = msg.Text
+                        }, o => o.WithTarget(new Address(threadPath)));
+                    }));
+        }
+
+        actionRow = actionRow
+            .WithView(Controls.Button("")
+                .WithIconStart(FluentIcons.Delete(IconSize.Size16))
+                .WithAppearance(Appearance.Stealth)
+                .WithLabel("Delete from here")
+                .WithClickAction(_ =>
+                {
+                    host.Hub.Post(new DeleteFromMessageRequest
+                    {
+                        ThreadPath = threadPath,
+                        MessageId = messageId
+                    }, o => o.WithTarget(new Address(threadPath)));
+                }));
+
+        return Controls.Stack
+            .WithView(bubble)
+            .WithView(actionRow);
+    }
+
+    /// <summary>
+    /// Builds the Overview for EditingPrompt messages:
+    /// inline MarkdownEditorControl with Submit and Cancel buttons.
+    /// </summary>
+    private static UiControl BuildEditingOverview(
+        LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId)
+    {
+        const string textDataId = "editText";
+        host.UpdateData(textDataId, msg.Text ?? "");
+
+        var editor = new MarkdownEditorControl()
+            { Value = new JsonPointerReference(LayoutAreaReference.GetDataPointer(textDataId)) }
+            .WithDocumentId($"{threadPath}/{messageId}")
+            .WithHeight("120px")
+            .WithMaxHeight("200px")
+            .WithPlaceholder("Edit your message...");
+
+        var buttonRow = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(_ =>
+                {
+                    host.Hub.Post(new DeleteFromMessageRequest
+                    {
+                        ThreadPath = threadPath,
+                        MessageId = messageId
+                    }, o => o.WithTarget(new Address(threadPath)));
+                }))
+            .WithView(Controls.Button("Submit")
+                .WithAppearance(Appearance.Accent)
+                .WithIconStart(FluentIcons.Send(IconSize.Size16))
+                .WithClickAction(async actx =>
+                {
+                    var editedText = await actx.Host.Stream.GetDataStream<string>(textDataId).FirstAsync();
+                    actx.Hub.Post(new ResubmitMessageRequest
+                    {
+                        ThreadPath = threadPath,
+                        MessageId = messageId,
+                        UserMessageText = editedText ?? msg.Text ?? ""
+                    }, o => o.WithTarget(new Address(threadPath)));
+                }));
+
+        return Controls.Stack
+            .WithStyle("max-width: 80%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; " +
+                        "background: var(--neutral-layer-4); border-inline-end: 3px solid var(--accent-fill-rest); " +
+                        "margin-bottom: 12px; align-self: flex-end; margin-left: auto;")
+            .WithView(Controls.Html("<div style=\"font-weight: 600; font-size: 0.85rem; color: var(--accent-fill-rest); margin-bottom: 8px;\">Edit message</div>"))
+            .WithView(editor)
+            .WithView(buttonRow);
     }
 
     /// <summary>

@@ -983,6 +983,90 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
 
     #endregion
 
+    #region Content Collection Listing Tests
+
+    [Fact]
+    public async Task GetDataRequest_UnifiedReference_ContentListRoot_ReturnsFilesAndFolders()
+    {
+        // arrange - create test files with subfolder
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_List_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        await File.WriteAllTextAsync(Path.Combine(testDir, "readme.md"), "# Hello", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(testDir, "data.json"), "{}", TestContext.Current.CancellationToken);
+        var subDir = Path.Combine(testDir, "images");
+        Directory.CreateDirectory(subDir);
+        await File.WriteAllTextAsync(Path.Combine(subDir, "logo.svg"), "<svg></svg>", TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir);
+            var client = GetClient();
+
+            // act - content:TestFiles/ lists the named collection root (trailing slash = browse)
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference("content:TestFiles/")),
+                o => o.WithTarget(CreateHostAddress()),
+                TestContext.Current.CancellationToken);
+
+            // assert
+            var dataResponse = response.Message;
+            dataResponse.Error.Should().BeNull();
+            dataResponse.Data.Should().NotBeNull();
+
+            var items = dataResponse.Data as IReadOnlyCollection<ContentCollections.CollectionItem>;
+            items.Should().NotBeNull();
+            items.Should().Contain(i => i.Name == "readme.md");
+            items.Should().Contain(i => i.Name == "data.json");
+            items.Should().Contain(i => i.Name == "images");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir))
+                Directory.Delete(testDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task GetDataRequest_UnifiedReference_ContentListSubfolder_ReturnsSubfolderFiles()
+    {
+        // arrange - create test files with subfolder
+        var testDir = Path.Combine(Path.GetTempPath(), "MeshWeaverTest_SubList_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(testDir);
+        var subDir = Path.Combine(testDir, "images");
+        Directory.CreateDirectory(subDir);
+        await File.WriteAllTextAsync(Path.Combine(subDir, "logo.svg"), "<svg></svg>", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(subDir, "banner.png"), "fake-png", TestContext.Current.CancellationToken);
+
+        try
+        {
+            var host = GetHostWithFileProvider(testDir);
+            var client = GetClient();
+
+            // act - content:TestFiles/images/ lists the subfolder (trailing slash = browse)
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new UnifiedReference("content:TestFiles/images/")),
+                o => o.WithTarget(CreateHostAddress()),
+                TestContext.Current.CancellationToken);
+
+            // assert
+            var dataResponse = response.Message;
+            dataResponse.Error.Should().BeNull();
+            dataResponse.Data.Should().NotBeNull();
+
+            var items = dataResponse.Data as IReadOnlyCollection<ContentCollections.CollectionItem>;
+            items.Should().NotBeNull();
+            items.Should().Contain(i => i.Name == "logo.svg");
+            items.Should().Contain(i => i.Name == "banner.png");
+        }
+        finally
+        {
+            if (Directory.Exists(testDir))
+                Directory.Delete(testDir, true);
+        }
+    }
+
+    #endregion
+
     #region Test Domain Models
 
     /// <summary>

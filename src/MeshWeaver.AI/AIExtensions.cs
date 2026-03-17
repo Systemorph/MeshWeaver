@@ -37,7 +37,10 @@ public static class AIExtensions
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
             .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))
             .WithType(typeof(CreateThreadResponse), nameof(CreateThreadResponse))
-            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest));
+            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
+            .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
+            .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
+            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest));
 
     extension(IServiceCollection services)
     {

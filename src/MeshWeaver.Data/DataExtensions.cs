@@ -817,6 +817,14 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
                     return request.Processed();
                 }
 
+                // For content listing (empty path, collection root, subfolder browse)
+                if (prefix == "content")
+                {
+                    var contentResult = await HandleContentPathAsync(hub, remainingPath, reference.NumberOfRows, ct);
+                    hub.Post(contentResult, o => o.ResponseFor(request));
+                    return request.Processed();
+                }
+
                 hub.Post(new GetDataResponse(null, 0) { Error = "Could not resolve workspace reference" },
                     o => o.ResponseFor(request));
                 return request.Processed();
@@ -932,6 +940,8 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
     /// </summary>
     private static WorkspaceReference? ResolveContentPath(string? remainingPath)
     {
+        remainingPath = remainingPath?.TrimEnd('/');
+
         if (string.IsNullOrEmpty(remainingPath))
             return null;
 
@@ -1011,12 +1021,30 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
         int? numberOfRows,
         CancellationToken ct)
     {
+        // Normalize: strip trailing slashes
+        remainingPath = remainingPath?.TrimEnd('/');
+
+        // Empty path → list files in default "content" collection root
         if (string.IsNullOrEmpty(remainingPath))
-            return new GetDataResponse(null, 0) { Error = "Invalid content path" };
+            return await ListCollectionItemsAsync(hub, "content", "/", ct);
 
         var slashIndex = remainingPath.IndexOf('/');
+
         if (slashIndex < 0)
-            return new GetDataResponse(null, 0) { Error = "Invalid content path: missing file path" };
+        {
+            // No slash — could be a file in default collection or a collection name.
+            // Try as file in default "content" collection first, then as collection name.
+            var fileResult = await GetFileContentAsync(hub, "content", remainingPath, numberOfRows, ct);
+            if (fileResult.Error == null)
+                return fileResult;
+
+            // Try as collection name — list its root
+            var listResult = await ListCollectionItemsAsync(hub, remainingPath, "/", ct);
+            if (listResult.Error == null)
+                return listResult;
+
+            return fileResult;
+        }
 
         var collectionPart = remainingPath[..slashIndex];
         var filePath = remainingPath[(slashIndex + 1)..];
@@ -1035,7 +1063,41 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             collectionName = collectionPart;
         }
 
-        return await GetFileContentAsync(hub, collectionName, filePath, numberOfRows, ct);
+        // Empty filePath → list collection root
+        if (string.IsNullOrEmpty(filePath))
+            return await ListCollectionItemsAsync(hub, collectionName, "/", ct);
+
+        // Try as file first; if not found, try as folder
+        var result = await GetFileContentAsync(hub, collectionName, filePath, numberOfRows, ct);
+        if (result.Error == null)
+            return result;
+
+        var folderResult = await ListCollectionItemsAsync(hub, collectionName, "/" + filePath, ct);
+        if (folderResult.Error == null)
+            return folderResult;
+
+        return result;
+    }
+
+    /// <summary>
+    /// Lists files and folders in a content collection path.
+    /// </summary>
+    private static async Task<GetDataResponse> ListCollectionItemsAsync(
+        IMessageHub hub,
+        string collectionName,
+        string path,
+        CancellationToken ct)
+    {
+        var fileContentProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
+        if (fileContentProvider == null)
+            return new GetDataResponse(null, 0)
+            { Error = "File content provider not available. Ensure AddContentCollections() is configured." };
+
+        var result = await fileContentProvider.ListCollectionItemsAsync(collectionName, path, ct);
+        if (!result.Success)
+            return new GetDataResponse(null, 0) { Error = result.Error };
+
+        return new GetDataResponse(result.Items, hub.Version);
     }
 
     /// <summary>
