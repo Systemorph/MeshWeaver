@@ -65,17 +65,13 @@ public static class NodeMenuItemsExtensions
 
     /// <summary>
     /// Default menu provider that yields standard menu items with inline permission checks.
-    /// Yields a node name item (navigates to NodeType) instead of a generic "Edit".
+    /// Delegates to individual layout area classes for menu item definitions.
     /// </summary>
     private static async IAsyncEnumerable<NodeMenuItemDefinition> DefaultMenuProvider(
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DefaultMenuProvider");
-        logger?.LogInformation("DefaultMenuProvider evaluating for hubPath={HubPath}, area={Area}", hubPath, ctx.Area);
-
         var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
-        logger?.LogInformation("DefaultMenuProvider permissions for {HubPath}: {Perms}", hubPath, perms);
 
         // Get the current node to determine name and type
         var nodes = await (host.Workspace.GetStream<MeshNode>()
@@ -83,52 +79,34 @@ public static class NodeMenuItemsExtensions
             ?? Observable.Return(Array.Empty<MeshNode>()))
             .FirstAsync();
         var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-
         var nodeName = node?.Name ?? "";
-        string Href(string area, string? qs = null) => MeshNodeLayoutAreas.BuildUrl(hubPath, area, qs);
 
-        if (perms.HasFlag(Permission.Update))
-        {
-            var editLabel = string.IsNullOrEmpty(nodeName) ? "Edit" : $"Edit {nodeName}";
-            yield return new(editLabel, "Edit",
-                RequiredPermission: Permission.Update, Order: -10, Href: Href("Edit"));
-        }
+        // Each area class provides its own GetMenuItem — factored for reuse
+        var edit = MeshNodeLayoutAreas.GetEditMenuItem(hubPath, nodeName, perms);
+        if (edit != null) yield return edit;
 
-        if (perms.HasFlag(Permission.Create))
-        {
-            // When on a NodeType definition page, pass the type as query parameter
-            var createQs = node?.NodeType == MeshNode.NodeTypePath
-                ? $"type={Uri.EscapeDataString(hubPath)}"
-                : null;
-            yield return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
-                RequiredPermission: Permission.Create, Order: 0, Href: Href(MeshNodeLayoutAreas.CreateNodeArea, createQs));
-            yield return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
-                RequiredPermission: Permission.Create, Order: 1, Href: Href(MeshNodeLayoutAreas.ImportMeshNodesArea));
-        }
+        var create = CreateLayoutArea.GetMenuItem(hubPath, node, perms);
+        if (create != null) yield return create;
 
-        if (perms.HasFlag(Permission.Read))
-            yield return new("Files", MeshNodeLayoutAreas.FilesArea, Order: 25, Href: Href(MeshNodeLayoutAreas.FilesArea));
+        var import = ImportLayoutArea.GetMenuItem(hubPath, perms);
+        if (import != null) yield return import;
 
-        if (perms.HasFlag(Permission.Read))
-        {
-            var exportLabel = string.IsNullOrEmpty(nodeName) ? "Export" : $"Export {nodeName}";
-            yield return new(exportLabel, MeshNodeLayoutAreas.ExportArea, Order: 26, Href: Href(MeshNodeLayoutAreas.ExportArea));
-        }
+        var files = MeshNodeLayoutAreas.GetFilesMenuItem(hubPath, perms);
+        if (files != null) yield return files;
 
-        yield return new("Threads", MeshNodeLayoutAreas.ThreadsArea, Order: 50, Href: Href(MeshNodeLayoutAreas.ThreadsArea));
+        var export = ExportLayoutArea.GetMenuItem(hubPath, nodeName, perms);
+        if (export != null) yield return export;
 
-        if (perms.HasFlag(Permission.Read))
-            yield return new("Versions", MeshNodeLayoutAreas.VersionsArea, Order: 55, Href: Href(MeshNodeLayoutAreas.VersionsArea));
+        yield return MeshNodeLayoutAreas.GetThreadsMenuItem(hubPath);
 
-        if (perms.HasFlag(Permission.Read))
-            yield return new("Settings", MeshNodeLayoutAreas.SettingsArea, Order: 90, Href: Href(MeshNodeLayoutAreas.SettingsArea));
+        var versions = VersionLayoutArea.GetMenuItem(hubPath, perms);
+        if (versions != null) yield return versions;
 
-        if (perms.HasFlag(Permission.Delete))
-        {
-            var deleteLabel = string.IsNullOrEmpty(nodeName) ? "Delete" : $"Delete {nodeName}";
-            yield return new(deleteLabel, MeshNodeLayoutAreas.DeleteArea,
-                RequiredPermission: Permission.Delete, Order: 100, Href: Href(MeshNodeLayoutAreas.DeleteArea));
-        }
+        var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(hubPath, perms);
+        if (settings != null) yield return settings;
+
+        var delete = DeleteLayoutArea.GetMenuItem(hubPath, nodeName, perms);
+        if (delete != null) yield return delete;
     }
 
     /// <summary>

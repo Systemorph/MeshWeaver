@@ -45,7 +45,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
             if (portalApp != null)
             {
                 var accessService = portalApp.Hub.ServiceProvider.GetRequiredService<AccessService>();
-                var userContext = accessService.Context;
+                var userContext = accessService.Context ?? accessService.CircuitContext;
 
                 // Skip virtual users — they don't need onboarding
                 if (userContext is { IsVirtual: false } && !string.IsNullOrEmpty(userContext.ObjectId))

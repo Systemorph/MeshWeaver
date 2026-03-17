@@ -1,8 +1,10 @@
 using System.Reactive.Linq;
+using System.Text.Json;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,8 +12,8 @@ using Microsoft.Extensions.DependencyInjection;
 namespace MeshWeaver.Graph;
 
 /// <summary>
-/// Registers the "Activity" area on User nodes for the personal dashboard start page.
-/// Modern social-media-inspired layout with activity timeline, quick-access cards, and chat.
+/// Registers the "Activity" area on User nodes.
+/// Shows a personal dashboard to the node owner, or a public profile to visitors.
 /// </summary>
 public static class UserActivityLayoutAreas
 {
@@ -26,60 +28,152 @@ public static class UserActivityLayoutAreas
         => configuration.AddLayout(layout => layout.WithView(ActivityArea, Activity));
 
     /// <summary>
-    /// Renders the user's personal dashboard with a modern social-media look.
+    /// Renders the user's page. Shows a personal dashboard to the owner,
+    /// or a public profile to visitors.
     /// </summary>
     public static IObservable<UiControl?> Activity(LayoutAreaHost host, RenderingContext _)
     {
         var nodePath = host.Hub.Address.ToString();
-        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
-        var userId = accessService?.Context?.ObjectId ?? "";
+        // Extract the owner ID from the hub address (e.g., "User/Alice" → "Alice")
+        var nodeOwnerId = nodePath.StartsWith("User/") ? nodePath[5..] : nodePath;
 
-        return Observable.FromAsync(async () =>
+        // Get the node from the workspace stream to derive the owner's display name
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
+            ?? Observable.Return(Array.Empty<MeshNode>());
+
+        return nodeStream.SelectMany(async nodes =>
         {
-            var userName = accessService?.Context?.Name ?? "User";
+            var ownerNode = nodes.FirstOrDefault(n => n.Path == nodePath);
+            var ownerName = ownerNode?.Name ?? nodeOwnerId;
 
-            // Outer shell: flex column, fills the available main area (height managed by CSS grid)
-            var dashboard = Controls.Stack
-                .WithWidth("100%")
-                .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
+            // Determine if the viewer is the node owner
+            var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+            var viewerId = accessService?.Context?.ObjectId ?? "";
+            var isOwner = string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase);
 
-            // Welcome banner
-            dashboard = dashboard.WithView(Controls.Html(
-                $"<div style=\"flex-shrink: 0; padding: 20px 24px 12px 24px;\">" +
-                $"<div style=\"font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em;\">" +
-                $"Welcome back, {EscapeHtml(userName)}</div>" +
-                $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
-                "</div>"));
-
-            // Chat — full width
-            dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
-
-            // Scrollable content area — full-width layout grid
-            var content = Controls.LayoutGrid
-                .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
-
-            // Latest Threads — full width
-            content = content.WithView(BuildLatestThreads(nodePath),
-                skin => skin.WithXs(12));
-
-            // Children section — full width
-            content = content.WithView(BuildChildren(nodePath),
-                skin => skin.WithXs(12));
-
-            // Activity Feed — 2/3 width on desktop, full on mobile
-            content = content.WithView(
-                BuildActivityFeed(),
-                skin => skin.WithXs(12).WithSm(8));
-
-            // Recently Viewed — 1/3 width on desktop, full on mobile
-            content = content.WithView(
-                BuildRecentActivity(nodePath),
-                skin => skin.WithXs(12).WithSm(4));
-
-            dashboard = dashboard.WithView(content);
-
-            return (UiControl?)dashboard;
+            if (isOwner)
+                return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName);
+            else
+                return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
         });
+    }
+
+    /// <summary>
+    /// Personal dashboard shown to the node owner — welcome banner, chat, threads,
+    /// activity feed, recently viewed, and child items.
+    /// </summary>
+    private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName)
+    {
+        // Outer shell: flex column, fills the available main area (height managed by CSS grid)
+        var dashboard = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
+
+        // Welcome banner
+        dashboard = dashboard.WithView(Controls.Html(
+            $"<div style=\"flex-shrink: 0; padding: 20px 24px 12px 24px;\">" +
+            $"<div style=\"font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em;\">" +
+            $"Welcome back, {EscapeHtml(ownerName)}</div>" +
+            $"<div style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-top: 2px;\">Here's what's happening across your workspace</div>" +
+            "</div>"));
+
+        // Chat — full width
+        dashboard = dashboard.WithView(BuildChatSection(host, nodePath));
+
+        // Scrollable content area — full-width layout grid
+        var content = Controls.LayoutGrid
+            .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
+
+        // Latest Threads — full width
+        content = content.WithView(BuildLatestThreads(nodePath),
+            skin => skin.WithXs(12));
+
+        // Children section — full width
+        content = content.WithView(BuildChildren(nodePath),
+            skin => skin.WithXs(12));
+
+        // Activity Feed — 2/3 width on desktop, full on mobile
+        content = content.WithView(
+            BuildActivityFeed(),
+            skin => skin.WithXs(12).WithSm(8));
+
+        // Recently Viewed — 1/3 width on desktop, full on mobile
+        content = content.WithView(
+            BuildRecentActivity(nodePath),
+            skin => skin.WithXs(12).WithSm(4));
+
+        dashboard = dashboard.WithView(content);
+
+        return dashboard;
+    }
+
+    /// <summary>
+    /// Public profile shown to visitors — UserProfileControl (rendered by Blazor)
+    /// with child nodes and recent activity below.
+    /// </summary>
+    private static UiControl BuildVisitorProfile(string nodePath, string ownerName, MeshNode? ownerNode)
+    {
+        // Extract User content fields (bio, email) if available
+        string? email = null;
+        string? bio = null;
+        if (ownerNode?.Content is User userContent)
+        {
+            email = userContent.Email;
+            bio = userContent.Bio;
+        }
+        else if (ownerNode?.Content is JsonElement je && je.ValueKind == JsonValueKind.Object)
+        {
+            if (je.TryGetProperty("Email", out var emailProp) || je.TryGetProperty("email", out emailProp))
+                email = emailProp.GetString();
+            if (je.TryGetProperty("Bio", out var bioProp) || je.TryGetProperty("bio", out bioProp))
+                bio = bioProp.GetString();
+        }
+
+        var profile = Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;");
+
+        // User profile card (rendered by Blazor UserProfilePageView)
+        profile = profile.WithView(new UserProfileControl()
+            .WithNodePath(nodePath)
+            .WithDisplayName(ownerName)
+            .WithIcon(ownerNode?.Icon)
+            .WithEmail(email)
+            .WithBio(bio));
+
+        // Scrollable content area
+        var content = Controls.Stack
+            .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
+
+        // Recent activity by this user
+        content = content.WithView(Controls.Stack.WithStyle("margin-top: 24px;")
+            .WithView(Controls.Html(
+                "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recent Activity</div>"))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"source:activity namespace:{nodePath} scope:subtree is:main sort:LastModified-desc")
+                .WithShowSearchBox(false)
+                .WithShowEmptyMessage(true)
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithCollapsibleSections(false)
+                .WithSectionCounts(false)
+                .WithMaxColumns(2)
+                .WithItemLimit(8)));
+
+        // Visible child nodes — security service automatically filters to viewer-visible nodes
+        content = content.WithView(Controls.Stack.WithStyle("margin-top: 24px;")
+            .WithView(Controls.Html(
+                "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Items</div>"))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
+                .WithShowSearchBox(false)
+                .WithShowEmptyMessage(true)
+                .WithRenderMode(MeshSearchRenderMode.Grouped)
+                .WithSectionCounts(true)
+                .WithItemLimit(20)
+                .WithCollapsibleSections(true)));
+
+        profile = profile.WithView(content);
+        return profile;
     }
 
     /// <summary>

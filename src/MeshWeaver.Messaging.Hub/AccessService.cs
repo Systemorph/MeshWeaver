@@ -11,11 +11,19 @@ public class AccessService
     private AccessContext? circuitContext;
 
     /// <summary>
-    /// Gets the current access context.
-    /// First checks the AsyncLocal (for request-specific overrides),
-    /// then falls back to the circuit-level context.
+    /// Gets the current request-scoped access context (AsyncLocal only).
+    /// Set by the delivery pipeline per-message. Returns null when no
+    /// message delivery is active. Use <see cref="CircuitContext"/> for
+    /// the persistent Blazor session context when needed.
     /// </summary>
-    public AccessContext? Context => context.Value ?? circuitContext;
+    public AccessContext? Context => context.Value;
+
+    /// <summary>
+    /// Gets the persistent circuit-level context.
+    /// In Blazor Server, this persists across SignalR calls within the same circuit.
+    /// In Orleans grains, this is always null (identity flows per-message only).
+    /// </summary>
+    public AccessContext? CircuitContext => circuitContext;
 
     /// <summary>
     /// Sets the request-specific context (AsyncLocal).

@@ -148,7 +148,7 @@ public static class NodeTypeLayoutAreas
                         .WithSectionCounts(true)
                         .WithItemLimit(10)
                         .WithCollapsibleSections(true)
-                        .WithCreateHref($"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}")));
+                        .WithCreateHref($"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(hubPath)}")));
 
             return (UiControl?)outer;
         });
