@@ -250,11 +250,12 @@ public class ContentService : IContentService
     public IReadOnlyCollection<ContentCollectionConfig> GetAllCollectionConfigs()
     {
         // Get local configs, resolving any mapped configs
+        // Filter out configs with ExposeInChildren=false (hidden backing stores)
         var configs = collectionConfigs.Values
             .Select(config => config.SourceType == MappedContentCollectionConfigProvider.MappedSourceType
                 ? ResolveMappedConfig(config)
                 : config)
-            .Where(c => c != null)
+            .Where(c => c != null && c.ExposeInChildren)
             .Cast<ContentCollectionConfig>()
             .ToList();
 

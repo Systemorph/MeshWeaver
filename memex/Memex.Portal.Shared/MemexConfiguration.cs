@@ -302,34 +302,24 @@ public static class MemexConfiguration
                 .ConfigureServices(services => services.AddAzureBlob())
                 // Register the mesh catalog and its public interfaces
                 .ConfigureServices(services => services.AddMeshCatalog())
-                // Add content collections at mesh level with storage config
-                // The storage collection is registered as a source for node hub mappings
-                .ConfigureHub(hub =>
-                {
-                    if (contentStorageConfig == null)
-                        return hub;
-                    // Storage collection: editable backing store for mapped content
-                    contentStorageConfig = contentStorageConfig with
-                    {
-                        IsEditable = true,
-                        IsStatic = false
-                    };
-                    return hub.AddContentCollection(_ => contentStorageConfig);
-                })
                 // Configure default views and content collections for each node hub
-                // Order matters: AddContentCollections registers $Content area first,
-                // then AddDefaultLayoutAreas sets DetailsArea as default (can be overridden by node type config)
+                // Each hub gets its own "content" collection pointing to a subdirectory
                 .ConfigureDefaultNodeHub(config =>
                 {
                     if (contentStorageConfig != null)
                     {
                         var nodePath = config.Address.ToString();
-                        // Register storage source on node hub so mapped collection can resolve it
-                        // Content collection is explicitly editable for file uploads
-                        var editableStorageConfig = contentStorageConfig with { IsEditable = true };
-                        config = config
-                            .AddContentCollection(_ => editableStorageConfig)
-                            .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
+                        var nodeContentConfig = contentStorageConfig with
+                        {
+                            Name = "content",
+                            IsEditable = true,
+                            BasePath = $"content/{nodePath}",
+                            Settings = new Dictionary<string, string>(contentStorageConfig.Settings ?? new())
+                            {
+                                ["BasePath"] = $"content/{nodePath}"
+                            }
+                        };
+                        config = config.AddContentCollection(_ => nodeContentConfig);
                     }
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
