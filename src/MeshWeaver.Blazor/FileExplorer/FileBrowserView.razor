@@ -3,7 +3,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @inherits BlazorView<FileBrowserControl,FileBrowserView>
 
-<FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" Embed="@true"></FileBrowser>
+<FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" IsReadOnly="@IsReadOnly" Embed="@true"></FileBrowser>
 
 @code
 {
@@ -11,6 +11,7 @@
     private string? Path;
     private bool PathCreation;
     private string? TopLevelPath;
+    private bool IsReadOnly;
     private ContentCollectionConfig? CollectionConfiguration;
 
     protected override void BindData()
@@ -21,6 +22,7 @@
         DataBind(ViewModel.PathCreation, x => x.PathCreation);
         DataBind(ViewModel.TopLevelPath, x => x.TopLevelPath);
         DataBind(ViewModel.CollectionConfiguration, x => x.CollectionConfiguration);
+        DataBind(ViewModel.ReadOnly, x => x.IsReadOnly);
     }
 
     protected override async Task OnParametersSetAsync()

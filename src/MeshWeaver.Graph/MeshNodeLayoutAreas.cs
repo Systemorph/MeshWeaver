@@ -867,9 +867,18 @@ public static class MeshNodeLayoutAreas
     /// Reads ?collection= query parameter to select which collection to browse.
     /// </summary>
     [Browsable(false)]
-    public static UiControl Files(LayoutAreaHost host, RenderingContext _)
+    public static IObservable<UiControl?> Files(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        return Observable.FromAsync(async () =>
+        {
+            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            return (UiControl?)BuildFilesView(host, hubPath, !canEdit);
+        });
+    }
+
+    private static UiControl BuildFilesView(LayoutAreaHost host, string hubPath, bool readOnly)
+    {
         var backHref = BuildUrl(hubPath, OverviewArea);
 
         var stack = Controls.Stack
@@ -883,13 +892,13 @@ public static class MeshNodeLayoutAreas
 
         if (collections is not { Count: > 0 })
         {
-            stack = stack.WithView(new FileBrowserControl("content"));
+            stack = stack.WithView(new FileBrowserControl("content").WithReadOnly(readOnly));
             return stack;
         }
 
         if (collections.Count == 1)
         {
-            stack = stack.WithView(new FileBrowserControl(collections[0].Name));
+            stack = stack.WithView(new FileBrowserControl(collections[0].Name).WithReadOnly(readOnly));
             return stack;
         }
 
@@ -922,7 +931,7 @@ public static class MeshNodeLayoutAreas
                     var selected = data?.GetValueOrDefault("collection")?.ToString();
                     if (string.IsNullOrEmpty(selected))
                         return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
-                    return (UiControl?)new FileBrowserControl(selected);
+                    return (UiControl?)new FileBrowserControl(selected).WithReadOnly(readOnly);
                 }));
 
         return stack;

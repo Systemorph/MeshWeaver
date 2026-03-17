@@ -23,6 +23,7 @@ public partial class FileBrowser
     [Parameter] public bool ShowNewArticle { get; set; }
     [Parameter] public ContentCollectionConfig? CollectionConfiguration { get; set; }
     [Parameter] public Address? Address { get; set; }
+    [Parameter] public bool IsReadOnly { get; set; }
     private IReadOnlyCollection<CollectionItem> CollectionItems { get; set; } = [];
     FluentInputFile myFileByStream = default!;
     protected override async Task OnParametersSetAsync()

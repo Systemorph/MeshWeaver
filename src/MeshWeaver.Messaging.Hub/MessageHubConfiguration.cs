@@ -4,6 +4,7 @@ using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
@@ -201,6 +202,7 @@ public record MessageHubConfiguration
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
+        var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PostPipeline");
         return syncPipeline.AddPipeline((d, next) =>
         {
             // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
@@ -222,6 +224,13 @@ public record MessageHubConfiguration
                     Name = hubAddress.ToString()
                 });
             }
+            logger?.LogDebug(
+                "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
+                syncPipeline.Hub.Address,
+                d.Message?.GetType().Name ?? "(null)",
+                d.AccessContext?.ObjectId ?? "(no-context)",
+                userService?.Context?.ObjectId ?? "(null)",
+                userService?.CircuitContext?.ObjectId ?? "(null)");
             return next(d);
         });
     }
@@ -262,9 +271,17 @@ public record MessageHubConfiguration
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
+        var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DeliveryPipeline");
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
-            userService?.SetContext(d.AccessContext);
+            var accessContext = d.AccessContext;
+            logger?.LogDebug(
+                "DeliveryPipeline: hub={Hub}, message={MessageType}, user={User}, sender={Sender}",
+                asyncPipeline.Hub.Address,
+                d.Message?.GetType().Name ?? "(null)",
+                accessContext?.ObjectId ?? "(no-context)",
+                d.Sender);
+            userService?.SetContext(accessContext);
             try
             {
                 return await next.Invoke(d, ct);

@@ -29,5 +29,14 @@
             => this with { CollectionConfiguration = config };
 
         public string? TopLevelPath { get; init; }
+
+        /// <summary>
+        /// When true, hides upload, create folder, and delete buttons.
+        /// Set based on user permissions (no Update permission on the node).
+        /// </summary>
+        public bool ReadOnly { get; init; }
+
+        public FileBrowserControl WithReadOnly(bool readOnly = true)
+            => this with { ReadOnly = readOnly };
     }
 }

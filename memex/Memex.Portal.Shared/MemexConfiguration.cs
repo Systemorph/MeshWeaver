@@ -309,10 +309,10 @@ public static class MemexConfiguration
                 {
                     if (contentStorageConfig == null)
                         return hub;
-                    // Storage collection: not directly editable, only used as backing store for mapped content
+                    // Storage collection: editable backing store for mapped content
                     contentStorageConfig = contentStorageConfig with
                     {
-                        IsEditable = false,
+                        IsEditable = true,
                         IsStatic = false
                     };
                     return hub.AddContentCollection(_ => contentStorageConfig);
@@ -326,8 +326,10 @@ public static class MemexConfiguration
                     {
                         var nodePath = config.Address.ToString();
                         // Register storage source on node hub so mapped collection can resolve it
+                        // Content collection is explicitly editable for file uploads
+                        var editableStorageConfig = contentStorageConfig with { IsEditable = true };
                         config = config
-                            .AddContentCollection(_ => contentStorageConfig)
+                            .AddContentCollection(_ => editableStorageConfig)
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
