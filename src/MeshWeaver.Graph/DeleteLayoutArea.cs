@@ -6,6 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,6 +18,18 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class DeleteLayoutArea
 {
+    /// <summary>
+    /// Returns the Delete menu item if the user has Delete permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Delete))
+            return null;
+        var label = string.IsNullOrEmpty(nodeName) ? "Delete" : $"Delete {nodeName}";
+        return new(label, MeshNodeLayoutAreas.DeleteArea,
+            RequiredPermission: Permission.Delete, Order: 100,
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.DeleteArea));
+    }
     /// <summary>
     /// Entry point for the Delete layout area.
     /// </summary>

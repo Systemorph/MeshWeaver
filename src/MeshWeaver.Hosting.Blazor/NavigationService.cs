@@ -301,7 +301,7 @@ internal class NavigationService : INavigationService
     private void TrackNavigationActivity(MeshNode node)
     {
         var accessService = _hub.ServiceProvider.GetService<AccessService>();
-        if (accessService?.Context?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
+        if ((accessService?.Context ?? accessService?.CircuitContext)?.ObjectId is not { } userId || string.IsNullOrEmpty(userId))
             return;
 
         // Skip system/internal paths

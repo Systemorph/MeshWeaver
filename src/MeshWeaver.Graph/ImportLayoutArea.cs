@@ -4,6 +4,8 @@ using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +21,17 @@ namespace MeshWeaver.Graph;
 [Browsable(false)]
 public static class ImportLayoutArea
 {
+    /// <summary>
+    /// Returns the Import menu item if the user has Create permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Create))
+            return null;
+        return new("Import", MeshNodeLayoutAreas.ImportMeshNodesArea,
+            RequiredPermission: Permission.Create, Order: 1,
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ImportMeshNodesArea));
+    }
     /// <summary>
     /// Layout area for importing mesh nodes.
     /// Shows a form with destination namespace picker, source type selector

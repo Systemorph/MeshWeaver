@@ -207,7 +207,9 @@ public record MessageHubConfiguration
             if (d.AccessContext is not null)
                 return next(d);
 
-            var context = userService?.Context;
+            // Context = per-request AsyncLocal (delivery pipeline).
+            // CircuitContext = persistent Blazor session context (for component-initiated posts).
+            var context = userService?.Context ?? userService?.CircuitContext;
             if (context is not null)
                 d = d.SetAccessContext(context);
             else

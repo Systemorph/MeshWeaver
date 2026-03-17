@@ -1,8 +1,10 @@
 ﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace Memex.Portal.Shared;
 
@@ -27,12 +29,15 @@ public static class OrganizationLayoutAreas
             ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath))
             ?? Observable.Return<MeshNode?>(null);
 
-        return orgStream.CombineLatest(nodeStream, (org, node) =>
+        return orgStream.CombineLatest(nodeStream).SelectMany(async t =>
         {
+            var (org, node) = t;
             if (org == null && node == null)
                 return Controls.Markdown("*Loading...*") as UiControl;
 
-            return BuildOrganizationView(host, org, node, hubPath);
+            var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
+            var canEdit = perms.HasFlag(Permission.Update);
+            return BuildOrganizationView(host, org, node, hubPath, canEdit);
         });
     }
 
@@ -40,7 +45,8 @@ public static class OrganizationLayoutAreas
         LayoutAreaHost host,
         Organization? org,
         MeshNode? node,
-        string hubPath)
+        string hubPath,
+        bool canEdit = false)
     {
         var name = org?.Name ?? node?.Name ?? "Organization";
         var description = org?.Description;
@@ -59,19 +65,26 @@ public static class OrganizationLayoutAreas
             .WithStyle("gap: 24px; align-items: flex-start; width: 100%; max-width: 1280px; margin: 0 auto; padding: 0 24px;");
 
         // Logo (large, rounded square like GitHub)
+        UiControl logoControl;
         if (!string.IsNullOrEmpty(logo))
         {
-            headerRow = headerRow.WithView(Controls.Html(
-                $"<img src=\"{logo}\" alt=\"\" style=\"width: 100px; height: 100px; border-radius: 12px; object-fit: cover; background: var(--neutral-layer-2);\" />"));
+            logoControl = Controls.Html(
+                $"<img src=\"{logo}\" alt=\"\" style=\"width: 100px; height: 100px; border-radius: 12px; object-fit: cover; background: var(--neutral-layer-2);\" />");
         }
         else
         {
             // Placeholder image with initials
             var initials = GetInitials(name);
-            headerRow = headerRow.WithView(Controls.Html(
+            logoControl = Controls.Html(
                 $"<div style=\"width: 100px; height: 100px; border-radius: 12px; background: var(--accent-fill-rest); display: flex; align-items: center; justify-content: center; color: white; font-size: 2.5rem; font-weight: 600;\">" +
-                $"{System.Web.HttpUtility.HtmlEncode(initials)}</div>"));
+                $"{System.Web.HttpUtility.HtmlEncode(initials)}</div>");
         }
+
+        if (canEdit)
+        {
+            logoControl = BuildEditableLogo(host, node, logoControl);
+        }
+        headerRow = headerRow.WithView(logoControl);
 
         // Info column (flex: 1 to take remaining space)
         var infoColumn = Controls.Stack.WithStyle("gap: 8px; flex: 1;");
@@ -149,6 +162,30 @@ public static class OrganizationLayoutAreas
             LayoutAreaControl.Children(host.Hub));
 
         return container;
+    }
+
+    /// <summary>
+    /// Wraps the logo control with a hover overlay and click handler to open a file browser
+    /// for uploading a new logo/icon. Reuses the same dialog pattern as BuildHeader's editable icon.
+    /// </summary>
+    private static UiControl BuildEditableLogo(LayoutAreaHost host, MeshNode? node, UiControl logoControl)
+    {
+        var nodePath = node?.Path ?? host.Hub.Address.ToString();
+
+        var wrapper = Controls.Stack
+            .WithStyle("position: relative; width: 100px; height: 100px; cursor: pointer; border-radius: 12px; overflow: hidden; flex-shrink: 0;")
+            .WithView(logoControl)
+            .WithView(Controls.Html(
+                "<div style=\"position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; " +
+                "justify-content: center; opacity: 0; transition: opacity 0.2s; border-radius: 12px;\" " +
+                "onmouseover=\"this.style.opacity='1'\" onmouseout=\"this.style.opacity='0'\">" +
+                "<span style=\"color: white; font-size: 24px;\">&#x270F;</span></div>"))
+            .WithClickAction(ctx =>
+            {
+                MeshNodeLayoutAreas.OpenChangeIconDialog(ctx.Host, node, nodePath);
+            });
+
+        return wrapper;
     }
 
     private static string? GetNodeLogo(MeshNode? node)

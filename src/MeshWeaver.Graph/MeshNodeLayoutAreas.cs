@@ -249,6 +249,7 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Builds the header with icon and click-to-edit title.
+    /// When canEdit is true, the icon is clickable to open a file browser for uploading a new icon/photo.
     /// </summary>
     internal static UiControl BuildHeader(LayoutAreaHost host, MeshNode? node, bool canEdit = true)
     {
@@ -264,21 +265,35 @@ public static class MeshNodeLayoutAreas
         // Add icon/image if available
         if (!string.IsNullOrEmpty(iconValue))
         {
+            UiControl iconControl;
             if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
             {
-                titleContent = titleContent.WithView(Controls.Html(
-                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />"));
+                iconControl = Controls.Html(
+                    $"<img src=\"{iconValue}\" alt=\"\" class=\"header-icon-img\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {(iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover")};\" />");
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
-                titleContent = titleContent.WithView(Controls.Html(
-                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>"));
+                iconControl = Controls.Html(
+                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>");
             }
             else
             {
-                titleContent = titleContent.WithView(
-                    Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);"));
+                iconControl = Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);");
             }
+
+            if (canEdit)
+                iconControl = BuildEditableIcon(host, node, iconControl);
+
+            titleContent = titleContent.WithView(iconControl);
+        }
+        else if (canEdit)
+        {
+            // Show a placeholder icon that can be clicked to upload
+            var placeholderIcon = Controls.Html(
+                "<div style=\"width: 48px; height: 48px; border-radius: 8px; border: 2px dashed var(--neutral-stroke-rest); " +
+                "display: flex; align-items: center; justify-content: center; color: var(--neutral-foreground-hint); font-size: 20px; " +
+                "cursor: pointer;\" title=\"Click to set icon\">&#x1F4F7;</div>");
+            titleContent = titleContent.WithView(BuildEditableIcon(host, node, placeholderIcon));
         }
 
         // Check if content has Title property for click-to-edit
@@ -312,6 +327,95 @@ public static class MeshNodeLayoutAreas
 
 
     /// <summary>
+    /// Wraps an icon control with a hover overlay and click handler to open a dialog
+    /// for uploading a new icon/photo. The dialog shows a file browser for the "content" collection
+    /// and a text field to set the icon path. Upload a file, then set the path to link it.
+    /// </summary>
+    private static UiControl BuildEditableIcon(LayoutAreaHost host, MeshNode? node, UiControl iconControl)
+    {
+        var nodePath = node?.Path ?? host.Hub.Address.ToString();
+
+        // Wrap icon in a container with hover overlay
+        var wrapper = Controls.Stack
+            .WithStyle("position: relative; width: 48px; height: 48px; cursor: pointer; border-radius: 8px; overflow: hidden;")
+            .WithView(iconControl)
+            .WithView(Controls.Html(
+                "<div style=\"position: absolute; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; " +
+                "justify-content: center; opacity: 0; transition: opacity 0.2s; border-radius: 8px;\" " +
+                "onmouseover=\"this.style.opacity='1'\" onmouseout=\"this.style.opacity='0'\">" +
+                "<span style=\"color: white; font-size: 18px;\">&#x270F;</span></div>"))
+            .WithClickAction(ctx =>
+            {
+                OpenChangeIconDialog(ctx.Host, node, nodePath);
+            });
+
+        return wrapper;
+    }
+
+    /// <summary>
+    /// Opens a dialog to change the node's icon. Contains a file browser for uploading images
+    /// and a text field for setting the icon path. After uploading, the user enters the file path
+    /// and clicks Save to update the node's Icon.
+    /// Can be called from custom layout areas (e.g., Organization overview).
+    /// </summary>
+    public static void OpenChangeIconDialog(LayoutAreaHost host, MeshNode? node, string nodePath)
+    {
+        var iconDataId = $"changeIcon_{nodePath.Replace("/", "_")}";
+        host.UpdateData(iconDataId, new Dictionary<string, object?> { ["iconPath"] = node?.Icon ?? "" });
+
+        var content = Controls.Stack.WithStyle("gap: 16px; padding: 8px;");
+
+        // Instructions
+        content = content.WithView(Controls.Html(
+            "<p style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem; margin: 0;\">" +
+            "Upload an image using the file browser below, then enter or paste the file path and click Save.</p>"));
+
+        // Icon path text field
+        content = content.WithView(new TextFieldControl(new JsonPointerReference("iconPath"))
+        {
+            Label = "Icon Path",
+            Placeholder = "e.g., /static/storage/content/image.png",
+            Immediate = true,
+            DataContext = LayoutAreaReference.GetDataPointer(iconDataId)
+        });
+
+        // File browser for the content collection
+        content = content.WithView(new FileBrowserControl("content") { Path = "/" });
+
+        // Save button
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px; justify-content: flex-end;")
+            .WithView(Controls.Button("Save")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(ctx =>
+                {
+                    var iconPath = "";
+                    ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(iconDataId)
+                        .Take(1)
+                        .Subscribe(data => iconPath = data?.GetValueOrDefault("iconPath")?.ToString()?.Trim() ?? "");
+
+                    if (node != null && !string.IsNullOrEmpty(iconPath))
+                    {
+                        var updatedNode = node with { Icon = iconPath };
+                        ctx.Host.Hub.Post(
+                            new DataChangeRequest { ChangedBy = ctx.Host.Stream.ClientId }.WithUpdates(updatedNode),
+                            o => o.WithTarget(ctx.Host.Hub.Address));
+                    }
+
+                    // Close dialog
+                    ctx.Host.UpdateArea(DialogControl.DialogArea, null);
+                }));
+
+        var dialog = Controls.Dialog(content, "Change Icon")
+            .WithSize("L")
+            .WithClosable(true)
+            .WithActions(actions);
+
+        host.UpdateArea(DialogControl.DialogArea, dialog);
+    }
+
+    /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
     /// </summary>
     /// <param name="nodePath">The path of the node</param>
@@ -324,6 +428,44 @@ public static class MeshNodeLayoutAreas
         if (!string.IsNullOrEmpty(queryString))
             url += $"?{queryString}";
         return url;
+    }
+
+    /// <summary>
+    /// Returns the Edit menu item if the user has Update permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetEditMenuItem(string hubPath, string? nodeName, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Update))
+            return null;
+        var label = string.IsNullOrEmpty(nodeName) ? "Edit" : $"Edit {nodeName}";
+        return new(label, EditArea,
+            RequiredPermission: Permission.Update, Order: -10, Href: BuildUrl(hubPath, EditArea));
+    }
+
+    /// <summary>
+    /// Returns the Files menu item if the user has Read permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetFilesMenuItem(string hubPath, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Read))
+            return null;
+        return new("Files", FilesArea, Order: 25, Href: BuildUrl(hubPath, FilesArea));
+    }
+
+    /// <summary>
+    /// Returns the Threads menu item (always visible).
+    /// </summary>
+    public static NodeMenuItemDefinition GetThreadsMenuItem(string hubPath)
+        => new("Threads", ThreadsArea, Order: 50, Href: BuildUrl(hubPath, ThreadsArea));
+
+    /// <summary>
+    /// Returns the Settings menu item if the user has Read permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetSettingsMenuItem(string hubPath, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Read))
+            return null;
+        return new("Settings", SettingsArea, Order: 90, Href: BuildUrl(hubPath, SettingsArea));
     }
 
     /// <summary>
@@ -510,15 +652,18 @@ public static class MeshNodeLayoutAreas
                 var nodeTypePath = node.Path;
                 var hiddenQuery = $"namespace:{nodeTypePath}";
 
-                // Build create href with type restriction and optional namespace restrictions
+                // Build create href pre-populated with type and namespace from NodeTypeDefinition
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
-                // Route through the current hub; DefaultNamespace is passed to the Create form via the type definition
-                var createNs = !string.IsNullOrEmpty(nodeTypeDefinition?.DefaultNamespace)
-                    ? nodeTypeDefinition.DefaultNamespace
-                    : hubPath;
-                var createHref = $"/{createNs}/{CreateNodeArea}?types={Uri.EscapeDataString(nodeTypePath)}";
+                var defaultNs = nodeTypeDefinition?.DefaultNamespace;
+                var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
+
+                var createQs = $"type={Uri.EscapeDataString(nodeTypePath)}";
+                if (!string.IsNullOrEmpty(defaultNs))
+                    createQs += $"&namespace={Uri.EscapeDataString(defaultNs)}";
                 if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
-                    createHref += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
+                    createQs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
+
+                var createHref = $"/{createNs}/{CreateNodeArea}?{createQs}";
 
                 return (UiControl?)Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
@@ -532,6 +677,7 @@ public static class MeshNodeLayoutAreas
 
             // Instance node catalog - excludes satellite and search-excluded types
             var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} is:main context:search";
+            var instanceNs = node?.Namespace ?? hubPath;
 
             return Controls.MeshSearch
                 .WithHiddenQuery(instanceHiddenQuery)
@@ -540,7 +686,7 @@ public static class MeshNodeLayoutAreas
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3)
-                .WithCreateHref($"/{hubPath}/{CreateNodeArea}");
+                .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
         });
     }
 
@@ -565,7 +711,7 @@ public static class MeshNodeLayoutAreas
             .WithSectionCounts(true)
             .WithItemLimit(10)
             .WithCollapsibleSections(true)
-            .WithCreateHref($"/{hubPath}/{CreateNodeArea}");
+            .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(hubPath)}");
     }
 
     /// <summary>

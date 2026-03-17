@@ -17,6 +17,7 @@ using MeshWeaver.Blazor.Pages;
 using MeshWeaver.Blazor.Portal;
 using MeshWeaver.Blazor.Portal.Authentication;
 using MeshWeaver.Blazor.Portal.Chat;
+using MeshWeaver.Blazor.Portal.Components;
 using MeshWeaver.Blazor.Radzen;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Documentation;
@@ -308,8 +309,12 @@ public static class MemexConfiguration
                 {
                     if (contentStorageConfig == null)
                         return hub;
-                    // Storage collection is not editable (managed by the system)
-                    contentStorageConfig = contentStorageConfig with { IsEditable = false };
+                    // Storage collection: not directly editable, only used as backing store for mapped content
+                    contentStorageConfig = contentStorageConfig with
+                    {
+                        IsEditable = false,
+                        IsStatic = false
+                    };
                     return hub.AddContentCollection(_ => contentStorageConfig);
                 })
                 // Configure default views and content collections for each node hub
@@ -320,7 +325,9 @@ public static class MemexConfiguration
                     if (contentStorageConfig != null)
                     {
                         var nodePath = config.Address.ToString();
+                        // Register storage source on node hub so mapped collection can resolve it
                         config = config
+                            .AddContentCollection(_ => contentStorageConfig)
                             .MapContentCollection("content", contentStorageConfig.Name, $"content/{nodePath}");
                     }
 
@@ -341,6 +348,7 @@ public static class MemexConfiguration
                 .AddGoogleMaps()
                 .AddGraphViews()  // Also enables @ autocomplete in markdown editors
                 .AddChatViews()   // Register ThreadChatView
+                .AddUserProfileViews() // Register UserProfilePageView
             )
             .AddBlazor(layoutClient => layoutClient
                 .WithPortalConfiguration(c => c)

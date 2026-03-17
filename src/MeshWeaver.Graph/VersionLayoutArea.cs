@@ -6,6 +6,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +18,16 @@ namespace MeshWeaver.Graph;
 /// </summary>
 public static class VersionLayoutArea
 {
+    /// <summary>
+    /// Returns the Versions menu item if the user has Read permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Read))
+            return null;
+        return new("Versions", MeshNodeLayoutAreas.VersionsArea, Order: 55,
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.VersionsArea));
+    }
     /// <summary>
     /// Renders the Versions list showing all historical versions of the current node.
     /// Each row has version number, timestamp, and Compare/Restore buttons.

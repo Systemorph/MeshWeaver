@@ -42,7 +42,7 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
 
                 // Fast path: if the circuit already has a context for this virtual user, reuse it
                 // (avoids mesh call on every request — only needed once per circuit).
-                var existing = accessService.Context;
+                var existing = accessService.Context ?? accessService.CircuitContext;
                 if (existing is not null && existing.ObjectId == virtualUserId && existing.IsVirtual)
                 {
                     accessService.SetContext(existing);

@@ -88,7 +88,7 @@ public partial class CollaborativeMarkdownView
 
         // Resolve current user for comment metadata
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
-        CurrentAuthor = accessService?.Context?.Name ?? "";
+        CurrentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
 
         // Subscribe to value changes reactively so we re-process content
         // when the hub updates (e.g., after accept/reject)

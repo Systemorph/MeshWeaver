@@ -26,6 +26,22 @@ namespace MeshWeaver.Graph;
 public static class CreateLayoutArea
 {
     /// <summary>
+    /// Returns the Create menu item if the user has Create permission.
+    /// When on a NodeType definition page, passes the type as query parameter.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, MeshNode? node, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Create))
+            return null;
+
+        var createQs = node?.NodeType == MeshNode.NodeTypePath
+            ? $"type={Uri.EscapeDataString(hubPath)}"
+            : null;
+        return new("Create", MeshNodeLayoutAreas.CreateNodeArea,
+            RequiredPermission: Permission.Create, Order: 0,
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.CreateNodeArea, createQs));
+    }
+    /// <summary>
     /// Main entry point for the Create layout area.
     /// - If current node is Transient: shows Create editor (own content type).
     /// - Otherwise: shows unified Create New form with type autocomplete.
@@ -464,6 +480,11 @@ public static class CreateLayoutArea
         var typeOverride = host.GetQueryStringParamValue("type");
         if (!string.IsNullOrEmpty(typeOverride))
             defaultType = typeOverride;
+
+        // Override namespace from query string (e.g. Create?namespace=ACME/Marketing)
+        var namespaceOverride = host.GetQueryStringParamValue("namespace");
+        if (namespaceOverride != null)
+            defaultNamespace = namespaceOverride;
 
         // Parse restriction query params (e.g. ?types=X,Y&namespaces=A,B)
         // Note: namespaces param uses != null to distinguish "absent" from "empty value" (root)

@@ -254,7 +254,7 @@
 
         // Resolve current user for annotation metadata
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
-        CurrentAuthor = accessService?.Context?.Name ?? "";
+        CurrentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
 
         // Track changes is purely driven by the control's configuration (Suggest mode)
         TrackChangesActive = BoundTrackChangesEnabled;

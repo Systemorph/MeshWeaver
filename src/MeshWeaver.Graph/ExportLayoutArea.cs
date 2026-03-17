@@ -9,6 +9,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.Domain;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,18 @@ namespace MeshWeaver.Graph;
 public static class ExportLayoutArea
 {
     public const string ExportArea = "Export";
+
+    /// <summary>
+    /// Returns the Export menu item if the user has Read permission.
+    /// </summary>
+    public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
+    {
+        if (!perms.HasFlag(Permission.Read))
+            return null;
+        var label = string.IsNullOrEmpty(nodeName) ? "Export" : $"Export {nodeName}";
+        return new(label, MeshNodeLayoutAreas.ExportArea, Order: 26,
+            Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea));
+    }
 
     /// <summary>
     /// Layout area handler for the Export action.

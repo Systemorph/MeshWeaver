@@ -52,8 +52,10 @@ public record LayoutAreaHost : IDisposable
         var resolvedArea = isDefaultArea ? ResolveDefaultArea() : reference.Area!;
         var context = new RenderingContext(resolvedArea) { Layout = reference.Layout };
 
-        // Capture the AccessContext at construction time (inside message delivery pipeline)
-        // so it can be restored during deferred initialization
+        // Capture the delivery-scoped AccessContext (AsyncLocal only) at construction time.
+        // Context returns only the per-request AsyncLocal — it does NOT fall back to
+        // circuitContext, which would leak one user's identity to other users when
+        // the LayoutAreaHost is cached and reused across requests (e.g., in Orleans grains).
         var accessService = workspace.Hub.ServiceProvider.GetService<AccessService>();
         var capturedAccessContext = accessService?.Context;
 

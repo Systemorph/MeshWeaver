@@ -24,7 +24,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
         {
             // If the circuit already has a context for this same user, reuse it
             // (avoids mesh lookup on every request — only needed once per circuit).
-            var existing = userService.Context;
+            var existing = userService.Context ?? userService.CircuitContext;
             if (existing is not null && existing.Email == userContext.Email)
             {
                 userService.SetContext(existing);
