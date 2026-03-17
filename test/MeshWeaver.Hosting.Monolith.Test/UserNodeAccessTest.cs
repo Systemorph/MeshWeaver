@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Layout;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -134,6 +135,41 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
             "The owner should be able to read their own User node");
+    }
+
+    // === File upload permission tests ===
+
+    [Fact(Timeout = 10000)]
+    public async Task Visitor_CannotUploadFiles_ToUserNode()
+    {
+        // Bob should NOT have update permission on User/Alice
+        var permissions = await GetPermissionsAsync("User/Alice", "Bob");
+
+        permissions.HasFlag(Permission.Update).Should().BeFalse(
+            "Visitors should not have update permission on someone else's User node — " +
+            "the FileBrowserControl should be ReadOnly, hiding upload/delete buttons");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Visitor_CannotUploadFiles_ToOrganization()
+    {
+        // Bob should NOT have update permission on ACME (no access assignment)
+        var permissions = await GetPermissionsAsync("ACME", "Bob");
+
+        permissions.HasFlag(Permission.Update).Should().BeFalse(
+            "Users without explicit access should not have update permission on organizations — " +
+            "the FileBrowserControl should be ReadOnly");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task FileBrowserControl_HasReadOnly_WhenNoEditPermission()
+    {
+        // Verify that FileBrowserControl.ReadOnly property works correctly
+        var control = new FileBrowserControl("content");
+        control.ReadOnly.Should().BeFalse("Default should be editable");
+
+        var readOnlyControl = control.WithReadOnly();
+        readOnlyControl.ReadOnly.Should().BeTrue("WithReadOnly() should set ReadOnly to true");
     }
 
     // === Organization (Group) access tests ===
