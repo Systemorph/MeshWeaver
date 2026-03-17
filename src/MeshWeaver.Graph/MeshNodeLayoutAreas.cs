@@ -890,15 +890,25 @@ public static class MeshNodeLayoutAreas
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.Where(c => c.IsEditable).ToList();
 
+        // Try to get the "content" collection config directly (may exist even if GetAllCollectionConfigs filters it)
+        var contentConfig = contentService?.GetCollectionConfig("content");
+
         if (collections is not { Count: > 0 })
         {
-            stack = stack.WithView(new FileBrowserControl("content").WithReadOnly(readOnly));
+            var fb = new FileBrowserControl("content").WithReadOnly(readOnly);
+            if (contentConfig != null)
+                fb = fb.WithCollectionConfiguration(contentConfig).CreatePath();
+            stack = stack.WithView(fb);
             return stack;
         }
 
         if (collections.Count == 1)
         {
-            stack = stack.WithView(new FileBrowserControl(collections[0].Name).WithReadOnly(readOnly));
+            var fb = new FileBrowserControl(collections[0].Name).WithReadOnly(readOnly);
+            var cfg = contentService?.GetCollectionConfig(collections[0].Name);
+            if (cfg != null)
+                fb = fb.WithCollectionConfiguration(cfg).CreatePath();
+            stack = stack.WithView(fb);
             return stack;
         }
 
