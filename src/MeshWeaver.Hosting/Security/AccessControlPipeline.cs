@@ -40,7 +40,12 @@ public static class AccessControlPipeline
                 if (attr == null)
                     return await next.Invoke(delivery, ct);
 
-                var userId = accessService.Context?.ObjectId
+                // Read userId from the delivery's AccessContext first (source of truth),
+                // then fall back to AccessService (set by earlier pipeline steps or Blazor circuit).
+                // Our pipeline runs before UserServiceDeliveryPipeline in the chain,
+                // so accessService.Context may not be set yet.
+                var userId = delivery.AccessContext?.ObjectId
+                             ?? accessService.Context?.ObjectId
                              ?? accessService.CircuitContext?.ObjectId;
 
                 var hubPath = string.Join("/", hub.Address.Segments);

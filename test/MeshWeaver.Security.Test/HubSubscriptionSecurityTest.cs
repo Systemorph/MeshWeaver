@@ -32,6 +32,9 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
             .AddMeshNodes(new MeshNode("SecuredHub") { Name = "Secured Hub" })
             .ConfigureDefaultNodeHub(c => c.AddData(d => d));
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration).AddData(d => d);
+
     /// <summary>
     /// Skip PublicAdminAccess — security tests need granular permissions.
     /// </summary>
@@ -73,11 +76,7 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
             o => o.WithTarget(hubAddress),
             TestContext.Current.CancellationToken);
 
-        var subscriberHub = Mesh.ServiceProvider.CreateMessageHub(
-            new Address("subscriber", "1"),
-            c => c.AddData(d => d));
-
-        var workspace = subscriberHub.GetWorkspace();
+        var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<EntityStore>(hubAddress, new CollectionsReference("test"));
 
         var act = async () => await stream
