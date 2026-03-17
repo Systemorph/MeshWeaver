@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.AI;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
@@ -29,11 +30,11 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // First configure base (adds persistence), then add Row-Level Security
-        // RLS must be added after persistence so it can decorate IMeshStorage
-        var configured = ConfigureMeshBase(builder).AddRowLevelSecurity();
+        // ConfigureMeshBase adds persistence + RLS + graph
+        var configured = ConfigureMeshBase(builder)
+            .AddThreadType();
 
-        // Register additional node types as MeshNodes (Comment and Thread are already registered by AddGraph())
+        // Register additional node types
         configured.AddMeshNodes(
             new MeshNode("secure") { Name = "Secure Type" }
         );

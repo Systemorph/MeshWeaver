@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
@@ -7,6 +8,7 @@ namespace MeshWeaver.Mesh;
 /// The node will be created with Transient state until the hub confirms.
 /// </summary>
 /// <param name="Node">The MeshNode to create</param>
+[RequiresPermission(Permission.Create)]
 public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>
 {
     /// <summary>
@@ -83,6 +85,7 @@ public enum NodeCreationRejectionReason
 /// Request to delete a MeshNode from the catalog.
 /// </summary>
 /// <param name="Path">The path of the node to delete</param>
+[RequiresPermission(Permission.Delete)]
 public record DeleteNodeRequest(string Path) : IRequest<DeleteNodeResponse>
 {
     /// <summary>
@@ -163,6 +166,7 @@ public enum NodeDeletionRejectionReason
 /// Request to update an existing MeshNode in the catalog.
 /// </summary>
 /// <param name="Node">The updated MeshNode data</param>
+[RequiresPermission(Permission.Update)]
 public record UpdateNodeRequest(MeshNode Node) : IRequest<UpdateNodeResponse>
 {
     /// <summary>
@@ -237,10 +241,39 @@ public enum NodeUpdateRejectionReason
 
 /// <summary>
 /// Request to move a MeshNode to a new path.
+/// Requires Delete permission on the source namespace and Create permission on the target namespace.
 /// </summary>
 /// <param name="SourcePath">The current path of the node</param>
 /// <param name="TargetPath">The new path for the node</param>
+[MoveNodePermission]
 public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<MoveNodeResponse>;
+
+/// <summary>
+/// Custom permission attribute for MoveNodeRequest.
+/// Checks Delete on source namespace and Create on target namespace.
+/// </summary>
+public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
+{
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        if (delivery.Message is MoveNodeRequest move)
+        {
+            yield return (GetNamespace(move.SourcePath), Permission.Delete);
+            yield return (GetNamespace(move.TargetPath), Permission.Create);
+        }
+        else
+        {
+            yield return (hubPath, Permission.Update);
+        }
+    }
+
+    private static string GetNamespace(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash > 0 ? path[..lastSlash] : path;
+    }
+}
 
 /// <summary>
 /// Response for node move request.

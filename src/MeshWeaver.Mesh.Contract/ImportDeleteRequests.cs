@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
@@ -7,6 +8,7 @@ namespace MeshWeaver.Mesh;
 /// </summary>
 /// <param name="SourcePath">Server-side source directory path</param>
 /// <param name="TargetPath">Target root path in the mesh</param>
+[RequiresPermission(Permission.Create)]
 public record ImportNodesRequest(string SourcePath, string TargetPath) : IRequest<ImportNodesResponse>
 {
     /// <summary>
@@ -58,6 +60,7 @@ public record ImportNodesResponse
 /// <param name="CollectionName">Name of the content collection</param>
 /// <param name="SourcePath">Server-side source directory path</param>
 /// <param name="TargetPath">Target folder path within the collection</param>
+[RequiresPermission(Permission.Create)]
 public record ImportContentRequest(string CollectionName, string SourcePath, string TargetPath) : IRequest<ImportContentResponse>;
 
 /// <summary>
@@ -83,6 +86,7 @@ public record ImportContentResponse
 /// </summary>
 /// <param name="CollectionName">Name of the content collection</param>
 /// <param name="FolderPath">Folder path to delete within the collection</param>
+[RequiresPermission(Permission.Delete)]
 public record DeleteContentRequest(string CollectionName, string FolderPath) : IRequest<DeleteContentResponse>;
 
 /// <summary>

@@ -81,10 +81,11 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     [Fact(Timeout = 5000)]
-    public async Task Menu_NoRoles_ShowsOnlyUnrestrictedItems()
+    public async Task Menu_NoRoles_SubscriptionDenied()
     {
         // With RLS enabled but no roles seeded, user has Permission.None.
-        // Only items with Permission.None requirement should appear.
+        // The AccessControlPipeline blocks SubscribeRequest (requires Read),
+        // so the stream receives a DeliveryFailure.
         var client = GetClientWithUser();
         var nodeAddress = new Address(NodePath);
 
@@ -95,15 +96,10 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = await FetchMenuItemsAsync(client, nodeAddress);
-
-        Output.WriteLine($"Menu items returned: {items.Count}");
-        foreach (var item in items)
-            Output.WriteLine($"  {item.Label} (Area={item.Area}, Permission={item.RequiredPermission})");
-
-        items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Threads"],
-            "no roles assigned — only unrestricted items should appear; Settings requires Read");
+        var act = () => FetchMenuItemsAsync(client, nodeAddress);
+        var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
+        ex.Message.Should().Contain("Access denied",
+            "user with no roles should be denied Read access on the hub");
     }
 
     [Fact(Timeout = 5000)]

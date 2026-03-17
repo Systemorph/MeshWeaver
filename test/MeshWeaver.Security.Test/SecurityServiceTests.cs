@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.AI;
 using MeshWeaver.Documentation;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
@@ -779,6 +780,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
     {
         return ConfigureMeshBase(builder)
             .AddDocumentation()
+            .AddAgentType()
             .AddRowLevelSecurity();
     }
 
