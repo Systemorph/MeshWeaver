@@ -117,4 +117,31 @@ public class FileContentProvider : IFileContentProvider
             return FileOperationResult.Fail($"Error deleting file '{filePath}' from collection '{collectionName}': {ex.Message}");
         }
     }
+
+    public async Task<CollectionListingResult> ListCollectionItemsAsync(
+        string collectionName,
+        string path,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var collection = await contentService.GetCollectionAsync(collectionName, ct);
+            if (collection == null)
+                return CollectionListingResult.Fail($"Content collection '{collectionName}' not found");
+
+            var items = await collection.GetCollectionItemsAsync(path);
+            var result = items.Select(item => new CollectionItemInfo(
+                item.Path,
+                item.Name,
+                item is FolderItem,
+                item is FileItem fileItem ? fileItem.LastModified : null
+            )).ToArray();
+
+            return CollectionListingResult.Ok(result);
+        }
+        catch (Exception ex)
+        {
+            return CollectionListingResult.Fail($"Error listing collection '{collectionName}' at path '{path}': {ex.Message}");
+        }
+    }
 }

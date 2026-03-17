@@ -1002,9 +1002,9 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
 
-            // act - content:TestFiles/ lists the named collection root (trailing slash = browse)
+            // act - content:TestFiles lists the named collection (folder, not a file)
             var response = await client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("content:TestFiles/")),
+                new GetDataRequest(new UnifiedReference("content:TestFiles")),
                 o => o.WithTarget(CreateHostAddress()),
                 TestContext.Current.CancellationToken);
 
@@ -1013,7 +1013,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             dataResponse.Error.Should().BeNull();
             dataResponse.Data.Should().NotBeNull();
 
-            var items = dataResponse.Data as IReadOnlyCollection<ContentCollections.CollectionItem>;
+            var items = dataResponse.Data as IReadOnlyCollection<CollectionItemInfo>;
             items.Should().NotBeNull();
             items.Should().Contain(i => i.Name == "readme.md");
             items.Should().Contain(i => i.Name == "data.json");
@@ -1042,9 +1042,9 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             var host = GetHostWithFileProvider(testDir);
             var client = GetClient();
 
-            // act - content:TestFiles/images/ lists the subfolder (trailing slash = browse)
+            // act - content:TestFiles/images resolves to a folder, lists its contents
             var response = await client.AwaitResponse(
-                new GetDataRequest(new UnifiedReference("content:TestFiles/images/")),
+                new GetDataRequest(new UnifiedReference("content:TestFiles/images")),
                 o => o.WithTarget(CreateHostAddress()),
                 TestContext.Current.CancellationToken);
 
@@ -1053,7 +1053,7 @@ public class UnifiedContentAccessTest(ITestOutputHelper output) : HubTestBase(ou
             dataResponse.Error.Should().BeNull();
             dataResponse.Data.Should().NotBeNull();
 
-            var items = dataResponse.Data as IReadOnlyCollection<ContentCollections.CollectionItem>;
+            var items = dataResponse.Data as IReadOnlyCollection<CollectionItemInfo>;
             items.Should().NotBeNull();
             items.Should().Contain(i => i.Name == "logo.svg");
             items.Should().Contain(i => i.Name == "banner.png");

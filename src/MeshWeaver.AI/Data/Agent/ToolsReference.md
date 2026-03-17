@@ -345,29 +345,26 @@ When you need to work with files in a content collection, follow this sequence:
 
 1. **Discover collections**: `Get('@path/collection:')` — lists all available collection configs (names, types, editability)
 2. **List files in collection root**: `Get('@path/content:')` — returns files and folders in the default "content" collection root
-3. **List files in a named collection**: `Get('@path/content:collectionName/')` — returns files and folders in the named collection root (note the trailing `/`)
-4. **List files in a subfolder**: `Get('@path/content:collectionName/subfolder/')` — returns files and folders in a subfolder (note the trailing `/`)
+3. **List files in a named collection**: `Get('@path/content:collectionName')` — returns files and folders in the named collection root
+4. **Browse a subfolder**: `Get('@path/content:collectionName/subfolder')` — if "subfolder" is a folder, returns its files and folders
 5. **Download a specific file**: `Get('@path/content:filename.md')` — downloads the file from the default "content" collection
 6. **Download from a named collection**: `Get('@path/content:collectionName/filename.md')` — downloads the file from the named collection
 
-**Key rule**: A trailing `/` means "list contents" (browse). No trailing `/` means "download file".
+The system automatically detects whether a path refers to a file or folder. Files are downloaded, folders are listed. Each item in a listing has `name`, `path`, `isFolder`, and `lastModified` (for files).
 
 ### Examples
 
 ```
 Get('@ACME/collection:')                    -- List all collection configs
 Get('@ACME/content:')                       -- List files/folders in default "content" collection
-Get('@ACME/content:attachments/')           -- List files/folders in "attachments" collection root
-Get('@ACME/content:attachments/reports/')   -- List files in "attachments/reports" subfolder
+Get('@ACME/content:attachments')            -- List files/folders in "attachments" collection root
+Get('@ACME/content:attachments/reports')    -- List files in "attachments/reports" subfolder
 Get('@ACME/content:readme.md')             -- Download readme.md from default "content" collection
 Get('@ACME/content:attachments/report.pdf') -- Download report.pdf from "attachments" collection
 Get('@Doc/Architecture/content:diagram.svg') -- Download from doc node's collection
 ```
 
-The format is: `@{address}/content:{collectionOrFile}` where `{collectionOrFile}` is either:
-- A file path (downloads the file from default collection)
-- `collectionName/filePath` (downloads from named collection)
-- Empty or ending with `/` (lists files and folders)
+The format is: `@{address}/content:{path}` where the path is automatically resolved as file (download) or folder (list contents).
 
 ### Embedding Content Files
 
