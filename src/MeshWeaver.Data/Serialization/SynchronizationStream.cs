@@ -393,6 +393,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public string StreamId { get; } = Guid.NewGuid().AsString();
     public string ClientId => Configuration.ClientId;
+    public string? Identity { get; init; }
 
 
     internal StreamConfiguration<TStream> Configuration { get; }

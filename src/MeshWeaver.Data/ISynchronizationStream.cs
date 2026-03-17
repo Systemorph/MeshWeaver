@@ -10,6 +10,13 @@ public interface ISynchronizationStream : IDisposable
     string StreamId { get; }
     string ClientId { get; }
 
+    /// <summary>
+    /// The identity (mesh node) that owns this stream.
+    /// For user-facing streams, this is the user ID.
+    /// For hub-to-hub streams, this is the hub address.
+    /// </summary>
+    string? Identity { get; }
+
     StreamIdentity StreamIdentity { get; }
     internal IMessageDelivery DeliverMessage(IMessageDelivery delivery);
     void RegisterForDisposal(IDisposable disposable);

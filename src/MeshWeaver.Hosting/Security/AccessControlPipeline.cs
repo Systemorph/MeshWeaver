@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,13 +41,7 @@ public static class AccessControlPipeline
                 if (attr == null)
                     return await next.Invoke(delivery, ct);
 
-                // Read userId from the delivery's AccessContext first (source of truth),
-                // then fall back to AccessService (set by earlier pipeline steps or Blazor circuit).
-                // Our pipeline runs before UserServiceDeliveryPipeline in the chain,
-                // so accessService.Context may not be set yet.
-                var userId = delivery.AccessContext?.ObjectId
-                             ?? accessService.Context?.ObjectId
-                             ?? accessService.CircuitContext?.ObjectId;
+                var userId = ResolveIdentity(delivery, accessService);
 
                 var hubPath = string.Join("/", hub.Address.Segments);
 
@@ -77,6 +72,33 @@ public static class AccessControlPipeline
                 return await next.Invoke(delivery, ct);
             });
         });
+
+    /// <summary>
+    /// Resolves the user identity from multiple sources in priority order:
+    /// 1. delivery.AccessContext — stamped by the sender's PostPipeline
+    /// 2. SubscribeRequest.Identity — explicit identity on the subscription (survives Orleans routing)
+    /// 3. accessService.Context — set by UserServiceDeliveryPipeline (may not be set yet)
+    /// 4. accessService.CircuitContext — Blazor circuit (monolith only)
+    /// </summary>
+    private static string? ResolveIdentity(IMessageDelivery delivery, AccessService accessService)
+    {
+        // 1. Delivery AccessContext (source of truth from sender)
+        var userId = delivery.AccessContext?.ObjectId;
+        if (!string.IsNullOrEmpty(userId))
+            return userId;
+
+        // 2. Explicit identity on SubscribeRequest (survives Orleans serialization)
+        if (delivery.Message is SubscribeRequest sub && !string.IsNullOrEmpty(sub.Identity))
+            return sub.Identity;
+
+        // 3. AccessService context (set by earlier pipeline steps)
+        userId = accessService.Context?.ObjectId;
+        if (!string.IsNullOrEmpty(userId))
+            return userId;
+
+        // 4. Blazor circuit context (monolith only)
+        return accessService.CircuitContext?.ObjectId;
+    }
 
     private static RequiresPermissionAttribute? GetAttribute(Type messageType)
         => AttributeCache.GetOrAdd(messageType, static type =>

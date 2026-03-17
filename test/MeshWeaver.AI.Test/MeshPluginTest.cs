@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.AI.Persistence;
+using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith;
@@ -31,8 +32,20 @@ namespace MeshWeaver.AI.Test;
 public class MeshPluginTest : MonolithMeshTestBase
 {
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
+    private static readonly string ContentTestPath = Path.Combine(Path.GetTempPath(), "MeshPluginTest_Content");
 
-    public MeshPluginTest(ITestOutputHelper output) : base(output) { }
+    public MeshPluginTest(ITestOutputHelper output) : base(output)
+    {
+        // Set up test content directory with sample files
+        if (Directory.Exists(ContentTestPath))
+            Directory.Delete(ContentTestPath, true);
+        Directory.CreateDirectory(ContentTestPath);
+        File.WriteAllText(Path.Combine(ContentTestPath, "readme.md"), "# Hello\nThis is a test file.");
+        File.WriteAllText(Path.Combine(ContentTestPath, "data.json"), "{\"key\": \"value\"}");
+        var subDir = Path.Combine(ContentTestPath, "images");
+        Directory.CreateDirectory(subDir);
+        File.WriteAllText(Path.Combine(subDir, "logo.svg"), "<svg></svg>");
+    }
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
@@ -46,7 +59,9 @@ public class MeshPluginTest : MonolithMeshTestBase
             })
             .AddGraph()
             .AddAI()
-            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+            .ConfigureDefaultNodeHub(config => config
+                .AddDefaultLayoutAreas()
+                .AddFileSystemContentCollection("test-content", _ => ContentTestPath));
     }
 
     #region CreateTools / CreateAllTools
@@ -563,6 +578,142 @@ public class MeshPluginTest : MonolithMeshTestBase
         // which does NOT contain create/update/delete
         navigator.AgentConfiguration!.Description.Should().NotContain("create");
         navigator.AgentConfiguration!.Description.Should().NotContain("delete");
+    }
+
+    #endregion
+
+    #region Content Collections
+
+    /// <summary>
+    /// Gets the ACME node hub which has content collections configured via ConfigureDefaultNodeHub.
+    /// </summary>
+    private IMessageHub GetAcmeHub() => Mesh.GetHostedHub(new Address("ACME"));
+
+    [Fact]
+    public async Task Get_CollectionConfigs_ReturnsAvailableCollections()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        // collection: prefix should return all collection configs
+        var result = await plugin.Get("@ACME/collection:");
+
+        result.Should().NotBeNullOrEmpty();
+        result.Should().NotStartWith("Error");
+        result.Should().NotStartWith("Not found");
+
+        // Should contain our test-content collection
+        result.Should().Contain("test-content");
+    }
+
+    [Fact]
+    public async Task Get_ContentFile_ReturnsFileContent()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        // content: prefix with file path should return file content
+        var result = await plugin.Get("@ACME/test-content:readme.md");
+
+        result.Should().NotBeNullOrEmpty();
+        result.Should().NotStartWith("Error");
+        result.Should().Contain("Hello");
+        result.Should().Contain("test file");
+    }
+
+    [Fact]
+    public async Task Get_ContentFileInSubfolder_ReturnsFileContent()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        // content: prefix with subfolder path
+        var result = await plugin.Get("@ACME/test-content:images/logo.svg");
+
+        result.Should().NotBeNullOrEmpty();
+        result.Should().NotStartWith("Error");
+        result.Should().Contain("svg");
+    }
+
+    [Fact]
+    public async Task Get_ContentFileNotFound_ReturnsError()
+    {
+        var mockChat = new MockAgentChat();
+        var plugin = new MeshPlugin(Mesh, mockChat);
+
+        var result = await plugin.Get("@ACME/test-content:nonexistent.txt");
+
+        result.Should().Contain("not found");
+    }
+
+    [Fact]
+    public void ContentService_ListsCollectionConfigs()
+    {
+        var hub = GetAcmeHub();
+        var contentService = hub.ServiceProvider.GetService<IContentService>();
+        contentService.Should().NotBeNull("IContentService should be registered on node hub");
+
+        var configs = contentService!.GetAllCollectionConfigs();
+        configs.Should().Contain(c => c.Name == "test-content",
+            "test-content collection should be registered");
+    }
+
+    [Fact]
+    public async Task ContentService_BrowseRootFiles()
+    {
+        var hub = GetAcmeHub();
+        var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("test-content");
+        collection.Should().NotBeNull();
+
+        var files = await collection!.GetFilesAsync("/");
+        files.Should().Contain(f => f.Name == "readme.md");
+        files.Should().Contain(f => f.Name == "data.json");
+    }
+
+    [Fact]
+    public async Task ContentService_BrowseFolders()
+    {
+        var hub = GetAcmeHub();
+        var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("test-content");
+        collection.Should().NotBeNull();
+
+        var folders = await collection!.GetFoldersAsync("/");
+        folders.Should().Contain(f => f.Name == "images");
+    }
+
+    [Fact]
+    public async Task ContentService_BrowseSubfolderFiles()
+    {
+        var hub = GetAcmeHub();
+        var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("test-content");
+        collection.Should().NotBeNull();
+
+        var files = await collection!.GetFilesAsync("/images");
+        files.Should().Contain(f => f.Name == "logo.svg");
+    }
+
+    [Fact]
+    public async Task ContentService_UploadAndBrowse()
+    {
+        var hub = GetAcmeHub();
+        var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
+        var collection = await contentService.GetCollectionAsync("test-content");
+        collection.Should().NotBeNull();
+
+        // Upload a new file
+        var content = "uploaded content"u8.ToArray();
+        using var stream = new MemoryStream(content);
+        await collection!.SaveFileAsync("/", "uploaded.txt", stream);
+
+        // Verify it shows up in browsing
+        var files = await collection.GetFilesAsync("/");
+        files.Should().Contain(f => f.Name == "uploaded.txt");
+
+        // Clean up
+        await collection.DeleteFileAsync("/uploaded.txt");
     }
 
     #endregion

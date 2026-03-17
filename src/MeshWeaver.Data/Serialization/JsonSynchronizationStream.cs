@@ -85,7 +85,9 @@ public static class JsonSynchronizationStream
             );
 
 
-        reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference),
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var identity = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+        reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
             o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner));
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(

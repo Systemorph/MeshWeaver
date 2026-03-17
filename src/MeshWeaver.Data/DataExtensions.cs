@@ -488,9 +488,18 @@ public static class DataExtensions
             return request.Processed();
         }
 
+        // Persist the subscriber's identity on the hub so that sub-hubs (e.g., thread streaming)
+        // and async view execution run under the correct user context.
+        var identity = request.Message.Identity ?? request.AccessContext?.ObjectId;
+        if (!string.IsNullOrEmpty(identity))
+        {
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            accessService?.SetCircuitContext(new AccessContext { ObjectId = identity, Name = identity });
+        }
+
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
-        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
-            request.Sender, hub.Address);
+        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}, identity={Identity}",
+            request.Sender, hub.Address, identity);
         return request.Processed();
     }
 
