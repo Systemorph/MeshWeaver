@@ -44,6 +44,46 @@ public interface IFileContentProvider
         string collectionName,
         string filePath,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Lists files and folders in a content collection path.
+    /// </summary>
+    /// <param name="collectionName">The name of the content collection</param>
+    /// <param name="path">The path within the collection (use "/" for root)</param>
+    /// <param name="ct">Cancellation token</param>
+    Task<CollectionListingResult> ListCollectionItemsAsync(
+        string collectionName,
+        string path,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Represents an item in a content collection listing (file or folder).
+/// </summary>
+public record CollectionItemInfo(string Path, string Name, bool IsFolder, DateTime? LastModified = null);
+
+/// <summary>
+/// Result of a collection listing operation.
+/// </summary>
+public record CollectionListingResult
+{
+    /// <summary>
+    /// The items in the collection path.
+    /// </summary>
+    public IReadOnlyCollection<CollectionItemInfo>? Items { get; init; }
+
+    /// <summary>
+    /// Error message if the listing failed.
+    /// </summary>
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// True if the listing was successful.
+    /// </summary>
+    public bool Success => Error == null && Items != null;
+
+    public static CollectionListingResult Ok(IReadOnlyCollection<CollectionItemInfo> items) => new() { Items = items };
+    public static CollectionListingResult Fail(string error) => new() { Error = error };
 }
 
 /// <summary>
