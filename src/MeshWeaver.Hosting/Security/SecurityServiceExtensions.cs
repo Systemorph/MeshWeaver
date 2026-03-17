@@ -18,7 +18,7 @@ public static class SecurityServiceExtensions
     /// This includes:
     /// - ISecurityService for permission evaluation (uses unsecured IStorageService directly)
     /// - RlsNodeValidator for enforcing permissions on CRUD operations
-    /// - ISubscriptionAccessChecker for read access checks on SubscribeRequests
+    /// - AccessControlPipeline for checking RequiresPermissionAttribute on incoming messages
     /// - PersistenceService handles secure query filtering via ISecurityService (implements IMeshStorage)
     ///
     /// Storage structure:
@@ -37,11 +37,8 @@ public static class SecurityServiceExtensions
                 // Register RLS validator
                 services.AddSingleton<INodeValidator, RlsNodeValidator>();
 
-                // Note: No ISubscriptionAccessChecker registration — DeliveryFailure for rejected
-                // subscriptions does not propagate to Observable streams. Individual layout views
-                // handle permission checks instead (Overview shows "Access Denied", Menu filters items).
-
                 return services;
-            });
+            })
+            .ConfigureDefaultNodeHub(c => c.AddAccessControlPipeline());
     }
 }

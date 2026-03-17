@@ -34,7 +34,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
     {
         // No PublicAdminAccess — use ConfigureMeshBase for real RLS enforcement
         return ConfigureMeshBase(builder)
-            .AddRowLevelSecurity();
+            .AddThreadType();
     }
 
     /// <summary>

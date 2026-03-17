@@ -469,6 +469,100 @@ sequenceDiagram
     Mesh-->>Portal: CreateNodeResponse(Success)
 ```
 
+# Message-Level Permission Enforcement
+
+## RequiresPermissionAttribute
+
+Message types can declare the permission they require via `[RequiresPermission]`. When a message arrives at a node hub with the `AccessControlPipeline` enabled, the pipeline checks whether the sender has the required permission on the hub's path. If denied, a `DeliveryFailure` with `ErrorType.Unauthorized` is returned.
+
+```csharp
+// Simple: single permission on the hub path
+[RequiresPermission(Permission.Read)]
+public record SubscribeRequest(...);
+
+[RequiresPermission(Permission.Create)]
+public record CreateNodeRequest(...);
+
+[RequiresPermission(Permission.Update)]
+public record DataChangeRequest(...);
+```
+
+### Built-in Annotated Messages
+
+| Message | Required Permission |
+|---------|-------------------|
+| `SubscribeRequest` | Read |
+| `GetDataRequest` | Read |
+| `CreateNodeRequest` | Create |
+| `ImportNodesRequest` | Create |
+| `ImportContentRequest` | Create |
+| `UpdateNodeRequest` | Update |
+| `DataChangeRequest` | Update |
+| `UndoActivityRequest` | Update |
+| `RollbackNodeRequest` | Update |
+| `UpdateUnifiedReferenceRequest` | Update |
+| `DeleteNodeRequest` | Delete |
+| `DeleteContentRequest` | Delete |
+| `DeleteUnifiedReferenceRequest` | Delete |
+| `MoveNodeRequest` | Custom (see below) |
+
+### Custom Permission Checks
+
+For messages that need non-trivial authorization logic, inherit from `RequiresPermissionAttribute` and override `GetPermissionChecks`. The method receives the `IMessageDelivery` and the hub path, and returns multiple `(path, permission)` pairs — all must pass.
+
+```csharp
+// MoveNodeRequest needs Delete on source + Create on target
+[MoveNodePermission]
+public record MoveNodeRequest(string SourcePath, string TargetPath);
+
+public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
+{
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        if (delivery.Message is MoveNodeRequest move)
+        {
+            yield return (GetNamespace(move.SourcePath), Permission.Delete);
+            yield return (GetNamespace(move.TargetPath), Permission.Create);
+        }
+        else
+        {
+            yield return (hubPath, Permission.Update);
+        }
+    }
+
+    private static string GetNamespace(string path)
+    {
+        var lastSlash = path.LastIndexOf('/');
+        return lastSlash > 0 ? path[..lastSlash] : path;
+    }
+}
+```
+
+### Extending with Custom Permissions
+
+The `Permission` enum uses `[Flags]` with bits 1–32 reserved for built-in permissions. Custom permissions use higher bits:
+
+```csharp
+const Permission Approve = (Permission)64;
+const Permission Publish = (Permission)128;
+
+// Custom message requiring Approve permission
+[RequiresPermission((Permission)64)]
+public record ApproveDocumentRequest(string Path);
+```
+
+## AccessControlPipeline
+
+The `AccessControlPipeline` is a delivery pipeline step registered by `AddRowLevelSecurity()` on all default node hubs. It runs before the message handler and:
+
+1. Reads the `RequiresPermissionAttribute` from the message type (cached per type)
+2. Calls `GetPermissionChecks()` to get the list of `(path, permission)` pairs
+3. Checks each pair against `ISecurityService.HasPermissionAsync()`
+4. If any check fails → sends `DeliveryFailure(ErrorType.Unauthorized)` back to sender
+
+Messages without `[RequiresPermission]` pass through unchecked. System messages (`PingRequest`, `InitializeHubRequest`, etc.) are not annotated and are always allowed.
+
 # Configuration
 
 Enable row-level security in your mesh configuration:

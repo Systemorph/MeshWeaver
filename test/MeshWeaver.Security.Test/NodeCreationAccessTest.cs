@@ -30,10 +30,9 @@ public class NodeCreationAccessTest(ITestOutputHelper output) : MonolithMeshTest
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        // Add Row-Level Security for access control testing
-        // Add graph configuration to register NodeTypes like "Markdown"
+        // ConfigureMeshBase adds RLS + graph (incl. Markdown)
         return ConfigureMeshBase(builder)
-            .AddRowLevelSecurity();
+            .AddThreadType();
     }
 
     /// <summary>

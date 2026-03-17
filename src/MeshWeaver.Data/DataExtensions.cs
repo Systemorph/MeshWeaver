@@ -488,26 +488,6 @@ public static class DataExtensions
             return request.Processed();
         }
 
-        // Check hub-level read permission via ISubscriptionAccessChecker (registered by AddRowLevelSecurity)
-        var accessChecker = hub.ServiceProvider.GetService<ISubscriptionAccessChecker>();
-        if (accessChecker != null)
-        {
-            var hubPath = hub.Address.ToString();
-            var (allowed, errorMessage) = await accessChecker.CheckReadAccessAsync(hubPath, ct);
-            if (!allowed)
-            {
-                logger?.LogWarning("HandleSubscribeRequest: Read access denied at hub {Hub}: {Error}",
-                    hubPath, errorMessage);
-                hub.Post(new DeliveryFailure(request)
-                    {
-                        ErrorType = ErrorType.Unauthorized,
-                        Message = $"Access denied: {errorMessage}"
-                    },
-                    o => o.ResponseFor(request));
-                return request.Processed();
-            }
-        }
-
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
         logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
             request.Sender, hub.Address);

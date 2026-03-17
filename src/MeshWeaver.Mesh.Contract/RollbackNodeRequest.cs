@@ -1,4 +1,5 @@
 using MeshWeaver.Data;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Mesh;
@@ -7,4 +8,5 @@ namespace MeshWeaver.Mesh;
 /// Rolls back a single node to a specific historical version.
 /// The node is saved with a new higher version number (content = old state).
 /// </summary>
+[RequiresPermission(Permission.Update)]
 public record RollbackNodeRequest(string Path, long TargetVersion) : IRequest<DataChangeResponse>;

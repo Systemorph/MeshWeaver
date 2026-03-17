@@ -23,6 +23,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
 {
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
+            .AddOrganizationType()
             .AddMeshNodes(
                 new MeshNode("Roland", "User")
                 {

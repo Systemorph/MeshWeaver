@@ -17,11 +17,10 @@ namespace MeshWeaver.Security.Test;
 
 /// <summary>
 /// Tests that RLS correctly denies read access for unauthorized users
-/// and grants it for authorized users at the permission-evaluation level.
-///
-/// Note: ISubscriptionAccessChecker is not registered because DeliveryFailure
-/// for rejected SubscribeRequests does not propagate to Observable streams.
-/// Access control is enforced at the individual layout/view level instead.
+/// and grants it for authorized users at the subscription level.
+/// SubscribeRequest is marked with [RequiresPermission(Permission.Read)] and the
+/// AccessControlPipeline (registered by AddRowLevelSecurity) checks permissions
+/// before the message reaches the handler.
 /// </summary>
 public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -54,14 +53,18 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
     }
 
     /// <summary>
-    /// With read access granted, the user should have at least Read permission.
-    /// The subscription stream error is about unmapped collections, not about access —
-    /// proving the access check would pass.
+    /// With read access granted, the subscription should pass the access check.
+    /// The stream error is about unmapped collections, not about access denial.
     /// </summary>
     [Fact(Timeout = 20000)]
     public async Task Subscription_WithReadAccess_PassesAccessCheck()
     {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
         var hubAddress = new Address("SecuredHub");
+
+        // Grant Read access to the admin user on SecuredHub
+        await securityService.AddUserRoleAsync(
+            TestUsers.Admin.ObjectId, "Viewer", "SecuredHub", "system", TestTimeout);
 
         // Ensure hub is started
         var client = GetClient();
@@ -70,7 +73,6 @@ public class HubSubscriptionSecurityTest(ITestOutputHelper output) : MonolithMes
             o => o.WithTarget(hubAddress),
             TestContext.Current.CancellationToken);
 
-        // Default admin user (Roland with Admin role) has access via claim-based roles
         var subscriberHub = Mesh.ServiceProvider.CreateMessageHub(
             new Address("subscriber", "1"),
             c => c.AddData(d => d));

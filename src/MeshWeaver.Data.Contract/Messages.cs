@@ -1,7 +1,9 @@
-﻿using MeshWeaver.Messaging;
+﻿using MeshWeaver.Mesh.Security;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
+[RequiresPermission(Permission.Update)]
 public record DataChangeRequest
     : IRequest<DataChangeResponse>
 {
@@ -77,6 +79,7 @@ public record PatchDataChangeRequest(
     string? ChangedBy
 ) : JsonChange(StreamId, Version, Change, ChangeType, ChangedBy);
 
+[RequiresPermission(Permission.Read)]
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>
 {
     public Address Subscriber { get; init; } = null!;
@@ -91,6 +94,7 @@ public record UnsubscribeRequest(string StreamId) : StreamMessage(StreamId);
 /// Request to get data by reference (collection or entity), similar to SubscribeRequest but for one-time data retrieval
 /// </summary>
 /// <param name="Reference">The workspace reference to retrieve data for</param>
+[RequiresPermission(Permission.Read)]
 public record GetDataRequest(WorkspaceReference Reference) : IRequest<GetDataResponse>;
 
 /// <summary>
@@ -112,6 +116,7 @@ public record GetDataResponse(object? Data, long Version)
 /// </summary>
 /// <param name="Path">The unified reference path (e.g., data:pricing/id/Collection/entityId, content:collection/file.txt, area:Overview)</param>
 /// <param name="Content">The content to update</param>
+[RequiresPermission(Permission.Update)]
 public record UpdateUnifiedReferenceRequest(string Path, object Content) : IRequest<UpdateUnifiedReferenceResponse>
 {
     public string? ChangedBy { get; init; }
@@ -134,6 +139,7 @@ public record UpdateUnifiedReferenceResponse(long Version)
 /// Supports data:, content:, and area: path patterns.
 /// </summary>
 /// <param name="Path">The unified reference path (e.g., data:pricing/id/Collection/entityId, content:collection/file.txt, area:Overview)</param>
+[RequiresPermission(Permission.Delete)]
 public record DeleteUnifiedReferenceRequest(string Path) : IRequest<DeleteUnifiedReferenceResponse>
 {
     public string? ChangedBy { get; init; }
