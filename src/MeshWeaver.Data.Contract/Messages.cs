@@ -83,6 +83,14 @@ public record PatchDataChangeRequest(
 public record SubscribeRequest(string StreamId, WorkspaceReference Reference) : IRequest<DataChangedEvent>
 {
     public Address Subscriber { get; init; } = null!;
+
+    /// <summary>
+    /// The identity (mesh node) that owns this subscription.
+    /// For user-facing streams (layout areas), this is the user ID.
+    /// For hub-to-hub streams, this is the hub address.
+    /// Used by AccessControlPipeline for permission checks.
+    /// </summary>
+    public string? Identity { get; init; }
 }
 
 /// <summary>
