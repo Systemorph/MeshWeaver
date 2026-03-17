@@ -53,3 +53,7 @@ await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
     dataSource, options.Value, satelliteTableNames);
 
 logger.LogInformation("Database migration completed successfully.");
+
+// Signal completion to Aspire (health check passes, then process exits cleanly)
+await host.StartAsync();
+await host.StopAsync();

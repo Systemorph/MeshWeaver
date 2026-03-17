@@ -8,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Memex.Portal.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 

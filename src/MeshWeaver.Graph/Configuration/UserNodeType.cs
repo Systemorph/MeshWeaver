@@ -74,13 +74,32 @@ public static class UserNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<User>())
-            .WithPublicRead()
+            .WithUserNodePublicRead()
             .WithSelfEdit()
             .WithPortalCreate()
             .AddDefaultLayoutAreas()
             .AddUserActivityLayoutAreas()
             .AddLayout(layout => layout.WithDefaultArea(UserActivityLayoutAreas.ActivityArea))
     };
+
+    /// <summary>
+    /// Grants public read access ONLY on the User node itself (path == "User/{id}"),
+    /// not on its children (threads, activities, etc.). Children inherit normal
+    /// access control — the user gets read access via UserScopeGrantHandler.
+    /// </summary>
+    private static MessageHubConfiguration WithUserNodePublicRead(this MessageHubConfiguration config)
+        => config.AddAccessRule(
+            [NodeOperation.Read],
+            (context, userId) =>
+            {
+                if (string.IsNullOrEmpty(userId)) return false;
+                var nodePath = context.Node.Path;
+                if (string.IsNullOrEmpty(nodePath)) return false;
+                // Only the User node itself is public, not children
+                // "User/Alice" is public, "User/Alice/SomeThread" is not
+                return nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
+                       && !nodePath["User/".Length..].Contains('/');
+            });
 
     /// <summary>
     /// Adds a create-access rule for portal namespace hubs (onboarding flow).
@@ -104,9 +123,17 @@ public static class UserNodeType
 
         public Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            // Read: all users including anonymous
+            // Read: only the User node itself is publicly readable (path == "User/{id}").
+            // Children (threads, activities, etc.) require explicit access.
             if (context.Operation == NodeOperation.Read)
-                return Task.FromResult(true);
+            {
+                var nodePath = context.Node.Path;
+                if (!string.IsNullOrEmpty(nodePath)
+                    && nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
+                    && !nodePath["User/".Length..].Contains('/'))
+                    return Task.FromResult(true);
+                return Task.FromResult(false);
+            }
 
             if (string.IsNullOrEmpty(userId))
                 return Task.FromResult(false);

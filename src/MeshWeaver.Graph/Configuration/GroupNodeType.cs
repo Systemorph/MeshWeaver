@@ -22,7 +22,8 @@ public static class GroupNodeType
     public static TBuilder AddGroupType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // Group/Organization nodes are NOT publicly readable.
+        // Users must have explicit access (via AccessAssignment) to see them.
         return builder;
     }
 

@@ -28,8 +28,10 @@ internal class DefaultPartitionProvider : IStaticNodeProvider
         yield return CreatePartition("Kernel", "kernel", "Kernel sessions",
             tableMappings: PartitionDefinition.StandardTableMappings, versioned: false);
 
-        // Grant Public (all authenticated users) Viewer role on non-admin partitions
-        foreach (var ns in new[] { "User", "Portal", "Kernel" })
+        // Grant Public (all authenticated users) Viewer role on Portal and Kernel.
+        // User namespace is NOT included — only the User node itself is publicly readable
+        // (via UserAccessRule), children require explicit access (via UserScopeGrantHandler).
+        foreach (var ns in new[] { "Portal", "Kernel" })
             yield return CreatePublicViewerAccess(ns);
     }
 
