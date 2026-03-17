@@ -1703,7 +1703,7 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
                 Operation = DataOperation.Read,
                 Entity = reference,
                 EntityType = reference.GetType(),
-                AccessContext = accessService?.Context,
+                AccessContext = accessService?.Context ?? accessService?.CircuitContext,
                 ServiceProvider = hub.ServiceProvider
             };
 
@@ -1740,7 +1740,7 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
                     Entity = entity,
                     EntityType = entity.GetType(),
                     Request = request,
-                    AccessContext = accessService?.Context,
+                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
                     ServiceProvider = hub.ServiceProvider
                 };
 
@@ -1761,7 +1761,7 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
                     Entity = entity,
                     EntityType = entity.GetType(),
                     Request = request,
-                    AccessContext = accessService?.Context,
+                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
                     ServiceProvider = hub.ServiceProvider
                 };
 
@@ -1782,7 +1782,7 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
                     Entity = entity,
                     EntityType = entity.GetType(),
                     Request = request,
-                    AccessContext = accessService?.Context,
+                    AccessContext = accessService?.Context ?? accessService?.CircuitContext,
                     ServiceProvider = hub.ServiceProvider
                 };
 

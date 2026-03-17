@@ -400,7 +400,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
             Name = "Engineering",
             NodeType = "Group",
         };
-        await NodeFactory.CreateNodeAsync(groupNode);
+        await NodeFactory.CreateNodeAsync(groupNode, ct: TestContext.Current.CancellationToken);
 
         // Change AccessObject from a User to a Group path
         var updatedAssignment = assignment with { AccessObject = "Admin/engineering" };

@@ -32,7 +32,7 @@ public static class ActivityLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Workspace.GetStream<MeshNode>()
+        return host.Workspace.GetStream<MeshNode>()!
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == hubPath);

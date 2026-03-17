@@ -7,6 +7,7 @@ using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Runtime;
 using Orleans.Streams;
 
 namespace MeshWeaver.Connection.Orleans;
@@ -78,6 +79,16 @@ public class OrleansRoutingService : IRoutingService, IDisposable
         {
             try
             {
+                // Propagate user identity via Orleans RequestContext so it's
+                // available on the silo side (in grain call filters and grains).
+                // This flows automatically with the Orleans message.
+                var accessContext = delivery.AccessContext;
+                if (accessContext != null)
+                {
+                    RequestContext.Set("UserId", accessContext.ObjectId);
+                    RequestContext.Set("UserName", accessContext.Name);
+                }
+
                 var grain = grainFactory.GetGrain<IRoutingGrain>("default");
                 await grain.RouteMessage(delivery);
                 return;

@@ -25,7 +25,7 @@ public static class ApiTokenLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Workspace.GetStream<MeshNode>()
+        return host.Workspace.GetStream<MeshNode>()!
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
@@ -59,7 +59,7 @@ public static class ApiTokenLayoutAreas
     public static IObservable<UiControl?> Thumbnail(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return host.Workspace.GetStream<MeshNode>()
+        return host.Workspace.GetStream<MeshNode>()!
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == hubPath);

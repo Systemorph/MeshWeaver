@@ -101,7 +101,7 @@ internal class SecurityService : ISecurityService
 
     public Task<bool> HasPermissionAsync(string nodePath, Permission permission, CancellationToken ct = default)
     {
-        var context = _accessService.Context;
+        var context = _accessService.Context ?? _accessService.CircuitContext;
         var userId = context?.ObjectId;
 
         // If no user context or virtual user, check "Anonymous" user permissions
@@ -122,7 +122,7 @@ internal class SecurityService : ISecurityService
 
     public Task<Permission> GetEffectivePermissionsAsync(string nodePath, CancellationToken ct = default)
     {
-        var context = _accessService.Context;
+        var context = _accessService.Context ?? _accessService.CircuitContext;
         var userId = context?.ObjectId;
 
         // If no user context or virtual user, check "Anonymous" user permissions
@@ -246,7 +246,8 @@ internal class SecurityService : ISecurityService
         }
 
         // Add permissions from AccessContext.Roles (claim-based roles)
-        var context = _accessService.Context;
+        // Use Context (AsyncLocal) first, fall back to CircuitContext for Blazor sessions
+        var context = _accessService.Context ?? _accessService.CircuitContext;
         if (context?.Roles != null
             && !string.IsNullOrEmpty(context.ObjectId)
             && context.ObjectId == userId)

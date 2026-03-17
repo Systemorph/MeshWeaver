@@ -57,7 +57,7 @@ internal interface IMeshCatalog : IPathResolver
     /// Returns the best matching node's address and the remaining path segments.
     /// Score is the number of matching segments from the path start.
     /// </summary>
-    Task<AddressResolution?> ResolvePathAsync(string path);
+    new Task<AddressResolution?> ResolvePathAsync(string path);
 
     /// <summary>
     /// Queries for child nodes under a parent path, filtered by query string.

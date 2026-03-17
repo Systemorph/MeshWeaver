@@ -336,7 +336,7 @@ public static class MeshExtensions
                 var childRequest = new DeleteNodeRequest(children[i].Path) { DeletedBy = deleteRequest.DeletedBy, Recursive = true };
                 var delivery = hub.Post(childRequest, o => o.WithTarget(hub.Address))!;
 
-                hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
+                _ = hub.RegisterCallback<DeleteNodeResponse>(delivery, response =>
                 {
                     childResponses[idx] = response.Message;
 
@@ -411,7 +411,7 @@ public static class MeshExtensions
             Operation = NodeOperation.Create,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
         // Run unified validators from DI
@@ -516,7 +516,7 @@ public static class MeshExtensions
             Operation = NodeOperation.Delete,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
         // Run unified validators from DI
@@ -685,7 +685,7 @@ public static class MeshExtensions
             Node = updatedNode,
             ExistingNode = existingNode,
             Request = request,
-            AccessContext = accessService?.Context
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
         // Run unified validators from DI
@@ -808,7 +808,7 @@ public static class MeshExtensions
             Operation = NodeOperation.Move,
             Node = node,
             Request = request,
-            AccessContext = accessService?.Context
+            AccessContext = accessService?.Context ?? accessService?.CircuitContext
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>();
