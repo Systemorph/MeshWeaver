@@ -60,7 +60,13 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
 
     private NpgsqlDataSource BuildDataSource(string connectionString, bool useVector = false)
     {
-        var dsb = new NpgsqlDataSourceBuilder(connectionString);
+        // Limit pool size per partition to avoid "too many clients" errors
+        // when fan-out queries hit all partitions in parallel
+        var csb = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            MaxPoolSize = 10
+        };
+        var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         if (useVector)
             dsb.UseVector();
         _configureDataSource?.Invoke(dsb);

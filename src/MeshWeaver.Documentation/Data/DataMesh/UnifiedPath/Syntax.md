@@ -15,7 +15,7 @@ Unified Path references use the pattern:
 
 | Component | Description | Example |
 |-----------|-------------|----------|
-| `address` | The MeshNode address (resolved via MeshCatalog) | `Systemorph/Marketing` |
+| `address` | The MeshNode address (resolved via MeshCatalog) | `Doc/DataMesh` |
 | `prefix` | Content type selector | `content:`, `data:`, `area:`, `schema:`, `model:` |
 | `path` | Resource path within the address | `docs/readme.md`, `Posts`, `Thumbnail` |
 
@@ -51,22 +51,22 @@ The `address` portion is matched against nodes in the MeshCatalog using score-ba
 ## Simple Reference (hyperlink)
 
 ```
-@Systemorph/Marketing
+@Doc/DataMesh/QuerySyntax
 ```
 
 Result:
 
-@Systemorph/Marketing
+@Doc/DataMesh/QuerySyntax
 
 ## Embedded Content
 
 ```
-@@Systemorph/Marketing/Thumbnail
+@@Doc/DataMesh/UnifiedPath/Thumbnail
 ```
 
 Result:
 
-@@Systemorph/Marketing/Thumbnail
+@@Doc/DataMesh/UnifiedPath/Thumbnail
 
 # Related
 

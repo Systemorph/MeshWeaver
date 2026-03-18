@@ -41,16 +41,16 @@ Embed the thumbnail card of this documentation:
 
 # Example: Catalog Area
 
-Embed the catalog (child nodes grid) of an organization:
+Embed the catalog (child nodes grid) of a documentation section:
 
 **Syntax:**
 ```
-@@Systemorph/Catalog
+@@Doc/DataMesh/Search
 ```
 
 **Result:**
 
-@@Systemorph/Catalog
+@@Doc/DataMesh/Search
 
 # Hyperlinks to Areas
 
@@ -58,12 +58,12 @@ Single `@` creates a navigation link:
 
 **Syntax:**
 ```
-@Systemorph/Marketing/Details
+@Doc/Architecture/Overview
 ```
 
 **Result:**
 
-@Systemorph/Marketing/Details
+@Doc/Architecture/Overview
 
 # Custom Areas
 

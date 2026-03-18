@@ -60,8 +60,8 @@ These prefixes have special meaning and map to specific layout areas:
 When you use `@path` or `@@path` **without a prefix**, it refers to a **layout area** of the target node:
 
 ```
-@Systemorph/Thumbnail     --> navigates to Systemorph node's Thumbnail area
-@@Systemorph/Thumbnail    --> embeds Systemorph node's Thumbnail area inline
+@Doc/DataMesh/Thumbnail         --> navigates to node's Thumbnail area
+@@Doc/DataMesh/Thumbnail        --> embeds node's Thumbnail area inline
 ```
 
 ## With Prefix = Specific Resource Type
@@ -123,12 +123,12 @@ This allows flexible naming of content collections to match your project structu
 
 **Syntax:**
 ```
-@@Systemorph/Thumbnail
+@@Doc/DataMesh/UnifiedPath/Thumbnail
 ```
 
 **Result:**
 
-@@Systemorph/Thumbnail
+@@Doc/DataMesh/UnifiedPath/Thumbnail
 
 ---
 
@@ -162,15 +162,15 @@ This allows flexible naming of content collections to match your project structu
 
 **Syntax:**
 ```
-@Systemorph/Marketing
-@ACME/ProductLaunch
+@Doc/DataMesh/QuerySyntax
+@Doc/DataMesh/UnifiedPath/Syntax
 ```
 
 **Result:**
 
-@Systemorph/Marketing
+@Doc/DataMesh/QuerySyntax
 
-@ACME/ProductLaunch
+@Doc/DataMesh/UnifiedPath/Syntax
 
 ---
 
@@ -193,5 +193,5 @@ This allows flexible naming of content collections to match your project structu
 Type `@` in any editor to see suggestions. Autocomplete is **case-insensitive**.
 
 1. `@` - Shows available namespaces
-2. `@Sys` - Filters to matches like `Systemorph`
-3. `@Systemorph/` - Shows child nodes
+2. `@Doc` - Filters to matches like `Doc`
+3. `@Doc/DataMesh/` - Shows child nodes

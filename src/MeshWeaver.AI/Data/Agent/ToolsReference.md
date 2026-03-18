@@ -82,15 +82,12 @@ With any other prefix, it accesses files from a content collection.
 
 ### Examples
 
-- `Get('@graph/org1')` — Get a specific organization node
+- `Get('@Doc/Architecture')` — Get a specific node
 - `Get('@NodeType/*')` — List all available node types
-- `Get('@ACME/ProductLaunch/data:')` — Get the node's content data as JSON
-- `Get('@ACME/ProductLaunch/data:Pricing')` — Get all Pricing entities
-- `Get('@ACME/ProductLaunch/data:Pricing/item-1')` — Get a specific Pricing entity
-- `Get('@ACME/ProductLaunch/schema:')` — Get content type schema for ProductLaunch
-- `Get('@ACME/ProductLaunch/model:')` — Get the full data model
-- `Get('@Northwind/Analytics/layoutAreas:')` — List available reports and charts
-- `Get('@Northwind/Analytics/area:SalesByCategory')` — Download area data for analysis
+- `Get('@Doc/DataMesh/data:')` — Get the node's content data as JSON
+- `Get('@Doc/DataMesh/schema:')` — Get content type schema
+- `Get('@Doc/DataMesh/model:')` — Get the full data model
+- `Get('@Doc/DataMesh/layoutAreas:')` — List available layout areas
 
 ## Search
 
@@ -104,11 +101,11 @@ Searches the mesh using a GitHub-style query syntax. Returns a JSON array of mat
 ### Common Patterns
 
 - `Search('nodeType:Agent')` — Find all agents
-- `Search('namespace:ACME')` — List direct children of ACME
-- `Search('path:ACME scope:descendants')` — All descendants under ACME recursively
+- `Search('namespace:Doc')` — List direct children of Doc
+- `Search('path:Doc scope:descendants')` — All descendants under Doc recursively
 - `Search('namespace:Doc scope:descendants')` — Browse all documentation
-- `Search('name:*sales* nodeType:Organization sort:name')` — Complex filtered query
-- `Search('laptop', '@graph')` — Free-text search under graph
+- `Search('name:*unified* sort:name')` — Complex filtered query
+- `Search('architecture')` — Free-text search
 
 ### Full Query Syntax Reference
 
@@ -135,8 +132,8 @@ Queries consist of space-separated terms. Each term can be:
 
 **namespace** — Sets the search location (like a folder). Default scope is `children`:
 ```
-namespace:Systemorph          # Immediate children of Systemorph
-namespace:Systemorph scope:descendants  # All items under Systemorph (recursive)
+namespace:Doc                  # Immediate children of Doc
+namespace:Doc scope:descendants  # All items under Doc (recursive)
 ```
 
 **scope** — Controls search scope relative to namespace or path:
@@ -150,8 +147,8 @@ scope:ancestorsandself # Self + all ancestors
 
 **path** — Sets the base path for search (default scope is `exact`):
 ```
-path:Systemorph                # The exact Systemorph node
-namespace:Systemorph           # Immediate children of Systemorph
+path:Doc/Architecture          # The exact node
+namespace:Doc                  # Immediate children of Doc
 ```
 
 **sort** — Specifies sort order: `sort:name`, `sort:name-desc`, `sort:lastModified-desc`
@@ -178,9 +175,9 @@ select:name,nodeType,icon
 
 Combine multiple filters:
 ```
-namespace:Systemorph nodeType:Project
-nodeType:Story name:*claims* sort:lastModified-desc limit:20
-namespace:ACME/ProductLaunch nodeType:Todo scope:descendants
+namespace:Doc nodeType:Markdown
+nodeType:Markdown name:*path* sort:lastModified-desc limit:20
+namespace:Doc/Architecture scope:descendants
 ```
 
 #### Tips
@@ -201,8 +198,8 @@ Displays a node's visual layout area in the chat UI.
 
 ### Example
 
-User asks: "Show me the organization chart"
-Action: Call `NavigateTo('@ACME/Organization')`, respond: "Here's the organization chart."
+User asks: "Show me the architecture docs"
+Action: Call `NavigateTo('@Doc/Architecture')`, respond: "Here's the architecture documentation."
 
 ## Create
 
@@ -245,7 +242,7 @@ Before creating a node, discover what content fields are expected:
 ### Example
 
 ```
-Create('{"id": "NewProject", "namespace": "ACME", "name": "New Project", "nodeType": "Project", "content": {"status": "Active"}}')
+Create('{"id": "NewPage", "namespace": "MyOrg", "name": "New Page", "nodeType": "Markdown"}')
 ```
 
 ## Update
@@ -271,7 +268,7 @@ Updates one or more existing nodes in the mesh. The entire MeshNode is replaced,
 ### Example
 
 ```
-Update('[{"id": "ExistingProject", "namespace": "ACME", "name": "Renamed Project", "nodeType": "Project", "content": {"status": "Completed"}}]')
+Update('[{"id": "ExistingPage", "namespace": "MyOrg", "name": "Renamed Page", "nodeType": "Markdown"}]')
 ```
 
 ## Delete
@@ -285,7 +282,7 @@ Deletes one or more nodes by their paths.
 ### Example
 
 ```
-Delete('["ACME/OldProject", "ACME/ArchivedTask"]')
+Delete('["MyOrg/OldPage", "MyOrg/ArchivedNote"]')
 ```
 
 ## Layout Areas (Reports, Views, Charts, Dashboards)
@@ -297,7 +294,7 @@ When the user asks about **reports**, **views**, **charts**, **analysis**, **das
 Use the `layoutAreas:` prefix to list all available layout areas for a node:
 
 ```
-Get('@Northwind/Analytics/layoutAreas:')
+Get('@path/layoutAreas:')
 ```
 
 This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `Description`, `Group`, and `Order` fields.
@@ -307,7 +304,7 @@ This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `D
 Use the `area:` prefix to download a layout area's data for analysis:
 
 ```
-Get('@Northwind/Analytics/area:SalesByCategory')
+Get('@path/area:AreaName')
 ```
 
 This returns the area's data as an EntityStore, which you can analyze and summarize.
@@ -317,7 +314,7 @@ This returns the area's data as an EntityStore, which you can analyze and summar
 Use `NavigateTo` to display a layout area visually in the chat UI:
 
 ```
-NavigateTo('@Northwind/Analytics/SalesByCategory')
+NavigateTo('@path/AreaName')
 ```
 
 ### Inline Embedding
@@ -325,7 +322,7 @@ NavigateTo('@Northwind/Analytics/SalesByCategory')
 Use `@@` syntax to embed a layout area inline in markdown responses:
 
 ```
-@@Northwind/Analytics/SalesByCategory
+@@path/AreaName
 ```
 
 ### Workflow
@@ -355,13 +352,12 @@ The system automatically detects whether a path refers to a file or folder. File
 ### Examples
 
 ```
-Get('@ACME/collection:')                    -- List all collection configs
-Get('@ACME/content:')                       -- List files/folders in default "content" collection
-Get('@ACME/content:attachments')            -- List files/folders in "attachments" collection root
-Get('@ACME/content:attachments/reports')    -- List files in "attachments/reports" subfolder
-Get('@ACME/content:readme.md')             -- Download readme.md from default "content" collection
-Get('@ACME/content:attachments/report.pdf') -- Download report.pdf from "attachments" collection
-Get('@Doc/Architecture/content:diagram.svg') -- Download from doc node's collection
+Get('@path/collection:')                    -- List all collection configs
+Get('@path/content:')                       -- List files/folders in default "content" collection
+Get('@path/content:collectionName')         -- List files/folders in a named collection
+Get('@path/content:collectionName/subfolder') -- List files in a subfolder
+Get('@path/content:readme.md')             -- Download readme.md from default "content" collection
+Get('@path/content:collectionName/file.pdf') -- Download file from a named collection
 ```
 
 The format is: `@{address}/content:{path}` where the path is automatically resolved as file (download) or folder (list contents).
@@ -370,8 +366,8 @@ The format is: `@{address}/content:{path}` where the path is automatically resol
 
 Use `@@` syntax to embed content files inline in markdown:
 ```
-@@ACME/content:images/logo.svg              -- Embed image inline
-@@ACME/content:notes.md                     -- Embed markdown inline
+@@path/content:images/logo.svg              -- Embed image inline
+@@path/content:notes.md                     -- Embed markdown inline
 ```
 
 ## Reading Documentation

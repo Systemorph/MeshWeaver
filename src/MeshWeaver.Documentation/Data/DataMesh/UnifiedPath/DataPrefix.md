@@ -43,12 +43,12 @@ Reference a specific data collection:
 
 **Syntax:**
 ```
-@Systemorph/Marketing/data:Posts
+@Doc/DataMesh/UnifiedPath/data:
 ```
 
 **Result:**
 
-@Systemorph/Marketing/data:Posts
+@Doc/DataMesh/UnifiedPath/data:
 
 # Rendering
 

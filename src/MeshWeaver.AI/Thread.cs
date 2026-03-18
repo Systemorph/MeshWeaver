@@ -67,6 +67,12 @@ public record Thread
     public string? ProviderType { get; init; }
 
     /// <summary>
+    /// The user ID who created this thread.
+    /// Used to filter "my threads" across all partitions.
+    /// </summary>
+    public string? CreatedBy { get; init; }
+
+    /// <summary>
     /// The primary node path — permissions are checked against the parent node.
     /// </summary>
     public string? PrimaryNodePath => ParentPath;

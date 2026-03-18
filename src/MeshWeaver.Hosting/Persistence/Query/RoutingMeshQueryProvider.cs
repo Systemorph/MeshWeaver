@@ -66,6 +66,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         foreach (var (partitionKey, _) in _router.QueryProviders)
         {
+            // Exclude Admin partition from global search — it contains partition metadata,
+            // access assignments, and system config, not user content. Direct path queries
+            // (e.g., path:Admin/Partition/X) still route to Admin via the segment-based path.
+            if (partitionKey.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             // Check if user has read permission on the partition's namespace
             var ns = GetNamespaceForPartition(partitionKey);
             if (await _securityService.HasPermissionAsync(ns, userId, Permission.Read, ct))
@@ -155,6 +161,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 // All providers discovered — wait for ongoing queries to finish
                 await Task.WhenAll(queryTasks);
             }
+            catch (OperationCanceledException) { /* silent */ }
             catch (Exception ex)
             {
                 channel.Writer.Complete(ex);
@@ -164,18 +171,21 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
             async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
             {
-                // Scope the request to the partition's namespace so each partition
-                // only searches its own data (not all data via a shared adapter)
-                var scopedRequest = string.IsNullOrEmpty(effectivePath)
-                    ? request with { DefaultPath = partitionKey, Query = fanOutQuery }
-                    : request;
-
-                await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
+                try
                 {
-                    if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
-                        continue;
-                    await channel.Writer.WriteAsync(item, ct);
+                    var scopedRequest = string.IsNullOrEmpty(effectivePath)
+                        ? request with { DefaultPath = partitionKey, Query = fanOutQuery }
+                        : request;
+
+                    await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
+                    {
+                        if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
+                            continue;
+                        await channel.Writer.WriteAsync(item, ct);
+                    }
                 }
+                catch (OperationCanceledException) { /* silent */ }
+                catch (Exception) { /* don't kill other partitions */ }
             }
         }
 
@@ -206,12 +216,17 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: known partitions + newly discovered, all in parallel
+        // Fan out: only accessible partitions (excludes Admin)
+        var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
         foreach (var (key, p) in _router.QueryProviders)
+        {
+            if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
+                continue;
             tasks.Add(AutocompleteOneAsync(key, p));
+        }
 
         await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
             tasks.Add(AutocompleteOneAsync(key, p));
@@ -223,9 +238,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-            await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, ct))
-                all.Add(s);
+            try
+            {
+                var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, limit, ct))
+                    all.Add(s);
+            }
+            catch (OperationCanceledException) { /* silent */ }
+            catch (Exception) { /* don't kill other partitions */ }
         }
     }
 
@@ -248,12 +268,17 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: known partitions + newly discovered, all in parallel
+        // Fan out: only accessible partitions (excludes Admin)
+        var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
         foreach (var (key, p) in _router.QueryProviders)
+        {
+            if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
+                continue;
             tasks.Add(AutocompleteOneAsync(key, p));
+        }
 
         await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
             tasks.Add(AutocompleteOneAsync(key, p));
@@ -277,9 +302,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
-            await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, ct))
-                all.Add(s);
+            try
+            {
+                var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
+                await foreach (var s in p.AutocompleteAsync(effectiveBasePath, prefix, options, mode, limit, contextPath, context, ct))
+                    all.Add(s);
+            }
+            catch (OperationCanceledException) { /* silent */ }
+            catch (Exception) { /* don't kill other partitions */ }
         }
     }
 

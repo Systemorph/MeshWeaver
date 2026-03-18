@@ -33,13 +33,19 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             }
 
             // First request for this user in this circuit — look up the mesh User node
-            // to get the system name (overrides the claim name).
+            // to resolve ObjectId to the user's node ID (username) and get the display name.
+            // Without this, ObjectId stays as the email (from claims), causing permission
+            // lookups to fail since AccessAssignment nodes use the username, not the email.
             if (!string.IsNullOrEmpty(userContext.Email))
             {
                 var meshUser = await TryLoadMeshUserAsync(userContext.Email, hub);
-                if (meshUser is not null && !string.IsNullOrEmpty(meshUser.Name))
+                if (meshUser is not null)
                 {
-                    userContext = userContext with { Name = meshUser.Name };
+                    userContext = userContext with
+                    {
+                        ObjectId = meshUser.Id,
+                        Name = meshUser.Name ?? meshUser.Id
+                    };
                 }
             }
 
@@ -80,7 +86,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
 
         return new AccessContext
         {
-            ObjectId = response.UserEmail!,
+            ObjectId = response.UserName ?? response.UserEmail!,
             Name = response.UserName ?? "",
             Email = response.UserEmail!,
         };

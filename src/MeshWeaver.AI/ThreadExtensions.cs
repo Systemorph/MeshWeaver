@@ -39,11 +39,15 @@ public static class ThreadExtensions
             ? request.UserMessageText[..57] + "..."
             : request.UserMessageText;
 
+        // Capture current user for "my threads" filtering across partitions
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+
         var threadNode = new MeshNode(speakingId, ns)
         {
             Name = name,
             NodeType = ThreadNodeType.NodeType,
-            Content = new AI.Thread { ParentPath = hubPath }
+            Content = new AI.Thread { ParentPath = hubPath, CreatedBy = createdBy }
         };
 
         meshService.CreateNodeAsync(threadNode).ContinueWith(t =>
