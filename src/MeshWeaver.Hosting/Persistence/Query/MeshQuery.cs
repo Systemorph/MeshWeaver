@@ -45,9 +45,9 @@ public class MeshQuery(
         _ = FanOutProvidersAsync();
         async Task FanOutProvidersAsync()
         {
-            try
+            await Task.WhenAll(providers.Select(async provider =>
             {
-                await Task.WhenAll(providers.Select(async provider =>
+                try
                 {
                     var count = 0;
                     logger?.LogDebug("MeshQuery: provider {Provider} starting for query '{Query}'",
@@ -58,8 +58,6 @@ public class MeshQuery(
                             continue; // deduplicate by path
 
                         count++;
-                        // Apply select: projection only if item is still a MeshNode
-                        // (providers that already projected will return dictionaries)
                         var result = parsedQuery.Select != null && item is MeshNode
                             ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
                             : item;
@@ -67,14 +65,14 @@ public class MeshQuery(
                     }
                     logger?.LogDebug("MeshQuery: provider {Provider} returned {Count} items for query '{Query}'",
                         provider.GetType().Name, count, request.Query);
-                }));
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "MeshQuery: FanOut failed for query '{Query}'", request.Query);
-                channel.Writer.Complete(ex);
-                return;
-            }
+                }
+                catch (OperationCanceledException) { /* silent */ }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "MeshQuery: provider {Provider} failed for query '{Query}'",
+                        provider.GetType().Name, request.Query);
+                }
+            }));
             channel.Writer.Complete();
         }
 

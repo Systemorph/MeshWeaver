@@ -309,14 +309,19 @@ public static class MemexConfiguration
                     if (contentStorageConfig != null)
                     {
                         var nodePath = config.Address.ToString();
+                        var contentSubdir = $"content/{nodePath}";
+                        // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
+                        var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)
+                            ? contentSubdir
+                            : Path.Combine(contentStorageConfig.BasePath, contentSubdir);
                         var nodeContentConfig = contentStorageConfig with
                         {
                             Name = "content",
                             IsEditable = true,
-                            BasePath = $"content/{nodePath}",
+                            BasePath = basePath,
                             Settings = new Dictionary<string, string>(contentStorageConfig.Settings ?? new())
                             {
-                                ["BasePath"] = $"content/{nodePath}"
+                                ["BasePath"] = basePath
                             }
                         };
                         config = config.AddContentCollection(_ => nodeContentConfig);

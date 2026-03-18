@@ -52,7 +52,7 @@ public static class UserActivityLayoutAreas
             var isOwner = string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase);
 
             if (isOwner)
-                return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName);
+                return (UiControl?)BuildOwnerDashboard(host, nodePath, ownerName, nodeOwnerId);
             else
                 return (UiControl?)BuildVisitorProfile(nodePath, ownerName, ownerNode);
         });
@@ -62,7 +62,7 @@ public static class UserActivityLayoutAreas
     /// Personal dashboard shown to the node owner — welcome banner, chat, threads,
     /// activity feed, recently viewed, and child items.
     /// </summary>
-    private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName)
+    private static UiControl BuildOwnerDashboard(LayoutAreaHost host, string nodePath, string ownerName, string nodeOwnerId)
     {
         // Outer shell: flex column, fills the available main area (height managed by CSS grid)
         var dashboard = Controls.Stack
@@ -85,7 +85,7 @@ public static class UserActivityLayoutAreas
             .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
 
         // Latest Threads — full width, above My Items
-        content = content.WithView(BuildLatestThreads(nodePath),
+        content = content.WithView(BuildLatestThreads(nodePath, nodeOwnerId),
             skin => skin.WithXs(12));
 
         // My Items — full width, below Latest Threads
@@ -291,9 +291,10 @@ public static class UserActivityLayoutAreas
     }
 
     /// <summary>
-    /// Latest threads — shows the user's most recently accessed threads.
+    /// Latest threads — shows the current user's threads across all partitions.
+    /// Filters by content.CreatedBy to find only threads created by this user.
     /// </summary>
-    private static UiControl BuildLatestThreads(string nodePath)
+    private static UiControl BuildLatestThreads(string nodePath, string nodeOwnerId)
     {
         var section = Controls.Stack.WithStyle("margin-top: 16px;");
 
@@ -301,7 +302,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Latest Threads</div>"));
 
         section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath} scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread content.CreatedBy:{nodeOwnerId} scope:descendants sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)

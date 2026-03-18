@@ -46,7 +46,7 @@ public static class PartitionNodeType
         NodeType = NodeType,
         Icon = "/static/NodeTypeIcons/database.svg",
         AssemblyLocation = typeof(PartitionNodeType).Assembly.Location,
-        ExcludeFromContext = new HashSet<string> { "create" },
+        ExcludeFromContext = new HashSet<string> { "create", "search" },
         Content = new NodeTypeDefinition { DefaultNamespace = Namespace },
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
