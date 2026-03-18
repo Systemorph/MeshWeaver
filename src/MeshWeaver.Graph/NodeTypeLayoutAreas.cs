@@ -148,7 +148,7 @@ public static class NodeTypeLayoutAreas
                         .WithSectionCounts(true)
                         .WithItemLimit(10)
                         .WithCollapsibleSections(true)
-                        .WithCreateHref($"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(hubPath)}")));
+                        .WithCreateHref(BuildCreateHref(hubPath, typeDef))));
 
             return (UiControl?)outer;
         });
@@ -729,6 +729,20 @@ public static class NodeTypeLayoutAreas
         stack = stack.WithView(buttonRow);
 
         return stack;
+    }
+
+    /// <summary>
+    /// Builds the Create href for a NodeType page.
+    /// Type defaults to the hub's own type path.
+    /// Namespace uses DefaultNamespace if explicitly set; omitted otherwise
+    /// so the Create form uses the current browsing context.
+    /// </summary>
+    private static string BuildCreateHref(string hubPath, NodeTypeDefinition? typeDef)
+    {
+        var qs = $"type={Uri.EscapeDataString(hubPath)}";
+        if (typeDef?.DefaultNamespace != null)
+            qs += $"&namespace={Uri.EscapeDataString(typeDef.DefaultNamespace)}";
+        return $"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}?{qs}";
     }
 
     private static UiControl BuildInfoRow(string label, string value)

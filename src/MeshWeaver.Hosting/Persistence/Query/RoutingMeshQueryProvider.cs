@@ -124,7 +124,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // (e.g., nodeType:Thread) — filtered queries need to find satellites.
         var fanOutQuery = request.Query ?? "";
         if (parsed.Scope == QueryScope.Exact)
-            fanOutQuery += " scope:descendants";
+            fanOutQuery += " scope:subtree";
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
@@ -299,7 +299,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // (e.g., nodeType:Thread) — filtered queries need to find satellites.
         var fanOutQuery = request.Query ?? "";
         if (parsed.Scope == QueryScope.Exact)
-            fanOutQuery += " scope:descendants";
+            fanOutQuery += " scope:subtree";
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 

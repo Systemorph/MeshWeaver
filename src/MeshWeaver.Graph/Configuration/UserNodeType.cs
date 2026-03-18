@@ -79,6 +79,7 @@ public static class UserNodeType
             .WithPortalCreate()
             .AddDefaultLayoutAreas()
             .AddUserActivityLayoutAreas()
+            .AddGlobalAdminSettingsTab()
             .AddLayout(layout => layout.WithDefaultArea(UserActivityLayoutAreas.ActivityArea))
     };
 
@@ -154,6 +155,89 @@ public static class UserNodeType
             // Create/Update: portal namespace identities (onboarding flow)
             return Task.FromResult(IsPortalIdentity(userId));
         }
+    }
+
+    private const string GlobalAdminTab = "GlobalAdmin";
+
+    /// <summary>
+    /// Adds a "Global Administration" tab to the User node's Settings page.
+    /// Only visible when the viewer is the node owner and has Admin permissions at root level.
+    /// Shows root-level access assignments for managing global admin roles.
+    /// </summary>
+    private static MessageHubConfiguration AddGlobalAdminSettingsTab(this MessageHubConfiguration config)
+        => config.AddSettingsMenuItems(
+            new SettingsMenuItemProvider(GetGlobalAdminTabAsync));
+
+    private static async IAsyncEnumerable<SettingsMenuItemDefinition> GetGlobalAdminTabAsync(
+        LayoutAreaHost host, RenderingContext ctx)
+    {
+        // Check if the viewer is the node owner
+        var hubPath = host.Hub.Address.ToString();
+        var nodeOwnerId = hubPath.StartsWith("User/") ? hubPath[5..] : hubPath;
+        var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewerId = accessService?.Context?.ObjectId
+                       ?? accessService?.CircuitContext?.ObjectId;
+
+        if (string.IsNullOrEmpty(viewerId)
+            || !string.Equals(viewerId, nodeOwnerId, StringComparison.OrdinalIgnoreCase))
+            yield break;
+
+        // Check if the user has Admin permissions at root level
+        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+        if (securityService == null)
+            yield break;
+
+        var rootPerms = await securityService.GetEffectivePermissionsAsync("", viewerId);
+        if (!rootPerms.HasFlag(Permission.All))
+            yield break;
+
+        yield return new SettingsMenuItemDefinition(
+            Id: GlobalAdminTab,
+            Label: "Global Administration",
+            ContentBuilder: BuildGlobalAdminTab,
+            Group: "Administration",
+            Icon: Application.Styles.FluentIcons.Shield(),
+            GroupIcon: Application.Styles.FluentIcons.Shield(),
+            Order: 300);
+    }
+
+    private static UiControl BuildGlobalAdminTab(LayoutAreaHost host, StackControl stack, MeshNode? node)
+    {
+        // Access Assignments section
+        stack = stack.WithView(Controls.Html(
+            "<div style=\"font-size: 1.05rem; font-weight: 600; margin-bottom: 16px;\">Global Access Assignments</div>" +
+            "<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 16px;\">Manage who has administrative access across the platform.</p>"));
+
+        stack = stack.WithView(Controls.MeshSearch
+            .WithHiddenQuery("namespace:_Access nodeType:AccessAssignment")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithCreateNodeType("AccessAssignment")
+            .WithCreateNamespace("_Access")
+            .WithMaxColumns(2));
+
+        // Data Sources section
+        stack = stack.WithView(Controls.Html(
+            "<div style=\"margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--neutral-stroke-divider);\">" +
+            "<div style=\"font-size: 1.05rem; font-weight: 600; margin-bottom: 12px;\">Data Sources</div></div>"));
+
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService != null)
+        {
+            stack = stack.WithView(Controls.MeshSearch
+                .WithHiddenQuery($"namespace:{MeshDataSourceNodeType.SourcesNamespace} nodeType:{MeshDataSourceNodeType.NodeType}")
+                .WithShowSearchBox(false)
+                .WithShowEmptyMessage(true)
+                .WithRenderMode(MeshSearchRenderMode.Flat)
+                .WithCollapsibleSections(false)
+                .WithSectionCounts(false)
+                .WithMaxColumns(2));
+        }
+
+        return stack;
     }
 
     private static bool IsPortalIdentity(string? userId)

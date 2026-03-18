@@ -27,11 +27,17 @@ public static class NodeAccessExtensions
 
     /// <summary>
     /// Grants read access to all authenticated users.
+    /// Registers both a node-level access rule (for row-level security)
+    /// and a hub-level permission rule (for AccessControlPipeline).
     /// </summary>
     public static MessageHubConfiguration WithPublicRead(this MessageHubConfiguration config)
-        => config.AddAccessRule(
-            [NodeOperation.Read],
-            (_, userId) => !string.IsNullOrEmpty(userId));
+        => config
+            .AddAccessRule(
+                [NodeOperation.Read],
+                (_, userId) => !string.IsNullOrEmpty(userId))
+            .AddHubPermissionRule(
+                Permission.Read,
+                (_, userId) => !string.IsNullOrEmpty(userId));
 
     /// <summary>
     /// Allows users to edit nodes under their own User/{userId} scope.
