@@ -35,6 +35,9 @@ public static class AccessControlPipeline
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
                 ?.CreateLogger("AccessControlPipeline");
 
+            // Hub-level permission rules (e.g., WithPublicRead) — checked before ISecurityService
+            var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
+
             return pipeline.AddPipeline(async (delivery, ct, next) =>
             {
                 var attr = GetAttribute(delivery.Message.GetType());
@@ -47,6 +50,10 @@ public static class AccessControlPipeline
 
                 foreach (var (path, permission) in attr.GetPermissionChecks(delivery, hubPath))
                 {
+                    // Check hub-level rules first (e.g., WithPublicRead grants Read to authenticated users)
+                    if (hubPermissions != null && hubPermissions.HasPermission(permission, delivery, userId))
+                        continue;
+
                     var hasPermission = !string.IsNullOrEmpty(userId)
                         ? await securityService.HasPermissionAsync(path, userId, permission, ct)
                         : await securityService.HasPermissionAsync(path, permission, ct);

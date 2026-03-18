@@ -87,8 +87,31 @@ public static class JsonSynchronizationStream
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var identity = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-        reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
+        var subscribeDelivery = reduced.Hub.Post(new SubscribeRequest(reduced.StreamId, reference) { Identity = identity },
             o => impersonateAsHub ? o.WithTarget(owner).ImpersonateAsHub(hub.Address) : o.WithTarget(owner));
+
+        // Register callback on parent hub to catch DeliveryFailure responses
+        // (e.g., from AccessControlPipeline rejecting the SubscribeRequest).
+        // The response routes through the parent hub first; without a callback here,
+        // the parent drops it (no matching callback), and the stream hangs forever.
+        if (subscribeDelivery != null)
+        {
+            hub.RegisterCallback(subscribeDelivery,
+                (delivery, _) =>
+                {
+                    if (delivery.Message is DeliveryFailure failure)
+                    {
+                        logger.LogWarning("SubscribeRequest for stream {StreamId} failed: {Message}",
+                            reduced.StreamId, failure.Message);
+                        reduced.OnError(new DeliveryFailureException(failure));
+                        return Task.FromResult(delivery.Processed());
+                    }
+                    // Non-failure responses: forward to stream hub
+                    reduced.Hub.DeliverMessage(delivery);
+                    return Task.FromResult(delivery.Processed());
+                }, default);
+        }
+
         reduced.RegisterForDisposal(
             reduced.Hub.Register<UnsubscribeRequest>(
                 delivery =>

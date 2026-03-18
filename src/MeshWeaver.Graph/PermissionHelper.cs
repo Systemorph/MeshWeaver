@@ -28,18 +28,35 @@ public static class PermissionHelper
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = accessService?.Context;
+        var userId = context?.ObjectId;
         logger?.LogInformation(
             "GetEffectivePermissionsAsync for path={Path}, user={User}, roles=[{Roles}], securityService={Type}",
             nodePath,
-            context?.ObjectId ?? "(null)",
+            userId ?? "(null)",
             context?.Roles != null ? string.Join(",", context.Roles) : "(null)",
             securityService.GetType().Name);
 
         try
         {
             var perms = await securityService.GetEffectivePermissionsAsync(nodePath);
+
+            // Merge hub-level permission rules (e.g., WithPublicRead grants Read to authenticated users)
+            var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
+            if (hubPermissions != null && !string.IsNullOrEmpty(userId))
+            {
+                foreach (Permission flag in Enum.GetValues<Permission>())
+                {
+                    if (flag != Permission.None && flag != Permission.All
+                        && !perms.HasFlag(flag)
+                        && hubPermissions.HasPermission(flag, null!, userId))
+                    {
+                        perms |= flag;
+                    }
+                }
+            }
+
             logger?.LogInformation("Effective permissions for {User} on {Path}: {Perms}",
-                context?.ObjectId ?? "(null)", nodePath, perms);
+                userId ?? "(null)", nodePath, perms);
             return perms;
         }
         catch (Exception ex)

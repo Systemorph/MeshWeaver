@@ -101,6 +101,15 @@ public partial class UserProfile : ComponentBase
         }
     }
 
+    private void NavigateToSettings()
+    {
+        var userId = AccessService.Context?.ObjectId;
+        if (!string.IsNullOrEmpty(userId))
+            Navigation.NavigateTo($"/User/{userId}/Settings");
+        else
+            Navigation.NavigateTo("/_settings");
+    }
+
     private void Logout()
     {
         var logoutUrl = AuthNavigation.GetLogoutUrl();

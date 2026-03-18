@@ -75,15 +75,16 @@ public static class CreateLayoutArea
                 // the real user's context (ImpersonateAsHub sets hub identity instead).
                 // Check if a DI-registered INodeTypeAccessRule supports Create for this type;
                 // if so, show the form and let the backend (RlsNodeValidator) enforce actual security.
+                var accessRules = host.Hub.ServiceProvider.GetServices<INodeTypeAccessRule>();
+
+                // Match by nodeType field or by hub path (NodeType hubs have path == type name)
                 var nodeType = currentNode?.NodeType;
-                if (!string.IsNullOrEmpty(nodeType))
-                {
-                    var accessRules = host.Hub.ServiceProvider.GetServices<INodeTypeAccessRule>();
-                    var rule = accessRules.FirstOrDefault(r =>
-                        r.NodeType.Equals(nodeType, StringComparison.OrdinalIgnoreCase));
-                    if (rule != null && rule.SupportedOperations.Contains(NodeOperation.Create))
-                        canCreate = true;
-                }
+                var rule = accessRules.FirstOrDefault(r =>
+                    (!string.IsNullOrEmpty(nodeType) && r.NodeType.Equals(nodeType, StringComparison.OrdinalIgnoreCase))
+                    || r.NodeType.Equals(currentPath, StringComparison.OrdinalIgnoreCase));
+
+                if (rule != null && rule.SupportedOperations.Contains(NodeOperation.Create))
+                    canCreate = true;
             }
             if (!canCreate)
             {

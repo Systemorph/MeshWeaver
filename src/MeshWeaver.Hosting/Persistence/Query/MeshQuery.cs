@@ -6,6 +6,8 @@ using System.Threading.Channels;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
@@ -38,6 +40,8 @@ public class MeshQuery(
 
         var channel = Channel.CreateUnbounded<object>();
 
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
+
         _ = FanOutProvidersAsync();
         async Task FanOutProvidersAsync()
         {
@@ -45,11 +49,15 @@ public class MeshQuery(
             {
                 await Task.WhenAll(providers.Select(async provider =>
                 {
+                    var count = 0;
+                    logger?.LogDebug("MeshQuery: provider {Provider} starting for query '{Query}'",
+                        provider.GetType().Name, request.Query);
                     await foreach (var item in provider.QueryAsync(request, Options, ct))
                     {
                         if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
                             continue; // deduplicate by path
 
+                        count++;
                         // Apply select: projection only if item is still a MeshNode
                         // (providers that already projected will return dictionaries)
                         var result = parsedQuery.Select != null && item is MeshNode
@@ -57,10 +65,13 @@ public class MeshQuery(
                             : item;
                         await channel.Writer.WriteAsync(result, ct);
                     }
+                    logger?.LogDebug("MeshQuery: provider {Provider} returned {Count} items for query '{Query}'",
+                        provider.GetType().Name, count, request.Query);
                 }));
             }
             catch (Exception ex)
             {
+                logger?.LogWarning(ex, "MeshQuery: FanOut failed for query '{Query}'", request.Query);
                 channel.Writer.Complete(ex);
                 return;
             }

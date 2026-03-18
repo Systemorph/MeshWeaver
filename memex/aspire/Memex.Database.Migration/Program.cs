@@ -7,10 +7,12 @@ using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Mesh;
 using Npgsql;
 
+Console.WriteLine("[Migration] Starting...");
 var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
 
 var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
+Console.WriteLine($"[Migration] ConnectionString: {(string.IsNullOrEmpty(connectionString) ? "(empty)" : connectionString[..Math.Min(30, connectionString.Length)] + "...")}");
 if (connectionString.Contains("database.azure.com"))
     builder.AddAzureNpgsqlDataSource("memex");
 else
@@ -24,10 +26,14 @@ builder.Services.Configure<PostgreSqlStorageOptions>(o =>
     o.VectorDimensions = embeddingOptions.Dimensions;
 });
 
+Console.WriteLine("[Migration] Building host...");
 var host = builder.Build();
+Console.WriteLine("[Migration] Host built. Resolving services...");
 
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Migration");
+Console.WriteLine("[Migration] Resolving NpgsqlDataSource...");
 var dataSource = host.Services.GetRequiredService<NpgsqlDataSource>();
+Console.WriteLine("[Migration] NpgsqlDataSource resolved.");
 var options = host.Services.GetRequiredService<IOptions<PostgreSqlStorageOptions>>();
 
 logger.LogInformation("Running database migration...");

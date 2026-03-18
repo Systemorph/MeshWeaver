@@ -80,7 +80,7 @@ public static class OrganizationNodeType
     public static MeshNode CreateMeshNode() => new(NodeType)
     {
         Name = "Organization",
-        NodeType = NodeType,
+        NodeType = "NodeType",
         Icon = "/static/NodeTypeIcons/building.svg",
         AssemblyLocation = typeof(OrganizationNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "" },
@@ -133,18 +133,6 @@ public static class OrganizationNodeType
                     Schema = createdNode.Id.ToLowerInvariant(),
                     TableMappings = PartitionDefinition.StandardTableMappings,
                     Description = $"Partition for organization {createdNode.Name ?? createdNode.Id}"
-                }
-            };
-
-            // Markdown overview page at {OrgId}/Overview
-            yield return new MeshNode("Overview", createdNode.Id)
-            {
-                Name = "Overview",
-                NodeType = "Markdown",
-                State = MeshNodeState.Active,
-                Content = new MarkdownContent
-                {
-                    Content = $"# {createdNode.Name ?? createdNode.Id}\n\nWelcome to **{createdNode.Name ?? createdNode.Id}**.\n"
                 }
             };
         }

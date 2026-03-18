@@ -58,6 +58,7 @@
     min-width: 28px;
     border-radius: 50%;
     flex-shrink: 0;
+    background: var(--neutral-layer-3, #f0f0f0) var(--icon-url) no-repeat center / 18px;
 }
 
 .mesh-node-picker-info {

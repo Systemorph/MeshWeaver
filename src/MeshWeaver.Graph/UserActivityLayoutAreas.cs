@@ -84,11 +84,11 @@ public static class UserActivityLayoutAreas
         var content = Controls.LayoutGrid
             .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; gap: 24px; width: 100%; " + ThinScrollbar);
 
-        // Latest Threads — full width
+        // Latest Threads — full width, above My Items
         content = content.WithView(BuildLatestThreads(nodePath),
             skin => skin.WithXs(12));
 
-        // Children section — full width
+        // My Items — full width, below Latest Threads
         content = content.WithView(BuildChildren(nodePath),
             skin => skin.WithXs(12));
 
