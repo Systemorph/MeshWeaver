@@ -14,13 +14,15 @@
 
 .thread-chat-input-area {
     flex-shrink: 0;
-    padding: 16px;
+    padding: 12px 16px;
     margin: 0 16px 16px 16px;
-    border: 1px solid var(--neutral-stroke-rest);
-    border-radius: 8px;
-    background: var(--neutral-layer-card-container);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    border: none;
+    border-radius: 0.25rem;
+    background: rgb(182 215 232);
     overflow: visible;
+    align-self: flex-end;
+    max-width: calc(100% - 5rem);
+    color: #1F2937;
 }
 
 .input-container {
