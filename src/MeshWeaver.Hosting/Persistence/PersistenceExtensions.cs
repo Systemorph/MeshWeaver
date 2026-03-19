@@ -9,6 +9,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
 
@@ -375,7 +376,8 @@ public static class PersistenceExtensions
                 sp.GetRequiredService<RoutingPersistenceServiceCore>(),
                 sp.GetService<AccessService>(),
                 sp.GetService<ISecurityService>(),
-                sp.GetService<IDataChangeNotifier>()));
+                sp.GetService<IDataChangeNotifier>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>()));
 
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>

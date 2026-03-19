@@ -8,14 +8,39 @@ namespace MeshWeaver.ContentCollections;
 /// <summary>
 /// Stream provider for Azure Blob Storage
 /// </summary>
-public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string containerName) : IStreamProvider
+public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string containerName, string basePrefix = "") : IStreamProvider
 {
     public string ProviderType => "AzureBlob";
+
+    /// <summary>
+    /// Prepends the base prefix to a relative path, producing the full blob path.
+    /// </summary>
+    private string ToFullPath(string path)
+    {
+        var trimmed = path.TrimStart('/');
+        if (string.IsNullOrEmpty(basePrefix))
+            return trimmed;
+        var prefix = basePrefix.TrimStart('/').TrimEnd('/');
+        return string.IsNullOrEmpty(trimmed) ? prefix + "/" : $"{prefix}/{trimmed}";
+    }
+
+    /// <summary>
+    /// Strips the base prefix from a full blob path, returning the relative path.
+    /// </summary>
+    private string ToRelativePath(string fullPath)
+    {
+        if (string.IsNullOrEmpty(basePrefix))
+            return "/" + fullPath;
+        var prefix = basePrefix.TrimStart('/').TrimEnd('/') + "/";
+        return fullPath.StartsWith(prefix)
+            ? "/" + fullPath[prefix.Length..]
+            : "/" + fullPath;
+    }
 
     public async Task<Stream?> GetStreamAsync(string reference, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        var blobClient = containerClient.GetBlobClient(reference.TrimStart('/'));
+        var blobClient = containerClient.GetBlobClient(ToFullPath(reference));
 
         if (!await blobClient.ExistsAsync(cancellationToken))
         {
@@ -28,7 +53,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
     public async Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(string path, CancellationToken cancellationToken = default)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        var blobClient = containerClient.GetBlobClient(path.TrimStart('/'));
+        var blobClient = containerClient.GetBlobClient(ToFullPath(path));
 
         if (!await blobClient.ExistsAsync(cancellationToken))
         {
@@ -46,7 +71,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
         await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
 
-        var blobClient = containerClient.GetBlobClient(reference.TrimStart('/'));
+        var blobClient = containerClient.GetBlobClient(ToFullPath(reference));
 
         if (content.CanSeek)
         {
@@ -75,14 +100,14 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
     {
         // Azure Blob Storage doesn't have true folders, but we can simulate them using blob prefixes
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        var prefix = path.TrimStart('/');
-        if (!string.IsNullOrEmpty(prefix) && !prefix.EndsWith('/'))
+        var fullPath = ToFullPath(path);
+        if (!string.IsNullOrEmpty(fullPath) && !fullPath.EndsWith('/'))
         {
-            prefix += '/';
+            fullPath += '/';
         }
 
         var folders = new HashSet<string>();
-        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", prefix, default))
+        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", fullPath, default))
         {
             if (blobItem.IsPrefix)
             {
@@ -98,20 +123,20 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
     public async Task<IReadOnlyCollection<FileItem>> GetFilesAsync(string path)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        var prefix = path.TrimStart('/');
-        if (!string.IsNullOrEmpty(prefix) && !prefix.EndsWith('/'))
+        var fullPath = ToFullPath(path);
+        if (!string.IsNullOrEmpty(fullPath) && !fullPath.EndsWith('/'))
         {
-            prefix += '/';
+            fullPath += '/';
         }
 
         var files = new List<FileItem>();
-        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", prefix, default))
+        await foreach (var blobItem in containerClient.GetBlobsByHierarchyAsync(BlobTraits.None, BlobStates.None, "/", fullPath, default))
         {
             if (blobItem.IsBlob)
             {
                 var fileName = blobItem.Blob.Name.Split('/').Last();
                 files.Add(new FileItem(
-                    '/' + blobItem.Blob.Name,
+                    ToRelativePath(blobItem.Blob.Name),
                     fileName,
                     blobItem.Blob.Properties.LastModified?.DateTime ?? DateTime.UtcNow
                 ));
@@ -123,8 +148,9 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
 
     public async Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken cancellationToken = default)
     {
-        var blobPath = $"{path.TrimStart('/').TrimEnd('/')}/{fileName}".TrimStart('/');
-        await WriteStreamAsync(blobPath, content, cancellationToken);
+        var relativePath = $"{path.TrimStart('/').TrimEnd('/')}/{fileName}".TrimStart('/');
+        var blobPath = ToFullPath(relativePath);
+        await WriteStreamAsync("/" + blobPath, content, cancellationToken);
     }
 
     public Task CreateFolderAsync(string folderPath)
@@ -136,7 +162,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
     public async Task DeleteFolderAsync(string folderPath)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        var prefix = folderPath.TrimStart('/');
+        var prefix = ToFullPath(folderPath);
         if (!string.IsNullOrEmpty(prefix) && !prefix.EndsWith('/'))
         {
             prefix += '/';
@@ -151,7 +177,7 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
     public async Task DeleteFileAsync(string filePath)
     {
         var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
-        await containerClient.DeleteBlobAsync(filePath.TrimStart('/'));
+        await containerClient.DeleteBlobAsync(ToFullPath(filePath));
     }
 
     public IDisposable? AttachMonitor(Action<string> onChanged)

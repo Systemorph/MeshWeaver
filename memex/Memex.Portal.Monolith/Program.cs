@@ -43,7 +43,7 @@ builder.UseMeshWeaver(
         // Register storage collection at mesh level for static file serving (monolith only)
         if (storageConfig != null)
         {
-            storageConfig = storageConfig with { IsEditable = true, IsStatic = true };
+            storageConfig = storageConfig with { IsEditable = false, IsStatic = true, ExposeInChildren = false };
             config.ConfigureHub(hub => hub.AddContentCollection(_ => storageConfig));
         }
 

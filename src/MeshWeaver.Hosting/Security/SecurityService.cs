@@ -449,19 +449,35 @@ internal class SecurityService : ISecurityService
     /// <summary>
     /// Adds a role to a user's AccessAssignment MeshNode.
     /// If the node already exists, appends the role. If not, creates a new node.
-    /// Node: namespace = targetNamespace ?? "", id = {userId}_Access, nodeType = "AccessAssignment"
+    /// Node: namespace = {targetNamespace}/_Access, id = {userId}_Access, nodeType = "AccessAssignment"
+    /// The _Access segment ensures satellite table routing in PostgreSQL (access table, not mesh_nodes).
     /// </summary>
     public async Task AddUserRoleAsync(string userId, string roleId, string? targetNamespace, string? assignedBy = null, CancellationToken ct = default)
     {
         _logger.LogInformation("Adding role {RoleId} to user {UserId} on namespace {Namespace} by {AssignedBy}",
             roleId, userId, targetNamespace ?? "(global)", assignedBy ?? "(system)");
 
-        var ns = targetNamespace ?? "";
         var nodeId = $"{userId}_Access";
-        var path = string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}";
+        // Use _Access satellite segment so PostgreSQL routes to the `access` table
+        // (where the trigger rebuilds user_effective_permissions)
+        var ns = string.IsNullOrEmpty(targetNamespace)
+            ? "_Access"
+            : $"{targetNamespace}/_Access";
 
-        // Try to load existing AccessAssignment node
+        // Try to load existing AccessAssignment node (check both old and new paths)
+        var path = $"{ns}/{nodeId}";
         var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
+        // Fallback: check legacy path without _Access segment
+        if (existingNode == null && !string.IsNullOrEmpty(targetNamespace))
+        {
+            var legacyPath = $"{targetNamespace}/{nodeId}";
+            existingNode = await _persistenceCore.GetNodeAsync(legacyPath, Options, ct);
+            if (existingNode != null)
+            {
+                // Delete from legacy location — it will be re-created at the correct path
+                await _persistenceCore.DeleteNodeAsync(legacyPath, false, ct);
+            }
+        }
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
         var roles = existingAssignment?.Roles?.ToList() ?? [];
@@ -474,7 +490,7 @@ internal class SecurityService : ISecurityService
         {
             NodeType = "AccessAssignment",
             Name = $"{userId} Access",
-            MainNode = string.IsNullOrEmpty(ns) ? nodeId : ns,
+            MainNode = string.IsNullOrEmpty(targetNamespace) ? "_Access" : targetNamespace,
             Content = new AccessAssignment
             {
                 AccessObject = userId,
@@ -496,11 +512,21 @@ internal class SecurityService : ISecurityService
         _logger.LogInformation("Removing role {RoleId} from user {UserId} on namespace {Namespace}",
             roleId, userId, targetNamespace ?? "(global)");
 
-        var ns = targetNamespace ?? "";
         var nodeId = $"{userId}_Access";
-        var path = string.IsNullOrEmpty(ns) ? nodeId : $"{ns}/{nodeId}";
+        var ns = string.IsNullOrEmpty(targetNamespace)
+            ? "_Access"
+            : $"{targetNamespace}/_Access";
+        var path = $"{ns}/{nodeId}";
 
         var existingNode = await _persistenceCore.GetNodeAsync(path, Options, ct);
+        // Fallback: check legacy path without _Access segment
+        if (existingNode == null && !string.IsNullOrEmpty(targetNamespace))
+        {
+            var legacyPath = $"{targetNamespace}/{nodeId}";
+            existingNode = await _persistenceCore.GetNodeAsync(legacyPath, Options, ct);
+            if (existingNode != null)
+                path = legacyPath; // Delete from legacy location
+        }
         var existingAssignment = existingNode != null ? DeserializeAssignment(existingNode) : null;
 
         if (existingAssignment == null)

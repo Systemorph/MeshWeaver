@@ -379,8 +379,12 @@ public static class MeshNodeLayoutAreas
             DataContext = LayoutAreaReference.GetDataPointer(iconDataId)
         });
 
-        // File browser for the content collection
-        content = content.WithView(new FileBrowserControl("content") { Path = "/" });
+        // File browser for the first editable content collection
+        var iconContentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var iconCollection = iconContentService?.GetAllCollectionConfigs()?.FirstOrDefault(c => c.IsEditable);
+        if (iconCollection != null)
+            content = content.WithView(new FileBrowserControl(iconCollection.Name) { Path = "/" }
+                .WithTopLevel("/").WithCollectionConfiguration(iconCollection).CreatePath());
 
         // Save button
         var actions = Controls.Stack
@@ -867,14 +871,36 @@ public static class MeshNodeLayoutAreas
     /// Reads ?collection= query parameter to select which collection to browse.
     /// </summary>
     [Browsable(false)]
-    public static IObservable<UiControl?> Files(LayoutAreaHost host, RenderingContext _)
+    public static UiControl Files(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        return Observable.FromAsync(async () =>
+        var backHref = BuildUrl(hubPath, OverviewArea);
+
+        var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
+        var collections = contentService?.GetAllCollectionConfigs()?.Where(c => c.IsEditable).ToList();
+
+        var stack = Controls.Stack
+            .WithView(Controls.Button("Back")
+                .WithAppearance(Appearance.Lightweight)
+                .WithIconStart(FluentIcons.ArrowLeft())
+                .WithNavigateToHref(backHref));
+
+        if (collections is not { Count: > 0 })
+            return stack;
+
+        foreach (var col in collections)
         {
-            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
-            return (UiControl?)BuildFilesView(host, hubPath, !canEdit);
-        });
+            if (collections.Count > 1)
+                stack = stack.WithView(Controls.Title(col.DisplayName ?? col.Name, 3));
+
+            var colConfig = col;
+            stack = stack.WithView(new FileBrowserControl(colConfig.Name)
+                .WithCollectionConfiguration(colConfig)
+                .WithCollectionInfo(colConfig.SourceType, colConfig.BasePath, colConfig.Settings)
+                .CreatePath());
+        }
+
+        return stack;
     }
 
     private static UiControl BuildFilesView(LayoutAreaHost host, string hubPath, bool readOnly)
@@ -890,25 +916,12 @@ public static class MeshNodeLayoutAreas
         var contentService = host.Hub.ServiceProvider.GetService<IContentService>();
         var collections = contentService?.GetAllCollectionConfigs()?.Where(c => c.IsEditable).ToList();
 
-        // Try to get the "content" collection config directly (may exist even if GetAllCollectionConfigs filters it)
-        var contentConfig = contentService?.GetCollectionConfig("content");
-
         if (collections is not { Count: > 0 })
-        {
-            var fb = new FileBrowserControl("content").WithReadOnly(readOnly);
-            if (contentConfig != null)
-                fb = fb.WithCollectionConfiguration(contentConfig).CreatePath();
-            stack = stack.WithView(fb);
             return stack;
-        }
 
         if (collections.Count == 1)
         {
-            var fb = new FileBrowserControl(collections[0].Name).WithReadOnly(readOnly);
-            var cfg = contentService?.GetCollectionConfig(collections[0].Name);
-            if (cfg != null)
-                fb = fb.WithCollectionConfiguration(cfg).CreatePath();
-            stack = stack.WithView(fb);
+            stack = stack.WithView(new FileBrowserControl(collections[0].Name).WithReadOnly(readOnly));
             return stack;
         }
 
