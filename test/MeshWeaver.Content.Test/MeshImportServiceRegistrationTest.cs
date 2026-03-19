@@ -1,5 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
-using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -10,13 +15,12 @@ using Xunit;
 namespace MeshWeaver.Content.Test;
 
 /// <summary>
-/// Tests that IMeshImportService is registered in DI across all persistence configurations
-/// and that zip/folder import flows work end-to-end.
+/// Tests that IMeshImportService is registered in DI and that
+/// zip/folder import flows work end-to-end using the hub's JsonSerializerOptions.
 /// </summary>
 public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly string _sourceDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", "ImportReg_Source_" + Guid.NewGuid());
-    private readonly string _targetDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", "ImportReg_Target_" + Guid.NewGuid());
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddGraph();
@@ -26,8 +30,6 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         base.Dispose();
         if (Directory.Exists(_sourceDirectory))
             Directory.Delete(_sourceDirectory, recursive: true);
-        if (Directory.Exists(_targetDirectory))
-            Directory.Delete(_targetDirectory, recursive: true);
     }
 
     [Fact]
@@ -54,7 +56,7 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
         await sourceAdapter.WriteAsync(node1, jsonOptions, CancellationToken.None);
         await sourceAdapter.WriteAsync(node2, jsonOptions, CancellationToken.None);
 
-        // Act - resolve from DI and run import
+        // Act - resolve from DI (uses hub's JsonSerializerOptions)
         var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
         var result = await importService.ImportNodesAsync(_sourceDirectory, force: true);
 

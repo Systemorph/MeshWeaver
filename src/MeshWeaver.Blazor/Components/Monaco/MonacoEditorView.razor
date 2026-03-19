@@ -22,7 +22,6 @@
     private bool completionProviderRegistered = false;
     private int lastCompletionItemCount = 0;
     private string? lastSetValue; // Track last value set to editor to detect external changes
-    private bool userIsTyping; // Suppress external value updates while user is actively editing
 
     [CascadingParameter(Name = "ThemeMode")]
     public DesignThemeModes Mode { get; set; }
@@ -266,7 +265,6 @@
     {
         if (editor != null)
         {
-            userIsTyping = true;
             var value = await editor.GetValue();
             if (value != Value)
             {
@@ -588,9 +586,8 @@
             });
 
             // Check if Value changed from an external source (e.g., data binding).
-            // Skip if user is actively typing — don't overwrite their input with server echo.
             var currentValue = Value ?? "";
-            if (currentValue != lastSetValue && !userIsTyping)
+            if (currentValue != lastSetValue)
             {
                 Logger.LogDebug("Value changed externally from '{OldValue}' to '{NewValue}'",
                     lastSetValue?.Substring(0, Math.Min(50, lastSetValue?.Length ?? 0)),
@@ -598,7 +595,6 @@
                 lastSetValue = currentValue;
                 await editor.SetValue(currentValue);
             }
-            userIsTyping = false;
 
             // Try to register completion provider (will skip if already registered with same items)
             await TryRegisterCompletionProvider();
