@@ -53,13 +53,25 @@ public class MeshImportService : IMeshImportService
             var source = new FileSystemStorageAdapter(sourcePath);
             var sourceNodes = await ReadAllNodesAsync(source, jsonOptions, ct);
 
+            if (sourceNodes.Count == 0)
+                return ImportNodesResponse.Fail("No nodes found in source directory.");
+
             // Remap paths if targetRootPath is specified
             if (!string.IsNullOrEmpty(targetRootPath))
-            {
                 sourceNodes = RemapPaths(sourceNodes, targetRootPath);
+
+            // 2. Validate all nodes before importing
+            var validationErrors = ValidateNodes(sourceNodes);
+            if (validationErrors.Count > 0)
+            {
+                var errorSummary = string.Join("; ", validationErrors.Take(5));
+                if (validationErrors.Count > 5)
+                    errorSummary += $" ... and {validationErrors.Count - 5} more errors";
+                _logger.LogError("Import validation failed: {Errors}", errorSummary);
+                return ImportNodesResponse.Fail($"Validation failed ({validationErrors.Count} error(s)): {errorSummary}");
             }
 
-            // 2. Query existing nodes in target namespace
+            // 3. Query existing nodes in target namespace
             var query = !string.IsNullOrEmpty(targetRootPath)
                 ? $"namespace:{targetRootPath} scope:subtree"
                 : "scope:subtree";
@@ -70,7 +82,7 @@ public class MeshImportService : IMeshImportService
                 existingNodes[node.Path] = node;
             }
 
-            // 3. Create / Update
+            // 4. Create / Update — fail on first error (don't create partial data)
             var nodesImported = 0;
             var nodesSkipped = 0;
             var errors = new List<string>();
@@ -90,6 +102,7 @@ public class MeshImportService : IMeshImportService
                         {
                             await _meshService.UpdateNodeAsync(sourceNode, ct);
                             nodesImported++;
+                            _logger.LogDebug("Updated node {Path}", sourceNode.Path);
                         }
                         else
                         {
@@ -100,6 +113,7 @@ public class MeshImportService : IMeshImportService
                     {
                         await _meshService.CreateNodeAsync(sourceNode, ct);
                         nodesImported++;
+                        _logger.LogDebug("Created node {Path}", sourceNode.Path);
                     }
 
                     onProgress?.Invoke(nodesImported, 0, sourceNode.Path);
@@ -107,18 +121,18 @@ public class MeshImportService : IMeshImportService
                 catch (Exception ex)
                 {
                     var errorMsg = $"{sourceNode.Path}: {ex.Message}";
-                    _logger.LogWarning(ex, "Failed to import node {Path}", sourceNode.Path);
+                    _logger.LogError(ex, "Failed to import node {Path}", sourceNode.Path);
                     errors.Add(errorMsg);
-                    nodesSkipped++;
+                    // Stop on first error — don't create partial/inconsistent data
+                    break;
                 }
             }
 
-            // 4. Remove nodes not in source (if removeMissing)
+            // 5. Remove nodes not in source (if removeMissing and no errors)
             var nodesRemoved = 0;
-            if (removeMissing)
+            if (removeMissing && errors.Count == 0)
             {
                 var sourcePaths = sourceNodes.Select(n => n.Path).ToHashSet();
-                // Delete deepest first to avoid parent-before-child issues
                 var toRemove = existingNodes.Keys
                     .Where(p => !sourcePaths.Contains(p))
                     .OrderByDescending(p => p.Count(c => c == '/'))
@@ -145,22 +159,53 @@ public class MeshImportService : IMeshImportService
                 nodesImported, nodesSkipped, nodesRemoved, sw.Elapsed);
 
             if (errors.Count > 0)
-            {
-                _logger.LogWarning("Import errors: {Errors}", string.Join("; ", errors));
-            }
-
-            var result = ImportNodesResponse.Ok(nodesImported, 0, nodesSkipped, 0, sw.Elapsed, nodesRemoved);
-            // If all nodes failed, report as error with details
-            if (nodesImported == 0 && errors.Count > 0)
                 return ImportNodesResponse.Fail(
-                    $"All {errors.Count} node(s) failed to import. First error: {errors[0]}");
-            return result;
+                    $"Import aborted after {nodesImported} node(s): {errors[0]}");
+
+            return ImportNodesResponse.Ok(nodesImported, 0, nodesSkipped, 0, sw.Elapsed, nodesRemoved);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to import nodes from {SourcePath}", sourcePath);
             return ImportNodesResponse.Fail($"Import failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Validates all nodes before import. Returns list of error messages (empty = valid).
+    /// </summary>
+    private static List<string> ValidateNodes(List<MeshNode> nodes)
+    {
+        var errors = new List<string>();
+        var paths = new HashSet<string>();
+
+        foreach (var node in nodes)
+        {
+            // Path must be valid
+            if (string.IsNullOrWhiteSpace(node.Path))
+            {
+                errors.Add($"Node has empty path (Id={node.Id}, Namespace={node.Namespace})");
+                continue;
+            }
+
+            // No backslashes in paths
+            if (node.Path.Contains('\\'))
+                errors.Add($"{node.Path}: path contains backslashes");
+
+            // Id must not be empty
+            if (string.IsNullOrWhiteSpace(node.Id))
+                errors.Add($"{node.Path}: Id is empty");
+
+            // Check for duplicate paths
+            if (!paths.Add(node.Path))
+                errors.Add($"{node.Path}: duplicate path in import");
+
+            // Path segments must not be empty
+            if (node.Path.Contains("//"))
+                errors.Add($"{node.Path}: path contains empty segments (//)");
+        }
+
+        return errors;
     }
 
     /// <summary>
