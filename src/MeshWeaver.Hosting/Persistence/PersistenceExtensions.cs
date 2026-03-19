@@ -374,6 +374,7 @@ public static class PersistenceExtensions
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new RoutingMeshQueryProvider(
                 sp.GetRequiredService<RoutingPersistenceServiceCore>(),
+                sp.GetService<MeshConfiguration>(),
                 sp.GetService<AccessService>(),
                 sp.GetService<ISecurityService>(),
                 sp.GetService<IDataChangeNotifier>(),

@@ -16,7 +16,8 @@ public class MeshConfiguration(
     Func<MessageHubConfiguration, MessageHubConfiguration>? defaultNodeHubConfiguration = null,
     IReadOnlyList<string>? globalCreatableTypes = null,
     IReadOnlySet<string>? autocompleteExcludedNodeTypes = null,
-    IReadOnlyList<NodeTypePermission>? nodeTypePermissions = null)
+    IReadOnlyList<NodeTypePermission>? nodeTypePermissions = null,
+    IReadOnlyList<QueryRoutingRule>? queryRoutingRules = null)
 {
     /// <summary>
     /// Registered mesh nodes by their key/path.
@@ -49,6 +50,31 @@ public class MeshConfiguration(
     /// Read by the persistence layer to sync to the database.
     /// </summary>
     public IReadOnlyList<NodeTypePermission> NodeTypePermissions { get; } = nodeTypePermissions ?? [];
+
+    /// <summary>
+    /// Query routing rules that resolve partition and table hints from ParsedQuery.
+    /// Applied in order during query execution; first non-null Partition/Table wins.
+    /// </summary>
+    public IReadOnlyList<QueryRoutingRule> QueryRoutingRules { get; } = queryRoutingRules ?? [];
+
+    /// <summary>
+    /// Applies all routing rules to a parsed query and returns accumulated hints.
+    /// First non-null Partition wins, first non-null Table wins.
+    /// </summary>
+    public QueryRoutingHints ResolveRoutingHints(ParsedQuery query)
+    {
+        string? partition = null;
+        string? table = null;
+        foreach (var rule in QueryRoutingRules)
+        {
+            var hint = rule(query);
+            if (hint == null) continue;
+            partition ??= hint.Partition;
+            table ??= hint.Table;
+            if (partition != null && table != null) break;
+        }
+        return new QueryRoutingHints { Partition = partition, Table = table };
+    }
 
     /// <summary>
     /// Default global creatable types: Markdown, Thread, Agent, NodeType.

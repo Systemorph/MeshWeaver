@@ -151,6 +151,18 @@ public record MeshQueryRequest
     public string? Context { get; init; }
 
     /// <summary>
+    /// Partition hint resolved by query routing rules.
+    /// When set, query is routed to this specific partition only (no fan-out).
+    /// </summary>
+    public string? PartitionHint { get; init; }
+
+    /// <summary>
+    /// Table hint resolved by query routing rules.
+    /// When set, overrides the default table resolution in the storage adapter.
+    /// </summary>
+    public string? TableHint { get; init; }
+
+    /// <summary>
     /// Creates a new request with the specified query string.
     /// </summary>
     public static MeshQueryRequest FromQuery(string query) => new() { Query = query };

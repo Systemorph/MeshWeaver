@@ -150,7 +150,12 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
     {
         var relativePath = $"{path.TrimStart('/').TrimEnd('/')}/{fileName}".TrimStart('/');
         var blobPath = ToFullPath(relativePath);
-        await WriteStreamAsync("/" + blobPath, content, cancellationToken);
+
+        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+        var blobClient = containerClient.GetBlobClient(blobPath);
+        if (content.CanSeek) content.Position = 0;
+        await blobClient.UploadAsync(content, overwrite: true, cancellationToken: cancellationToken);
     }
 
     public Task CreateFolderAsync(string folderPath)

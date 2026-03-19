@@ -48,19 +48,242 @@ if (connectionString.Contains("database.azure.com"))
     logger.LogInformation("Granted CREATE ON DATABASE to azure_pg_admin.");
 }
 
-// Initialize the full schema in the public schema (vector extension + all tables).
-// Per-partition schemas are created by PostgreSqlPartitionedStoreFactory at app startup,
-// but the public schema serves as a fallback since partition data sources use
-// SearchPath = "{schemaName},public".
+// ═══════════════════════════════════════════════════════════════════════════
+// Schema initialization — always runs, idempotent (CREATE IF NOT EXISTS).
+// Sets up tables, indexes, triggers, and satellite tables in the public schema.
+// New DBs get everything correct from the start.
+// Existing DBs get updated trigger functions (e.g., fixed role flag values).
+// ═══════════════════════════════════════════════════════════════════════════
+
 await PostgreSqlSchemaInitializer.InitializeAsync(dataSource, options.Value);
 
-// Create satellite tables (threads, annotations, etc.) in the public schema as well.
-// These are needed as fallback when partition-specific schemas haven't been created yet.
 var satelliteTableNames = MeshWeaver.Mesh.PartitionDefinition.StandardTableMappings.Values;
 await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
     dataSource, options.Value, satelliteTableNames);
 
-logger.LogInformation("Database migration completed successfully.");
+await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(dataSource);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Versioned migrations — tracked in admin.mesh_nodes as MeshNode(id="db_version").
+//
+// Two categories:
+//   (a) Schema migrations: structural changes needed for both new and existing DBs.
+//       These go into PostgreSqlSchemaInitializer (idempotent, always run).
+//   (b) Data repairs: fix data written incorrectly by prior code versions.
+//       These go here as versioned migrations — only run once, only needed
+//       for existing DBs. New DBs never have the bad data.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Ensure admin schema exists for version tracking
+await using (var ensureAdmin = dataSource.CreateCommand("CREATE SCHEMA IF NOT EXISTS admin"))
+{
+    await ensureAdmin.ExecuteNonQueryAsync();
+}
+
+// Ensure admin.mesh_nodes exists (may not if this is a fresh DB before partition init)
+await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(
+    dataSource, options.Value);
+
+// Read current DB version (0 = fresh DB or pre-versioning)
+int currentVersion = 0;
+try
+{
+    await using var readVersion = dataSource.CreateCommand("""
+        SELECT (content->>'Version')::int FROM admin.mesh_nodes
+        WHERE id = 'db_version' AND namespace = '' LIMIT 1
+        """);
+    var result = await readVersion.ExecuteScalarAsync();
+    if (result is int v) currentVersion = v;
+    else if (result is long l) currentVersion = (int)l;
+}
+catch
+{
+    // Table may not exist yet — version = 0 (fresh DB)
+}
+
+logger.LogInformation("Current DB version: {Version}", currentVersion);
+
+// Detect fresh DB (no partition schemas exist yet)
+bool isFreshDb;
+await using (var checkSchemas = dataSource.CreateCommand("""
+    SELECT count(*) FROM information_schema.schemata s
+    WHERE EXISTS (
+        SELECT 1 FROM information_schema.tables t
+        WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes'
+    )
+    AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+    AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+    """))
+{
+    var schemaCount = (long)(await checkSchemas.ExecuteScalarAsync())!;
+    isFreshDb = schemaCount == 0;
+}
+
+if (isFreshDb)
+{
+    logger.LogInformation("Fresh database detected — skipping data repairs (no existing data to fix).");
+    currentVersion = 1; // Skip all repair migrations
+}
+
+// ── Data repair v1: Move AccessAssignments to correct table + namespace ──
+// Bug: AddUserRoleAsync wrote AccessAssignment nodes to mesh_nodes (wrong table)
+// with namespace={scope}/{userId}_Access (missing _Access segment).
+// Fix: Move to access table, add _Access to namespace, rebuild permissions.
+if (currentVersion < 1)
+{
+    logger.LogInformation("Running repair v1: Move AccessAssignments to access table with _Access namespace...");
+    await using (var cmd = dataSource.CreateCommand("""
+        DO $$
+        DECLARE
+            schema_rec RECORD;
+            moved_count INT;
+            ns_count INT;
+            cols TEXT := 'namespace, id, name, node_type, description, category, icon, display_order, last_modified, version, state, content, desired_id, main_node, embedding';
+        BEGIN
+            FOR schema_rec IN
+                SELECT schema_name FROM information_schema.schemata s
+                WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
+                AND EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'access')
+                AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+                AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+            LOOP
+                -- Move AccessAssignments from mesh_nodes to access table
+                EXECUTE format(
+                    'INSERT INTO %I.access (' || cols || ') SELECT ' || cols || ' FROM %I.mesh_nodes WHERE node_type = ''AccessAssignment'' ON CONFLICT (namespace, id) DO NOTHING',
+                    schema_rec.schema_name, schema_rec.schema_name
+                );
+                GET DIAGNOSTICS moved_count = ROW_COUNT;
+                IF moved_count > 0 THEN
+                    EXECUTE format(
+                        'DELETE FROM %I.mesh_nodes WHERE node_type = ''AccessAssignment''',
+                        schema_rec.schema_name
+                    );
+                    RAISE NOTICE 'Schema %: moved % AccessAssignment(s) from mesh_nodes to access', schema_rec.schema_name, moved_count;
+                END IF;
+
+                -- Fix namespace: ensure _Access segment is present
+                EXECUTE format(
+                    'UPDATE %I.access SET namespace = namespace || ''/_Access'' WHERE node_type = ''AccessAssignment'' AND namespace NOT LIKE ''%%/_Access''',
+                    schema_rec.schema_name
+                );
+                GET DIAGNOSTICS ns_count = ROW_COUNT;
+                IF ns_count > 0 THEN
+                    RAISE NOTICE 'Schema %: fixed % namespace(s) to include /_Access', schema_rec.schema_name, ns_count;
+                END IF;
+
+                -- Rebuild permissions
+                BEGIN
+                    EXECUTE format('SELECT %I.rebuild_user_effective_permissions()', schema_rec.schema_name);
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'Schema %: rebuild failed: %', schema_rec.schema_name, SQLERRM;
+                END;
+            END LOOP;
+        END $$;
+        """))
+    {
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    currentVersion = 1;
+    logger.LogInformation("Repair v1 completed.");
+}
+
+// ── Data repair v2: Re-create trigger functions + populate partition_access ──
+// The schema initializer now includes partition_access sync in
+// rebuild_user_effective_permissions() with hardcoded schema name.
+// For existing DBs: re-run schema init per schema to update the function,
+// then rebuild permissions which populates partition_access.
+if (currentVersion < 2)
+{
+    logger.LogInformation("Running repair v2: Update trigger functions and populate partition_access...");
+
+    // Discover existing partition schemas
+    var schemas = new List<string>();
+    await using (var listCmd = dataSource.CreateCommand("""
+        SELECT schema_name FROM information_schema.schemata s
+        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
+        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+        ORDER BY s.schema_name
+        """))
+    {
+        await using var rdr = await listCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync()) schemas.Add(rdr.GetString(0));
+    }
+
+    foreach (var schema in schemas)
+    {
+        logger.LogInformation("Repair v2: Updating trigger function for schema {Schema}...", schema);
+
+        // Build a temporary SearchPath data source to re-create the trigger function
+        var csb = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = $"{schema},public" };
+        var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+        dsb.UseVector();
+        await using var schemaDs = dsb.Build();
+
+        // Check if this schema has a versions schema
+        var versionsSchema = schema + "_versions";
+        bool hasVersions;
+        await using (var checkCmd = dataSource.CreateCommand(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)"))
+        {
+            checkCmd.Parameters.AddWithValue(versionsSchema);
+            hasVersions = (bool)(await checkCmd.ExecuteScalarAsync())!;
+        }
+
+        var schemaOpts = new PostgreSqlStorageOptions
+        {
+            ConnectionString = csb.ConnectionString,
+            VectorDimensions = options.Value.VectorDimensions,
+            Schema = schema
+        };
+
+        if (hasVersions)
+        {
+            var vCsb = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = $"{versionsSchema},public" };
+            await using var versionsDs = new NpgsqlDataSourceBuilder(vCsb.ConnectionString).Build();
+            await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
+                dataSource, schemaDs, versionsDs, schemaOpts, versionsSchema);
+        }
+        else
+        {
+            await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(schemaDs, schemaOpts);
+        }
+
+        // Now rebuild permissions — the updated function will populate partition_access
+        try
+        {
+            await using var rebuildCmd = dataSource.CreateCommand(
+                $"SELECT \"{schema}\".rebuild_user_effective_permissions()");
+            await rebuildCmd.ExecuteNonQueryAsync();
+            logger.LogInformation("Repair v2: Schema {Schema} — rebuilt permissions + partition_access", schema);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Repair v2: Schema {Schema} — rebuild failed", schema);
+        }
+    }
+
+    currentVersion = 2;
+    logger.LogInformation("Repair v2 completed.");
+}
+
+// Save current version
+await using (var saveVersion = dataSource.CreateCommand("""
+    INSERT INTO admin.mesh_nodes (namespace, id, name, node_type, state, content, last_modified, main_node)
+    VALUES ('', 'db_version', 'Database Version', 'Settings', 2,
+            jsonb_build_object('Version', @version, 'LastMigration', now()::text),
+            now(), 'db_version')
+    ON CONFLICT (namespace, id) DO UPDATE SET
+        content = jsonb_build_object('Version', @version, 'LastMigration', now()::text),
+        last_modified = now()
+    """))
+{
+    saveVersion.Parameters.AddWithValue("@version", currentVersion);
+    await saveVersion.ExecuteNonQueryAsync();
+}
+
+logger.LogInformation("Database migration completed. Version: {Version}", currentVersion);
 
 // Signal completion to Aspire (health check passes, then process exits cleanly)
 await host.StartAsync();

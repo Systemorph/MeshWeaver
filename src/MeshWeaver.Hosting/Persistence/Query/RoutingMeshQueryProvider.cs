@@ -21,6 +21,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 internal class RoutingMeshQueryProvider : IMeshQueryProvider
 {
     private readonly RoutingPersistenceServiceCore _router;
+    private readonly MeshConfiguration? _meshConfig;
     private readonly AccessService? _accessService;
     private readonly ISecurityService? _securityService;
     private readonly IDataChangeNotifier? _changeNotifier;
@@ -31,12 +32,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
     public RoutingMeshQueryProvider(
         RoutingPersistenceServiceCore router,
+        MeshConfiguration? meshConfig = null,
         AccessService? accessService = null,
         ISecurityService? securityService = null,
         IDataChangeNotifier? changeNotifier = null,
         ILogger<RoutingMeshQueryProvider>? logger = null)
     {
         _router = router;
+        _meshConfig = meshConfig;
         _accessService = accessService;
         _securityService = securityService;
         _changeNotifier = changeNotifier;
@@ -119,13 +122,21 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var parsed = _parser.Parse(request.Query);
+
+        // Apply routing rules to resolve partition/table hints
+        var hints = _meshConfig?.ResolveRoutingHints(parsed) ?? new QueryRoutingHints();
+        var enrichedRequest = (hints.Partition != null || hints.Table != null)
+            ? request with { PartitionHint = hints.Partition, TableHint = hints.Table }
+            : request;
+
         var effectivePath = parsed.Path ?? request.DefaultPath;
-        var segment = PathPartition.GetFirstSegment(effectivePath);
+        var segment = hints.Partition
+            ?? PathPartition.GetFirstSegment(effectivePath);
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
         {
-            // Route to specific partition
-            await foreach (var item in provider.QueryAsync(request, options, ct))
+            // Route to specific partition (from path or routing rules)
+            await foreach (var item in provider.QueryAsync(enrichedRequest, options, ct))
                 yield return item;
             yield break;
         }

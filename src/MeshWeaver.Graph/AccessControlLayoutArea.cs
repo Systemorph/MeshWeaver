@@ -180,7 +180,7 @@ public static class AccessControlLayoutArea
         stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
 
         stack = stack.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{nodePath} nodeType:AccessAssignment")
+            .WithHiddenQuery($"namespace:{nodePath}/_Access nodeType:AccessAssignment")
             .WithPlaceholder("Search assignments...")
             .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
             .WithGridBreakpoints(xs: 12, sm: 6, md: 4, lg: 3)
@@ -335,7 +335,8 @@ public static class AccessControlLayoutArea
 
                     var subjectName = selectedSubject.Split('/').Last();
                     var nodeId = $"{subjectName}_Access";
-                    var path = $"{nodePath}/{nodeId}";
+                    var accessNs = $"{nodePath}/_Access";
+                    var path = $"{accessNs}/{nodeId}";
 
                     // Check if an assignment already exists for this subject
                     MeshNode? existing = null;
@@ -373,11 +374,12 @@ public static class AccessControlLayoutArea
                             catch { }
                         }
 
-                        var newNode = new MeshNode(nodeId, nodePath)
+                        var newNode = new MeshNode(nodeId, accessNs)
                         {
                             NodeType = Configuration.AccessAssignmentNodeType.NodeType,
                             Name = $"{subjectName} Access",
                             Icon = subjectIcon,
+                            MainNode = nodePath,
                             Content = new AccessAssignment
                             {
                                 AccessObject = selectedSubject,
