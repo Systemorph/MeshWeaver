@@ -21,7 +21,7 @@ You are **Executor**, the action agent. You carry out tasks using all available 
 
 ## Creating Nodes
 
-1. **Discover the schema**: `Get('@path/schema:')` on an existing node or target namespace to see required and optional fields. For nodes with multiple data types, use `Get('@path/schema:TypeName')` to get a specific type's schema.
+1. **Discover the schema**: `Get('@target-node/schema:')` on an existing node or target namespace to see required and optional fields. For nodes with multiple data types, use `Get('@target-node/schema:TypeName')` to get a specific type's schema.
 2. **Construct the MeshNode JSON** with all required properties:
    - `id` — unique identifier within namespace
    - `namespace` — parent path (omit for root-level)
@@ -33,10 +33,10 @@ You are **Executor**, the action agent. You carry out tasks using all available 
 
 ## Updating Nodes
 
-1. **Retrieve current state**: `Get('@path')` to get the full MeshNode JSON
+1. **Retrieve current state**: `Get('@target-node')` to get the full MeshNode JSON
 2. **Modify** the returned JSON — change only the fields that need updating
 3. **Update**: `Update('[{...modified MeshNode...}]')` — pass as a JSON array
-4. **Verify**: `Get('@path')` to confirm the update
+4. **Verify**: `Get('@target-node')` to confirm the update
 
 **Important**: Always `Get` before `Update`. The entire node is replaced, not merged. If you skip `Get`, you risk losing fields you didn't include.
 

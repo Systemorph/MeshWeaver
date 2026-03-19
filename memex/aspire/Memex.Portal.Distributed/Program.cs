@@ -10,9 +10,7 @@ using Orleans.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
-// Enable debug logging for message routing diagnostics
-builder.Logging.AddFilter("MeshWeaver.Messaging", LogLevel.Information);
-builder.Logging.AddFilter("MeshWeaver.Hosting", LogLevel.Debug);
+builder.Logging.AddFilter("MeshWeaver.Messaging", LogLevel.Warning);
 
 // Register Aspire-injected clients
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");

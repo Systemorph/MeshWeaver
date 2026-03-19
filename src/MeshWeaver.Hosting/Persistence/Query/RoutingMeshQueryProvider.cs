@@ -52,7 +52,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
     private string GetEffectiveUserId()
     {
-        var userId = _accessService?.Context?.ObjectId;
+        // Try thread-local context first, then circuit/session context
+        var ctx = _accessService?.Context?.ObjectId;
+        var circuit = _accessService?.CircuitContext?.ObjectId;
+        var userId = ctx ?? circuit;
+        _logger?.LogDebug("[UserId] Context={Context}, CircuitContext={Circuit}, Effective={Effective}",
+            ctx ?? "(null)", circuit ?? "(null)", userId ?? "Anonymous");
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
@@ -78,11 +83,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
         {
-            // Route to specific partition (from path or routing rules)
+            _logger?.LogDebug("[QueryRoute] Single partition: {Segment}, query={Query}", segment, request.Query);
             await foreach (var item in provider.QueryAsync(enrichedRequest, options, ct))
                 yield return item;
             yield break;
         }
+
+        _logger?.LogDebug("[QueryRoute] Global fan-out, crossSchema={HasCrossSchema}, query={Query}",
+            _crossSchemaProvider != null, request.Query);
 
         // Build fan-out query: search full partition trees.
         // Exclude satellite nodes (is:main) unless the query has a specific filter
@@ -102,7 +110,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             var crossParsed = _parser.Parse(fanOutQuery);
             var userId = GetEffectiveUserId();
 
-            _logger?.LogInformation("Cross-schema query: {Query}, schemas=[{Schemas}], userId={UserId}",
+            _logger?.LogDebug("Cross-schema query: {Query}, schemas=[{Schemas}], userId={UserId}",
                 fanOutQuery, string.Join(",", schemas), userId);
 
             var crossResults = new List<object>();
@@ -131,7 +139,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var allResults = new ConcurrentBag<object>();
 
-        _logger?.LogInformation("Fan-out query: {Query}, providers={Count}, effectivePath={Path}",
+        _logger?.LogDebug("Fan-out query: {Query}, providers={Count}, effectivePath={Path}",
             fanOutQuery, _router.QueryProviders.Count, effectivePath);
 
         var queryTasks = new List<Task>();
@@ -150,7 +158,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         await Task.WhenAll(queryTasks);
 
-        _logger?.LogInformation("Fan-out complete: {ResultCount} results from {TaskCount} partitions",
+        _logger?.LogDebug("Fan-out complete: {ResultCount} results from {TaskCount} partitions",
             allResults.Count, queryTasks.Count);
 
         // Re-sort merged results and apply global limit
@@ -228,18 +236,22 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: query all partitions. Access control enforced in SQL.
-        // Limit concurrency to avoid pool exhaustion on keystroke-driven autocomplete.
+        // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
+        // Use searchable_schemas from cross-schema provider if available.
+        var searchableSchemas = _crossSchemaProvider != null
+            ? (await _crossSchemaProvider.GetSearchableSchemasAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
         foreach (var (key, p) in _router.QueryProviders)
         {
+            // Skip non-searchable partitions (Admin, Portal, Kernel)
+            if (searchableSchemas != null && !searchableSchemas.Contains(key.ToLowerInvariant()))
+                continue;
             tasks.Add(AutocompleteOneAsync(key, p));
         }
-
-        await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
-            tasks.Add(AutocompleteOneAsync(key, p));
 
         await Task.WhenAll(tasks);
 
@@ -248,10 +260,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            try
-            {
-                await FanOutThrottle.WaitAsync(ct);
-            }
+            try { await FanOutThrottle.WaitAsync(ct); }
             catch (OperationCanceledException) { return; }
 
             try
@@ -288,17 +297,20 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: query all partitions. Access control enforced in SQL.
+        // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
+        var searchableSchemas = _crossSchemaProvider != null
+            ? (await _crossSchemaProvider.GetSearchableSchemasAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
+
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
         foreach (var (key, p) in _router.QueryProviders)
         {
+            if (searchableSchemas != null && !searchableSchemas.Contains(key.ToLowerInvariant()))
+                continue;
             tasks.Add(AutocompleteOneAsync(key, p));
         }
-
-        await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
-            tasks.Add(AutocompleteOneAsync(key, p));
 
         await Task.WhenAll(tasks);
 

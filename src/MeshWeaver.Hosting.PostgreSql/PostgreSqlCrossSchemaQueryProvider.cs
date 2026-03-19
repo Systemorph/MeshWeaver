@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 
 namespace MeshWeaver.Hosting.PostgreSql;
@@ -16,13 +17,16 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     private readonly NpgsqlDataSource _dataSource;
     private readonly PostgreSqlPartitionedStoreFactory _factory;
     private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
+    private readonly ILogger? _logger;
 
     public PostgreSqlCrossSchemaQueryProvider(
         NpgsqlDataSource dataSource,
-        PostgreSqlPartitionedStoreFactory factory)
+        PostgreSqlPartitionedStoreFactory factory,
+        ILogger<PostgreSqlCrossSchemaQueryProvider>? logger = null)
     {
         _dataSource = dataSource;
         _factory = factory;
+        _logger = logger;
     }
 
     /// <summary>
@@ -43,26 +47,35 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
 
     public async Task<IReadOnlyList<string>> GetSearchableSchemasAsync(CancellationToken ct = default)
     {
-        var schemas = new List<string>();
-        await using var cmd = _dataSource.CreateCommand(
-            "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name");
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-            schemas.Add(reader.GetString(0));
-
-        // If empty (first run), sync from factory and retry
-        if (schemas.Count == 0)
+        try
         {
-            await SyncSearchableSchemasAsync(ct);
-            schemas.Clear();
-            await using var cmd2 = _dataSource.CreateCommand(
+            var schemas = new List<string>();
+            await using var cmd = _dataSource.CreateCommand(
                 "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name");
-            await using var reader2 = await cmd2.ExecuteReaderAsync(ct);
-            while (await reader2.ReadAsync(ct))
-                schemas.Add(reader2.GetString(0));
-        }
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                schemas.Add(reader.GetString(0));
 
-        return schemas;
+            // If empty (first run), sync from factory and retry
+            if (schemas.Count == 0)
+            {
+                await SyncSearchableSchemasAsync(ct);
+                schemas.Clear();
+                await using var cmd2 = _dataSource.CreateCommand(
+                    "SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name");
+                await using var reader2 = await cmd2.ExecuteReaderAsync(ct);
+                while (await reader2.ReadAsync(ct))
+                    schemas.Add(reader2.GetString(0));
+            }
+
+            return schemas;
+        }
+        catch (OperationCanceledException) { return []; }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to load searchable schemas");
+            return [];
+        }
     }
 
     public async IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
@@ -72,10 +85,12 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         string? userId = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Build WHERE clause from parsed query (without access control — the stored proc handles that).
-        // Since the stored proc receives the WHERE clause as a TEXT string and executes it dynamically,
-        // we must inline parameter values — parameterized @p0 refs won't work inside EXECUTE.
-        var (whereClause, parameters) = _sqlGenerator.GenerateWhereClause(query);
+        // Build WHERE clause from parsed query (without access control or text search —
+        // access control is handled by the stored proc, text search is added below with tsvector).
+        // Strip TextSearch to avoid double ILIKE: GenerateWhereClause would add its own ILIKE,
+        // and we add a tsvector-indexed search below.
+        var queryForWhere = query with { TextSearch = null };
+        var (whereClause, parameters) = _sqlGenerator.GenerateWhereClause(queryForWhere);
 
         // Strip "WHERE " prefix — the stored proc adds its own WHERE
         var filterClause = whereClause.StartsWith("WHERE ")
@@ -97,13 +112,22 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             filterClause = filterClause.Replace(name, sqlValue);
         }
 
-        // Add text search if present
+        // Add text search if present — use tsvector for indexed word matching,
+        // with ILIKE fallback for partial/path matches the tsvector misses.
         if (!string.IsNullOrEmpty(query.TextSearch))
         {
-            var textExpr = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'')";
+            var escaped = EscapeSql(query.TextSearch);
+            // Split into words, each as prefix match (e.g., "Partner Re" → "Partner:* & Re:*")
+            var words = escaped.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var tsTerms = string.Join(" & ", words.Select(w => $"{w}:*"));
+
+            var tsvectorExpr = "to_tsvector('english', COALESCE(n.name,'') || ' ' || COALESCE(n.description,'') || ' ' || COALESCE(n.node_type,''))";
+            var ilikeFallback = $"COALESCE(n.name,'') || ' ' || n.path || ' ' || COALESCE(n.node_type,'')";
+
             if (!string.IsNullOrEmpty(filterClause))
                 filterClause += " AND ";
-            filterClause += $"{textExpr} ILIKE '%{EscapeSql(query.TextSearch)}%'";
+            // tsvector uses the GIN index; ILIKE catches path/id matches
+            filterClause += $"({tsvectorExpr} @@ to_tsquery('english', '{tsTerms}') OR {ilikeFallback} ILIKE '%{escaped}%')";
         }
 
         // Build ORDER BY
@@ -112,6 +136,10 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
             : "n.last_modified DESC";
 
         var limit = query.Limit ?? 50;
+
+        _logger?.LogInformation(
+            "[CrossSchema] search_across_schemas(where='{Where}', user='{User}', order='{Order}', limit={Limit})",
+            filterClause, userId, orderBy, limit);
 
         // Call the stored procedure using named parameters
         await using var cmd = _dataSource.CreateCommand(
@@ -163,5 +191,5 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
     }
 
     private static string EscapeSql(string input) =>
-        input.Replace("'", "''").Replace("%", "\\%").Replace("_", "\\_");
+        input.Replace("'", "''");
 }

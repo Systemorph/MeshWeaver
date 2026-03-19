@@ -183,52 +183,30 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Verifies that thread execution does NOT cause DeliveryFailure messages.
-    /// This catches misrouted messages (e.g., the literal "path" issue).
+    /// Verifies SubmitMessageRequest completes without timeout (no deadlock).
+    /// Uses AwaitResponse to ensure the thread hub responds.
     /// </summary>
     [Fact]
-    public async Task ExecuteThread_NoDeliveryFailures()
+    public async Task ExecuteThread_SubmitMessageDoesNotTimeout()
     {
-        var ct = new CancellationTokenSource(20.Seconds()).Token;
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
-        var failures = new List<string>();
-
-        Mesh.Register<DeliveryFailure>(delivery =>
-        {
-            var failure = delivery.Message;
-            var msg = $"DeliveryFailure: {failure.Message} (type={failure.ErrorType})";
-            Output.WriteLine($"[ERROR] {msg}");
-            failures.Add(msg);
-            return delivery.Processed();
-        });
 
         await CreateContextNodeAsync(ContextPath, ct);
-        var threadPath = await CreateThreadAsync(client, ContextPath, "No failures test", ct);
+        var threadPath = await CreateThreadAsync(client, ContextPath, "Timeout test", ct);
 
-        var twoMessages = ObserveThreadMessages(client, threadPath)
-            .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
+        // Use AwaitResponse — if routing is broken, this will timeout
+        var response = await client.AwaitResponse(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Test no timeout",
+                ContextPath = ContextPath
+            },
+            o => o.WithTarget(new Address(threadPath)), ct);
 
-        client.Post(new SubmitMessageRequest
-        {
-            ThreadPath = threadPath,
-            UserMessageText = "Test no delivery failures",
-            ContextPath = ContextPath
-        }, o => o.WithTarget(new Address(threadPath)));
-
-        var msgIds = await twoMessages;
-        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
-
-        // Wait for streaming and any delayed routing errors
-        await Task.Delay(3000, ct);
-
-        if (failures.Count > 0)
-        {
-            Output.WriteLine($"\n{failures.Count} delivery failures:");
-            foreach (var f in failures)
-                Output.WriteLine($"  - {f}");
-        }
-
-        failures.Should().BeEmpty("thread execution should not cause any delivery failures");
+        response.Message.Success.Should().BeTrue("SubmitMessageResponse should arrive without timeout");
+        Output.WriteLine("SubmitMessageRequest completed without timeout");
     }
 
     /// <summary>

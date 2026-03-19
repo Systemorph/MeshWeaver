@@ -44,6 +44,19 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             }
         };
 
+        // Grant all authenticated users read access to documentation
+        yield return new MeshNode($"{WellKnownUsers.Public}_Access", RootNamespace)
+        {
+            NodeType = "AccessAssignment",
+            Name = $"{WellKnownUsers.Public} Access",
+            Content = new AccessAssignment
+            {
+                AccessObject = WellKnownUsers.Public,
+                DisplayName = "All authenticated users",
+                Roles = [new RoleAssignment { Role = "Viewer" }]
+            }
+        };
+
         foreach (var node in LazyNodes.Value)
             yield return node;
     }

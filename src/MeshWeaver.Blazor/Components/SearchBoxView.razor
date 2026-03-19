@@ -116,8 +116,8 @@
 
             // Generic search (existing behavior for non-@ queries)
             var searchQuery = string.IsNullOrEmpty(BoundNamespace)
-                ? $"*{query}* scope:descendants"
-                : $"namespace:{BoundNamespace} *{query}* scope:descendants";
+                ? $"*{query}* scope:descendants context:search"
+                : $"namespace:{BoundNamespace} *{query}* scope:descendants context:search";
 
             var request = new MeshQueryRequest
             {

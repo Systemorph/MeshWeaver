@@ -57,6 +57,16 @@ public static class GraphConfigurationExtensions
                     var firstSeg = slash > 0 ? path[..slash] : path;
                     return string.IsNullOrEmpty(firstSeg) ? null : new QueryRoutingHints { Partition = firstSeg };
                 })
+                // Rule: nodeType → partition for Admin-only types
+                .AddQueryRoutingRule(query =>
+                {
+                    var nt = query.ExtractNodeType();
+                    return nt switch
+                    {
+                        "Partition" or "Role" or "GlobalSettings" => new QueryRoutingHints { Partition = "Admin" },
+                        _ => null
+                    };
+                })
                 // Rule: nodeType → satellite table resolution
                 .AddQueryRoutingRule(query =>
                 {

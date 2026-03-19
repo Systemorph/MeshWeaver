@@ -311,7 +311,9 @@ public static class PostgreSqlExtensions
         {
             var factory = sp.GetRequiredService<IPartitionedStoreFactory>() as PostgreSqlPartitionedStoreFactory
                 ?? throw new InvalidOperationException("Cross-schema queries require PostgreSqlPartitionedStoreFactory");
-            return new PostgreSqlCrossSchemaQueryProvider(sp.GetRequiredService<NpgsqlDataSource>(), factory);
+            return new PostgreSqlCrossSchemaQueryProvider(
+                sp.GetRequiredService<NpgsqlDataSource>(), factory,
+                sp.GetService<ILoggerFactory>()?.CreateLogger<PostgreSqlCrossSchemaQueryProvider>());
         });
 
         services.AddPartitionedCoreAndWrapperServices();

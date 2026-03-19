@@ -275,7 +275,7 @@ if (currentVersion < 3)
 {
     logger.LogInformation("Running repair v3: Drop rogue schemas...");
     var rogueSchemas = new[] {
-        "_access", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
         "p", "mesh", "thread", "agent", "partition", "organization", "vuser"
     };
@@ -306,7 +306,7 @@ if (currentVersion < 3)
     var excludedSchemas = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "admin", "portal", "kernel",
-        "_access", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
         "p", "mesh", "thread", "agent", "partition", "organization", "vuser",
         "public", "information_schema", "pg_catalog", "pg_toast"

@@ -93,6 +93,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
                     delivery.Message.GetType().Name, address, delivery.Sender, delivery.Target);
                 var result = await grain.RouteMessage(delivery);
+
+                if (result.State == MessageDeliveryState.Failed)
+                {
+                    // Grain returned a non-transient failure (e.g., node doesn't exist).
+                    // Send DeliveryFailure back to the caller — do NOT retry.
+                    logger.LogWarning("Orleans: delivery FAILED for {MessageType} to {Address}: {State}",
+                        delivery.Message.GetType().Name, address, result.State);
+                    SendDeliveryFailure(delivery, $"Delivery failed to {address}");
+                    return;
+                }
+
                 logger.LogDebug("Orleans: delivered {MessageType} to {Address}, result={State}",
                     delivery.Message.GetType().Name, address, result.State);
                 return;
@@ -118,7 +129,10 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     {
         try
         {
-            // Route the failure back through the mesh hub so AwaitResponse gets it
+            // Route the failure back to the sender so AwaitResponse callers get an exception.
+            // Must use WithTarget(sender) — not ResponseFor — because the callback is on the
+            // remote client hub, not the local silo mesh hub. The DeliveryFailure message type
+            // is excluded from recursive failure handling (delivery.Message is DeliveryFailure check).
             var meshHub = serviceProvider.GetService<IMessageHub>();
             if (meshHub != null)
             {

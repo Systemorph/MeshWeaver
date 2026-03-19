@@ -268,10 +268,10 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         // Infrastructure partitions — not searchable content
         "admin", "portal", "kernel",
         // Satellite table names that became schemas by mistake
-        "_access", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
         // Path segments that became schemas by mistake
         "login", "markdown", "onboarding", "welcome", "settings", "storage",
-        "p", "mesh", "thread", "agent", "partition", "organization", "vuser",
+        "p", "path", "mesh", "thread", "agent", "partition", "organization", "vuser",
         // System
         "public", "information_schema", "pg_catalog", "pg_toast"
     };

@@ -407,7 +407,14 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 StateHasChanged();
                 try
                 {
-                    var ns = NavigationService.CurrentNamespace ?? initialContext ?? "";
+                    var ns = NavigationService.CurrentNamespace ?? initialContext;
+                    if (string.IsNullOrEmpty(ns))
+                    {
+                        // No context available — use the logged-in user's namespace as default
+                        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+                        var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+                        ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : "User";
+                    }
                     var createResponse = await Hub.AwaitResponse(
                         new CreateThreadRequest
                         {
