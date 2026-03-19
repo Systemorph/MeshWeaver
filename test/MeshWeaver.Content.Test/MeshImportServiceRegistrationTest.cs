@@ -21,15 +21,20 @@ namespace MeshWeaver.Content.Test;
 public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private readonly string _sourceDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", "ImportReg_Source_" + Guid.NewGuid());
+    private readonly string _storageDirectory = Path.Combine(Path.GetTempPath(), "MeshWeaverTests", "ImportReg_Storage_" + Guid.NewGuid());
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddGraph();
+        => base.ConfigureMesh(builder)
+            .AddGraph()
+            .AddFileSystemPersistence(_storageDirectory);
 
     public override void Dispose()
     {
         base.Dispose();
         if (Directory.Exists(_sourceDirectory))
             Directory.Delete(_sourceDirectory, recursive: true);
+        if (Directory.Exists(_storageDirectory))
+            Directory.Delete(_storageDirectory, recursive: true);
     }
 
     [Fact]
@@ -68,15 +73,15 @@ public class MeshImportServiceRegistrationTest(ITestOutputHelper output) : Monol
     [Fact]
     public async Task IMeshImportService_ImportNodes_WithTargetRootPath()
     {
-        // Arrange
+        // Arrange - create source with nodes under a namespace
         Directory.CreateDirectory(_sourceDirectory);
         var sourceAdapter = new FileSystemStorageAdapter(_sourceDirectory);
         var jsonOptions = StorageImporter.CreateFullImportOptions();
 
-        var node = MeshNode.FromPath("Item1") with { Name = "Item 1", NodeType = "Markdown" };
+        var node = MeshNode.FromPath("ImportedData/Item1") with { Name = "Item 1", NodeType = "Markdown" };
         await sourceAdapter.WriteAsync(node, jsonOptions, CancellationToken.None);
 
-        // Act - import with a target root path
+        // Act - import filtering by root path
         var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
         var result = await importService.ImportNodesAsync(
             _sourceDirectory,
