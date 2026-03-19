@@ -8,6 +8,24 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public static class PostgreSqlSchemaInitializer
 {
     /// <summary>
+    /// Creates the partition_access table in the public schema.
+    /// This table maps users to partition schemas they can access, populated by
+    /// rebuild_user_effective_permissions() trigger in each partition schema.
+    /// </summary>
+    public static async Task InitializePartitionAccessTableAsync(NpgsqlDataSource dataSource, CancellationToken ct = default)
+    {
+        await using var cmd = dataSource.CreateCommand("""
+            CREATE TABLE IF NOT EXISTS public.partition_access (
+                user_id    TEXT NOT NULL,
+                partition  TEXT NOT NULL,
+                PRIMARY KEY (user_id, partition)
+            );
+            CREATE INDEX IF NOT EXISTS idx_partition_access_user ON public.partition_access (user_id);
+            """);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
     /// Ensures the vector extension exists and initializes the full schema.
     /// Creates the extension as plain SQL first, then reloads types so the
     /// UseVector() plugin can resolve the vector OID for parameterized queries.
@@ -176,6 +194,7 @@ public static class PostgreSqlSchemaInitializer
     internal static string GetMeshSchemaScript(PostgreSqlStorageOptions options, string versionsSchema)
     {
         var dim = options.VectorDimensions;
+        var schemaName = options.Schema ?? "public";
         return $$"""
             CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -303,10 +322,11 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 31
-                            WHEN 'Editor' THEN 23
-                            WHEN 'Viewer' THEN 1
-                            WHEN 'Commenter' THEN 17
+                            WHEN 'Admin' THEN 63
+                            WHEN 'PlatformAdmin' THEN 63
+                            WHEN 'Editor' THEN 55
+                            WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49
                             ELSE 0
                         END
                     ) AS permissions
@@ -318,6 +338,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
@@ -363,10 +384,11 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 31
-                            WHEN 'Editor' THEN 23
-                            WHEN 'Viewer' THEN 1
-                            WHEN 'Commenter' THEN 17
+                            WHEN 'Admin' THEN 63
+                            WHEN 'PlatformAdmin' THEN 63
+                            WHEN 'Editor' THEN 55
+                            WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49
                             ELSE 0
                         END
                     ) AS permissions
@@ -378,6 +400,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
@@ -432,6 +455,25 @@ public static class PostgreSqlSchemaInitializer
                 ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
                 ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
                 ALTER TABLE user_effective_permissions_old RENAME TO user_effective_permissions_shadow;
+
+                -- Sync partition_access: upsert users with Read permission, remove revoked
+                BEGIN
+                    INSERT INTO public.partition_access (user_id, partition)
+                    SELECT DISTINCT user_id, '{{schemaName}}'
+                    FROM user_effective_permissions
+                    WHERE permission = 'Read' AND is_allow = true
+                    ON CONFLICT (user_id, partition) DO NOTHING;
+
+                    DELETE FROM public.partition_access
+                    WHERE partition = '{{schemaName}}'
+                      AND user_id NOT IN (
+                        SELECT user_id FROM user_effective_permissions
+                        WHERE permission = 'Read' AND is_allow = true
+                      );
+                EXCEPTION WHEN undefined_table THEN
+                    -- partition_access table may not exist yet (first migration)
+                    NULL;
+                END;
             END;
             $$ LANGUAGE plpgsql;
 
@@ -566,6 +608,7 @@ public static class PostgreSqlSchemaInitializer
     private static string GetSchemaScript(PostgreSqlStorageOptions options)
     {
         var dim = options.VectorDimensions;
+        var schemaName = options.Schema ?? "public";
         return $$"""
             CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -695,10 +738,11 @@ public static class PostgreSqlSchemaInitializer
                          LIMIT 1),
                         -- Fallback: built-in role lookup
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 31
-                            WHEN 'Editor' THEN 23
-                            WHEN 'Viewer' THEN 1
-                            WHEN 'Commenter' THEN 17
+                            WHEN 'Admin' THEN 63
+                            WHEN 'PlatformAdmin' THEN 63
+                            WHEN 'Editor' THEN 55
+                            WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49
                             ELSE 0
                         END
                     ) AS permissions
@@ -710,6 +754,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
@@ -756,10 +801,11 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 31
-                            WHEN 'Editor' THEN 23
-                            WHEN 'Viewer' THEN 1
-                            WHEN 'Commenter' THEN 17
+                            WHEN 'Admin' THEN 63
+                            WHEN 'PlatformAdmin' THEN 63
+                            WHEN 'Editor' THEN 55
+                            WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49
                             ELSE 0
                         END
                     ) AS permissions
@@ -771,6 +817,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
@@ -828,6 +875,25 @@ public static class PostgreSqlSchemaInitializer
                 ALTER TABLE user_effective_permissions RENAME TO user_effective_permissions_old;
                 ALTER TABLE user_effective_permissions_shadow RENAME TO user_effective_permissions;
                 ALTER TABLE user_effective_permissions_old RENAME TO user_effective_permissions_shadow;
+
+                -- Sync partition_access: upsert users with Read permission, remove revoked
+                BEGIN
+                    INSERT INTO public.partition_access (user_id, partition)
+                    SELECT DISTINCT user_id, '{{schemaName}}'
+                    FROM user_effective_permissions
+                    WHERE permission = 'Read' AND is_allow = true
+                    ON CONFLICT (user_id, partition) DO NOTHING;
+
+                    DELETE FROM public.partition_access
+                    WHERE partition = '{{schemaName}}'
+                      AND user_id NOT IN (
+                        SELECT user_id FROM user_effective_permissions
+                        WHERE permission = 'Read' AND is_allow = true
+                      );
+                EXCEPTION WHEN undefined_table THEN
+                    -- partition_access table may not exist yet (first migration)
+                    NULL;
+                END;
             END;
             $$ LANGUAGE plpgsql;
 
@@ -987,6 +1053,7 @@ public static class PostgreSqlSchemaInitializer
     private static string GetUnversionedSchemaScript(PostgreSqlStorageOptions options)
     {
         var dim = options.VectorDimensions;
+        var schemaName = options.Schema ?? "public";
         return $$"""
             CREATE EXTENSION IF NOT EXISTS vector;
 

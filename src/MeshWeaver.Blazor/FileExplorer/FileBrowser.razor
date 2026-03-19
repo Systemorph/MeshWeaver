@@ -3,8 +3,6 @@
 
 
 <div class="file-browser">
-    <!-- Debug: remove after fixing -->
-    <p style="color:red; font-size:0.7rem;">DEBUG: Collection=@(Collection != null ? "OK" : "NULL"), ReadOnly=@IsReadOnly, Name=@CollectionName, Config=@(CollectionConfiguration != null ? "OK" : "NULL")</p>
     <!-- Toolbar with Separate Row for Breadcrumb Navigation -->
     <FluentToolbar Class="toolbar">
         @if (Collection != null)
@@ -54,6 +52,15 @@
                     <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
                     <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
                     <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
+                    <FluentInputFile @ref="@myFileByStream"
+                                     AnchorId="MyUploadStream"
+                                     DragDropZoneVisible="false"
+                                     Mode="InputFileMode.Stream"
+                                     Multiple="true"
+                                     MaximumFileSize="@(20 * 1024 * 1024)"
+                                     ProgressPercentChanged="@(p => progressPercent = p)"
+                                     OnFileUploaded="@OnFileUploadedAsync"
+                                     OnCompleted="@OnCompleted" />
                     if (ShowNewArticle)
                     {
                         <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
@@ -62,18 +69,6 @@
             }
         </div>
     </FluentToolbar>
-    @if (!IsReadOnly)
-    {
-        <FluentInputFile @ref="@myFileByStream"
-                         AnchorId="MyUploadStream"
-                         DragDropZoneVisible="false"
-                         Mode="InputFileMode.Stream"
-                         Multiple="true"
-                         MaximumFileSize="@(20 * 1024 * 1024)"
-                         ProgressPercentChanged="@(p => progressPercent = p)"
-                         OnFileUploaded="@OnFileUploadedAsync"
-                         OnCompleted="@OnCompleted" />
-    }
 
     <FluentProgress Min="0" Max="100" Value="@progressPercent" Visible="@(progressPercent > 0)" />
     <FluentLabel Alignment="HorizontalAlignment.Center">

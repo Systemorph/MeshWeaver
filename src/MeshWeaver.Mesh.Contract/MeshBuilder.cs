@@ -137,6 +137,7 @@ public record MeshBuilder
         var meshTypeRegs = MeshTypeRegistrations;
         var excludedTypes = AutocompleteExcludedTypes;
         var accessConfig = NodeTypeAccessConfig;
+        var routingRules = QueryRoutingRules;
 
         ConfigureServices(services => services
             .AddSingleton(_ =>
@@ -150,7 +151,8 @@ public record MeshBuilder
                     MeshNodes.GroupBy(x => x.Path).ToDictionary(g => g.Key, g => g.Last()),
                     combinedDefaultConfig,
                     autocompleteExcludedNodeTypes: excludedTypes.Count > 0 ? excludedTypes : null,
-                    nodeTypePermissions: accessConfig.Build());
+                    nodeTypePermissions: accessConfig.Build(),
+                    queryRoutingRules: routingRules);
             })
             .AddSingleton<ITypeRegistry>(_ =>
             {
@@ -271,4 +273,17 @@ public record MeshBuilder
     }
 
     internal NodeTypeAccessBuilder NodeTypeAccessConfig { get; } = new();
+
+    /// <summary>
+    /// Registers a query routing rule that resolves partition and/or table hints from a ParsedQuery.
+    /// Rules are applied in order during query execution; first non-null Partition/Table wins.
+    /// Use this to restrict fan-out queries (e.g., nodeType:User → partition "User").
+    /// </summary>
+    public MeshBuilder AddQueryRoutingRule(QueryRoutingRule rule)
+    {
+        QueryRoutingRules.Add(rule);
+        return this;
+    }
+
+    internal List<QueryRoutingRule> QueryRoutingRules { get; } = [];
 }

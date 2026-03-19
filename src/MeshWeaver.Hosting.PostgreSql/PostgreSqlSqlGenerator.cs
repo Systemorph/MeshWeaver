@@ -14,6 +14,15 @@ public class PostgreSqlSqlGenerator
     private int _paramIndex;
     private readonly Dictionary<string, object> _parameters = new();
 
+    /// <summary>
+    /// PostgreSQL schema name for qualifying access control tables.
+    /// When set, tables like user_effective_permissions become "schema"."table".
+    /// </summary>
+    public string? SchemaName { get; init; }
+
+    private string QualifyTable(string table)
+        => string.IsNullOrEmpty(SchemaName) ? table : $"\"{SchemaName}\".\"{table}\"";
+
     private static readonly Dictionary<string, string> PropertyMap = new(StringComparer.OrdinalIgnoreCase)
     {
         ["name"] = "n.name",
@@ -233,10 +242,11 @@ public class PostgreSqlSqlGenerator
     {
         var parameters = new Dictionary<string, object>();
 
+        var meshTable = QualifyTable("mesh_nodes");
         var sql = new StringBuilder(
             "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
             "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
-            "n.desired_id FROM mesh_nodes n");
+            $"n.desired_id FROM {meshTable} n");
 
         var clauses = new List<string> { "n.embedding IS NOT NULL" };
 
@@ -544,12 +554,15 @@ public class PostgreSqlSqlGenerator
             ? $"{paramName}"
             : $"{paramName}, 'Public'";
 
+        var uepTable = QualifyTable("user_effective_permissions");
+        var ntpTable = QualifyTable("node_type_permissions");
+
         // Public-read node types (e.g. User, Organization) are visible to authenticated users
         var publicReadClause = userId == WellKnownUsers.Anonymous
             ? ""
-            : """
+            : $"""
 
-                            OR EXISTS (SELECT 1 FROM node_type_permissions ntp
+                            OR EXISTS (SELECT 1 FROM {ntpTable} ntp
                                        WHERE ntp.node_type = n.node_type AND ntp.public_read = true)
             """;
 
@@ -558,7 +571,7 @@ public class PostgreSqlSqlGenerator
                 n.main_node = {paramName}{publicReadClause}
                 OR
                 (SELECT uep.is_allow
-                 FROM user_effective_permissions uep
+                 FROM {uepTable} uep
                  WHERE uep.user_id IN ({userList})
                    AND uep.permission = 'Read'
                    AND n.main_node LIKE uep.node_path_prefix || '%'

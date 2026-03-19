@@ -244,6 +244,9 @@ public static class PostgreSqlExtensions
                 sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
                 configureDataSource));
 
+        services.AddSingleton<IPartitionAccessProvider>(
+            new PostgreSqlPartitionAccessProvider(baseDataSource));
+
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;
@@ -299,6 +302,9 @@ public static class PostgreSqlExtensions
                 sp.GetService<MeshConfiguration>()?.NodeTypePermissions,
                 configureDataSource);
         });
+
+        services.AddSingleton<IPartitionAccessProvider>(sp =>
+            new PostgreSqlPartitionAccessProvider(sp.GetRequiredService<NpgsqlDataSource>()));
 
         services.AddPartitionedCoreAndWrapperServices();
 

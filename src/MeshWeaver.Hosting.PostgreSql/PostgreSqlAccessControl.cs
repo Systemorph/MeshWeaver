@@ -6,15 +6,24 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// <summary>
 /// Manages hierarchical permission resolution using the denormalized user_effective_permissions table.
 /// Permissions are now populated from AccessAssignment and GroupMembership MeshNodes via triggers.
+/// When schemaName is set, all table references are schema-qualified for cross-schema queries.
 /// </summary>
 public class PostgreSqlAccessControl
 {
     private readonly NpgsqlDataSource _dataSource;
+    private readonly string? _schemaName;
 
-    public PostgreSqlAccessControl(NpgsqlDataSource dataSource)
+    public PostgreSqlAccessControl(NpgsqlDataSource dataSource, string? schemaName = null)
     {
         _dataSource = dataSource;
+        _schemaName = schemaName;
     }
+
+    private string Q(string table)
+        => string.IsNullOrEmpty(_schemaName) ? $"\"{table}\"" : $"\"{_schemaName}\".\"{table}\"";
+
+    private string QFunc(string function)
+        => string.IsNullOrEmpty(_schemaName) ? function : $"\"{_schemaName}\".{function}";
 
     /// <summary>
     /// Manually rebuilds the denormalized permissions table.
@@ -23,7 +32,7 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task RebuildDenormalizedTableAsync(CancellationToken ct = default)
     {
-        await using var cmd = _dataSource.CreateCommand("SELECT rebuild_user_effective_permissions()");
+        await using var cmd = _dataSource.CreateCommand($"SELECT {QFunc("rebuild_user_effective_permissions()")}");
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -33,10 +42,11 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task<bool> HasPermissionAsync(string userId, string nodePath, string permission, CancellationToken ct = default)
     {
+        var uepTable = Q("user_effective_permissions");
         await using var cmd = _dataSource.CreateCommand(
-            """
+            $"""
             SELECT uep.is_allow
-            FROM user_effective_permissions uep
+            FROM {uepTable} uep
             WHERE uep.user_id = $1
               AND uep.permission = $2
               AND $3 LIKE uep.node_path_prefix || '%'
@@ -56,13 +66,14 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task<IReadOnlyList<string>> GetEffectivePermissionsAsync(string userId, string nodePath, CancellationToken ct = default)
     {
+        var uepTable = Q("user_effective_permissions");
         await using var cmd = _dataSource.CreateCommand(
-            """
+            $"""
             SELECT DISTINCT permission
             FROM (
                 SELECT permission, is_allow,
                        ROW_NUMBER() OVER (PARTITION BY permission ORDER BY LENGTH(node_path_prefix) DESC) AS rn
-                FROM user_effective_permissions
+                FROM {uepTable}
                 WHERE user_id = $1
                   AND $2 LIKE node_path_prefix || '%'
             ) sub
@@ -87,9 +98,10 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task GrantAsync(string nodePath, string subject, string permission, bool isAllow, CancellationToken ct = default)
     {
+        var acTable = Q("access_control");
         await using var cmd = _dataSource.CreateCommand(
-            """
-            INSERT INTO access_control (node_path, subject, permission, is_allow)
+            $"""
+            INSERT INTO {acTable} (node_path, subject, permission, is_allow)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (node_path, subject, permission) DO UPDATE SET is_allow = $4
             """);
@@ -107,9 +119,10 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task RevokeAsync(string nodePath, string subject, string permission, CancellationToken ct = default)
     {
+        var acTable = Q("access_control");
         await using var cmd = _dataSource.CreateCommand(
-            """
-            DELETE FROM access_control
+            $"""
+            DELETE FROM {acTable}
             WHERE node_path = $1 AND subject = $2 AND permission = $3
             """);
         cmd.Parameters.AddWithValue(nodePath);
@@ -125,9 +138,10 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task AddGroupMemberAsync(string groupName, string memberId, CancellationToken ct = default)
     {
+        var gmTable = Q("group_members");
         await using var cmd = _dataSource.CreateCommand(
-            """
-            INSERT INTO group_members (group_name, member_id)
+            $"""
+            INSERT INTO {gmTable} (group_name, member_id)
             VALUES ($1, $2)
             ON CONFLICT DO NOTHING
             """);
@@ -143,9 +157,10 @@ public class PostgreSqlAccessControl
     /// </summary>
     public async Task RemoveGroupMemberAsync(string groupName, string memberId, CancellationToken ct = default)
     {
+        var gmTable = Q("group_members");
         await using var cmd = _dataSource.CreateCommand(
-            """
-            DELETE FROM group_members
+            $"""
+            DELETE FROM {gmTable}
             WHERE group_name = $1 AND member_id = $2
             """);
         cmd.Parameters.AddWithValue(groupName);
@@ -176,10 +191,11 @@ public class PostgreSqlAccessControl
             ? $"jsonb_build_object({string.Join(", ", contentParts)})"
             : "'{}'::jsonb";
 
+        var mnTable = Q("mesh_nodes");
         var mainNode = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
         await using var cmd = _dataSource.CreateCommand(
             $"""
-            INSERT INTO mesh_nodes (namespace, id, name, node_type, content, main_node)
+            INSERT INTO {mnTable} (namespace, id, name, node_type, content, main_node)
             VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, $2)
             ON CONFLICT (namespace, id) DO UPDATE
             SET content = {jsonBuild},
@@ -200,9 +216,10 @@ public class PostgreSqlAccessControl
     public async Task RemovePolicyAsync(string targetNamespace, CancellationToken ct = default)
     {
         var ns = targetNamespace ?? "";
+        var mnTable = Q("mesh_nodes");
         await using var cmd = _dataSource.CreateCommand(
-            """
-            DELETE FROM mesh_nodes
+            $"""
+            DELETE FROM {mnTable}
             WHERE namespace = $1 AND id = '_Policy' AND node_type = 'PartitionAccessPolicy'
             """);
         cmd.Parameters.AddWithValue(ns);
@@ -220,11 +237,12 @@ public class PostgreSqlAccessControl
         IEnumerable<NodeTypePermission> permissions,
         CancellationToken ct = default)
     {
+        var ntpTable = Q("node_type_permissions");
         foreach (var p in permissions)
         {
             await using var cmd = _dataSource.CreateCommand(
-                """
-                INSERT INTO node_type_permissions (node_type, public_read)
+                $"""
+                INSERT INTO {ntpTable} (node_type, public_read)
                 VALUES ($1, $2)
                 ON CONFLICT (node_type) DO UPDATE SET public_read = EXCLUDED.public_read
                 """);

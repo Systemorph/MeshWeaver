@@ -46,6 +46,35 @@ public static class GraphConfigurationExtensions
                 .AddPartitionType()
                 .AddGlobalSettingsType();
 
+            // Register query routing rules for partition + table resolution
+            builder
+                // Rule: path/namespace → partition (first path segment)
+                .AddQueryRoutingRule(query =>
+                {
+                    var path = query.Path;
+                    if (string.IsNullOrEmpty(path)) return null;
+                    var slash = path.IndexOf('/');
+                    var firstSeg = slash > 0 ? path[..slash] : path;
+                    return string.IsNullOrEmpty(firstSeg) ? null : new QueryRoutingHints { Partition = firstSeg };
+                })
+                // Rule: nodeType → satellite table resolution
+                .AddQueryRoutingRule(query =>
+                {
+                    var nt = query.ExtractNodeType();
+                    if (string.IsNullOrEmpty(nt)) return null;
+                    var table = nt switch
+                    {
+                        "AccessAssignment" => "access",
+                        "Thread" or "ThreadMessage" => "threads",
+                        "Activity" or "ActivityLog" => "activities",
+                        "UserActivity" => "user_activities",
+                        "Comment" => "annotations",
+                        "TrackedChange" or "Approval" => "annotations",
+                        _ => null
+                    };
+                    return table != null ? new QueryRoutingHints { Table = table } : null;
+                });
+
             // Register Graph content types in the hub's type registry for polymorphic JSON serialization
             builder.ConfigureHub(config => config.WithGraphTypes());
 

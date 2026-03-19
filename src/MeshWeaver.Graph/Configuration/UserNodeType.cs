@@ -43,6 +43,9 @@ public static class UserNodeType
             return services;
         });
         builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // nodeType:User → restrict to "User" partition (no fan-out needed)
+        builder.AddQueryRoutingRule(query =>
+            query.ExtractNodeType() == NodeType ? new QueryRoutingHints { Partition = "User" } : null);
         return builder;
     }
 

@@ -11,7 +11,8 @@ namespace MeshWeaver.Hosting.PostgreSql;
 /// <summary>
 /// Factory for creating per-partition PostgreSQL persistence stores.
 /// Each partition gets its own PostgreSQL schema with isolated tables.
-/// Uses per-partition NpgsqlDataSource with SearchPath set to the schema.
+/// Runtime queries use a single shared NpgsqlDataSource with schema-qualified SQL.
+/// DDL (schema init) uses temporary SearchPath-scoped data sources, disposed immediately after.
 /// </summary>
 public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactory
 {
@@ -59,16 +60,17 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         }
     }
 
-    private NpgsqlDataSource BuildDataSource(string connectionString, bool useVector = false)
+    /// <summary>
+    /// Builds a temporary NpgsqlDataSource for DDL operations (schema init).
+    /// These are short-lived — created, used for DDL, then disposed.
+    /// Runtime queries use the shared _baseDataSource instead.
+    /// </summary>
+    private NpgsqlDataSource BuildDdlDataSource(string connectionString, bool useVector = false)
     {
-        // Limit pool size per partition to avoid "too many clients" errors
-        // when fan-out queries hit all partitions in parallel.
-        // ConnectionIdleLifetime: close idle connections after 30s so previous app instances
-        // don't hold server slots when the Docker container persists across restarts.
         var csb = new NpgsqlConnectionStringBuilder(connectionString)
         {
-            MaxPoolSize = 3,
-            ConnectionIdleLifetime = 30
+            MaxPoolSize = 2,
+            ConnectionIdleLifetime = 10
         };
         var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         if (useVector)
@@ -107,21 +109,19 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{versionsSchemaName}\""))
             await cmd.ExecuteNonQueryAsync(ct);
 
-        // Create a per-schema data source with SearchPath including public for extension types (e.g. vector)
+        // --- DDL phase: temporary SearchPath-scoped data sources, disposed after init ---
         var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
         {
             SearchPath = $"{schemaName},public"
         };
-        var schemaDataSource = BuildDataSource(builder.ConnectionString, useVector: true);
+        var ddlSchemaDataSource = BuildDdlDataSource(builder.ConnectionString, useVector: true);
 
-        // Create a versions data source with SearchPath pointing to the versions schema
         var versionsConnBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
         {
             SearchPath = $"{versionsSchemaName},public"
         };
-        var versionsDataSource = BuildDataSource(versionsConnBuilder.ConnectionString);
+        var ddlVersionsDataSource = BuildDdlDataSource(versionsConnBuilder.ConnectionString);
 
-        // Initialize mesh tables + cross-schema trigger + versions table
         var schemaOptions = new PostgreSqlStorageOptions
         {
             ConnectionString = builder.ConnectionString,
@@ -129,18 +129,17 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             Schema = schemaName
         };
         await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
-            _baseDataSource, schemaDataSource, versionsDataSource,
+            _baseDataSource, ddlSchemaDataSource, ddlVersionsDataSource,
             schemaOptions, versionsSchemaName, ct);
 
-        // Sync node type permissions to the new schema
+        // Sync node type permissions using temporary DDL data source
         if (_nodeTypePermissions.Count > 0)
         {
-            var ac = new PostgreSqlAccessControl(schemaDataSource);
+            var ac = new PostgreSqlAccessControl(ddlSchemaDataSource);
             await ac.SyncNodeTypePermissionsAsync(_nodeTypePermissions, ct);
         }
 
         // Look up the PartitionDefinition for this partition to enable satellite table routing.
-        // If no pre-existing definition, create one with StandardTableMappings for content partitions.
         var partitionDef = _partitionDefinitions?.FirstOrDefault(
             p => p.Namespace.Equals(firstSegment, StringComparison.OrdinalIgnoreCase));
         if (partitionDef == null)
@@ -158,16 +157,17 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         if (partitionDef.TableMappings is { Count: > 0 })
         {
             await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-                schemaDataSource, _options, partitionDef.TableMappings.Values, ct);
+                ddlSchemaDataSource, _options, partitionDef.TableMappings.Values, ct);
         }
 
-        // Create the storage adapter with partition definition for satellite table routing
-        var adapter = new PostgreSqlStorageAdapter(schemaDataSource, _embeddingProvider, partitionDef);
+        // Dispose DDL data sources — no longer needed
+        await ddlSchemaDataSource.DisposeAsync();
+        await ddlVersionsDataSource.DisposeAsync();
 
-        // Create query provider — RoutingPersistenceServiceCore creates the persistence core internally
+        // --- Runtime phase: shared _baseDataSource with schema-qualified SQL ---
+        var adapter = new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, partitionDef);
         var queryProvider = new PostgreSqlMeshQuery(adapter, _changeNotifier, _accessService);
-        // Version query reads from the versions schema
-        var versionQuery = new PostgreSqlVersionQuery(versionsDataSource);
+        var versionQuery = new PostgreSqlVersionQuery(_baseDataSource, versionsSchemaName);
 
         return new PartitionedStore(adapter, queryProvider, versionQuery);
     }
@@ -201,7 +201,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             {
                 SearchPath = $"{schemaName},public"
             };
-            var schemaDataSource = BuildDataSource(builder.ConnectionString, useVector: true);
+            var schemaDataSource = BuildDdlDataSource(builder.ConnectionString, useVector: true);
 
             var schemaOptions = new PostgreSqlStorageOptions
             {
@@ -220,7 +220,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
                 {
                     SearchPath = $"{versionsSchemaName},public"
                 };
-                var versionsDataSource = BuildDataSource(versionsConnBuilder.ConnectionString);
+                var versionsDataSource = BuildDdlDataSource(versionsConnBuilder.ConnectionString);
 
                 await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
                     _baseDataSource, schemaDataSource, versionsDataSource,

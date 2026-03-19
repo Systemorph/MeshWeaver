@@ -18,9 +18,10 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
-    private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
+    private readonly PostgreSqlSqlGenerator _sqlGenerator;
     private readonly IEmbeddingProvider _embeddingProvider;
     private readonly PartitionDefinition? _partitionDefinition;
+    private readonly string? _schemaName;
     private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
     public NpgsqlDataSource DataSource => _dataSource;
@@ -34,24 +35,34 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         _dataSource = dataSource;
         _embeddingProvider = embeddingProvider ?? NullEmbeddingProvider.Instance;
         _partitionDefinition = partitionDefinition;
+        _schemaName = partitionDefinition?.Schema;
+        _sqlGenerator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         _logger = logger;
     }
 
     /// <summary>
-    /// Resolves the table name for a given path and optional nodeType.
+    /// Returns a schema-qualified table reference for use in SQL.
+    /// When a schema is set, returns "schema"."table"; otherwise just "table".
+    /// </summary>
+    private string QualifyTable(string table)
+        => string.IsNullOrEmpty(_schemaName) ? $"\"{table}\"" : $"\"{_schemaName}\".\"{table}\"";
+
+    /// <summary>
+    /// Resolves a schema-qualified table name for a given path and optional nodeType.
     /// Checks path-based satellite routing first, then falls back to nodeType-based routing.
-    /// This ensures AccessAssignment nodes (e.g., "PartnerRe/rbuergi_Access") route to the
-    /// access table even when the path doesn't contain a "_Access" segment.
     /// </summary>
     private string ResolveTable(string path, string? nodeType = null)
     {
+        string table;
         if (_partitionDefinition == null)
-            return "mesh_nodes";
-        var table = _partitionDefinition.ResolveTable(path);
-        if (table != "mesh_nodes" || string.IsNullOrEmpty(nodeType))
-            return table;
-        // Path didn't match a satellite segment — try nodeType-based routing
-        return _partitionDefinition.ResolveTableByNodeType(nodeType);
+            table = "mesh_nodes";
+        else
+        {
+            table = _partitionDefinition.ResolveTable(path);
+            if (table == "mesh_nodes" && !string.IsNullOrEmpty(nodeType))
+                table = _partitionDefinition.ResolveTableByNodeType(nodeType);
+        }
+        return QualifyTable(table);
     }
 
     private static string NormalizePath(string? path) =>
@@ -77,7 +88,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
             $"last_modified, version, state, content, desired_id, main_node " +
-            $"FROM \"{table}\" WHERE namespace = $1 AND id = $2");
+            $"FROM {table} WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
@@ -105,7 +116,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         var table = ResolveTable(node.Path, node.NodeType);
         await using var cmd = _dataSource.CreateCommand(
             $"""
-            INSERT INTO "{table}" (namespace, id, name, node_type, category, icon, display_order,
+            INSERT INTO {table} (namespace, id, name, node_type, category, icon, display_order,
                                     last_modified, version, state, content, desired_id, embedding, main_node)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
             ON CONFLICT (namespace, id) DO UPDATE SET
@@ -156,7 +167,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"DELETE FROM \"{table}\" WHERE namespace = $1 AND id = $2");
+            $"DELETE FROM {table} WHERE namespace = $1 AND id = $2");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
@@ -171,7 +182,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var table = ResolveTable(normalizedParent);
         await using var cmd = _dataSource.CreateCommand(
-            $"SELECT id, namespace FROM \"{table}\" WHERE namespace = $1");
+            $"SELECT id, namespace FROM {table} WHERE namespace = $1");
         cmd.Parameters.AddWithValue(normalizedParent);
 
         var paths = new List<string>();
@@ -197,7 +208,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 
         var table = ResolveTable(normalizedPath);
         await using var cmd = _dataSource.CreateCommand(
-            $"SELECT 1 FROM \"{table}\" WHERE namespace = $1 AND id = $2 LIMIT 1");
+            $"SELECT 1 FROM {table} WHERE namespace = $1 AND id = $2 LIMIT 1");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
 
@@ -219,7 +230,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         await using var cmd = _dataSource.CreateCommand(
             $"SELECT id, namespace, name, node_type, category, icon, display_order, " +
             $"last_modified, version, state, content, desired_id, main_node " +
-            $"FROM \"{table}\" WHERE $1 = path OR $1 LIKE path || '/%' " +
+            $"FROM {table} WHERE $1 = path OR $1 LIKE path || '/%' " +
             $"ORDER BY LENGTH(path) DESC LIMIT 1");
         cmd.Parameters.AddWithValue(normalizedPath);
 
@@ -242,8 +253,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
+        var poTable = QualifyTable("partition_objects");
         await using var cmd = _dataSource.CreateCommand(
-            "SELECT data, type_name FROM partition_objects WHERE partition_key = $1");
+            $"SELECT data, type_name FROM {poTable} WHERE partition_key = $1");
         cmd.Parameters.AddWithValue(partitionKey);
 
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -288,9 +300,10 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             var json = JsonSerializer.Serialize(obj, obj.GetType(), options);
             var typeName = obj.GetType().AssemblyQualifiedName;
 
+            var poTable = QualifyTable("partition_objects");
             await using var cmd = _dataSource.CreateCommand(
-                """
-                INSERT INTO partition_objects (id, partition_key, type_name, data, last_modified)
+                $"""
+                INSERT INTO {poTable} (id, partition_key, type_name, data, last_modified)
                 VALUES ($1, $2, $3, $4::jsonb, $5)
                 ON CONFLICT (partition_key, id) DO UPDATE SET
                     type_name = EXCLUDED.type_name,
@@ -314,8 +327,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
+        var poTable = QualifyTable("partition_objects");
         await using var cmd = _dataSource.CreateCommand(
-            "DELETE FROM partition_objects WHERE partition_key = $1");
+            $"DELETE FROM {poTable} WHERE partition_key = $1");
         cmd.Parameters.AddWithValue(partitionKey);
 
         await cmd.ExecuteNonQueryAsync(ct);
@@ -328,8 +342,9 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var partitionKey = GetPartitionStorageKey(nodePath, subPath);
 
+        var poTable = QualifyTable("partition_objects");
         await using var cmd = _dataSource.CreateCommand(
-            "SELECT MAX(last_modified) FROM partition_objects WHERE partition_key = $1");
+            $"SELECT MAX(last_modified) FROM {poTable} WHERE partition_key = $1");
         cmd.Parameters.AddWithValue(partitionKey);
 
         var result = await cmd.ExecuteScalarAsync(ct);
@@ -344,14 +359,15 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     {
         var prefix = NormalizePath(nodePath) + "/";
 
+        var poTable = QualifyTable("partition_objects");
         await using var cmd = _dataSource.CreateCommand(
-            """
+            $"""
             SELECT DISTINCT
                 CASE WHEN position('/' in substring(partition_key from length($1) + 1)) > 0
                      THEN substring(partition_key from length($1) + 1 for position('/' in substring(partition_key from length($1) + 1)) - 1)
                      ELSE substring(partition_key from length($1) + 1)
                 END AS sub_path
-            FROM partition_objects
+            FROM {poTable}
             WHERE partition_key LIKE $2
             """);
         cmd.Parameters.AddWithValue(prefix);
@@ -392,22 +408,29 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         // NOTE: We query BOTH the satellite table and mesh_nodes (via UNION ALL) because existing data
         // may be in mesh_nodes from before satellite table routing was enabled on the write path.
         var effectivePath = query.Path ?? basePath;
-        var tableName = !string.IsNullOrEmpty(effectivePath)
-            ? ResolveTable(effectivePath)
-            : _partitionDefinition?.ResolveTableByNodeType(query.ExtractNodeType()) ?? "mesh_nodes";
+        string rawTable;
+        if (!string.IsNullOrEmpty(effectivePath))
+        {
+            rawTable = _partitionDefinition?.ResolveTable(effectivePath) ?? "mesh_nodes";
+        }
+        else
+        {
+            rawTable = _partitionDefinition?.ResolveTableByNodeType(query.ExtractNodeType()) ?? "mesh_nodes";
+        }
 
         // When the path resolves to mesh_nodes but nodeType maps to a satellite table,
         // use the satellite table instead. Satellite tables are the source of truth.
-        if (tableName == "mesh_nodes" && _partitionDefinition != null)
+        if (rawTable == "mesh_nodes" && _partitionDefinition != null)
         {
             var satelliteTable = _partitionDefinition.ResolveTableByNodeType(query.ExtractNodeType());
             if (satelliteTable != null && satelliteTable != "mesh_nodes")
-                tableName = satelliteTable;
+                rawTable = satelliteTable;
         }
+        var tableName = QualifyTable(rawTable);
         // Resolve satellite table names for source:activity and source:accessed JOINs.
         // Non-partitioned setups store everything in mesh_nodes (no satellite tables).
-        var activityTable = _partitionDefinition?.ResolveTableByNodeType("Activity") ?? "mesh_nodes";
-        var userActivityTable = _partitionDefinition?.ResolveTableByNodeType("UserActivity") ?? "mesh_nodes";
+        var activityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("Activity") ?? "mesh_nodes");
+        var userActivityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("UserActivity") ?? "mesh_nodes");
         var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, userId, activityUserId, tableName,
             activityTable, userActivityTable);
         if (!string.IsNullOrEmpty(effectivePath))

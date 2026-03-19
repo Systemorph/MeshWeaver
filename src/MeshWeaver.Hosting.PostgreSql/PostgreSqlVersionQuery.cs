@@ -13,10 +13,14 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlVersionQuery : IVersionQuery
 {
     private readonly NpgsqlDataSource _dataSource;
+    private readonly string _historyTable;
 
-    public PostgreSqlVersionQuery(NpgsqlDataSource dataSource)
+    public PostgreSqlVersionQuery(NpgsqlDataSource dataSource, string? versionsSchema = null)
     {
         _dataSource = dataSource;
+        _historyTable = string.IsNullOrEmpty(versionsSchema)
+            ? "\"mesh_node_history\""
+            : $"\"{versionsSchema}\".\"mesh_node_history\"";
     }
 
     private static (string Namespace, string Id) SplitPath(string path)
@@ -33,7 +37,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         var (ns, id) = SplitPath(path);
         await using var cmd = _dataSource.CreateCommand(
             "SELECT version, last_modified, changed_by, name, node_type " +
-            "FROM mesh_node_history WHERE namespace = $1 AND id = $2 " +
+            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 " +
             "ORDER BY version DESC");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
@@ -60,7 +64,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         await using var cmd = _dataSource.CreateCommand(
             "SELECT id, namespace, name, node_type, category, icon, display_order, " +
             "last_modified, version, state, content, desired_id, main_node " +
-            "FROM mesh_node_history WHERE namespace = $1 AND id = $2 AND version = $3");
+            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version = $3");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
         cmd.Parameters.AddWithValue(version);
@@ -80,7 +84,7 @@ public class PostgreSqlVersionQuery : IVersionQuery
         await using var cmd = _dataSource.CreateCommand(
             "SELECT id, namespace, name, node_type, category, icon, display_order, " +
             "last_modified, version, state, content, desired_id, main_node " +
-            "FROM mesh_node_history WHERE namespace = $1 AND id = $2 AND version < $3 " +
+            $"FROM {_historyTable} WHERE namespace = $1 AND id = $2 AND version < $3 " +
             "ORDER BY version DESC LIMIT 1");
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(id);
