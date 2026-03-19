@@ -1,5 +1,6 @@
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
+@using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.Extensions.DependencyInjection
 @using System.IO.Compression
 @inject NavigationManager NavigationManager
@@ -9,11 +10,15 @@
     <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
         @if (IsFileMode)
         {
-            <text>Upload a file to import into the mesh.</text>
+            <text>Upload file(s) to import into the mesh.</text>
+        }
+        else if (IsFolderMode)
+        {
+            <text>Upload a folder of MeshNodes (.md, .json files) to import into the mesh.</text>
         }
         else
         {
-            <text>Upload a ZIP file containing MeshNodes and their partition data to import into the mesh.</text>
+            <text>Upload a ZIP file containing MeshNodes to import into the mesh.</text>
         }
     </p>
 
@@ -23,22 +28,36 @@
             <FluentCheckbox @bind-Value="@ForceReimport" Label="Force re-import (overwrite existing data)" />
         </div>
 
-        <div style="margin-bottom: 16px;">
-            <FluentButton Id="node-import-upload" Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
-                          IconStart="@(new Icons.Regular.Size16.ArrowUpload())">
-                @(IsFileMode ? "Select File" : "Select ZIP File")
-            </FluentButton>
-        </div>
+        @if (IsFolderMode)
+        {
+            <div style="margin-bottom: 16px;">
+                <label class="fluent-input-label" style="display: block; margin-bottom: 4px; font-weight: 600;">Select Folder</label>
+                <InputFile OnChange="@OnFolderSelectedAsync"
+                           webkitdirectory=""
+                           directory=""
+                           multiple
+                           style="display: block; padding: 8px; border: 1px dashed var(--neutral-stroke-rest); border-radius: 4px; width: 100%;" />
+            </div>
+        }
+        else
+        {
+            <div style="margin-bottom: 16px;">
+                <FluentButton Id="node-import-upload" Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                              IconStart="@(new Icons.Regular.Size16.ArrowUpload())">
+                    @(IsFileMode ? "Select File" : "Select ZIP File")
+                </FluentButton>
+            </div>
 
-        <FluentInputFile @ref="@inputFile"
-                         AnchorId="node-import-upload"
-                         DragDropZoneVisible="false"
-                         Mode="InputFileMode.Stream"
-                         Multiple="@IsFileMode"
-                         Accept="@AcceptFilter"
-                         MaximumFileSize="@(500 * 1024 * 1024)"
-                         OnFileUploaded="@OnFileUploadedAsync"
-                         OnCompleted="@OnUploadCompletedAsync" />
+            <FluentInputFile @ref="@inputFile"
+                             AnchorId="node-import-upload"
+                             DragDropZoneVisible="false"
+                             Mode="InputFileMode.Stream"
+                             Multiple="@IsFileMode"
+                             Accept="@AcceptFilter"
+                             MaximumFileSize="@(500 * 1024 * 1024)"
+                             OnFileUploaded="@OnFileUploadedAsync"
+                             OnCompleted="@OnUploadCompletedAsync" />
+        }
     }
 
     @if (IsImporting)
@@ -54,9 +73,8 @@
             {
                 <h3 style="color: var(--success); margin: 0 0 12px 0;">Import Complete</h3>
                 <p><strong>Nodes imported:</strong> @ImportResult.NodesImported</p>
-                <p><strong>Partitions imported:</strong> @ImportResult.PartitionsImported</p>
                 <p><strong>Nodes skipped:</strong> @ImportResult.NodesSkipped</p>
-                <p><strong>Partitions skipped:</strong> @ImportResult.PartitionsSkipped</p>
+                <p><strong>Nodes removed:</strong> @ImportResult.NodesRemoved</p>
                 <p><strong>Time:</strong> @ImportResult.Elapsed.TotalSeconds.ToString("F1")s</p>
             }
             else
@@ -93,6 +111,7 @@
     private string? ErrorMessage;
 
     private bool IsFileMode => ImportMode == "file";
+    private bool IsFolderMode => ImportMode == "folder";
     private string AcceptFilter => IsFileMode ? ".md,.json,.yaml,.yml,.txt,.csv,.xml,.html" : ".zip";
 
     protected override void BindData()
@@ -101,6 +120,93 @@
         TargetPath = ViewModel?.TargetPath;
         ImportMode = ViewModel?.Mode;
         ForceReimport = ViewModel?.Force ?? false;
+    }
+
+    /// <summary>
+    /// Handles folder upload via InputFile with webkitdirectory attribute.
+    /// Files arrive with their relative paths preserved.
+    /// </summary>
+    private async Task OnFolderSelectedAsync(InputFileChangeEventArgs e)
+    {
+        IsImporting = true;
+        ErrorMessage = null;
+        ImportResult = null;
+        ProgressPercent = 10;
+        ProgressMessage = $"Uploading {e.FileCount} files...";
+        StateHasChanged();
+
+        string? tempDir = null;
+        try
+        {
+            tempDir = Path.Combine(Path.GetTempPath(), "meshweaver-import-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(tempDir);
+
+            // Save all files preserving their relative directory structure
+            var files = e.GetMultipleFiles(maximumFileCount: 10000);
+            var saved = 0;
+            foreach (var file in files)
+            {
+                // file.Name contains the relative path (e.g., "AIConsulting/Discussion/Governance.md")
+                var relativePath = file.Name.Replace('\\', '/');
+                var destPath = Path.Combine(tempDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                var destDir = Path.GetDirectoryName(destPath);
+                if (destDir != null)
+                    Directory.CreateDirectory(destDir);
+
+                await using var fs = File.Create(destPath);
+                await using var stream = file.OpenReadStream(maxAllowedSize: 500 * 1024 * 1024);
+                await stream.CopyToAsync(fs);
+                saved++;
+
+                if (saved % 10 == 0)
+                {
+                    ProgressPercent = Math.Min(10 + (saved * 50 / files.Count), 59);
+                    ProgressMessage = $"Uploading... {saved}/{files.Count} files";
+                    StateHasChanged();
+                }
+            }
+
+            ProgressPercent = 60;
+            ProgressMessage = "Importing nodes...";
+            StateHasChanged();
+
+            // Call import service
+            var importService = Hub.ServiceProvider.GetService<IMeshImportService>();
+            if (importService == null)
+            {
+                ErrorMessage = "Import service is not available.";
+                IsImporting = false;
+                return;
+            }
+
+            ImportResult = await importService.ImportNodesAsync(
+                tempDir,
+                TargetPath,
+                ForceReimport,
+                onProgress: (nodes, partitions, currentPath) =>
+                {
+                    ProgressPercent = Math.Min(60 + nodes % 40, 99);
+                    ProgressMessage = $"Importing... {nodes} nodes ({currentPath})";
+                    InvokeAsync(StateHasChanged);
+                },
+                ct: CancellationToken.None);
+
+            ProgressPercent = 100;
+            ProgressMessage = "Done!";
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Import failed: {ex.Message}";
+        }
+        finally
+        {
+            IsImporting = false;
+            if (tempDir != null)
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+            StateHasChanged();
+        }
     }
 
     private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
@@ -137,7 +243,7 @@
             }
             else
             {
-                // Folder/ZIP mode: save as temp zip, extract
+                // ZIP mode: save as temp zip, extract
                 var tempZip = Path.GetTempFileName();
                 try
                 {
@@ -178,7 +284,7 @@
                 onProgress: (nodes, partitions, currentPath) =>
                 {
                     ProgressPercent = Math.Min(60 + (nodes + partitions) % 40, 99);
-                    ProgressMessage = $"Importing... {nodes} nodes, {partitions} partitions ({currentPath})";
+                    ProgressMessage = $"Importing... {nodes} nodes ({currentPath})";
                     InvokeAsync(StateHasChanged);
                 },
                 ct: CancellationToken.None);
@@ -210,7 +316,6 @@
 
     private Task OnUploadCompletedAsync(IEnumerable<FluentInputFileEventArgs> files)
     {
-        // Upload completed callback - state already updated in OnFileUploadedAsync
         return Task.CompletedTask;
     }
 
