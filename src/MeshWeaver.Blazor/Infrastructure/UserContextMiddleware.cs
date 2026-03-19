@@ -41,16 +41,23 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 var meshUser = await TryLoadMeshUserAsync(userContext.Email, hub);
                 if (meshUser is not null)
                 {
+                    logger.LogInformation("UserContext resolved: email={Email} → objectId={ObjectId} (node={NodeId})",
+                        userContext.Email, meshUser.Id, meshUser.Path);
                     userContext = userContext with
                     {
                         ObjectId = meshUser.Id,
                         Name = meshUser.Name ?? meshUser.Id
                     };
                 }
+                else
+                {
+                    logger.LogWarning("UserContext: no User node found for email={Email}, ObjectId stays as email",
+                        userContext.Email);
+                }
             }
 
-            logger.LogDebug("UserContext: ObjectId={ObjectId}, Name={Name}, Email={Email}, Roles=[{Roles}]",
-                userContext.ObjectId, userContext.Name, userContext.Email, string.Join(", ", userContext.Roles ?? []));
+            logger.LogInformation("UserContext set: ObjectId={ObjectId}, Name={Name}, Email={Email}",
+                userContext.ObjectId, userContext.Name, userContext.Email);
 
             userService.SetContext(userContext);
             userService.SetCircuitContext(userContext);

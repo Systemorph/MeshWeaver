@@ -50,8 +50,6 @@ public class MeshQuery(
                 try
                 {
                     var count = 0;
-                    logger?.LogDebug("MeshQuery: provider {Provider} starting for query '{Query}'",
-                        provider.GetType().Name, request.Query);
                     await foreach (var item in provider.QueryAsync(request, Options, ct))
                     {
                         if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
@@ -63,13 +61,18 @@ public class MeshQuery(
                             : item;
                         await channel.Writer.WriteAsync(result, ct);
                     }
-                    logger?.LogDebug("MeshQuery: provider {Provider} returned {Count} items for query '{Query}'",
-                        provider.GetType().Name, count, request.Query);
+                    if (count > 0 || logger?.IsEnabled(LogLevel.Debug) == true)
+                        logger?.LogDebug("MeshQuery: {Provider} returned {Count} items for '{Query}'",
+                            provider.GetType().Name, count, request.Query);
                 }
-                catch (OperationCanceledException) { /* silent */ }
+                catch (OperationCanceledException)
+                {
+                    logger?.LogDebug("MeshQuery: {Provider} cancelled for '{Query}'",
+                        provider.GetType().Name, request.Query);
+                }
                 catch (Exception ex)
                 {
-                    logger?.LogWarning(ex, "MeshQuery: provider {Provider} failed for query '{Query}'",
+                    logger?.LogWarning(ex, "MeshQuery: {Provider} failed for '{Query}'",
                         provider.GetType().Name, request.Query);
                 }
             }));

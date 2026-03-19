@@ -88,7 +88,8 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
         var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
         var blobServiceClient = factory.CreateClient(clientName);
 
-        return Task.FromResult<IStreamProvider>(new AzureBlobStreamProvider(blobServiceClient, containerName));
+        var basePath = config.BasePath ?? config.Settings?.GetValueOrDefault("BasePath") ?? "";
+        return Task.FromResult<IStreamProvider>(new AzureBlobStreamProvider(blobServiceClient, containerName, basePath));
     }
 }
 

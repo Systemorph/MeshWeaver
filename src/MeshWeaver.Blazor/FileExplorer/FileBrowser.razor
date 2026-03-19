@@ -3,6 +3,8 @@
 
 
 <div class="file-browser">
+    <!-- Debug: remove after fixing -->
+    <p style="color:red; font-size:0.7rem;">DEBUG: Collection=@(Collection != null ? "OK" : "NULL"), ReadOnly=@IsReadOnly, Name=@CollectionName, Config=@(CollectionConfiguration != null ? "OK" : "NULL")</p>
     <!-- Toolbar with Separate Row for Breadcrumb Navigation -->
     <FluentToolbar Class="toolbar">
         @if (Collection != null)

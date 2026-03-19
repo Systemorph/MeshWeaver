@@ -36,7 +36,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         return base.ConfigureClient(configuration);
     }
 
-    // ── Partition nodes excluded from search ───────────────────────────────
+    // ── Partition nodes excluded from search context ──────────────────────
 
     [Fact(Timeout = 30000)]
     public async Task SearchContext_ExcludesPartitionNodes()
@@ -62,9 +62,11 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         foreach (var r in results.Take(20))
             Output.WriteLine($"  {r.Path} ({r.NodeType})");
 
-        // Assert: Partition nodes excluded from search context, content nodes included
+        // Assert: Partition metadata nodes excluded from search, content nodes included.
+        // The actual PartnerRe content (on its own partition) should be visible via fan-out,
+        // but the Admin/Partition/PartnerRe metadata node should NOT clutter search.
         results.Should().NotContain(n => n.NodeType == "Partition",
-            "Partition nodes should be excluded from search context");
+            "Partition metadata nodes should be excluded from search context");
         results.Select(n => n.Name).Should().Contain("Test Document");
     }
 

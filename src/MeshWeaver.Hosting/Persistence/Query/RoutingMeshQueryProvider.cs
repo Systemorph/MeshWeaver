@@ -9,6 +9,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
 
@@ -23,6 +24,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
     private readonly AccessService? _accessService;
     private readonly ISecurityService? _securityService;
     private readonly IDataChangeNotifier? _changeNotifier;
+    private readonly ILogger? _logger;
     private readonly QueryParser _parser = new();
     private readonly MemoryCache _accessCache = new(new MemoryCacheOptions());
     private static readonly MemoryCacheEntryOptions CacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
@@ -31,12 +33,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         RoutingPersistenceServiceCore router,
         AccessService? accessService = null,
         ISecurityService? securityService = null,
-        IDataChangeNotifier? changeNotifier = null)
+        IDataChangeNotifier? changeNotifier = null,
+        ILogger<RoutingMeshQueryProvider>? logger = null)
     {
         _router = router;
         _accessService = accessService;
         _securityService = securityService;
         _changeNotifier = changeNotifier;
+        _logger = logger;
 
         // Evict access cache when partition access changes
         _changeNotifier?.Subscribe(notification =>
@@ -66,16 +70,14 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         foreach (var (partitionKey, _) in _router.QueryProviders)
         {
-            // Exclude Admin partition from global search — it contains partition metadata,
-            // access assignments, and system config, not user content. Direct path queries
-            // (e.g., path:Admin/Partition/X) still route to Admin via the segment-based path.
-            if (partitionKey.Equals("Admin", StringComparison.OrdinalIgnoreCase))
-                continue;
-
             // Check if user has read permission on the partition's namespace
             var ns = GetNamespaceForPartition(partitionKey);
-            if (await _securityService.HasPermissionAsync(ns, userId, Permission.Read, ct))
+            var hasAccess = await _securityService.HasPermissionAsync(ns, userId, Permission.Read, ct);
+            if (hasAccess)
                 accessible.Add(partitionKey);
+            else
+                _logger?.LogDebug("Partition {Partition} (ns={Namespace}) not accessible for user {UserId}",
+                    partitionKey, ns, userId);
         }
 
         // Always include the User partition — users can access their own subtree
@@ -83,6 +85,9 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         // by the node type access rules, not at the partition level.
         if (!accessible.Contains("User") && _router.QueryProviders.ContainsKey("User"))
             accessible.Add("User");
+
+        _logger?.LogInformation("User {UserId}: accessible partitions = [{Partitions}], total providers = {Total}",
+            userId, string.Join(", ", accessible), _router.QueryProviders.Count);
 
         _accessCache.Set(cacheKey, accessible, CacheOptions);
         return accessible;
@@ -134,69 +139,63 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
-        // Fan out: query accessible partitions in parallel, each scoped to its own namespace.
+        // Fan out: query accessible partitions in parallel, collect all results,
+        // then re-sort and apply the global limit. Each partition applies its own
+        // ORDER BY + LIMIT, but the merge must re-sort to produce correct global ordering.
         var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-        var channel = Channel.CreateUnbounded<object>();
+        var allResults = new ConcurrentBag<object>();
 
-        _ = ProduceAllResultsAsync();
-        async Task ProduceAllResultsAsync()
+        var queryTasks = new List<Task>();
+        foreach (var (key, p) in _router.QueryProviders)
+        {
+            if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
+                continue;
+            queryTasks.Add(QueryOneAsync(key, p));
+        }
+
+        // Discover new partitions and query each as it becomes available
+        await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
+            queryTasks.Add(QueryOneAsync(key, p));
+
+        await Task.WhenAll(queryTasks);
+
+        // Re-sort merged results and apply global limit
+        var globalLimit = request.Limit ?? parsed.Limit;
+        IEnumerable<object> sorted = allResults;
+        if (parsed.OrderBy != null)
+        {
+            var evaluator = new QueryEvaluator();
+            sorted = evaluator.OrderResults(allResults.OfType<MeshNode>(), parsed.OrderBy).Cast<object>();
+        }
+        if (globalLimit.HasValue)
+            sorted = sorted.Take(globalLimit.Value);
+
+        foreach (var item in sorted)
+            yield return item;
+
+        yield break;
+
+        async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
         {
             try
             {
-                var queryTasks = new ConcurrentBag<Task>();
+                var scopedRequest = string.IsNullOrEmpty(effectivePath)
+                    ? request with { DefaultPath = partitionKey, Query = fanOutQuery }
+                    : request;
 
-                // Start querying already-known accessible partitions immediately
-                foreach (var (key, p) in _router.QueryProviders)
+                await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
                 {
-                    if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
+                    if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
                         continue;
-                    queryTasks.Add(QueryOneAsync(key, p));
+                    allResults.Add(item);
                 }
-
-                // Discover new partitions and start querying each as it becomes available
-                await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
-                    queryTasks.Add(QueryOneAsync(key, p));
-
-                // All providers discovered — wait for ongoing queries to finish
-                await Task.WhenAll(queryTasks);
             }
             catch (OperationCanceledException) { /* silent */ }
             catch (Exception ex)
             {
-                channel.Writer.Complete(ex);
-                return;
+                _logger?.LogWarning(ex, "Fan-out query to partition {Partition} failed", partitionKey);
             }
-            channel.Writer.Complete();
-
-            async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
-            {
-                try
-                {
-                    var scopedRequest = string.IsNullOrEmpty(effectivePath)
-                        ? request with { DefaultPath = partitionKey, Query = fanOutQuery }
-                        : request;
-
-                    await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
-                    {
-                        if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
-                            continue;
-                        await channel.Writer.WriteAsync(item, ct);
-                    }
-                }
-                catch (OperationCanceledException) { /* silent */ }
-                catch (Exception) { /* don't kill other partitions */ }
-            }
-        }
-
-        // Enforce global limit across all partitions
-        var globalLimit = request.Limit ?? parsed.Limit;
-        int count = 0;
-        await foreach (var item in channel.Reader.ReadAllAsync(ct))
-        {
-            yield return item;
-            if (globalLimit.HasValue && ++count >= globalLimit.Value)
-                yield break;
         }
     }
 

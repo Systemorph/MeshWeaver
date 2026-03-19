@@ -309,7 +309,7 @@ public static class MemexConfiguration
                     if (contentStorageConfig != null)
                     {
                         var nodePath = config.Address.ToString();
-                        var contentSubdir = $"content/{nodePath}";
+                        var contentSubdir = nodePath;
                         // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
                         var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)
                             ? contentSubdir

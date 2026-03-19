@@ -21,6 +21,8 @@ public class PostgreSqlStorageAdapterFactory(
 {
     public const string StorageType = "PostgreSql";
 
+    private NpgsqlDataSource? _cachedDataSource;
+
     public IStorageAdapter Create(GraphStorageConfig config, IServiceProvider serviceProvider)
     {
         // Try to use an Aspire-injected or externally-registered NpgsqlDataSource first
@@ -28,16 +30,25 @@ public class PostgreSqlStorageAdapterFactory(
 
         if (dataSource == null)
         {
-            var opts = options.Value;
-            var connectionString = opts.ConnectionString
-                ?? config.ConnectionString
-                ?? throw new InvalidOperationException(
-                    "PostgreSQL connection string not configured. " +
-                    "Set PostgreSqlStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
+            // Cache the data source so multiple Create() calls share a single connection pool
+            if (_cachedDataSource == null)
+            {
+                var opts = options.Value;
+                var connectionString = opts.ConnectionString
+                    ?? config.ConnectionString
+                    ?? throw new InvalidOperationException(
+                        "PostgreSQL connection string not configured. " +
+                        "Set PostgreSqlStorageOptions.ConnectionString or Graph:Storage:ConnectionString.");
 
-            var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
-            dataSourceBuilder.UseVector();
-            dataSource = dataSourceBuilder.Build();
+                var csb = new NpgsqlConnectionStringBuilder(connectionString)
+                {
+                    MaxPoolSize = 20
+                };
+                var dataSourceBuilder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+                dataSourceBuilder.UseVector();
+                _cachedDataSource = dataSourceBuilder.Build();
+            }
+            dataSource = _cachedDataSource;
         }
 
         var embeddingProvider = serviceProvider.GetService<IEmbeddingProvider>();
@@ -103,7 +114,8 @@ public static class PostgreSqlExtensions
         var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
         configure?.Invoke(opts);
 
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        var csb = new NpgsqlConnectionStringBuilder(connectionString) { MaxPoolSize = 3, ConnectionIdleLifetime = 30 };
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         dataSourceBuilder.UseVector();
         var dataSource = dataSourceBuilder.Build();
 
@@ -133,7 +145,8 @@ public static class PostgreSqlExtensions
         var opts = new PostgreSqlStorageOptions { ConnectionString = connectionString };
         configure?.Invoke(opts);
 
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        var csb = new NpgsqlConnectionStringBuilder(connectionString) { MaxPoolSize = 3, ConnectionIdleLifetime = 30 };
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         dataSourceBuilder.UseVector();
         var dataSource = dataSourceBuilder.Build();
 

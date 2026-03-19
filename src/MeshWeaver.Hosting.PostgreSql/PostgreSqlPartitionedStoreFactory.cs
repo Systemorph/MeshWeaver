@@ -23,6 +23,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private readonly IReadOnlyList<NodeTypePermission> _nodeTypePermissions;
     private readonly string _baseConnectionString;
     private readonly Action<NpgsqlDataSourceBuilder>? _configureDataSource;
+    private readonly SemaphoreSlim _schemaInitLock = new(1, 1);
     private List<PartitionDefinition>? _partitionDefinitions;
 
     public PostgreSqlPartitionedStoreFactory(
@@ -61,10 +62,13 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private NpgsqlDataSource BuildDataSource(string connectionString, bool useVector = false)
     {
         // Limit pool size per partition to avoid "too many clients" errors
-        // when fan-out queries hit all partitions in parallel
+        // when fan-out queries hit all partitions in parallel.
+        // ConnectionIdleLifetime: close idle connections after 30s so previous app instances
+        // don't hold server slots when the Docker container persists across restarts.
         var csb = new NpgsqlConnectionStringBuilder(connectionString)
         {
-            MaxPoolSize = 10
+            MaxPoolSize = 3,
+            ConnectionIdleLifetime = 30
         };
         var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
         if (useVector)
@@ -74,6 +78,21 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     }
 
     public async Task<PartitionedStore> CreateStoreAsync(string firstSegment, CancellationToken ct = default)
+    {
+        // Serialize schema creation to avoid "tuple concurrently updated" errors
+        // when multiple partitions initialize in parallel (CREATE EXTENSION, CREATE SCHEMA)
+        await _schemaInitLock.WaitAsync(ct);
+        try
+        {
+            return await CreateStoreInternalAsync(firstSegment, ct);
+        }
+        finally
+        {
+            _schemaInitLock.Release();
+        }
+    }
+
+    private async Task<PartitionedStore> CreateStoreInternalAsync(string firstSegment, CancellationToken ct)
     {
         var schemaName = SanitizeSchemaName(firstSegment);
         var versionsSchemaName = schemaName + "_versions";

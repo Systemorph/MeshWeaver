@@ -191,7 +191,6 @@ public partial class FileBrowser
     int progressPercent;
     string progressTitle = "";
 
-
     private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
     {
         progressPercent = file.ProgressPercent;
@@ -209,7 +208,6 @@ public partial class FileBrowser
         {
             ToastService.ShowError($"Error uploading {file.Name}: {e.Message}");
         }
-
     }
 
     private async Task OnCompleted(IEnumerable<FluentInputFileEventArgs> files)

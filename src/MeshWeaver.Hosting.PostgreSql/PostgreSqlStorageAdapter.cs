@@ -2,6 +2,7 @@
 using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using Pgvector;
@@ -20,25 +21,38 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
     private readonly PostgreSqlSqlGenerator _sqlGenerator = new();
     private readonly IEmbeddingProvider _embeddingProvider;
     private readonly PartitionDefinition? _partitionDefinition;
+    private readonly Microsoft.Extensions.Logging.ILogger? _logger;
 
     public NpgsqlDataSource DataSource => _dataSource;
 
     public PostgreSqlStorageAdapter(
         NpgsqlDataSource dataSource,
         IEmbeddingProvider? embeddingProvider = null,
-        PartitionDefinition? partitionDefinition = null)
+        PartitionDefinition? partitionDefinition = null,
+        Microsoft.Extensions.Logging.ILogger<PostgreSqlStorageAdapter>? logger = null)
     {
         _dataSource = dataSource;
         _embeddingProvider = embeddingProvider ?? NullEmbeddingProvider.Instance;
         _partitionDefinition = partitionDefinition;
+        _logger = logger;
     }
 
     /// <summary>
-    /// Resolves the table name for a given path.
-    /// Returns a satellite table name if the path matches a TableMapping, otherwise "mesh_nodes".
+    /// Resolves the table name for a given path and optional nodeType.
+    /// Checks path-based satellite routing first, then falls back to nodeType-based routing.
+    /// This ensures AccessAssignment nodes (e.g., "PartnerRe/rbuergi_Access") route to the
+    /// access table even when the path doesn't contain a "_Access" segment.
     /// </summary>
-    private string ResolveTable(string path)
-        => _partitionDefinition?.ResolveTable(path) ?? "mesh_nodes";
+    private string ResolveTable(string path, string? nodeType = null)
+    {
+        if (_partitionDefinition == null)
+            return "mesh_nodes";
+        var table = _partitionDefinition.ResolveTable(path);
+        if (table != "mesh_nodes" || string.IsNullOrEmpty(nodeType))
+            return table;
+        // Path didn't match a satellite segment — try nodeType-based routing
+        return _partitionDefinition.ResolveTableByNodeType(nodeType);
+    }
 
     private static string NormalizePath(string? path) =>
         path?.Trim('/') ?? "";
@@ -88,7 +102,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
             ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
             : null;
 
-        var table = ResolveTable(node.Path);
+        var table = ResolveTable(node.Path, node.NodeType);
         await using var cmd = _dataSource.CreateCommand(
             $"""
             INSERT INTO "{table}" (namespace, id, name, node_type, category, icon, display_order,
@@ -413,6 +427,13 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
                 else
                     sql += $" WHERE {scopeClause}";
             }
+        }
+
+        if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
+        {
+            _logger.LogDebug("SQL: {Sql}", sql);
+            foreach (var (name, value) in parameters)
+                _logger.LogDebug("  Param {Name} = {Value}", name, value);
         }
 
         await using var cmd = _dataSource.CreateCommand(sql);

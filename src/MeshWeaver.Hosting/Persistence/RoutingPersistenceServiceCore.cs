@@ -91,14 +91,19 @@ internal class RoutingPersistenceServiceCore : IStorageService
     internal async IAsyncEnumerable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProvidersAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var partitions = await _factory.DiscoverPartitionsAsync(ct);
+        // Use a dedicated startup timeout for partition discovery and provisioning —
+        // this is infrastructure that must complete even if the triggering request
+        // is cancelled (e.g., user typing fast in the search bar).
+        using var startupCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var startupCt = startupCts.Token;
+        var partitions = await _factory.DiscoverPartitionsAsync(startupCt);
 
         foreach (var segment in partitions)
         {
             if (_stores.ContainsKey(segment))
                 continue;
 
-            var partition = await _factory.CreateStoreAsync(segment, ct);
+            var partition = await _factory.CreateStoreAsync(segment, startupCt);
             var core = new InMemoryPersistenceService(partition.StorageAdapter, _changeNotifier);
             if (_stores.TryAdd(segment, core))
             {

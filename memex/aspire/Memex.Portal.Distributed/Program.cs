@@ -16,13 +16,25 @@ builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
 
 // Register Aspire-injected PostgreSQL data source (with pgvector support)
+// Limit pool size — each partition creates its own pool (3 connections each),
+// and multiple silo instances share the same PostgreSQL server (max_connections=100).
 var connectionString = builder.Configuration.GetConnectionString("memex") ?? "";
 if (connectionString.Contains("database.azure.com"))
     builder.AddAzureNpgsqlDataSource("memex",
-        configureDataSourceBuilder: dsb => dsb.UseVector());
+        configureDataSourceBuilder: dsb =>
+        {
+            dsb.UseVector();
+            dsb.ConnectionStringBuilder.MaxPoolSize = 3;
+            dsb.ConnectionStringBuilder.ConnectionIdleLifetime = 30;
+        });
 else
     builder.AddNpgsqlDataSource("memex",
-        configureDataSourceBuilder: dsb => dsb.UseVector());
+        configureDataSourceBuilder: dsb =>
+        {
+            dsb.UseVector();
+            dsb.ConnectionStringBuilder.MaxPoolSize = 3;
+            dsb.ConnectionStringBuilder.ConnectionIdleLifetime = 30;
+        });
 
 // Disable dev login in the distributed deployment
 builder.Configuration["Authentication:EnableDevLogin"] = "false";
