@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text.Json;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -8,23 +10,24 @@ namespace MeshWeaver.Hosting.Persistence;
 
 /// <summary>
 /// Implementation of IMeshImportService that imports nodes and content
-/// from file system sources into the mesh storage.
+/// from file system sources into the mesh via IMeshService.
 /// Scoped service — uses the hub's JsonSerializerOptions for proper type polymorphism.
+/// All writes go through IMeshService for proper security enforcement and activity logging.
 /// </summary>
 public class MeshImportService : IMeshImportService
 {
-    private readonly IStorageAdapter? _storageAdapter;
+    private readonly IMeshService _meshService;
     private readonly IContentService _contentService;
     private readonly IMessageHub _hub;
     private readonly ILogger<MeshImportService> _logger;
 
     public MeshImportService(
+        IMeshService meshService,
         IContentService contentService,
         IMessageHub hub,
-        ILogger<MeshImportService> logger,
-        IStorageAdapter? storageAdapter = null)
+        ILogger<MeshImportService> logger)
     {
-        _storageAdapter = storageAdapter;
+        _meshService = meshService;
         _contentService = contentService;
         _hub = hub;
         _logger = logger;
@@ -43,19 +46,159 @@ public class MeshImportService : IMeshImportService
 
         try
         {
-            if (_storageAdapter == null)
-                return ImportNodesResponse.Fail("Import is not available: no storage adapter configured.");
+            var sw = Stopwatch.StartNew();
+            var jsonOptions = _hub.JsonSerializerOptions;
 
+            // 1. Read all source nodes from the uploaded directory
             var source = new FileSystemStorageAdapter(sourcePath);
-            return await ImportHelper.RunImportAsync(
-                source, _storageAdapter, _logger, force, targetRootPath, removeMissing, onProgress, ct,
-                _hub.JsonSerializerOptions);
+            var sourceNodes = await ReadAllNodesAsync(source, jsonOptions, ct);
+
+            // Remap paths if targetRootPath is specified
+            if (!string.IsNullOrEmpty(targetRootPath))
+            {
+                sourceNodes = RemapPaths(sourceNodes, targetRootPath);
+            }
+
+            // 2. Query existing nodes in target namespace
+            var query = !string.IsNullOrEmpty(targetRootPath)
+                ? $"namespace:{targetRootPath} scope:subtree"
+                : "scope:subtree";
+            var existingNodes = new Dictionary<string, MeshNode>();
+            await foreach (var node in _meshService.QueryAsync<MeshNode>(
+                new MeshQueryRequest { Query = query, Limit = int.MaxValue }, ct: ct))
+            {
+                existingNodes[node.Path] = node;
+            }
+
+            // 3. Create / Update
+            var nodesImported = 0;
+            var nodesSkipped = 0;
+
+            // Sort by path depth so parents are created before children
+            var sortedNodes = sourceNodes.OrderBy(n => n.Path.Count(c => c == '/')).ToList();
+
+            foreach (var sourceNode in sortedNodes)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                try
+                {
+                    if (existingNodes.TryGetValue(sourceNode.Path, out _))
+                    {
+                        if (force)
+                        {
+                            await _meshService.UpdateNodeAsync(sourceNode, ct);
+                            nodesImported++;
+                        }
+                        else
+                        {
+                            nodesSkipped++;
+                        }
+                    }
+                    else
+                    {
+                        await _meshService.CreateNodeAsync(sourceNode, ct);
+                        nodesImported++;
+                    }
+
+                    onProgress?.Invoke(nodesImported, 0, sourceNode.Path);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to import node {Path}", sourceNode.Path);
+                    nodesSkipped++;
+                }
+            }
+
+            // 4. Remove nodes not in source (if removeMissing)
+            var nodesRemoved = 0;
+            if (removeMissing)
+            {
+                var sourcePaths = sourceNodes.Select(n => n.Path).ToHashSet();
+                // Delete deepest first to avoid parent-before-child issues
+                var toRemove = existingNodes.Keys
+                    .Where(p => !sourcePaths.Contains(p))
+                    .OrderByDescending(p => p.Count(c => c == '/'))
+                    .ToList();
+
+                foreach (var path in toRemove)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        await _meshService.DeleteNodeAsync(path, ct);
+                        nodesRemoved++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete node {Path}", path);
+                    }
+                }
+            }
+
+            sw.Stop();
+            _logger.LogInformation(
+                "Import complete: {Imported} nodes imported, {Skipped} skipped, {Removed} removed in {Elapsed}",
+                nodesImported, nodesSkipped, nodesRemoved, sw.Elapsed);
+
+            return ImportNodesResponse.Ok(nodesImported, 0, nodesSkipped, 0, sw.Elapsed, nodesRemoved);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to import nodes from {SourcePath}", sourcePath);
             return ImportNodesResponse.Fail($"Import failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Reads all nodes recursively from a file system source.
+    /// </summary>
+    private static async Task<List<MeshNode>> ReadAllNodesAsync(
+        FileSystemStorageAdapter source,
+        JsonSerializerOptions jsonOptions,
+        CancellationToken ct)
+    {
+        var nodes = new List<MeshNode>();
+        await ReadRecursiveAsync(source, null, jsonOptions, nodes, ct);
+        return nodes;
+    }
+
+    private static async Task ReadRecursiveAsync(
+        FileSystemStorageAdapter source,
+        string? parentPath,
+        JsonSerializerOptions jsonOptions,
+        List<MeshNode> nodes,
+        CancellationToken ct)
+    {
+        var (nodePaths, directoryPaths) = await source.ListChildPathsAsync(parentPath, ct);
+
+        foreach (var nodePath in nodePaths)
+        {
+            ct.ThrowIfCancellationRequested();
+            var node = await source.ReadAsync(nodePath, jsonOptions, ct);
+            if (node != null)
+                nodes.Add(node);
+        }
+
+        foreach (var dirPath in directoryPaths)
+        {
+            await ReadRecursiveAsync(source, dirPath, jsonOptions, nodes, ct);
+        }
+    }
+
+    /// <summary>
+    /// Remaps node paths to be under the target root path.
+    /// </summary>
+    private static List<MeshNode> RemapPaths(List<MeshNode> nodes, string targetRootPath)
+    {
+        return nodes.Select(n =>
+        {
+            var newPath = $"{targetRootPath}/{n.Path}";
+            var parts = newPath.Split('/');
+            var newId = parts[^1];
+            var newNamespace = string.Join("/", parts[..^1]);
+            return n with { Id = newId, Namespace = newNamespace };
+        }).ToList();
     }
 
     public async Task<int> ImportContentAsync(
@@ -105,7 +248,6 @@ public class MeshImportService : IMeshImportService
         var collection = await _contentService.GetCollectionAsync(collectionName, ct)
             ?? throw new InvalidOperationException($"Content collection '{collectionName}' not found");
 
-        // Count items before deletion
         var files = await collection.GetFilesAsync(folderPath);
         var folders = await collection.GetFoldersAsync(folderPath);
         var itemCount = files.Count + folders.Count;

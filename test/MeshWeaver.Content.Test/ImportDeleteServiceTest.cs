@@ -180,14 +180,8 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact]
     public async Task MeshImportService_ImportNodes_NonexistentSource_ReturnsFail()
     {
-        // Arrange - create service with explicit file system adapter and hub
-        var hub = GetClient();
-        var logger = ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<MeshImportService>();
-        Directory.CreateDirectory(_targetDirectory);
-        var storageAdapter = new FileSystemStorageAdapter(_targetDirectory);
-        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
-        var importService = new MeshImportService(contentService, hub, logger, storageAdapter);
-
+        // Arrange - resolve from DI (now uses IMeshService, not IStorageAdapter)
+        var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
         var nonExistentPath = Path.Combine(Path.GetTempPath(), "nonexistent_" + Guid.NewGuid());
 
         // Act
@@ -201,14 +195,9 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact]
     public async Task MeshImportService_ImportNodes_ValidSource_ImportsSuccessfully()
     {
-        // Arrange - create service with explicit file system adapter and hub
-        var hub = GetClient();
-        var logger = ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<MeshImportService>();
+        // Arrange - resolve from DI
+        var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
         Directory.CreateDirectory(_sourceDirectory);
-        Directory.CreateDirectory(_targetDirectory);
-        var storageAdapter = new FileSystemStorageAdapter(_targetDirectory);
-        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
-        var importService = new MeshImportService(contentService, hub, logger, storageAdapter);
 
         // Seed source with nodes
         var sourceAdapter = new FileSystemStorageAdapter(_sourceDirectory);
