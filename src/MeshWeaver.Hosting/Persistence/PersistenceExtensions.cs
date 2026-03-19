@@ -374,13 +374,19 @@ public static class PersistenceExtensions
         // Partition-level access control is enforced in SQL (public.partition_access),
         // not in the routing layer.
         services.AddSingleton<IMeshQueryProvider>(sp =>
-            new RoutingMeshQueryProvider(
+        {
+            var crossSchema = sp.GetService<ICrossSchemaQueryProvider>();
+            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>();
+            logger?.LogInformation("[STARTUP] RoutingMeshQueryProvider: CrossSchemaProvider={HasCrossSchema}",
+                crossSchema != null);
+            return new RoutingMeshQueryProvider(
                 sp.GetRequiredService<RoutingPersistenceServiceCore>(),
                 sp.GetService<MeshConfiguration>(),
-                sp.GetService<ICrossSchemaQueryProvider>(),
+                crossSchema,
                 sp.GetService<AccessService>(),
                 sp.GetService<IDataChangeNotifier>(),
-                sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>()));
+                logger);
+        });
 
         // Register the routing version query
         services.AddSingleton<IVersionQuery>(sp =>

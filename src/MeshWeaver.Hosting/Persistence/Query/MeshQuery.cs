@@ -79,7 +79,11 @@ public class MeshQuery(
             channel.Writer.Complete();
         }
 
-        await foreach (var item in channel.Reader.ReadAllAsync(ct))
+        // Use CancellationToken.None — the channel completes when all producers finish.
+        // Passing `ct` here would throw OperationCanceledException immediately if the
+        // request was cancelled (e.g., user typing fast in search bar), even though
+        // partial results may already be in the channel.
+        await foreach (var item in channel.Reader.ReadAllAsync(CancellationToken.None))
             yield return item;
     }
 
@@ -90,11 +94,15 @@ public class MeshQuery(
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var all = new ConcurrentBag<QuerySuggestion>();
+        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         await Task.WhenAll(providers.Select(async provider =>
         {
             await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
-                all.Add(suggestion);
+            {
+                if (seen.TryAdd(suggestion.Path, 0))
+                    all.Add(suggestion);
+            }
         }));
 
         foreach (var suggestion in all
@@ -117,11 +125,15 @@ public class MeshQuery(
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var all = new ConcurrentBag<QuerySuggestion>();
+        var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 
         await Task.WhenAll(providers.Select(async provider =>
         {
             await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
-                all.Add(suggestion);
+            {
+                if (seen.TryAdd(suggestion.Path, 0))
+                    all.Add(suggestion);
+            }
         }));
 
         IEnumerable<QuerySuggestion> ordered = mode switch
