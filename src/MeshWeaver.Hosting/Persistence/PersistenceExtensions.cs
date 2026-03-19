@@ -270,6 +270,9 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
+        // Import service
+        services.TryAddSingleton<IMeshImportService, MeshImportService>();
+
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
@@ -407,6 +410,9 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
+        // Import service
+        services.TryAddSingleton<IMeshImportService, MeshImportService>();
+
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
@@ -450,6 +456,9 @@ public static class PersistenceExtensions
 
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
+
+        // Import service
+        services.TryAddSingleton<IMeshImportService, MeshImportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();

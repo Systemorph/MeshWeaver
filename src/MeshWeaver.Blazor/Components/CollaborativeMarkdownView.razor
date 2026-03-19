@@ -122,7 +122,7 @@
 
     @* Split layout: content + annotation cards *@
     <div class="collab-md-split @(HasSideAnnotations ? "with-sidebar" : "")">
-        <div class="collab-md-content markdown-annotations-container" @ref="contentRef">
+        <div class="collab-md-content markdown-annotations-container markdown-body" data-theme="@Mode.ToString().ToLower()" style="background-color: var(--neutral-layer-1);" @ref="contentRef">
             @((MarkupString)RenderedHtml)
         </div>
 

@@ -1,4 +1,7 @@
-﻿using Microsoft.AspNetCore.Authentication;
+﻿using System.Net.Http.Headers;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
@@ -74,6 +77,18 @@ public static class AuthenticationBuilderExtensions
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
+            options.Events = new OAuthEvents
+            {
+                OnCreatingTicket = async context =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", context.AccessToken);
+                    var response = await context.Backchannel.SendAsync(request, context.HttpContext.RequestAborted);
+                    response.EnsureSuccessStatusCode();
+                    var user = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                    context.RunClaimActions(user.RootElement);
+                }
+            };
         });
 
         return builder;
@@ -105,6 +120,18 @@ public static class AuthenticationBuilderExtensions
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
+            options.Events = new OAuthEvents
+            {
+                OnCreatingTicket = async context =>
+                {
+                    var request = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", context.AccessToken);
+                    var response = await context.Backchannel.SendAsync(request, context.HttpContext.RequestAborted);
+                    response.EnsureSuccessStatusCode();
+                    var user = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                    context.RunClaimActions(user.RootElement);
+                }
+            };
         });
 
         return builder;
@@ -134,6 +161,20 @@ public static class AuthenticationBuilderExtensions
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.NameIdentifier, "sub");
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Name, "name");
             options.ClaimActions.MapJsonKey(System.Security.Claims.ClaimTypes.Email, "email");
+            options.Events = new OAuthEvents
+            {
+                OnCreatingTicket = async context =>
+                {
+                    // Apple returns user info in the initial authorization response, not via userinfo endpoint.
+                    // The ID token (if present) contains the claims.
+                    if (context.TokenResponse?.Response?.RootElement is { } root
+                        && root.TryGetProperty("id_token", out _))
+                    {
+                        // Claims already extracted from token by the middleware
+                        return;
+                    }
+                }
+            };
         });
 
         return builder;

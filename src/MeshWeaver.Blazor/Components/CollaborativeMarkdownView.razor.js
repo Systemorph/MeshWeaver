@@ -138,6 +138,99 @@ export async function highlightCodeBlocks(contentEl) {
     codeElements.forEach(el => hljs.highlightElement(el));
 }
 
+// =============================================================================
+// Mermaid diagram rendering
+// =============================================================================
+
+function ensureMermaidLoaded() {
+    if (window.mermaid) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://unpkg.com/mermaid/dist/mermaid.min.js';
+        script.onload = () => setTimeout(resolve, 100);
+        script.onerror = reject;
+        document.head.appendChild(script);
+    });
+}
+
+export async function renderMermaidDiagrams(contentEl) {
+    if (!contentEl) return;
+    const mermaidDivs = contentEl.querySelectorAll('div.mermaid');
+    if (mermaidDivs.length === 0) return;
+
+    await ensureMermaidLoaded();
+
+    let theme = 'default';
+    if (window.themeHandler && typeof window.themeHandler.getEffectiveTheme === 'function') {
+        theme = window.themeHandler.getEffectiveTheme() === 'dark' ? 'dark' : 'default';
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        theme = 'dark';
+    }
+
+    window.mermaid.initialize({ theme: theme, startOnLoad: false, securityLevel: 'loose' });
+
+    for (const div of mermaidDivs) {
+        try {
+            const diagram = div.textContent;
+            div.innerHTML = '';
+            const pre = document.createElement('pre');
+            pre.className = 'mermaid';
+            pre.textContent = diagram;
+            div.appendChild(pre);
+            await window.mermaid.run({ nodes: [pre] });
+        } catch (error) {
+            console.error('Mermaid rendering error:', error);
+            div.innerHTML = `<div style="color: var(--annotation-delete-color); padding: 1rem;">Error rendering diagram: ${error.message}</div>`;
+        }
+    }
+}
+
+// =============================================================================
+// MathJax rendering
+// =============================================================================
+
+export async function renderMathBlocks(contentEl) {
+    if (!contentEl) return;
+    const mathElements = contentEl.querySelectorAll('.math');
+    if (mathElements.length === 0) return;
+
+    if (!window.MathJax || !window.MathJax.typesetPromise) {
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                packages: ['base', 'ams', 'noundefined', 'newcommand', 'boldsymbol']
+            },
+            startup: { typeset: false }
+        };
+
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js';
+
+        const loaded = await new Promise(resolve => {
+            script.onload = () => resolve(true);
+            script.onerror = () => resolve(false);
+            document.head.appendChild(script);
+        });
+
+        if (!loaded) return;
+
+        await new Promise(resolve => {
+            function check() {
+                if (window.MathJax && window.MathJax.typesetPromise) resolve();
+                else setTimeout(check, 100);
+            }
+            check();
+        });
+    }
+
+    try {
+        await window.MathJax.typesetPromise([contentEl]);
+    } catch (error) {
+        console.error('MathJax error:', error);
+    }
+}
+
 export function highlightAnnotation(annotationId) {
     // Remove previous highlights
     document.querySelectorAll('.annotation-active').forEach(el => el.classList.remove('annotation-active'));
