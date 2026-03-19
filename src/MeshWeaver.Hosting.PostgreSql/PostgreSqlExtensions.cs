@@ -306,6 +306,14 @@ public static class PostgreSqlExtensions
         services.AddSingleton<IPartitionAccessProvider>(sp =>
             new PostgreSqlPartitionAccessProvider(sp.GetRequiredService<NpgsqlDataSource>()));
 
+        // Register cross-schema query provider — uses stored procedure for single-query fan-out
+        services.AddSingleton<ICrossSchemaQueryProvider>(sp =>
+        {
+            var factory = sp.GetRequiredService<IPartitionedStoreFactory>() as PostgreSqlPartitionedStoreFactory
+                ?? throw new InvalidOperationException("Cross-schema queries require PostgreSqlPartitionedStoreFactory");
+            return new PostgreSqlCrossSchemaQueryProvider(sp.GetRequiredService<NpgsqlDataSource>(), factory);
+        });
+
         services.AddPartitionedCoreAndWrapperServices();
 
         return services;

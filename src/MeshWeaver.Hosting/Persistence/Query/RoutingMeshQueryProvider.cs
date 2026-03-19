@@ -1,10 +1,10 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using System.Threading.Channels;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
@@ -20,6 +20,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 {
     private readonly RoutingPersistenceServiceCore _router;
     private readonly MeshConfiguration? _meshConfig;
+    private readonly ICrossSchemaQueryProvider? _crossSchemaProvider;
+    private readonly AccessService? _accessService;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ILogger? _logger;
     private readonly QueryParser _parser = new();
@@ -28,31 +30,30 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
     /// Limits concurrent partition queries during fan-out to prevent pool exhaustion.
     /// With 23+ schemas, unrestricted parallelism exhausts the shared connection pool.
     /// </summary>
-    private static readonly SemaphoreSlim FanOutThrottle = new(5, 5);
+    private static readonly SemaphoreSlim FanOutThrottle = new(20, 20);
 
-    /// <summary>
-    /// Latest-wins context for autocomplete — cancels previous in-flight fan-out
-    /// when a new autocomplete request arrives (user types faster than queries complete).
-    /// </summary>
-    private readonly QueryContext _autocompleteContext = new();
 
-    /// <summary>
-    /// Latest-wins context for search queries — cancels previous fan-out
-    /// when a new search request arrives.
-    /// </summary>
-    private readonly QueryContext _queryContext = new();
 
     public RoutingMeshQueryProvider(
         RoutingPersistenceServiceCore router,
         MeshConfiguration? meshConfig = null,
+        ICrossSchemaQueryProvider? crossSchemaProvider = null,
+        AccessService? accessService = null,
         IDataChangeNotifier? changeNotifier = null,
         ILogger<RoutingMeshQueryProvider>? logger = null)
     {
         _router = router;
         _meshConfig = meshConfig;
+        _crossSchemaProvider = crossSchemaProvider;
+        _accessService = accessService;
         _changeNotifier = changeNotifier;
         _logger = logger;
+    }
 
+    private string GetEffectiveUserId()
+    {
+        var userId = _accessService?.Context?.ObjectId;
+        return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
     // Partition-level access control is enforced in SQL via public.partition_access JOIN
@@ -63,9 +64,6 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Cancel any previous in-flight fan-out query
-        ct = _queryContext.StartNew(ct);
-
         var parsed = _parser.Parse(request.Query);
 
         // Apply routing rules to resolve partition/table hints
@@ -95,24 +93,65 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
-        // Fan out: query all partitions in parallel, collect all results,
-        // then re-sort and apply the global limit. Each partition applies its own
-        // ORDER BY + LIMIT, but the merge must re-sort to produce correct global ordering.
-        // Partition-level access control is enforced in SQL (public.partition_access JOIN).
+        // Cross-schema query: single UNION ALL across all searchable schemas (PostgreSQL only).
+        // Only used for global search and activity feed — never for namespace-scoped queries
+        // (those are routed to a single partition above via routing hints or path extraction).
+        if (_crossSchemaProvider != null)
+        {
+            var schemas = await _crossSchemaProvider.GetSearchableSchemasAsync(ct);
+            var crossParsed = _parser.Parse(fanOutQuery);
+            var userId = GetEffectiveUserId();
+
+            _logger?.LogInformation("Cross-schema query: {Query}, schemas=[{Schemas}], userId={UserId}",
+                fanOutQuery, string.Join(",", schemas), userId);
+
+            var crossResults = new List<object>();
+            await foreach (var node in _crossSchemaProvider.QueryAcrossSchemasAsync(
+                crossParsed, options, schemas, userId, ct))
+            {
+                crossResults.Add(node);
+            }
+
+            var crossLimit = request.Limit ?? parsed.Limit;
+            IEnumerable<object> crossSorted = crossResults;
+            if (parsed.OrderBy != null)
+            {
+                var evaluator = new QueryEvaluator();
+                crossSorted = evaluator.OrderResults(crossResults.OfType<MeshNode>(), parsed.OrderBy).Cast<object>();
+            }
+            if (crossLimit.HasValue)
+                crossSorted = crossSorted.Take(crossLimit.Value);
+
+            foreach (var item in crossSorted)
+                yield return item;
+            yield break;
+        }
+
+        // Fallback: per-partition fan-out (non-PostgreSQL or when cross-schema not available)
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var allResults = new ConcurrentBag<object>();
+
+        _logger?.LogInformation("Fan-out query: {Query}, providers={Count}, effectivePath={Path}",
+            fanOutQuery, _router.QueryProviders.Count, effectivePath);
 
         var queryTasks = new List<Task>();
         foreach (var (key, p) in _router.QueryProviders)
         {
+            _logger?.LogDebug("Fan-out: querying partition {Key} ({ProviderType})", key, p.GetType().Name);
             queryTasks.Add(QueryOneAsync(key, p));
         }
 
         // Discover new partitions and query each as it becomes available
         await foreach (var (key, p) in _router.DiscoverNewProvidersAsync(ct))
+        {
+            _logger?.LogDebug("Fan-out: discovered new partition {Key}", key);
             queryTasks.Add(QueryOneAsync(key, p));
+        }
 
         await Task.WhenAll(queryTasks);
+
+        _logger?.LogInformation("Fan-out complete: {ResultCount} results from {TaskCount} partitions",
+            allResults.Count, queryTasks.Count);
 
         // Re-sort merged results and apply global limit
         var globalLimit = request.Limit ?? parsed.Limit;
@@ -132,21 +171,33 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            await FanOutThrottle.WaitAsync(ct);
+            try
+            {
+                await FanOutThrottle.WaitAsync(ct);
+            }
+            catch (OperationCanceledException) { return; }
+
             try
             {
                 var scopedRequest = string.IsNullOrEmpty(effectivePath)
                     ? enrichedRequest with { DefaultPath = partitionKey, Query = fanOutQuery }
                     : enrichedRequest;
 
+                var count = 0;
                 await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
                 {
                     if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
                         continue;
                     allResults.Add(item);
+                    count++;
                 }
+                if (count > 0)
+                    _logger?.LogDebug("Fan-out: partition {Key} returned {Count} results", partitionKey, count);
             }
-            catch (OperationCanceledException) { /* silent */ }
+            catch (OperationCanceledException)
+            {
+                _logger?.LogDebug("Fan-out: partition {Key} CANCELLED", partitionKey);
+            }
             catch (Exception ex)
             {
                 _logger?.LogWarning(ex, "Fan-out query to partition {Partition} failed", partitionKey);
@@ -165,8 +216,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         int limit = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Cancel any previous in-flight autocomplete fan-out
-        ct = _autocompleteContext.StartNew(ct);
+        // Note: no latest-wins cancellation here — let queries complete.
+        // The SemaphoreSlim throttle limits concurrency sufficiently.
 
         var segment = PathPartition.GetFirstSegment(basePath);
 
@@ -197,7 +248,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            await FanOutThrottle.WaitAsync(ct);
+            try
+            {
+                await FanOutThrottle.WaitAsync(ct);
+            }
+            catch (OperationCanceledException) { return; }
+
             try
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
@@ -220,8 +276,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Cancel any previous in-flight autocomplete fan-out
-        ct = _autocompleteContext.StartNew(ct);
+        // Note: no latest-wins cancellation here — let queries complete.
+        // The SemaphoreSlim throttle limits concurrency sufficiently.
 
         var segment = PathPartition.GetFirstSegment(basePath);
 
@@ -263,7 +319,9 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
-            await FanOutThrottle.WaitAsync(ct);
+            try { await FanOutThrottle.WaitAsync(ct); }
+            catch (OperationCanceledException) { return; }
+
             try
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;

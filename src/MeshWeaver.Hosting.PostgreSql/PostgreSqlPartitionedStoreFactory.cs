@@ -253,11 +253,34 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         }
     }
 
+    /// <summary>
+    /// Schemas to exclude from partition discovery.
+    /// These are rogue schemas created from path segments that shouldn't be partitions,
+    /// or internal schemas (satellite tables, system schemas).
+    /// </summary>
+    /// <summary>
+    /// Schemas to exclude from partition discovery for search fan-out.
+    /// Only content partitions (User + organizations) should be searched.
+    /// Admin, Portal, Kernel contain infrastructure nodes, not user content.
+    /// </summary>
+    private static readonly HashSet<string> ExcludedSchemas = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Infrastructure partitions — not searchable content
+        "admin", "portal", "kernel",
+        // Satellite table names that became schemas by mistake
+        "_access", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        // Path segments that became schemas by mistake
+        "login", "markdown", "onboarding", "welcome", "settings", "storage",
+        "p", "mesh", "thread", "agent", "partition", "organization", "vuser",
+        // System
+        "public", "information_schema", "pg_catalog", "pg_toast"
+    };
+
     public async Task<IReadOnlyList<string>> DiscoverPartitionsAsync(CancellationToken ct = default)
     {
         var partitions = new List<string>();
 
-        // Find schemas that contain a mesh_nodes table
+        // Find schemas that contain a mesh_nodes table, excluding rogue/internal schemas
         await using var cmd = _baseDataSource.CreateCommand("""
             SELECT schema_name
             FROM information_schema.schemata s
@@ -274,7 +297,9 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            partitions.Add(reader.GetString(0));
+            var schema = reader.GetString(0);
+            if (!ExcludedSchemas.Contains(schema))
+                partitions.Add(schema);
         }
 
         return partitions;

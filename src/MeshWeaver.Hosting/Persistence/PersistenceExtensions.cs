@@ -377,6 +377,8 @@ public static class PersistenceExtensions
             new RoutingMeshQueryProvider(
                 sp.GetRequiredService<RoutingPersistenceServiceCore>(),
                 sp.GetService<MeshConfiguration>(),
+                sp.GetService<ICrossSchemaQueryProvider>(),
+                sp.GetService<AccessService>(),
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>()));
 

@@ -15,7 +15,7 @@ public class PostgreSqlPartitionAccessProvider(NpgsqlDataSource dataSource) : IP
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         await using var cmd = dataSource.CreateCommand(
-            "SELECT partition FROM public.partition_access WHERE user_id IN ($1, 'Public')");
+            "SELECT partition FROM public.partition_access WHERE user_id = $1 OR user_id = 'Public'");
         cmd.Parameters.AddWithValue(userId);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))

@@ -504,8 +504,9 @@ public static class ThreadLayoutAreas
         var parentHub = hub.Configuration.ParentHub ?? hub;
 
         var streamingStart = DateTimeOffset.UtcNow;
-        logger.LogInformation("ExecStreaming: initializing agent for {ThreadPath}, identity={Identity}",
-            request.ThreadPath, identity);
+        logger.LogInformation("ExecStreaming: initializing agent for {ThreadPath}, identity={Identity}, " +
+            "execHub={ExecHubAddress}, parentHub={ParentHubAddress}",
+            request.ThreadPath, identity, hub.Address, parentHub.Address);
 
         // Run everything on a background thread — don't block the hub
         _ = Task.Run(async () =>
@@ -581,6 +582,10 @@ public static class ThreadLayoutAreas
     /// </summary>
     private static void PostResponseUpdate(IMessageHub hub, string threadPath, string responsePath, string text)
     {
+        var logger = hub.ServiceProvider.GetService<ILogger<ThreadSession>>();
+        logger?.LogDebug("PostResponseUpdate: hub={HubAddress}, target={ResponsePath}, textLen={TextLen}",
+            hub.Address, responsePath, text?.Length ?? 0);
+
         var nodeId = responsePath.Split('/').Last();
         var updatedNode = new MeshNode(nodeId, threadPath)
         {
