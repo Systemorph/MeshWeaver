@@ -53,9 +53,9 @@ public record TransactionMapping
     public string GroupLineOfBusinessName { get; init; } = string.Empty;
 
     /// <summary>
-    /// Fraction of local LoB amount allocated to this group LoB (0..1).
+    /// Fraction of local LoB amount allocated to this group LoB (0..100).
     /// </summary>
     [Display(Name = "Percentage")]
-    [DisplayFormat(DataFormatString = "{0:P0}")]
+    [DisplayFormat(DataFormatString = "{0:0}%")]
     public double Percentage { get; init; }
 }

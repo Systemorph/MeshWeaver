@@ -12,7 +12,7 @@
     "localLineOfBusinessName": "Household",
     "groupLineOfBusiness": "CAS",
     "groupLineOfBusinessName": "Casualty",
-    "percentage": 0.1
+    "percentage": 10
   },
   "icon": "/static/storage/content/FutuRe/icon.svg"
 }

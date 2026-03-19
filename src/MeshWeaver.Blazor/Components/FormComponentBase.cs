@@ -82,10 +82,12 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         DataPointer = ViewModel.Data as JsonPointerReference;
         valueUpdateSubject = new();
 
+        // No .Skip(1) — the first value change must propagate immediately
+        // so that editing a field (e.g. TransactionMapping percentage) triggers
+        // reactive updates on the first keystroke, not only from the second one.
         AddBinding(valueUpdateSubject
             .ThrottleImmediate(TimeSpan.FromMilliseconds(DebounceWindow))
             .DistinctUntilChanged()
-            .Skip(1)
             .Subscribe(x =>
             {
                 if (DataPointer is not null)
@@ -231,6 +233,17 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     {
         if (Stream is null || ViewModel is not { IsBlurable: true })
             return;
+
+        // Flush any pending value that the debounce cooldown hasn't emitted yet.
+        // Without this, a user could edit a value and click away before the
+        // debounce timer fires, causing the change to be silently lost.
+        if (hasPendingLocalChanges && DataPointer is not null)
+        {
+            lastSyncedValue = currentLocalValue;
+            hasPendingLocalChanges = false;
+            UpdatePointer(ConvertToData(currentLocalValue!)!, DataPointer);
+        }
+
         Stream.Hub.Post(new BlurEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
     }
 }

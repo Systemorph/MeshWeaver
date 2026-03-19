@@ -622,7 +622,7 @@ public static class ProfitabilityLayoutAreas
             var tickValue = maxValue * i / 4;
             var y = marginTop + ScaleY(tickValue);
             sb.AppendLine($"  <line x1=\"{marginLeft}\" y1=\"{y:F0}\" x2=\"{marginLeft + chartWidth}\" y2=\"{y:F0}\" style=\"stroke: var(--rz-chart-axis-color, #4f5154)\" stroke-width=\"1\"/>");
-            sb.AppendLine($"  <text x=\"{marginLeft - 8}\" y=\"{y + 4:F0}\" text-anchor=\"end\" font-size=\"12\" style=\"fill: var(--rz-chart-axis-label-color, #c9cacd)\">{tickValue:F0}</text>");
+            sb.AppendLine($"  <text x=\"{marginLeft - 8}\" y=\"{y + 4:F0}\" text-anchor=\"end\" font-size=\"12\" style=\"fill: var(--rz-chart-axis-label-color, #c9cacd)\">{tickValue:N0}</text>");
         }
 
         // Bars, labels, and connectors

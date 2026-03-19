@@ -88,9 +88,7 @@ FutuRe has three business units across three continents. Each one grew independe
 
 Each BU writes business in its own currency (EUR, USD, JPY), classifies products with its own taxonomy, and reports on its own schedule. The group CFO wants one consolidated view. Today, that means weeks of reconciliation.
 
----
-
-# Step 1: Local Data Cubes
+## Step 1: Local Data Cubes
 
 Instead of ripping out existing systems, each BU creates a **local data product** — a structured data cube with its own Lines of Business, its own currency, and its own Performance.
 
@@ -154,9 +152,7 @@ Each cube is a self-contained data product. The BU owns it, controls its quality
 - [EuropeRe Analysis Hub](@FutuRe/EuropeRe/Analysis/AnnualReport) — 8 local LoBs, EUR
 - [AmericasIns Analysis Hub](@FutuRe/AmericasIns/Analysis/AnnualReport) — 8 local LoBs, USD
 
----
-
-# Step 2: Combining into a Group View
+## Step 2: Combining into a Group View
 
 To consolidate, we need two transformations — and both are applied **virtually at query time**, with zero data copying.
 
@@ -219,11 +215,9 @@ EuropeRe calls it "Household." AmericasIns calls it "Homeowners." Both map to th
 
 Three currencies, two conversion modes (Plan rate vs. Actuals rate), plus the option to view original currency. A single toolbar dropdown switches the entire dashboard — no recalculation, no spreadsheet exports.
 
-[Explore the FX Conversion story →](@FutuRe/FxConversion)
+- [Explore the FX Conversion story →](@FutuRe/FxConversion)
 
----
-
-# Step 3: Onboarding AsiaRe
+## Step 3: Onboarding AsiaRe
 
 When FutuRe acquires AsiaRe, the new unit needs to map its local product lines to the group standard. Traditionally a multi-month spreadsheet exercise — here, a MeshWeaver agent reads an email discussion between actuaries, proposes structured mapping rules, and integrates AsiaRe into the group Performance.
 
@@ -247,7 +241,7 @@ graph LR
 
 Onboarding drops from months to minutes. The resulting rules are versioned, auditable, and governed — not buried in a spreadsheet.
 
-[See the AsiaRe onboarding thread →](@FutuRe/AsiaRe/TransactionMapping/MappingRules/_Thread/t1)
+- [See the AsiaRe onboarding thread →](@FutuRe/AsiaRe/TransactionMapping/MappingRules/_Thread/t1)
 
 ---
 
@@ -255,7 +249,7 @@ Onboarding drops from months to minutes. The resulting rules are versioned, audi
 
 The group profitability dashboard assembles data from all business units in real time. Switch currencies, drill into Lines of Business, compare Plan vs. Actuals — all from one view.
 
-@("FutuRe/Analysis/AnnualReport")
+- [Access the group profitability annual report dashboard →](@FutuRe/Analysis/AnnualReport)
 
 ---
 
@@ -263,7 +257,7 @@ The group profitability dashboard assembles data from all business units in real
 
 No ETL pipelines. No nightly batch jobs. No stale copies. Each BU owns its data. The group view is assembled virtually through reactive stream composition. When EuropeRe updates a number, the group dashboard updates instantly.
 
-[How virtual data distribution works →](@FutuRe/DataDistribution)
+- [How virtual data distribution works →](@FutuRe/DataDistribution)
 
 ---
 
@@ -271,8 +265,8 @@ No ETL pipelines. No nightly batch jobs. No stale copies. Each BU owns its data.
 
 Every mapping rule, every exchange rate, every data product comes with clear ownership, SLOs, and audit trails.
 
-- [Group Lines of Business](@FutuRe/LineOfBusiness/Search) — the 10 standard categories with SLOs
-- [Exchange Rates](@FutuRe/ExchangeRate) — 4 currency pairs with governance
-- [EuropeRe Mapping Rules](@FutuRe/EuropeRe/TransactionMapping/MappingRules) — 13 split rules across 8 local LoBs
-- [AmericasIns Mapping Rules](@FutuRe/AmericasIns/TransactionMapping/MappingRules) — 14 split rules across 8 local LoBs
-- [Why Data Mesh?](@FutuRe/WhyDataMesh) — The principles behind this architecture
+- [Group Lines of Business →](@FutuRe/LineOfBusiness/Search) — the 10 standard categories with SLOs
+- [Exchange Rates →](@FutuRe/ExchangeRate) — 4 currency pairs with governance
+- [EuropeRe Mapping Rules →](@FutuRe/EuropeRe/TransactionMapping/MappingRules) — 13 split rules across 8 local LoBs
+- [AmericasIns Mapping Rules →](@FutuRe/AmericasIns/TransactionMapping/MappingRules) — 14 split rules across 8 local LoBs
+- [Why Data Mesh? →](@FutuRe/WhyDataMesh) — The principles behind this architecture

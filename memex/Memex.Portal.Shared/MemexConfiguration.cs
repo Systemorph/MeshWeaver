@@ -306,10 +306,15 @@ public static class MemexConfiguration
                 // Each hub gets its own "content" collection pointing to a subdirectory
                 .ConfigureDefaultNodeHub(config =>
                 {
+                    // Declared before the if-block so it's available for both the "content"
+                    // collection mapping below and the "attachments" mapping further down.
+                    var nodePath = config.Address.ToString();
+
                     if (contentStorageConfig != null)
                     {
-                        var nodePath = config.Address.ToString();
-                        var contentSubdir = nodePath;
+                        // Scope static media (SVG, PNG, JPG) to a per-node subdirectory
+                        // so each hub serves only its own content files.
+                        var contentSubdir = $"content/{nodePath}";
                         // Combine with original BasePath for FileSystem; for AzureBlob, subdirectory is the blob prefix
                         var basePath = string.IsNullOrEmpty(contentStorageConfig.BasePath)
                             ? contentSubdir
@@ -326,6 +331,10 @@ public static class MemexConfiguration
                         };
                         config = config.AddContentCollection(_ => nodeContentConfig);
                     }
+
+                    // Map "attachments" to "storage" with per-node subdirectory
+                    // (needed by FutuRe and other samples that store datacube.csv, etc.)
+                    config = config.MapContentCollection("attachments", "storage", $"attachments/{nodePath}");
 
                     return config.AddDefaultLayoutAreas().AddThreadsLayoutArea().AddApiTokensSettingsTab();
                 })

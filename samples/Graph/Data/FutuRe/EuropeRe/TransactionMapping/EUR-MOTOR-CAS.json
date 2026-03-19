@@ -1,18 +1,1 @@
-{
-  "id": "EUR-MOTOR-CAS",
-  "namespace": "FutuRe/EuropeRe/TransactionMapping",
-  "name": "EuropeRe: Motor → Casualty (100%)",
-  "nodeType": "FutuRe/TransactionMapping",
-  "isPersistent": true,
-  "content": {
-    "$type": "TransactionMapping",
-    "id": "EUR-MOTOR-CAS",
-    "businessUnit": "EuropeRe",
-    "localLineOfBusiness": "MOTOR",
-    "localLineOfBusinessName": "Motor",
-    "groupLineOfBusiness": "CAS",
-    "groupLineOfBusinessName": "Casualty",
-    "percentage": 1
-  },
-  "icon": "/static/storage/content/FutuRe/icon.svg"
-}
+{"$type":"MeshNode","id":"EUR-MOTOR-CAS","namespace":"FutuRe/EuropeRe/TransactionMapping","path":"FutuRe/EuropeRe/TransactionMapping/EUR-MOTOR-CAS","mainNode":"FutuRe/EuropeRe/TransactionMapping/EUR-MOTOR-CAS","name":"EuropeRe: Motor \u2192 Casualty (100%)","nodeType":"FutuRe/TransactionMapping","icon":"/static/storage/content/FutuRe/icon.svg","lastModified":"2026-03-17T12:52:05.829887+00:00","version":547,"state":"Active","content":{"$type":"TransactionMapping","id":"EUR-MOTOR-CAS","businessUnit":"EuropeRe","localLineOfBusiness":"MOTOR","localLineOfBusinessName":"Motor","groupLineOfBusiness":"CAS","groupLineOfBusinessName":"Casualty","percentage":100}}

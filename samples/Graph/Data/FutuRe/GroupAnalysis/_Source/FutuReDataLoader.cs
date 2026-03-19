@@ -3,6 +3,7 @@
 // DisplayName: FutuRe Data Loader
 // </meshweaver>
 
+using System.Collections.Immutable;
 using System.Globalization;
 using System.IO;
 using System.Reactive.Linq;
@@ -50,7 +51,17 @@ public static class FutuReDataLoader
                      && val.ValueKind == JsonValueKind.String)
                 buCurrency = val.GetString() ?? "CHF";
 
-            var stream = await contentService.GetContentAsync("attachments", "datacube.csv", ct);
+            // GetContentAsync throws if the "attachments" collection isn't configured;
+            // treat that the same as a missing file — return an empty data cube.
+            Stream? stream;
+            try
+            {
+                stream = await contentService.GetContentAsync("attachments", "datacube.csv", ct);
+            }
+            catch
+            {
+                stream = null;
+            }
             if (stream == null)
                 return (new List<FutuReDataCube>(), buCurrency);
             using var reader = new StreamReader(stream);
@@ -183,9 +194,10 @@ public static class FutuReDataLoader
                 LineOfBusinessName = lobLookup.GetValueOrDefault(
                     rule.GroupLineOfBusiness, rule.GroupLineOfBusiness),
                 Currency = currency,
-                Estimate = row.Estimate * rule.Percentage * estimateFxRate,
+                // Percentages are stored as whole numbers (e.g. 80 = 80%); divide by 100.
+                Estimate = row.Estimate * (rule.Percentage / 100.0) * estimateFxRate,
                 Actual = row.Actual.HasValue
-                    ? row.Actual.Value * rule.Percentage * actualFxRate
+                    ? row.Actual.Value * (rule.Percentage / 100.0) * actualFxRate
                     : null
             });
         });
@@ -230,15 +242,15 @@ public static class FutuReDataLoader
             : segments[0];
 
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshQuery
-            .ObserveQuery<MeshNode>(
+        // Use AccumulateChanges (not raw .Select) so incremental add/update/remove
+        // deltas are merged into the full collection instead of replacing it.
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
                 MeshQueryRequest.FromQuery(
-                    $"nodeType:FutuRe/LineOfBusiness namespace:{buNamespace}/LineOfBusiness state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToLineOfBusiness)
-                .Where(lob => lob != null)
-                .Cast<LineOfBusiness>()
-                .OrderBy(lob => lob.Order));
+                    $"nodeType:FutuRe/LineOfBusiness namespace:{buNamespace}/LineOfBusiness state:Active")),
+            ConvertToLineOfBusiness,
+            lob => lob.SystemName)
+            .Select(lobs => lobs.OrderBy(lob => lob.Order));
     }
 
     // ---------------------------------------------------------------
@@ -251,14 +263,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<AmountType>> LoadAmountTypes(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToAmountType)
-                .Where(a => a != null)
-                .Cast<AmountType>()
-                .OrderBy(a => a.Order));
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/AmountType namespace:FutuRe/AmountType state:Active")),
+            ConvertToAmountType,
+            a => a.SystemName)
+            .Select(items => items.OrderBy(a => a.Order));
     }
 
     /// <summary>
@@ -267,14 +277,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<Currency>> LoadCurrencies(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToCurrency)
-                .Where(c => c != null)
-                .Cast<Currency>()
-                .OrderBy(c => c.Order));
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/Currency namespace:FutuRe/Currency state:Active")),
+            ConvertToCurrency,
+            c => c.Id)
+            .Select(items => items.OrderBy(c => c.Order));
     }
 
     /// <summary>
@@ -283,14 +291,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<Country>> LoadCountries(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToCountry)
-                .Where(c => c != null)
-                .Cast<Country>()
-                .OrderBy(c => c.Order));
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/Country namespace:FutuRe/Country state:Active")),
+            ConvertToCountry,
+            c => c.Id)
+            .Select(items => items.OrderBy(c => c.Order));
     }
 
     /// <summary>
@@ -300,13 +306,11 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants"))
-            .Select(change => change.Items
-                .Select(ConvertToTransactionMapping)
-                .Where(m => m != null)
-                .Cast<TransactionMapping>());
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/TransactionMapping namespace:FutuRe scope:descendants")),
+            ConvertToTransactionMapping,
+            m => m.Id);
     }
 
     /// <summary>
@@ -315,14 +319,12 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<ExchangeRate>> LoadExchangeRates(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToExchangeRate)
-                .Where(fx => fx != null)
-                .Cast<ExchangeRate>()
-                .OrderBy(fx => fx.Order));
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/ExchangeRate namespace:FutuRe/ExchangeRate state:Active")),
+            ConvertToExchangeRate,
+            fx => fx.SystemName)
+            .Select(items => items.OrderBy(fx => fx.Order));
     }
 
     /// <summary>
@@ -331,13 +333,11 @@ public static class FutuReDataLoader
     public static IObservable<IEnumerable<BusinessUnit>> LoadBusinessUnits(IWorkspace workspace)
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToBusinessUnit)
-                .Where(bu => bu != null)
-                .Cast<BusinessUnit>());
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/BusinessUnit namespace:FutuRe state:Active")),
+            ConvertToBusinessUnit,
+            bu => bu.Id);
     }
 
     /// <summary>
@@ -347,14 +347,12 @@ public static class FutuReDataLoader
     {
         var meshQuery = workspace.Hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        return meshQuery
-            .ObserveQuery<MeshNode>(
-                MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active"))
-            .Select(change => change.Items
-                .Select(ConvertToLineOfBusiness)
-                .Where(lob => lob != null)
-                .Cast<LineOfBusiness>()
-                .OrderBy(lob => lob.Order));
+        return AccumulateChanges(
+            meshQuery.ObserveQuery<MeshNode>(
+                MeshQueryRequest.FromQuery("nodeType:FutuRe/LineOfBusiness namespace:FutuRe/LineOfBusiness state:Active")),
+            ConvertToLineOfBusiness,
+            lob => lob.SystemName)
+            .Select(lobs => lobs.OrderBy(lob => lob.Order));
     }
 
     // ---------------------------------------------------------------
@@ -508,4 +506,48 @@ public static class FutuReDataLoader
         json.TryGetProperty(property, out var val) &&
         (val.ValueKind == JsonValueKind.True || val.ValueKind == JsonValueKind.False)
             && val.GetBoolean();
+
+    // ---------------------------------------------------------------
+    // Incremental Change Accumulation
+    // ---------------------------------------------------------------
+
+    /// <summary>
+    /// Accumulates incremental ObserveQuery changes into a full collection.
+    /// Initial/Reset emissions replace the entire dictionary; Added/Updated/Removed
+    /// apply deltas on top of the current state.
+    /// This keeps charts reactive to single-field edits (e.g. a mapping percentage)
+    /// without losing the rest of the collection.
+    /// </summary>
+    private static IObservable<IEnumerable<T>> AccumulateChanges<T>(
+        IObservable<QueryResultChange<MeshNode>> source,
+        Func<MeshNode, T?> convert,
+        Func<T, string> getKey)
+        where T : class
+    {
+        return source
+            .Scan(
+                ImmutableDictionary<string, T>.Empty,
+                (current, change) =>
+                {
+                    if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+                        return change.Items
+                            .Select(convert)
+                            .Where(item => item != null)
+                            .Cast<T>()
+                            .ToImmutableDictionary(getKey);
+
+                    var builder = current.ToBuilder();
+                    foreach (var node in change.Items)
+                    {
+                        var item = convert(node);
+                        if (item == null) continue;
+                        if (change.ChangeType == QueryChangeType.Removed)
+                            builder.Remove(getKey(item));
+                        else // Added or Updated
+                            builder[getKey(item)] = item;
+                    }
+                    return builder.ToImmutable();
+                })
+            .Select(dict => dict.Values.AsEnumerable());
+    }
 }

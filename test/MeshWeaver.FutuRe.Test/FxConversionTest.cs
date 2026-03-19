@@ -38,13 +38,13 @@ public class FxConversionTest
         {
             Id = "EUR-HOUSEHOLD-PROPERTY",
             BusinessUnit = "EuropeRe", LocalLineOfBusiness = "HOUSEHOLD",
-            GroupLineOfBusiness = "PROPERTY", Percentage = 1.0
+            GroupLineOfBusiness = "PROPERTY", Percentage = 100
         },
         new()
         {
             Id = "AME-CASUALTY-CASUALTY",
             BusinessUnit = "AmericasIns", LocalLineOfBusiness = "CASUALTY",
-            GroupLineOfBusiness = "CASUALTY", Percentage = 1.0
+            GroupLineOfBusiness = "CASUALTY", Percentage = 100
         }
     ];
 
@@ -196,20 +196,20 @@ public class FxConversionTest
             }
         };
 
-        // 2 mappings: HOUSEHOLD → PROPERTY at 60%, HOUSEHOLD → CASUALTY at 40%
+        // 2 mappings: HOUSEHOLD → PROPERTY at 60, HOUSEHOLD → CASUALTY at 40
         var mappings = new[]
         {
             new TransactionMapping
             {
                 Id = "EUR-HOUSEHOLD-PROPERTY", BusinessUnit = "EuropeRe",
                 LocalLineOfBusiness = "HOUSEHOLD", GroupLineOfBusiness = "PROPERTY",
-                Percentage = 0.6
+                Percentage = 60
             },
             new TransactionMapping
             {
                 Id = "EUR-HOUSEHOLD-CASUALTY", BusinessUnit = "EuropeRe",
                 LocalLineOfBusiness = "HOUSEHOLD", GroupLineOfBusiness = "CASUALTY",
-                Percentage = 0.4
+                Percentage = 40
             }
         };
 
@@ -278,7 +278,7 @@ public class FxConversionTest
             {
                 Id = "ASIA-MARINE-MARINE", BusinessUnit = "AsiaRe",
                 LocalLineOfBusiness = "MARINE", GroupLineOfBusiness = "MARINE",
-                Percentage = 1.0
+                Percentage = 100
             }
         };
 
@@ -410,7 +410,7 @@ public class FxConversionTest
             {
                 Id = "CHE-PROPERTY-PROPERTY", BusinessUnit = "SwissRe",
                 LocalLineOfBusiness = "PROPERTY", GroupLineOfBusiness = "PROPERTY",
-                Percentage = 1.0
+                Percentage = 100
             }
         };
 

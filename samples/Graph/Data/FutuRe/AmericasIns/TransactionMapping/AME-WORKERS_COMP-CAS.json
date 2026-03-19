@@ -12,7 +12,7 @@
     "localLineOfBusinessName": "Workers Compensation",
     "groupLineOfBusiness": "CAS",
     "groupLineOfBusinessName": "Casualty",
-    "percentage": 1
+    "percentage": 100
   },
   "icon": "/static/storage/content/FutuRe/icon.svg"
 }

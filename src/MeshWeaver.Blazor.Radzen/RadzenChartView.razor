@@ -31,7 +31,8 @@
                     </RadzenCategoryAxis>
                 }
 
-                <RadzenValueAxis>
+                @* Format Y-axis with thousands separators and no decimals for readability (e.g. 1,234,567 instead of 1234567.00) *@
+                <RadzenValueAxis FormatString="{0:N0}">
                     <RadzenGridLines Visible="true" />
                 </RadzenValueAxis>
 

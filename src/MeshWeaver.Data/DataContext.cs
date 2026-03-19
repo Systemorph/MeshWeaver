@@ -239,7 +239,12 @@ public sealed record DataContext : IDisposable
     /// </summary>
     private void RegisterInitializationFailureHandler(Exception initException)
     {
-        var errorMessage = $"Hub '{Hub.Address}' initialization failed: {initException.Message}";
+        // Unwrap inner exceptions to surface the actual root cause in the error message.
+        // Without this, AggregateException wrapping produces doubled "Hub X failed: Hub X failed" messages.
+        var innerMessages = initException.InnerException is AggregateException agg
+            ? string.Join("; ", agg.InnerExceptions.Select(e => e.Message))
+            : initException.InnerException?.Message ?? initException.Message;
+        var errorMessage = $"Hub '{Hub.Address}' initialization failed: {innerMessages}";
         Hub.Register(delivery =>
         {
             if (delivery.Message is DeliveryFailure)
