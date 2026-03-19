@@ -1,6 +1,7 @@
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -8,20 +9,24 @@ namespace MeshWeaver.Hosting.Persistence;
 /// <summary>
 /// Implementation of IMeshImportService that imports nodes and content
 /// from file system sources into the mesh storage.
+/// Scoped service — uses the hub's JsonSerializerOptions for proper type polymorphism.
 /// </summary>
 public class MeshImportService : IMeshImportService
 {
     private readonly IStorageAdapter _storageAdapter;
     private readonly IContentService _contentService;
+    private readonly IMessageHub _hub;
     private readonly ILogger<MeshImportService> _logger;
 
     public MeshImportService(
         IStorageAdapter storageAdapter,
         IContentService contentService,
+        IMessageHub hub,
         ILogger<MeshImportService> logger)
     {
         _storageAdapter = storageAdapter;
         _contentService = contentService;
+        _hub = hub;
         _logger = logger;
     }
 
@@ -40,7 +45,8 @@ public class MeshImportService : IMeshImportService
         {
             var source = new FileSystemStorageAdapter(sourcePath);
             return await ImportHelper.RunImportAsync(
-                source, _storageAdapter, _logger, force, targetRootPath, removeMissing, onProgress, ct);
+                source, _storageAdapter, _logger, force, targetRootPath, removeMissing, onProgress, ct,
+                _hub.JsonSerializerOptions);
         }
         catch (Exception ex)
         {
