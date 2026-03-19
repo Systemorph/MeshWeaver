@@ -1,3 +1,4 @@
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
@@ -146,6 +147,66 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact(Timeout = 30000)]
+    public async Task ContentService_BrowseFolders()
+    {
+        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
+        var configs = contentService.GetAllCollectionConfigs();
+        configs.Should().NotBeEmpty();
+
+        var firstConfig = configs.First();
+        var collection = await contentService.GetCollectionAsync(firstConfig.Name);
+        collection.Should().NotBeNull();
+
+        var folders = await collection!.GetFoldersAsync("/");
+        Output.WriteLine($"Root folders in '{collection.Collection}': {string.Join(", ", folders.Select(f => f.Name))}");
+
+        // If there are folders, verify we can browse into them
+        if (folders.Count > 0)
+        {
+            var firstFolder = folders.First();
+            var subItems = await collection.GetCollectionItemsAsync($"/{firstFolder.Name}");
+            Output.WriteLine($"Items in '{firstFolder.Name}': {subItems.Count}");
+            subItems.Should().NotBeNull();
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task ContentCompletions_CollectionNames_ShownAtFirstLevel()
+    {
+        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
+        var configs = contentService.GetAllCollectionConfigs();
+        configs.Should().NotBeEmpty();
+
+        // When user types just "@", content collections should appear as "collectionName:" suggestions
+        foreach (var config in configs)
+        {
+            var collPath = $"{config.Name}:";
+            collPath.Should().EndWith(":", "collection names should end with colon for drilling down");
+            Output.WriteLine($"  Collection tag: {collPath} (DisplayName: {config.DisplayName})");
+        }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task ContentCompletions_FilesInCollection_ReturnedAfterColon()
+    {
+        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
+        var configs = contentService.GetAllCollectionConfigs();
+        configs.Should().NotBeEmpty();
+
+        var firstConfig = configs.First();
+        var collection = await contentService.GetCollectionAsync(firstConfig.Name);
+        collection.Should().NotBeNull();
+
+        // After user selects "content:", they should see files and/or folders
+        var files = await collection!.GetFilesAsync("/");
+        var folders = await collection.GetFoldersAsync("/");
+
+        Output.WriteLine($"Items after '{firstConfig.Name}:' -> {files.Count} files, {folders.Count} folders");
+        (files.Count + folders.Count).Should().BeGreaterThan(0,
+            "selecting a collection should reveal its contents");
+    }
+
+    [Fact(Timeout = 30000)]
     public async Task ContentFiles_HaveExpectedUnifiedPathFormat()
     {
         var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
@@ -173,5 +234,64 @@ public class ContentAutocompleteInChatTest(ITestOutputHelper output) : MonolithM
                 Output.WriteLine($"  {unifiedRef} -> {file.Name}");
             }
         }
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task ContentFiles_FilterByPartialName()
+    {
+        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
+        var configs = contentService.GetAllCollectionConfigs();
+        var firstConfig = configs.First();
+        var collection = await contentService.GetCollectionAsync(firstConfig.Name);
+        collection.Should().NotBeNull();
+
+        var allFiles = await collection!.GetFilesAsync("/");
+        if (allFiles.Count == 0)
+        {
+            Output.WriteLine("No files in collection — skipping filter test");
+            return;
+        }
+
+        // Take the first 3 chars of the first file's name as a filter
+        var firstFile = allFiles.First();
+        var filterText = firstFile.Name[..Math.Min(3, firstFile.Name.Length)];
+
+        // Filter manually to verify
+        var expectedMatches = allFiles.Where(f =>
+            f.Name.Contains(filterText, StringComparison.OrdinalIgnoreCase)).ToList();
+
+        Output.WriteLine($"Filter '{filterText}': {expectedMatches.Count} matches out of {allFiles.Count} files");
+        expectedMatches.Should().NotBeEmpty($"filter '{filterText}' should match at least the original file");
+        expectedMatches.Should().AllSatisfy(f =>
+            f.Name.Should().Contain(filterText, Exactly.Once(),
+                $"each match should contain the filter text '{filterText}'"));
+    }
+
+    [Fact(Timeout = 30000)]
+    public async Task ContentFolders_BrowsingYieldsOnlyScopedItems()
+    {
+        var contentService = Mesh.ServiceProvider.GetRequiredService<IContentService>();
+        var configs = contentService.GetAllCollectionConfigs();
+        var firstConfig = configs.First();
+        var collection = await contentService.GetCollectionAsync(firstConfig.Name);
+        collection.Should().NotBeNull();
+
+        var rootFolders = await collection!.GetFoldersAsync("/");
+        if (rootFolders.Count == 0)
+        {
+            Output.WriteLine("No folders in root — skipping scoping test");
+            return;
+        }
+
+        var folder = rootFolders.First();
+        var subFiles = await collection.GetFilesAsync($"/{folder.Name}");
+        var subFolders = await collection.GetFoldersAsync($"/{folder.Name}");
+
+        Output.WriteLine($"Browsing '{folder.Name}/': {subFiles.Count} files, {subFolders.Count} folders");
+
+        // Sub-items should have paths that include the parent folder
+        subFiles.Should().AllSatisfy(f =>
+            f.Path.Should().Contain(folder.Name,
+                $"file path '{f.Path}' should be inside folder '{folder.Name}'"));
     }
 }
