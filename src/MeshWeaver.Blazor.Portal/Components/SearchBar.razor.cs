@@ -252,8 +252,10 @@ public partial class SearchBar : IAsyncDisposable
         }
 
         // Plain search query - navigate to search page which uses QueryAsync
+        // Add scope:descendants as hidden query so search finds nodes at all levels
         var encodedPlainQuery = Uri.EscapeDataString(trimmed);
-        NavigationManager.NavigateTo($"/search?q={encodedPlainQuery}");
+        var hq = Uri.EscapeDataString("scope:descendants");
+        NavigationManager.NavigateTo($"/search?q={encodedPlainQuery}&hq={hq}");
         ClearSearch();
     }
 

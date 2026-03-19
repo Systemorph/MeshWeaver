@@ -172,6 +172,7 @@ public partial class MeshSearchView : IDisposable
         if (!_initialized && !string.IsNullOrEmpty(BoundVisibleQuery))
         {
             _currentValue = BoundVisibleQuery;
+            _lastBoundVisibleQuery = BoundVisibleQuery;
         }
 
         // Re-query when VisibleQuery changes from parent (e.g. picker typing)
@@ -200,9 +201,16 @@ public partial class MeshSearchView : IDisposable
         if (firstRender)
         {
             _initialized = true;
-            if (monacoEditor != null && !string.IsNullOrEmpty(BoundVisibleQuery))
+            try
             {
-                await monacoEditor.SetValueAsync(BoundVisibleQuery);
+                if (monacoEditor != null && !string.IsNullOrEmpty(BoundVisibleQuery))
+                {
+                    await monacoEditor.SetValueAsync(BoundVisibleQuery);
+                }
+            }
+            catch
+            {
+                // Monaco editor may not be fully initialized yet
             }
 
             // If we have pre-computed groups, no need to fetch
@@ -247,6 +255,27 @@ public partial class MeshSearchView : IDisposable
         {
             await LoadResultsAsync();
         }
+
+        // Update URL if we're on the search page so the URL is shareable
+        UpdateSearchUrl();
+    }
+
+    private void UpdateSearchUrl()
+    {
+        var uri = new Uri(Navigation.Uri);
+        if (!uri.AbsolutePath.TrimEnd('/').Equals("/search", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var parts = new List<string>();
+        var visibleQuery = _currentValue?.Trim();
+        if (!string.IsNullOrWhiteSpace(visibleQuery))
+            parts.Add($"q={Uri.EscapeDataString(visibleQuery)}");
+        var hiddenQuery = BoundHiddenQuery;
+        if (!string.IsNullOrWhiteSpace(hiddenQuery))
+            parts.Add($"hq={Uri.EscapeDataString(hiddenQuery)}");
+
+        var url = parts.Count > 0 ? $"/search?{string.Join("&", parts)}" : "/search";
+        Navigation.NavigateTo(url, replace: true);
     }
 
     private async Task LoadResultsAsync()
@@ -684,6 +713,7 @@ public partial class MeshSearchView : IDisposable
         _overriddenHiddenQuery = _editableHiddenQuery;
         _showSearchOptions = false;
         await LoadResultsAsync();
+        UpdateSearchUrl();
     }
 
     public void Dispose()

@@ -377,107 +377,137 @@ public static class ThreadLayoutAreas
         var request = delivery.Message;
         var threadPath = request.ThreadPath;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
-        logger.LogInformation("HandleSubmitMessage: threadPath={ThreadPath}", threadPath);
 
-        // Generate message IDs
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-        var userNodePath = $"{threadPath}/{userMsgId}";
-        var responsePath = $"{threadPath}/{responseMsgId}";
+        // Log access context for diagnosing RLS failures
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var identity = delivery.AccessContext?.ObjectId
+                       ?? accessService?.Context?.ObjectId
+                       ?? accessService?.CircuitContext?.ObjectId;
+        logger.LogInformation("HandleSubmitMessage: threadPath={ThreadPath}, identity={Identity}, hub={HubAddress}",
+            threadPath, identity ?? "(none)", hub.Address);
 
-        logger.LogInformation("HandleSubmitMessage: creating nodes userMsgId={UserMsgId}, responseMsgId={ResponseMsgId}", userMsgId, responseMsgId);
-
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
-
-        // 1. Create message nodes FIRST — they must exist in persistence before
-        // the Blazor client tries to subscribe (Orleans needs the grain to activate).
-        // When both complete, update ThreadMessages and start streaming.
-        var userNodeTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
+        try
         {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = userMsgId,
-                Role = "user",
-                Text = request.UserMessageText,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput
-            }
-        });
+            // Generate message IDs
+            var userMsgId = Guid.NewGuid().ToString("N")[..8];
+            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+            var userNodePath = $"{threadPath}/{userMsgId}";
+            var responsePath = $"{threadPath}/{responseMsgId}";
 
-        var responseNodeTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = responseMsgId,
-                Role = "assistant",
-                Text = "",
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse
-            }
-        });
+            logger.LogInformation("HandleSubmitMessage: creating nodes userMsgId={UserMsgId}, responseMsgId={ResponseMsgId}", userMsgId, responseMsgId);
 
-        var submitStart = DateTimeOffset.UtcNow;
-    Task.WhenAll(userNodeTask, responseNodeTask).ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-            {
-                logger.LogError(t.Exception, "HandleSubmitMessage: node creation FAILED for {ThreadPath}", threadPath);
-                return;
-            }
+            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var session = hub.ServiceProvider.GetRequiredService<ThreadSession>();
 
-            logger.LogInformation("HandleSubmitMessage: nodes created for {ThreadPath} in {Elapsed}ms",
-                threadPath, (DateTimeOffset.UtcNow - submitStart).TotalMilliseconds);
-
-            // 2. Update Thread.ThreadMessages AFTER nodes exist in persistence.
-            // The Blazor client subscribes to message hubs as soon as it receives the IDs —
-            // in Orleans, the grain must be activatable (node in persistence) by that time.
-            // Use InvokeAsync to run on the hub's execution block where the workspace stream has data.
-            hub.InvokeAsync(() =>
+            // 1. Create message nodes FIRST — they must exist in persistence before
+            // the Blazor client tries to subscribe (Orleans needs the grain to activate).
+            // When both complete, update ThreadMessages and start streaming.
+            var userNodeTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
             {
-                hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                    .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+                NodeType = ThreadMessageNodeType.NodeType,
+                Content = new ThreadMessage
                 {
-                    var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                    var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-                    var updatedMsgList = currentContent.ThreadMessages.Concat([userMsgId, responseMsgId]).ToList();
-                    var newContent = currentContent with { ThreadMessages = updatedMsgList };
-                    var updatedNode = (threadNode ?? new MeshNode(threadPath)) with { Content = newContent };
-                    hub.Post(new DataChangeRequest { Updates = [updatedNode] });
+                    Id = userMsgId,
+                    Role = "user",
+                    Text = request.UserMessageText,
+                    Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.ExecutedInput
+                }
+            });
+
+            var responseNodeTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+            {
+                NodeType = ThreadMessageNodeType.NodeType,
+                Content = new ThreadMessage
+                {
+                    Id = responseMsgId,
+                    Role = "assistant",
+                    Text = "",
+                    Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.AgentResponse
+                }
+            });
+
+            var submitStart = DateTimeOffset.UtcNow;
+            Task.WhenAll(userNodeTask, responseNodeTask).ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    // Log each inner exception for detailed diagnosis
+                    var ex = t.Exception?.Flatten();
+                    foreach (var inner in ex?.InnerExceptions ?? [])
+                    {
+                        logger.LogError(inner, "HandleSubmitMessage: node creation FAILED for {ThreadPath}: {Error}",
+                            threadPath, inner.Message);
+                    }
+                    return;
+                }
+
+                logger.LogInformation("HandleSubmitMessage: nodes created for {ThreadPath} in {Elapsed}ms",
+                    threadPath, (DateTimeOffset.UtcNow - submitStart).TotalMilliseconds);
+
+                // 2. Update Thread.ThreadMessages AFTER nodes exist in persistence.
+                // The Blazor client subscribes to message hubs as soon as it receives the IDs —
+                // in Orleans, the grain must be activatable (node in persistence) by that time.
+                // Use InvokeAsync to run on the hub's execution block where the workspace stream has data.
+                hub.InvokeAsync(() =>
+                {
+                    hub.ServiceProvider.GetRequiredService<IWorkspace>()
+                        .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+                    {
+                        var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                        if (threadNode == null)
+                        {
+                            logger.LogError("HandleSubmitMessage: thread node NOT FOUND in workspace stream for {ThreadPath}. " +
+                                "Available nodes: [{Nodes}]",
+                                threadPath, string.Join(", ", nodes?.Select(n => n.Path) ?? []));
+                            return;
+                        }
+                        var currentContent = threadNode.Content as MeshThread ?? new MeshThread();
+                        var updatedMsgList = currentContent.ThreadMessages.Concat([userMsgId, responseMsgId]).ToList();
+                        var newContent = currentContent with { ThreadMessages = updatedMsgList };
+                        var updatedNode = threadNode with { Content = newContent };
+                        hub.Post(new DataChangeRequest { Updates = [updatedNode] });
+                        logger.LogInformation("HandleSubmitMessage: ThreadMessages updated for {ThreadPath}, count={Count}",
+                            threadPath, updatedMsgList.Count);
+                    });
+                });
+
+                // 3. Start streaming — safe now, both nodes exist in persistence
+                var execHub = hub.GetHostedHub(
+                    new Address($"{threadPath}/_Exec"),
+                    config => config
+                        .AddMeshDataSource()
+                        .WithServices(services =>
+                        {
+                            services.AddSingleton(session);
+                            return services;
+                        })
+                        .WithHandler<StartStreamingRequest>(HandleExecStreaming),
+                    HostedHubCreation.Always);
+
+                execHub!.Post(new StartStreamingRequest
+                {
+                    ThreadPath = threadPath,
+                    UserMessageText = request.UserMessageText,
+                    UserMessagePath = userNodePath,
+                    ResponsePath = responsePath,
+                    ResponseOrder = 0,
+                    ContextPath = request.ContextPath,
+                    AgentName = request.AgentName,
+                    ModelName = request.ModelName,
+                    Attachments = request.Attachments
                 });
             });
 
-            // 3. Start streaming — safe now, both nodes exist in persistence
-            var execHub = hub.GetHostedHub(
-                new Address($"{threadPath}/_Exec"),
-                config => config
-                    .AddMeshDataSource()
-                    .WithServices(services =>
-                    {
-                        services.AddSingleton(session);
-                        return services;
-                    })
-                    .WithHandler<StartStreamingRequest>(HandleExecStreaming),
-                HostedHubCreation.Always);
-
-            execHub!.Post(new StartStreamingRequest
-            {
-                ThreadPath = threadPath,
-                UserMessageText = request.UserMessageText,
-                UserMessagePath = userNodePath,
-                ResponsePath = responsePath,
-                ResponseOrder = 0,
-                ContextPath = request.ContextPath,
-                AgentName = request.AgentName,
-                ModelName = request.ModelName,
-                Attachments = request.Attachments
-            });
-        });
-
-        // 4. Send response immediately — don't wait for node creation or streaming
-        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            // 4. Send response immediately — don't wait for node creation or streaming
+            hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "HandleSubmitMessage: UNHANDLED EXCEPTION for {ThreadPath}", threadPath);
+            hub.Post(new SubmitMessageResponse { Success = false, Error = ex.Message }, o => o.ResponseFor(delivery));
+        }
 
         return delivery.Processed();
     }

@@ -445,8 +445,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 }
             }
 
-            // Post execution request to thread hub — hub creates both user and response nodes
-            Hub.Post(new SubmitMessageRequest
+            // Post execution request to thread hub — hub creates both user and response nodes.
+            // Use Post + RegisterCallback (non-blocking) instead of AwaitResponse to avoid
+            // blocking the hub execution pipeline.
+            Logger.LogInformation("[ThreadChat:{InstanceId}] Posting SubmitMessageRequest to {ThreadPath}",
+                _instanceId, threadPath);
+            var submitDelivery = Hub.Post(new SubmitMessageRequest
             {
                 ThreadPath = threadPath!,
                 UserMessageText = userMessageText!,
@@ -455,6 +459,19 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 ContextPath = initialContext,
                 Attachments = attachments.Select(a => a.Path).ToList()
             }, o => o.WithTarget(new Address(threadPath!)));
+
+            if (submitDelivery != null)
+            {
+                _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, response =>
+                {
+                    if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+                    {
+                        Logger.LogError("[ThreadChat:{InstanceId}] SubmitMessageRequest FAILED: {Error}",
+                            _instanceId, sr.Message.Error);
+                    }
+                    return response;
+                });
+            }
 
             // Transition to WaitingForResponse — input stays disabled until new cells appear
             submissionHandler.OnMessagePosted();

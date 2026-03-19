@@ -266,7 +266,7 @@ public class MeshImportService : IMeshImportService
             var parts = newPath.Split('/');
             var newId = parts[^1];
             var newNamespace = string.Join("/", parts[..^1]);
-            return n with { Id = newId, Namespace = newNamespace };
+            return n with { Id = newId, Namespace = newNamespace, MainNode = newPath };
         }).ToList();
     }
 
