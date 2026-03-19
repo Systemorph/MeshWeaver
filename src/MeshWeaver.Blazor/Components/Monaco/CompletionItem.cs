@@ -14,7 +14,9 @@ public enum CompletionItemKind
     /// <summary>Command or function</summary>
     Function = 2,
     /// <summary>Variable or reference</summary>
-    Variable = 5
+    Variable = 5,
+    /// <summary>Folder or directory</summary>
+    Folder = 23
 }
 
 /// <summary>

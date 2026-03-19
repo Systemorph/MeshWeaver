@@ -557,6 +557,16 @@ public class PostgreSqlSqlGenerator
         var uepTable = QualifyTable("user_effective_permissions");
         var ntpTable = QualifyTable("node_type_permissions");
 
+        // Partition-level access: when querying a specific schema, check public.partition_access.
+        // Returns false immediately if user has no access to this partition (no fan-out waste).
+        var partitionAccessClause = !string.IsNullOrEmpty(SchemaName)
+            ? $"""
+                EXISTS (SELECT 1 FROM public.partition_access pa
+                        WHERE pa.user_id IN ({userList}) AND pa.partition = '{SchemaName}')
+                AND
+            """
+            : "";
+
         // Public-read node types (e.g. User, Organization) are visible to authenticated users
         var publicReadClause = userId == WellKnownUsers.Anonymous
             ? ""
@@ -568,16 +578,19 @@ public class PostgreSqlSqlGenerator
 
         return $"""
             (
-                n.main_node = {paramName}{publicReadClause}
-                OR
-                (SELECT uep.is_allow
-                 FROM {uepTable} uep
-                 WHERE uep.user_id IN ({userList})
-                   AND uep.permission = 'Read'
-                   AND n.main_node LIKE uep.node_path_prefix || '%'
-                 ORDER BY LENGTH(uep.node_path_prefix) DESC,
-                          CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
-                 LIMIT 1) = true
+                {partitionAccessClause}
+                (
+                    n.main_node = {paramName}{publicReadClause}
+                    OR
+                    (SELECT uep.is_allow
+                     FROM {uepTable} uep
+                     WHERE uep.user_id IN ({userList})
+                       AND uep.permission = 'Read'
+                       AND n.main_node LIKE uep.node_path_prefix || '%'
+                     ORDER BY LENGTH(uep.node_path_prefix) DESC,
+                              CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
+                     LIMIT 1) = true
+                )
             )
             """;
     }

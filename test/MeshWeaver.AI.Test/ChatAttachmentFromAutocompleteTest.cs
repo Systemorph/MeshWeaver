@@ -124,4 +124,44 @@ public class ChatAttachmentFromAutocompleteTest
         var result = MarkdownReferenceExtractor.RemoveReferenceByPath(input, "Systemorph/content:docs/guide.md");
         result.Should().Be("check here");
     }
+
+    /// <summary>Tests that references left in text are still extractable (text-left-in behavior).</summary>
+    [Fact]
+    public void ReferencesLeftInText_StillExtractable()
+    {
+        var markdown = "check @ACME/Reports and @Systemorph/Docs please";
+        var paths = MarkdownReferenceExtractor.GetUniquePaths(markdown);
+        paths.Should().HaveCount(2);
+        paths.Should().Contain("ACME/Reports");
+        paths.Should().Contain("Systemorph/Docs");
+    }
+
+    /// <summary>Tests extraction of all unified path tag types (content:, data:, schema:, etc.).</summary>
+    [Theory]
+    [InlineData("@Org/Microsoft/content:readme.md", "Org/Microsoft/content:readme.md")]
+    [InlineData("@Org/Microsoft/content:docs/guide.md", "Org/Microsoft/content:docs/guide.md")]
+    [InlineData("@content:readme.md", "content:readme.md")]
+    [InlineData("@Org/data:collection1", "Org/data:collection1")]
+    [InlineData("@Org/schema:MeshNode", "Org/schema:MeshNode")]
+    [InlineData("@Org/model:MyModel", "Org/model:MyModel")]
+    [InlineData("@Org/collection:docs", "Org/collection:docs")]
+    [InlineData("@Org/menu:main", "Org/menu:main")]
+    [InlineData("@Org/layoutAreas:overview", "Org/layoutAreas:overview")]
+    public void UnifiedPathTags_ExtractedCorrectly(string input, string expectedPath)
+    {
+        var paths = MarkdownReferenceExtractor.GetUniquePaths(input);
+        paths.Should().ContainSingle().Which.Should().Be(expectedPath);
+    }
+
+    /// <summary>Tests mixed references: addresses, content paths, and unified tags in one message.</summary>
+    [Fact]
+    public void MixedReferences_AllExtracted()
+    {
+        var markdown = "Compare @ACME/Reports with @Org/content:readme.md and @Org/data:sales";
+        var paths = MarkdownReferenceExtractor.GetUniquePaths(markdown);
+        paths.Should().HaveCount(3);
+        paths.Should().Contain("ACME/Reports");
+        paths.Should().Contain("Org/content:readme.md");
+        paths.Should().Contain("Org/data:sales");
+    }
 }

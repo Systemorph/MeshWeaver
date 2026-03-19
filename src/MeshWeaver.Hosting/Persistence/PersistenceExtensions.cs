@@ -370,13 +370,13 @@ public static class PersistenceExtensions
         services.AddSingleton<IStorageService>(sp =>
             sp.GetRequiredService<RoutingPersistenceServiceCore>());
 
-        // Register the routing query provider with access filtering
+        // Register the routing query provider.
+        // Partition-level access control is enforced in SQL (public.partition_access),
+        // not in the routing layer.
         services.AddSingleton<IMeshQueryProvider>(sp =>
             new RoutingMeshQueryProvider(
                 sp.GetRequiredService<RoutingPersistenceServiceCore>(),
                 sp.GetService<MeshConfiguration>(),
-                sp.GetService<AccessService>(),
-                sp.GetService<ISecurityService>(),
                 sp.GetService<IDataChangeNotifier>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<RoutingMeshQueryProvider>()));
 

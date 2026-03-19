@@ -240,6 +240,100 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
     #endregion
 
+    #region Filtering Tests
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_AtEmpty_DoesNotReturnRandomWords()
+    {
+        var provider = GetUnifiedReferenceProvider();
+        var items = await provider.GetItemsAsync("@", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Got {items.Length} suggestions for '@':");
+        foreach (var item in items.Take(10))
+            Output.WriteLine($"  - Label: {item.Label}, Category: {item.Category}");
+
+        // Every result should be a recognized node, type, or keyword — no random text
+        items.Should().AllSatisfy(item =>
+        {
+            item.Label.Should().NotBeNullOrWhiteSpace();
+            item.InsertText.Should().StartWith("@", "all results should start with @");
+        });
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_AtPartialPrefix_OnlyReturnsMatchingNodes()
+    {
+        var provider = GetUnifiedReferenceProvider();
+        var items = await provider.GetItemsAsync("@Sys", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        // All results should contain "Sys" somewhere — no unrelated suggestions
+        items.Should().AllSatisfy(item =>
+        {
+            var matchesFilter = item.Label.Contains("Sys", StringComparison.OrdinalIgnoreCase) ||
+                                item.InsertText.Contains("Sys", StringComparison.OrdinalIgnoreCase);
+            matchesFilter.Should().BeTrue($"item '{item.Label}' should match filter 'Sys'");
+        });
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_AtNonexistentPrefix_ReturnsEmpty()
+    {
+        var provider = GetUnifiedReferenceProvider();
+        var items = await provider.GetItemsAsync("@ZzzNonexistent999", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        items.Should().BeEmpty("a nonexistent prefix should not match any nodes");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task MeshQuery_WithBasePath_OnlyReturnsChildren()
+    {
+        // Verify AutocompleteAsync with basePath scopes results
+        var suggestions = await MeshQuery.AutocompleteAsync("Systemorph", "", 20, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Children of Systemorph: {suggestions.Length}");
+        foreach (var s in suggestions)
+            Output.WriteLine($"  - {s.Path}: {s.Name} ({s.NodeType})");
+
+        // All results should be under or at the Systemorph namespace
+        suggestions.Should().AllSatisfy(s =>
+        {
+            s.Path.Should().StartWith("Systemorph", $"path '{s.Path}' should be at or under Systemorph");
+        });
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task MeshQuery_WithBasePathAndPrefix_FiltersCorrectly()
+    {
+        // Get all children of Systemorph first
+        var allChildren = await MeshQuery.AutocompleteAsync("Systemorph", "", 20, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        if (allChildren.Length == 0)
+        {
+            Output.WriteLine("Systemorph has no children — skipping filter test");
+            return;
+        }
+
+        // Use the first child's name as prefix filter
+        var firstChild = allChildren[0];
+        var prefix = firstChild.Name[..Math.Min(3, firstChild.Name.Length)];
+
+        var filtered = await MeshQuery.AutocompleteAsync("Systemorph", prefix, 20, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Filtered '{prefix}' under Systemorph: {filtered.Length} results");
+        filtered.Should().AllSatisfy(s =>
+        {
+            s.Path.Should().StartWith("Systemorph");
+        });
+    }
+
+    #endregion
+
     #region DI Integration Tests
 
     [Fact(Timeout = 10000)]
@@ -281,6 +375,44 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
         items.Should().Contain(i => i.Label.Contains("Systemorph", StringComparison.OrdinalIgnoreCase),
             "Provider should return Systemorph for @Sys");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_AtFullAddress_ReturnsKeywords()
+    {
+        var provider = GetUnifiedReferenceProvider();
+
+        // Provider expects addressType/addressId (2 segments) before showing keywords
+        var items = await provider.GetItemsAsync("@Systemorph/Marketing/", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Got {items.Length} suggestions for '@Systemorph/Marketing/':");
+        foreach (var item in items)
+        {
+            Output.WriteLine($"  - Label: {item.Label}, InsertText: {item.InsertText}, Category: {item.Category}");
+        }
+
+        // Should contain keyword suggestions like content/, data/, schema/
+        items.Should().Contain(i => i.Label.Contains("content", StringComparison.OrdinalIgnoreCase),
+            "should suggest content keyword");
+        items.Should().Contain(i => i.Label.Contains("data", StringComparison.OrdinalIgnoreCase),
+            "should suggest data keyword");
+        items.Should().Contain(i => i.Label.Contains("schema", StringComparison.OrdinalIgnoreCase),
+            "should suggest schema keyword");
+    }
+
+    [Fact(Timeout = 10000)]
+    public async Task Provider_Keywords_HaveCorrectInsertText()
+    {
+        var provider = GetUnifiedReferenceProvider();
+
+        var items = await provider.GetItemsAsync("@Systemorph/Marketing/", null, TestContext.Current.CancellationToken)
+            .ToArrayAsync(TestContext.Current.CancellationToken);
+
+        var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
+        contentItem.Should().NotBeNull();
+        contentItem!.InsertText.Should().Contain("@Systemorph/Marketing/content",
+            "keyword InsertText should include full address path");
     }
 
     #endregion

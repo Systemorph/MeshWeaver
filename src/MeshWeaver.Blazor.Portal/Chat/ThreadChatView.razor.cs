@@ -514,33 +514,18 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (_agentsByPath.TryGetValue(path, out var agentInfo))
         {
             OnAgentChanged(agentInfo);
-        }
-        else
-        {
-            // Add as attachment chip if not already present
-            if (!attachments.Any(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
-            {
-                var displayName = await ResolveContextDisplayNameAsync(path);
-                attachments.Add(new AttachmentInfo(path, displayName, IsContext: false));
-            }
+            return;
         }
 
-        // Wait briefly for Monaco to finish inserting the text
-        await Task.Delay(50);
+        // Skip directory/collection entries (they'll re-trigger autocomplete via JS)
+        if (path.EndsWith("/") || path.EndsWith(":"))
+            return;
 
-        // Remove the @reference from the editor text
-        if (monacoEditor != null)
+        // Add as attachment chip if not already present (text stays in editor)
+        if (!attachments.Any(a => a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)))
         {
-            var currentText = await monacoEditor.GetValueAsync();
-            if (!string.IsNullOrEmpty(currentText))
-            {
-                var cleanedText = MarkdownReferenceExtractor.RemoveReferenceByPath(currentText, path);
-                if (cleanedText != currentText)
-                {
-                    MessageText = cleanedText;
-                    await monacoEditor.SetValueAsync(cleanedText);
-                }
-            }
+            var displayName = await ResolveContextDisplayNameAsync(path);
+            attachments.Add(new AttachmentInfo(path, displayName, IsContext: false));
         }
 
         StateHasChanged();
@@ -552,20 +537,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         var updatedText = MessageText;
         var editorNeedsUpdate = false;
 
-        // Check if any new reference matches a known agent — if so, select that agent
         var existingPaths = attachments.Select(a => a.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var refPath in currentRefs)
         {
             if (existingPaths.Contains(refPath))
                 continue;
 
-            // Check if this path matches a known agent
             if (_agentsByPath.TryGetValue(refPath, out var agentInfo))
             {
-                // Select the agent instead of adding as attachment
                 OnAgentChanged(agentInfo);
-
-                // Remove the @reference text from the editor
+                // Only remove agent references from text
                 if (!string.IsNullOrEmpty(updatedText))
                 {
                     updatedText = MarkdownReferenceExtractor.RemoveReferenceByPath(updatedText, refPath);
@@ -574,30 +555,20 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             }
             else
             {
-                // Non-agent reference: add as attachment chip and remove @text from editor
+                // Add as attachment chip, keep text in editor
                 attachments.Add(new AttachmentInfo(refPath, DisplayName: null, IsContext: false));
-
-                if (!string.IsNullOrEmpty(updatedText))
-                {
-                    updatedText = MarkdownReferenceExtractor.RemoveReferenceByPath(updatedText, refPath);
-                    editorNeedsUpdate = true;
-                }
             }
         }
 
-        // Remove stale reference attachments (not in current refs, and not context)
-        // Re-extract from updated text since we may have removed some references
-        var remainingRefs = MarkdownReferenceExtractor.GetUniquePaths(updatedText);
+        // Remove stale reference attachments not in current text
+        var remainingRefs = MarkdownReferenceExtractor.GetUniquePaths(editorNeedsUpdate ? updatedText : MessageText);
         attachments.RemoveAll(a => !a.IsContext && !remainingRefs.Contains(a.Path, StringComparer.OrdinalIgnoreCase));
 
-        // Update the editor if we removed any @text
         if (editorNeedsUpdate)
         {
             MessageText = updatedText;
             if (monacoEditor != null)
-            {
                 await monacoEditor.SetValueAsync(updatedText ?? "");
-            }
         }
 
         StateHasChanged();
@@ -793,6 +764,21 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         };
     }
 
+    private static readonly (string Tag, string Description, string Emoji)[] UnifiedPathTags =
+    [
+        ("content:", "Content files (documents, images)", "\U0001F4C4"),
+        ("data:", "Data collections and entities", "\U0001F5C3"),
+        ("schema:", "JSON schemas and type definitions", "\U0001F4CB"),
+        ("collection:", "Collection configuration", "\U0001F4C1"),
+        ("model:", "Data model diagrams", "\U0001F4CA"),
+        ("menu:", "Menu items", "\U0001F4DC"),
+        ("layoutAreas:", "Available layout areas", "\U0001F5BC"),
+    ];
+
+    /// <summary>
+    /// Main completion handler. Parses the reference after @ and routes to the right handler.
+    /// All results are scoped and filtered — no random/unrelated suggestions.
+    /// </summary>
     private async Task<CompletionItem[]> GetCompletionsAsync(string query)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -800,51 +786,72 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         try
         {
-            var results = new List<CompletionItem>();
+            if (!query.StartsWith("@"))
+                return [];
 
-            if (query.StartsWith("@"))
+            var reference = query[1..]; // strip @
+            var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
+
+            // Case 1: Contains colon → tag query (e.g., "Org/Microsoft/content:My")
+            if (reference.Contains(':'))
+                return (await GetContentCompletionsAsync(reference)).ToArray();
+
+            // Parse reference into basePath + filter
+            // e.g. "Org/Microsoft/" → basePath="Org/Microsoft", filter=""
+            // e.g. "Org/Micro"     → basePath="Org", filter="Micro"
+            // e.g. ""               → basePath=currentAddress, filter=""
+            // e.g. "Sys"            → basePath="", filter="Sys"
+            string basePath;
+            string filter;
+
+            if (string.IsNullOrEmpty(reference))
             {
-                var reference = query[1..];
-
-                QuerySuggestion[] suggestions;
-                if (string.IsNullOrWhiteSpace(reference))
-                {
-                    suggestions = await MeshQuery.AutocompleteAsync("", "", 20).ToArrayAsync();
-                }
-                else if (reference.EndsWith("/"))
-                {
-                    var basePath = reference.TrimEnd('/');
-                    suggestions = await MeshQuery.AutocompleteAsync(basePath, "", 20).ToArrayAsync();
-                }
-                else
-                {
-                    suggestions = await MeshQuery.AutocompleteAsync("", reference, 20).ToArrayAsync();
-                }
-
-                results.AddRange(suggestions.Select(s => new CompletionItem
-                {
-                    Label = s.Path,
-                    InsertText = $"@{s.Path}",
-                    Description = s.NodeType ?? s.Name,
-                    Path = s.Path,
-                    Category = "Addresses"
-                }));
-
-                // Also include content collection files from the current context
-                var contentItems = await GetContentCompletionsAsync(reference);
-                results.AddRange(contentItems);
+                // Just "@" — scope to current address
+                basePath = currentAddress;
+                filter = "";
+            }
+            else if (reference.EndsWith("/"))
+            {
+                // Completed path segment — show children
+                basePath = reference.TrimEnd('/');
+                filter = "";
             }
             else
             {
-                var suggestions = await MeshQuery.AutocompleteAsync("", query, 20).ToArrayAsync();
-                results.AddRange(suggestions.Select(s => new CompletionItem
+                var lastSlash = reference.LastIndexOf('/');
+                if (lastSlash >= 0)
                 {
-                    Label = s.Path,
-                    InsertText = s.Path,
-                    Description = s.NodeType ?? "",
-                    Path = s.Path,
-                    Category = ""
-                }));
+                    basePath = reference[..lastSlash];
+                    filter = reference[(lastSlash + 1)..];
+                }
+                else
+                {
+                    // No slash — search from root with this as prefix
+                    basePath = "";
+                    filter = reference;
+                }
+            }
+
+            var results = new List<CompletionItem>();
+
+            // Get node suggestions from mesh query
+            var suggestions = await MeshQuery.AutocompleteAsync(basePath, filter, 20).ToArrayAsync();
+            results.AddRange(suggestions.Select(s => ToCompletionItem(s, string.IsNullOrEmpty(basePath) ? "Addresses" : "Nearby")));
+
+            // When showing children of an address (basePath is set, filter is empty or partial),
+            // also show unified path tags scoped to this address
+            if (!string.IsNullOrEmpty(basePath))
+                results.AddRange(GetUnifiedPathTagCompletions(basePath, filter));
+
+            // When no basePath and no filter, also show global suggestions + tags for current address
+            if (string.IsNullOrEmpty(basePath) && string.IsNullOrEmpty(filter) && !string.IsNullOrEmpty(currentAddress))
+            {
+                var existingPaths = results.Select(r => r.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var contextSuggestions = await MeshQuery.AutocompleteAsync(currentAddress, "", 20).ToArrayAsync();
+                results.InsertRange(0, contextSuggestions
+                    .Where(s => !existingPaths.Contains(s.Path))
+                    .Select(s => ToCompletionItem(s, "Nearby")));
+                results.AddRange(GetUnifiedPathTagCompletions(currentAddress, ""));
             }
 
             return results.ToArray();
@@ -854,6 +861,45 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogError(ex, "Error getting completions for query: {Query}", query);
             return [];
         }
+    }
+
+    private static List<CompletionItem> GetUnifiedPathTagCompletions(string address, string filterText)
+    {
+        var items = new List<CompletionItem>();
+        foreach (var (tag, description, emoji) in UnifiedPathTags)
+        {
+            if (!string.IsNullOrEmpty(filterText) &&
+                !tag.StartsWith(filterText, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var tagPath = string.IsNullOrEmpty(address)
+                ? tag
+                : $"{address}/{tag}";
+
+            items.Add(new CompletionItem
+            {
+                Label = $"{emoji} {tag}",
+                InsertText = $"@{tagPath}",
+                Description = description,
+                Path = tagPath,
+                Category = "Keywords",
+                Kind = CompletionItemKind.Module
+            });
+        }
+        return items;
+    }
+
+    private static CompletionItem ToCompletionItem(QuerySuggestion s, string category)
+    {
+        return new CompletionItem
+        {
+            Label = s.Path,
+            InsertText = $"@{s.Path}",
+            Description = s.NodeType ?? s.Name,
+            Path = s.Path,
+            Category = category,
+            IconUrl = s.Icon
+        };
     }
 
     /// <summary>
@@ -941,7 +987,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                     items.Add(new CompletionItem
                     {
-                        Label = $"{config.Name}:",
+                        Label = $"\U0001F4C1 {config.Name}:",
                         InsertText = $"@{collPath}",
                         Description = config.DisplayName ?? config.Name,
                         Path = collPath,
@@ -983,12 +1029,12 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                         items.Add(new CompletionItem
                         {
-                            Label = folder.Name + "/",
+                            Label = $"\U0001F4C1 {folder.Name}/",
                             InsertText = $"@{unifiedPath}",
                             Description = $"{folder.ItemCount} items",
                             Path = unifiedPath,
                             Category = "Content",
-                            Kind = CompletionItemKind.Module
+                            Kind = CompletionItemKind.Folder
                         });
                     }
                 }
@@ -1014,7 +1060,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
                         items.Add(new CompletionItem
                         {
-                            Label = file.Name,
+                            Label = $"\U0001F4C4 {file.Name}",
                             InsertText = $"@{unifiedPath}",
                             Description = collection.DisplayName,
                             Path = unifiedPath,

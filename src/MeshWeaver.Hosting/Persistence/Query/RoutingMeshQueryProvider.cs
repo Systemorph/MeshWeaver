@@ -5,10 +5,8 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence.Query;
@@ -22,105 +20,52 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 {
     private readonly RoutingPersistenceServiceCore _router;
     private readonly MeshConfiguration? _meshConfig;
-    private readonly AccessService? _accessService;
-    private readonly ISecurityService? _securityService;
     private readonly IDataChangeNotifier? _changeNotifier;
     private readonly ILogger? _logger;
     private readonly QueryParser _parser = new();
-    private readonly MemoryCache _accessCache = new(new MemoryCacheOptions());
-    private static readonly MemoryCacheEntryOptions CacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
+
+    /// <summary>
+    /// Limits concurrent partition queries during fan-out to prevent pool exhaustion.
+    /// With 23+ schemas, unrestricted parallelism exhausts the shared connection pool.
+    /// </summary>
+    private static readonly SemaphoreSlim FanOutThrottle = new(5, 5);
+
+    /// <summary>
+    /// Latest-wins context for autocomplete — cancels previous in-flight fan-out
+    /// when a new autocomplete request arrives (user types faster than queries complete).
+    /// </summary>
+    private readonly QueryContext _autocompleteContext = new();
+
+    /// <summary>
+    /// Latest-wins context for search queries — cancels previous fan-out
+    /// when a new search request arrives.
+    /// </summary>
+    private readonly QueryContext _queryContext = new();
 
     public RoutingMeshQueryProvider(
         RoutingPersistenceServiceCore router,
         MeshConfiguration? meshConfig = null,
-        AccessService? accessService = null,
-        ISecurityService? securityService = null,
         IDataChangeNotifier? changeNotifier = null,
         ILogger<RoutingMeshQueryProvider>? logger = null)
     {
         _router = router;
         _meshConfig = meshConfig;
-        _accessService = accessService;
-        _securityService = securityService;
         _changeNotifier = changeNotifier;
         _logger = logger;
 
-        // Evict access cache when partition access changes
-        _changeNotifier?.Subscribe(notification =>
-        {
-            if (notification.Path.StartsWith("Admin/Partition", StringComparison.OrdinalIgnoreCase) ||
-                notification.Path.Contains("_Access", StringComparison.OrdinalIgnoreCase))
-            {
-                _accessCache.Compact(1.0); // Clear all entries
-            }
-        });
     }
 
-    /// <summary>
-    /// Returns the set of partition keys the current user can access, or null if no filtering needed.
-    /// </summary>
-    private async Task<HashSet<string>?> GetAccessiblePartitionsAsync(CancellationToken ct)
-    {
-        var userId = _accessService?.Context?.ObjectId;
-        if (string.IsNullOrEmpty(userId) || _securityService == null)
-            return null; // No user context or no security => no filtering
-
-        var cacheKey = $"partition-access:{userId}";
-        if (_accessCache.TryGetValue<HashSet<string>>(cacheKey, out var cached))
-            return cached;
-
-        var accessible = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var (partitionKey, _) in _router.QueryProviders)
-        {
-            // Check if user has read permission on the partition's namespace
-            var ns = GetNamespaceForPartition(partitionKey);
-            var hasAccess = await _securityService.HasPermissionAsync(ns, userId, Permission.Read, ct);
-            if (hasAccess)
-                accessible.Add(partitionKey);
-            else
-                _logger?.LogDebug("Partition {Partition} (ns={Namespace}) not accessible for user {UserId}",
-                    partitionKey, ns, userId);
-        }
-
-        // Always include the User partition — users can access their own subtree
-        // via RLS self-access and SatelliteAccessRule. Per-node filtering is handled
-        // by the node type access rules, not at the partition level.
-        if (!accessible.Contains("User") && _router.QueryProviders.ContainsKey("User"))
-            accessible.Add("User");
-
-        _logger?.LogInformation("User {UserId}: accessible partitions = [{Partitions}], total providers = {Total}",
-            userId, string.Join(", ", accessible), _router.QueryProviders.Count);
-
-        _accessCache.Set(cacheKey, accessible, CacheOptions);
-        return accessible;
-    }
-
-    /// <summary>
-    /// Gets the namespace for a partition. Uses Partition metadata if available,
-    /// otherwise falls back to the partition key itself.
-    /// </summary>
-    private string GetNamespaceForPartition(string partitionKey)
-    {
-        // Check if any partition metadata maps to this store key
-        foreach (var (_, ns) in _router.PartitionNamespaces)
-        {
-            if (_router.BasePathToPartition.TryGetValue(ns, out var storeKey) &&
-                storeKey.Equals(partitionKey, StringComparison.OrdinalIgnoreCase))
-            {
-                return ns;
-            }
-        }
-
-        // Default: the partition key itself is the namespace
-        return partitionKey;
-    }
+    // Partition-level access control is enforced in SQL via public.partition_access JOIN
+    // in PostgreSqlSqlGenerator.GenerateAccessControlClause. No in-memory filtering needed.
 
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Cancel any previous in-flight fan-out query
+        ct = _queryContext.StartNew(ct);
+
         var parsed = _parser.Parse(request.Query);
 
         // Apply routing rules to resolve partition/table hints
@@ -150,18 +95,16 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         if (parsed.IsMain != true && !parsed.HasConditions)
             fanOutQuery += " is:main";
 
-        // Fan out: query accessible partitions in parallel, collect all results,
+        // Fan out: query all partitions in parallel, collect all results,
         // then re-sort and apply the global limit. Each partition applies its own
         // ORDER BY + LIMIT, but the merge must re-sort to produce correct global ordering.
-        var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
+        // Partition-level access control is enforced in SQL (public.partition_access JOIN).
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
         var allResults = new ConcurrentBag<object>();
 
         var queryTasks = new List<Task>();
         foreach (var (key, p) in _router.QueryProviders)
         {
-            if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
-                continue;
             queryTasks.Add(QueryOneAsync(key, p));
         }
 
@@ -189,11 +132,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task QueryOneAsync(string partitionKey, IMeshQueryProvider p)
         {
+            await FanOutThrottle.WaitAsync(ct);
             try
             {
                 var scopedRequest = string.IsNullOrEmpty(effectivePath)
-                    ? request with { DefaultPath = partitionKey, Query = fanOutQuery }
-                    : request;
+                    ? enrichedRequest with { DefaultPath = partitionKey, Query = fanOutQuery }
+                    : enrichedRequest;
 
                 await foreach (var item in p.QueryAsync(scopedRequest, options, ct))
                 {
@@ -207,6 +151,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             {
                 _logger?.LogWarning(ex, "Fan-out query to partition {Partition} failed", partitionKey);
             }
+            finally
+            {
+                FanOutThrottle.Release();
+            }
         }
     }
 
@@ -217,6 +165,9 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         int limit = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Cancel any previous in-flight autocomplete fan-out
+        ct = _autocompleteContext.StartNew(ct);
+
         var segment = PathPartition.GetFirstSegment(basePath);
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
@@ -226,15 +177,13 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: only accessible partitions (excludes Admin)
-        var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
+        // Fan out: query all partitions. Access control enforced in SQL.
+        // Limit concurrency to avoid pool exhaustion on keystroke-driven autocomplete.
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
         foreach (var (key, p) in _router.QueryProviders)
         {
-            if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
-                continue;
             tasks.Add(AutocompleteOneAsync(key, p));
         }
 
@@ -248,6 +197,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
+            await FanOutThrottle.WaitAsync(ct);
             try
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
@@ -256,6 +206,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             }
             catch (OperationCanceledException) { /* silent */ }
             catch (Exception) { /* don't kill other partitions */ }
+            finally { FanOutThrottle.Release(); }
         }
     }
 
@@ -269,6 +220,9 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
         string? context = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Cancel any previous in-flight autocomplete fan-out
+        ct = _autocompleteContext.StartNew(ct);
+
         var segment = PathPartition.GetFirstSegment(basePath);
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
@@ -278,15 +232,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
-        // Fan out: only accessible partitions (excludes Admin)
-        var accessiblePartitions = await GetAccessiblePartitionsAsync(ct);
+        // Fan out: query all partitions. Access control enforced in SQL.
         var all = new ConcurrentBag<QuerySuggestion>();
         var tasks = new ConcurrentBag<Task>();
 
         foreach (var (key, p) in _router.QueryProviders)
         {
-            if (accessiblePartitions != null && !accessiblePartitions.Contains(key))
-                continue;
             tasks.Add(AutocompleteOneAsync(key, p));
         }
 
@@ -312,6 +263,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         async Task AutocompleteOneAsync(string partitionKey, IMeshQueryProvider p)
         {
+            await FanOutThrottle.WaitAsync(ct);
             try
             {
                 var effectiveBasePath = string.IsNullOrEmpty(basePath) ? partitionKey : basePath;
@@ -320,14 +272,20 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             }
             catch (OperationCanceledException) { /* silent */ }
             catch (Exception) { /* don't kill other partitions */ }
+            finally { FanOutThrottle.Release(); }
         }
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request, JsonSerializerOptions options)
     {
         var parsed = _parser.Parse(request.Query);
+
+        // Apply routing rules to narrow partition
+        var hints = _meshConfig?.ResolveRoutingHints(parsed) ?? new QueryRoutingHints();
+
         var effectivePath = parsed.Path ?? request.DefaultPath;
-        var segment = PathPartition.GetFirstSegment(effectivePath);
+        var segment = hints.Partition
+            ?? PathPartition.GetFirstSegment(effectivePath);
 
         if (segment != null && _router.QueryProviders.TryGetValue(segment, out var provider))
         {

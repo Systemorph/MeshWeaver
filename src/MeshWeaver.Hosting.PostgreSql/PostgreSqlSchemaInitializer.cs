@@ -303,6 +303,8 @@ public static class PostgreSqlSchemaInitializer
             -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
+                -- Set search_path so unqualified table names resolve to this schema
+                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
                 TRUNCATE user_effective_permissions_shadow;
 
                 -- Direct entries from AccessAssignment nodes (access satellite table)
@@ -717,6 +719,8 @@ public static class PostgreSqlSchemaInitializer
             -- AccessAssignment content: {"accessObject":"...","roles":[{"role":"...","denied":true},...]}
             CREATE OR REPLACE FUNCTION rebuild_user_effective_permissions() RETURNS void AS $$
             BEGIN
+                -- Set search_path so unqualified table names resolve to this schema
+                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
                 TRUNCATE user_effective_permissions_shadow;
 
                 -- Direct entries from AccessAssignment nodes (access satellite table)

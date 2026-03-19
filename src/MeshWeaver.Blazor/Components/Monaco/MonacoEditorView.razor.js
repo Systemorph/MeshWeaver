@@ -444,6 +444,21 @@ export function registerCompletionProvider(editorId, config) {
             if (currentState?.dotNetRef && path) {
                 currentState.dotNetRef.invokeMethodAsync('HandleCompletionAccepted', path);
             }
+            // Re-trigger suggest if accepted item was a directory/collection (ends with / or :)
+            if (currentState?.editorInstance) {
+                setTimeout(() => {
+                    const editor = currentState.editorInstance;
+                    const model = editor.getModel();
+                    const pos = editor.getPosition();
+                    if (pos && model) {
+                        const lineContent = model.getLineContent(pos.lineNumber);
+                        const charBefore = lineContent.charAt(pos.column - 2); // 1-based
+                        if (charBefore === '/' || charBefore === ':') {
+                            editor.trigger('keyboard', 'editor.action.triggerSuggest', {});
+                        }
+                    }
+                }, 100);
+            }
         });
     }
 
@@ -508,7 +523,7 @@ export function registerCompletionProvider(editorId, config) {
                 if (trigger === '/') {
                     regex = new RegExp(`(?:^|\\s)${escapedTrigger}([\\w\\-\\.]+)?$`);
                 } else {
-                    regex = new RegExp(`${escapedTrigger}([\\w\\-\\./]+)?$`);
+                    regex = new RegExp(`${escapedTrigger}([\\w\\-\\./:]+)?$`);
                 }
 
                 const match = textUntilPosition.match(regex);
