@@ -200,6 +200,12 @@ public partial class SearchBar : IAsyncDisposable
                 showDropdown = false;
                 highlightedIndex = -1;
                 break;
+
+            default:
+                // Don't re-render for regular typing keys — keydown fires before
+                // the input value updates, so re-rendering here would push the old
+                // searchTerm back to the FluentTextField, causing cursor jumps.
+                return Task.CompletedTask;
         }
 
         StateHasChanged();

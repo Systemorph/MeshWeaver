@@ -13,16 +13,16 @@ namespace MeshWeaver.Hosting.Persistence;
 /// </summary>
 public class MeshImportService : IMeshImportService
 {
-    private readonly IStorageAdapter _storageAdapter;
+    private readonly IStorageAdapter? _storageAdapter;
     private readonly IContentService _contentService;
     private readonly IMessageHub _hub;
     private readonly ILogger<MeshImportService> _logger;
 
     public MeshImportService(
-        IStorageAdapter storageAdapter,
         IContentService contentService,
         IMessageHub hub,
-        ILogger<MeshImportService> logger)
+        ILogger<MeshImportService> logger,
+        IStorageAdapter? storageAdapter = null)
     {
         _storageAdapter = storageAdapter;
         _contentService = contentService;
@@ -43,6 +43,9 @@ public class MeshImportService : IMeshImportService
 
         try
         {
+            if (_storageAdapter == null)
+                return ImportNodesResponse.Fail("Import is not available: no storage adapter configured.");
+
             var source = new FileSystemStorageAdapter(sourcePath);
             return await ImportHelper.RunImportAsync(
                 source, _storageAdapter, _logger, force, targetRootPath, removeMissing, onProgress, ct,
