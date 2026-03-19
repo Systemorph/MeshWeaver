@@ -40,7 +40,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             .ConfigureServices(services =>
             {
                 services.AddMemoryChatPersistence();
-                services.AddSingleton<IChatClientFactory>(new ToolCallingFakeChatClientFactory());
+                services.AddSingleton<IChatClientFactory>(sp => new ToolCallingFakeChatClientFactory(sp));
                 return services;
             })
             .AddAI()
@@ -232,7 +232,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         public void Dispose() { }
     }
 
-    private class ToolCallingFakeChatClientFactory : IChatClientFactory
+    private class ToolCallingFakeChatClientFactory(IServiceProvider sp) : IChatClientFactory
     {
         public string Name => "ToolCallingFakeFactory";
         public IReadOnlyList<string> Models => ["tool-calling-model"];
@@ -245,7 +245,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             string? modelName = null)
         {
             // Wire the real MeshPlugin tools so the agent can actually execute them
-            var hub = chat.Hub;
+            var hub = sp.GetRequiredService<IMessageHub>();
             var meshPlugin = new MeshPlugin(hub, chat);
             var tools = meshPlugin.CreateTools(); // Get, Search, NavigateTo
 
