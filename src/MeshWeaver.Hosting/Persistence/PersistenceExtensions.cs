@@ -270,8 +270,8 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import service
-        services.TryAddSingleton<IMeshImportService, MeshImportService>();
+        // Import service (scoped — needs IMessageHub for JsonSerializerOptions)
+        services.TryAddScoped<IMeshImportService, MeshImportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
@@ -410,8 +410,8 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import service
-        services.TryAddSingleton<IMeshImportService, MeshImportService>();
+        // Import service (scoped — needs IMessageHub for JsonSerializerOptions)
+        services.TryAddScoped<IMeshImportService, MeshImportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
@@ -457,8 +457,8 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import service
-        services.TryAddSingleton<IMeshImportService, MeshImportService>();
+        // Import service (scoped — needs IMessageHub for JsonSerializerOptions)
+        services.TryAddScoped<IMeshImportService, MeshImportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();

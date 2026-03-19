@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,7 @@ public static class ImportHelper
     /// <param name="removeMissing">If true, delete target nodes not present in source</param>
     /// <param name="onProgress">Optional progress callback</param>
     /// <param name="ct">Cancellation token</param>
+    /// <param name="jsonOptions">Optional JSON serializer options (from hub); falls back to StorageImporter.CreateFullImportOptions()</param>
     /// <returns>Import result</returns>
     public static async Task<ImportNodesResponse> RunImportAsync(
         IStorageAdapter source,
@@ -30,7 +32,8 @@ public static class ImportHelper
         string? rootPath = null,
         bool removeMissing = false,
         Action<int, int, string>? onProgress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        JsonSerializerOptions? jsonOptions = null)
     {
         // Idempotency check
         if (!force)
@@ -43,7 +46,7 @@ public static class ImportHelper
             }
         }
 
-        var jsonOptions = StorageImporter.CreateFullImportOptions();
+        jsonOptions ??= StorageImporter.CreateFullImportOptions();
         var importer = new StorageImporter(source, target, logger);
         var result = await importer.ImportAsync(new StorageImportOptions
         {
