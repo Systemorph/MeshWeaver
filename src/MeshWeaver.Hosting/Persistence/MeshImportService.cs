@@ -73,6 +73,7 @@ public class MeshImportService : IMeshImportService
             // 3. Create / Update
             var nodesImported = 0;
             var nodesSkipped = 0;
+            var errors = new List<string>();
 
             // Sort by path depth so parents are created before children
             var sortedNodes = sourceNodes.OrderBy(n => n.Path.Count(c => c == '/')).ToList();
@@ -105,7 +106,9 @@ public class MeshImportService : IMeshImportService
                 }
                 catch (Exception ex)
                 {
+                    var errorMsg = $"{sourceNode.Path}: {ex.Message}";
                     _logger.LogWarning(ex, "Failed to import node {Path}", sourceNode.Path);
+                    errors.Add(errorMsg);
                     nodesSkipped++;
                 }
             }
@@ -141,7 +144,17 @@ public class MeshImportService : IMeshImportService
                 "Import complete: {Imported} nodes imported, {Skipped} skipped, {Removed} removed in {Elapsed}",
                 nodesImported, nodesSkipped, nodesRemoved, sw.Elapsed);
 
-            return ImportNodesResponse.Ok(nodesImported, 0, nodesSkipped, 0, sw.Elapsed, nodesRemoved);
+            if (errors.Count > 0)
+            {
+                _logger.LogWarning("Import errors: {Errors}", string.Join("; ", errors));
+            }
+
+            var result = ImportNodesResponse.Ok(nodesImported, 0, nodesSkipped, 0, sw.Elapsed, nodesRemoved);
+            // If all nodes failed, report as error with details
+            if (nodesImported == 0 && errors.Count > 0)
+                return ImportNodesResponse.Fail(
+                    $"All {errors.Count} node(s) failed to import. First error: {errors[0]}");
+            return result;
         }
         catch (Exception ex)
         {
@@ -152,6 +165,7 @@ public class MeshImportService : IMeshImportService
 
     /// <summary>
     /// Reads all nodes recursively from a file system source.
+    /// Normalizes paths to use forward slashes.
     /// </summary>
     private static async Task<List<MeshNode>> ReadAllNodesAsync(
         FileSystemStorageAdapter source,
@@ -160,7 +174,12 @@ public class MeshImportService : IMeshImportService
     {
         var nodes = new List<MeshNode>();
         await ReadRecursiveAsync(source, null, jsonOptions, nodes, ct);
-        return nodes;
+        // Normalize all paths to use forward slashes (Windows FS adapter may use backslashes)
+        return nodes.Select(n => n with
+        {
+            Id = n.Id?.Replace('\\', '/'),
+            Namespace = n.Namespace?.Replace('\\', '/')
+        }).ToList();
     }
 
     private static async Task ReadRecursiveAsync(
@@ -175,7 +194,9 @@ public class MeshImportService : IMeshImportService
         foreach (var nodePath in nodePaths)
         {
             ct.ThrowIfCancellationRequested();
-            var node = await source.ReadAsync(nodePath, jsonOptions, ct);
+            // Normalize path separators before reading
+            var normalizedPath = nodePath.Replace('\\', '/');
+            var node = await source.ReadAsync(normalizedPath, jsonOptions, ct);
             if (node != null)
                 nodes.Add(node);
         }
