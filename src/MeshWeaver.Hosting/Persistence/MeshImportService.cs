@@ -194,11 +194,14 @@ public class MeshImportService : IMeshImportService
         foreach (var nodePath in nodePaths)
         {
             ct.ThrowIfCancellationRequested();
-            // Normalize path separators before reading
             var normalizedPath = nodePath.Replace('\\', '/');
             var node = await source.ReadAsync(normalizedPath, jsonOptions, ct);
             if (node != null)
                 nodes.Add(node);
+
+            // Directories with index.md are returned as nodes, not directories.
+            // We must also recurse into them to find their children.
+            await ReadRecursiveAsync(source, nodePath, jsonOptions, nodes, ct);
         }
 
         foreach (var dirPath in directoryPaths)
