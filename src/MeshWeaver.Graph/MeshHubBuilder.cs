@@ -127,20 +127,18 @@ public class MeshHubBuilder
         // Add custom initialization if configured
         if (_initializationFunc != null)
         {
-            config = config.WithInitialization(hub =>
+            var initFunc = _initializationFunc;
+            config = config.WithInitialization(async (hub, ct) =>
             {
-                _ = Task.Run(async () =>
+                try
                 {
-                    try
-                    {
-                        await _initializationFunc(hub, CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        var logger = hub.ServiceProvider.GetService<ILogger<MeshHubBuilder>>();
-                        logger?.LogError(ex, "Error during mesh hub initialization for {Address}", hub.Address);
-                    }
-                });
+                    await initFunc(hub, ct);
+                }
+                catch (Exception ex)
+                {
+                    var logger = hub.ServiceProvider.GetService<ILogger<MeshHubBuilder>>();
+                    logger?.LogError(ex, "Error during mesh hub initialization for {Address}", hub.Address);
+                }
             });
         }
 

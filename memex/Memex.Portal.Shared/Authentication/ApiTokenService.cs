@@ -89,19 +89,16 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         }
 
         // Update LastUsedAt (fire-and-forget, non-critical)
-        _ = Task.Run(() =>
+        try
         {
-            try
-            {
-                var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };
-                var updatedNode = node! with { Content = updated };
-                hub.Post(new UpdateNodeRequest(updatedNode));
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Failed to update LastUsedAt for token {HashPrefix}", hashPrefix);
-            }
-        });
+            var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };
+            var updatedNode = node! with { Content = updated };
+            hub.Post(new UpdateNodeRequest(updatedNode));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to update LastUsedAt for token {HashPrefix}", hashPrefix);
+        }
 
         return apiToken;
     }
