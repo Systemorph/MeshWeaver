@@ -516,6 +516,39 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Queries nodes across multiple schemas using a single UNION ALL query.
+    /// Much more efficient than per-schema fan-out: one connection, one round-trip.
+    /// </summary>
+    public async IAsyncEnumerable<MeshNode> QueryNodesAcrossSchemasAsync(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        IReadOnlyList<string> schemas,
+        string? userId = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (schemas.Count == 0) yield break;
+
+        var generator = new PostgreSqlSqlGenerator();
+        var (sql, parameters) = generator.GenerateCrossSchemaSelectQuery(query, schemas, userId);
+
+        if (_logger?.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Debug) == true)
+            _logger.LogDebug("Cross-schema SQL ({SchemaCount} schemas): {Sql}", schemas.Count, sql);
+
+        await using var cmd = _dataSource.CreateCommand(sql);
+        foreach (var (name, value) in parameters)
+        {
+            var p = new NpgsqlParameter(name, value ?? DBNull.Value);
+            cmd.Parameters.Add(p);
+        }
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            yield return ReadMeshNode(reader, options);
+        }
+    }
+
     #endregion
 
     private static MeshNode ReadMeshNode(NpgsqlDataReader reader, JsonSerializerOptions options)

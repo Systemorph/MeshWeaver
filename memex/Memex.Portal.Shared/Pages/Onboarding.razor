@@ -46,9 +46,11 @@
                                  Style="width: 100%;" />
 
                 <FluentTextField Label="Email"
-                                 ReadOnly="true"
+                                 Required="true"
+                                 ReadOnly="@emailReadOnly"
                                  @bind-Value="model.Email"
-                                 Style="width: 100%; opacity: 0.7;" />
+                                 Placeholder="your@email.com"
+                                 Style="@($"width: 100%;{(emailReadOnly ? " opacity: 0.7;" : "")}")" />
 
                 <FluentTextArea Label="Bio"
                                 @bind-Value="model.Bio"
@@ -81,6 +83,7 @@
 @code {
     private OnboardingModel model = new();
     private bool isSaving;
+    private bool emailReadOnly;
     private string? errorMessage;
 
     protected override void OnInitialized()
@@ -89,6 +92,9 @@
         if (context != null)
         {
             model.Email = context.Email ?? "";
+
+            // Only lock the email field if we got a valid email from OAuth
+            emailReadOnly = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@');
 
             // Pre-populate full name from OAuth claims
             if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")

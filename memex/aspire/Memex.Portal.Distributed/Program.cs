@@ -10,6 +10,8 @@ using Orleans.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
+builder.Logging.AddFilter("MeshWeaver.Messaging", LogLevel.Warning);
+
 // Register Aspire-injected clients
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");

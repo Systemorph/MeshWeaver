@@ -1,0 +1,1 @@
+This content was embedded inline using the @@ syntax.

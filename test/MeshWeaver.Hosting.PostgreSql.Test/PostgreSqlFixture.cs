@@ -36,9 +36,10 @@ public class PostgreSqlFixture : IAsyncLifetime
         dataSourceBuilder.UseVector();
         DataSource = dataSourceBuilder.Build();
 
-        // Initialize schema
+        // Initialize schema + partition_access + searchable_schemas + stored proc
         Options = new PostgreSqlStorageOptions();
         await PostgreSqlSchemaInitializer.InitializeAsync(DataSource, Options);
+        await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(DataSource);
 
         StorageAdapter = new PostgreSqlStorageAdapter(DataSource);
         AccessControl = new PostgreSqlAccessControl(DataSource);

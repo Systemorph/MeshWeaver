@@ -812,6 +812,213 @@
 }
 
 /* ==========================================================================
+   Markdown Body Content Styles (github-markdown overrides + Fluent UI tokens)
+   These mirror MarkdownView.razor.css so collaborative content is styled
+   identically to standalone markdown.
+   ========================================================================== */
+
+/* --- Headings --- */
+
+::deep h1,
+::deep h2 {
+    border-bottom: none;
+    font-size: 2em;
+    line-height: 1.5;
+}
+
+::deep h1:focus,
+::deep h2:focus {
+    outline: none;
+}
+
+/* --- Paragraphs --- */
+
+::deep p {
+    margin-bottom: 1.5em;
+    font-size: 1em;
+    line-height: 1.6;
+}
+
+/* --- Lists --- */
+
+::deep ul,
+::deep ol {
+    margin-bottom: 1.5em;
+}
+
+/* --- Code blocks --- */
+
+::deep .code-content {
+    position: relative;
+    padding-right: 40px;
+    border-radius: 5px;
+    border: 1px solid var(--color-border-default);
+    background-color: var(--neutral-layer-2);
+    font-size: 1em;
+    line-height: 1.5;
+    margin-bottom: 1.5em;
+}
+
+::deep .code-content code {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    display: block;
+    padding: 10px;
+    background-color: var(--color-canvas-default);
+    color: var(--color-fg-default);
+    font-size: 1em;
+    line-height: 1.5;
+}
+
+::deep .copy-to-clipboard {
+    cursor: pointer;
+    display: inline-block;
+    height: 24px;
+    border-radius: 3px;
+    position: absolute;
+    right: 1em;
+    top: 1em;
+}
+
+::deep .copy-to-clipboard:before {
+    content: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%23036ac4' d='M8 2a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h6a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8ZM7 4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V4ZM4 6a2 2 0 0 1 1-1.73V14.5A2.5 2.5 0 0 0 7.5 17h6.23A2 2 0 0 1 12 18H7.5A3.5 3.5 0 0 1 4 14.5V6Z'%3E%3C/path%3E%3C/svg%3E");
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+}
+
+/* --- Inline code (light theme default) --- */
+
+::deep code:not(pre code) {
+    background-color: #f6f8fa;
+    color: #24292f;
+    padding: 0.2em 0.4em;
+    border-radius: 6px;
+    font-size: 85%;
+    border: 1px solid #d1d9e0;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+/* --- Tables (Fluent UI tokens) --- */
+
+::deep table {
+    background-color: transparent;
+}
+
+::deep table tr {
+    background-color: var(--neutral-layer-1);
+    border-top-color: var(--neutral-stroke-rest, #d1d9e0);
+}
+
+::deep table tr:nth-child(2n) {
+    background-color: var(--neutral-layer-2);
+}
+
+::deep table td,
+::deep table th {
+    border-color: var(--neutral-stroke-rest, #d1d9e0);
+}
+
+::deep table th {
+    background-color: var(--neutral-layer-2);
+}
+
+/* --- Images --- */
+
+::deep img {
+    background-color: transparent;
+}
+
+/* --- Mermaid diagrams --- */
+
+::deep .mermaid {
+    background-color: transparent;
+}
+
+::deep .mermaid svg {
+    background-color: transparent;
+}
+
+/* --- SVG theme container --- */
+
+::deep .svg-theme-container {
+    overflow-x: auto !important;
+    overflow-y: visible;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    -webkit-overflow-scrolling: touch;
+}
+
+::deep .svg-theme-container svg {
+    max-width: 100%;
+    height: auto;
+}
+
+::deep .svg-theme-container::-webkit-scrollbar {
+    height: 6px;
+}
+
+::deep .svg-theme-container::-webkit-scrollbar-thumb {
+    background-color: #c6c6c6;
+    border-radius: 3px;
+}
+
+::deep .svg-theme-container .svg-dark {
+    display: none;
+}
+
+/* ==========================================================================
+   Dark Theme Overrides (explicit data-theme + system preference fallback)
+   ========================================================================== */
+
+/* Inline code — dark (explicit) */
+.collab-md-content[data-theme="dark"] ::deep code:not(pre code) {
+    background-color: #161b22;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+}
+
+/* Tables — dark (explicit) */
+.collab-md-content[data-theme="dark"] ::deep table tr {
+    background-color: var(--neutral-layer-1);
+}
+
+.collab-md-content[data-theme="dark"] ::deep table tr:nth-child(2n) {
+    background-color: var(--neutral-layer-2);
+}
+
+.collab-md-content[data-theme="dark"] ::deep table th {
+    background-color: var(--neutral-layer-2);
+}
+
+/* SVG theme switching — dark (explicit) */
+.collab-md-content[data-theme="dark"] ::deep .svg-theme-container .svg-light {
+    display: none;
+}
+
+.collab-md-content[data-theme="dark"] ::deep .svg-theme-container .svg-dark {
+    display: block;
+}
+
+/* System preference fallback (for data-theme="system") */
+@media (prefers-color-scheme: dark) {
+    .collab-md-content:not([data-theme="light"]) ::deep code:not(pre code) {
+        background-color: #161b22;
+        color: #c9d1d9;
+        border: 1px solid #30363d;
+    }
+
+    .collab-md-content:not([data-theme="light"]) ::deep .svg-theme-container .svg-light {
+        display: none;
+    }
+
+    .collab-md-content:not([data-theme="light"]) ::deep .svg-theme-container .svg-dark {
+        display: block;
+    }
+}
+
+/* ==========================================================================
    Responsive: collapse sidebar on narrow screens
    ========================================================================== */
 

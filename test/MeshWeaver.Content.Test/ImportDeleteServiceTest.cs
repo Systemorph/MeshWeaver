@@ -180,13 +180,8 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact]
     public async Task MeshImportService_ImportNodes_NonexistentSource_ReturnsFail()
     {
-        // Arrange - create a service with a file system adapter so DI resolution works
-        var logger = ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<MeshImportService>();
-        Directory.CreateDirectory(_targetDirectory);
-        var storageAdapter = new FileSystemStorageAdapter(_targetDirectory);
-        var contentService = Mesh.ServiceProvider.GetService<IContentService>();
-        var importService = new MeshImportService(storageAdapter, contentService!, logger);
-
+        // Arrange - resolve from DI (now uses IMeshService, not IStorageAdapter)
+        var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
         var nonExistentPath = Path.Combine(Path.GetTempPath(), "nonexistent_" + Guid.NewGuid());
 
         // Act
@@ -200,13 +195,9 @@ public class ImportDeleteServiceTest(ITestOutputHelper output) : MonolithMeshTes
     [Fact]
     public async Task MeshImportService_ImportNodes_ValidSource_ImportsSuccessfully()
     {
-        // Arrange
-        var logger = ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<MeshImportService>();
+        // Arrange - resolve from DI
+        var importService = Mesh.ServiceProvider.GetRequiredService<IMeshImportService>();
         Directory.CreateDirectory(_sourceDirectory);
-        Directory.CreateDirectory(_targetDirectory);
-        var storageAdapter = new FileSystemStorageAdapter(_targetDirectory);
-        var contentService = Mesh.ServiceProvider.GetService<IContentService>();
-        var importService = new MeshImportService(storageAdapter, contentService!, logger);
 
         // Seed source with nodes
         var sourceAdapter = new FileSystemStorageAdapter(_sourceDirectory);

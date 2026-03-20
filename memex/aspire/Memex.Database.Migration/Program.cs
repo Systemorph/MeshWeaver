@@ -268,6 +268,82 @@ if (currentVersion < 2)
     logger.LogInformation("Repair v2 completed.");
 }
 
+// ── Data repair v3: Drop rogue schemas created from path segments ──
+// Bug: paths like "login", "markdown", "onboarding" etc. created schemas
+// that shouldn't exist as partitions. Drop them to keep discovery clean.
+if (currentVersion < 3)
+{
+    logger.LogInformation("Running repair v3: Drop rogue schemas...");
+    var rogueSchemas = new[] {
+        "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "login", "markdown", "onboarding", "welcome", "settings", "storage",
+        "p", "mesh", "thread", "agent", "partition", "organization", "vuser"
+    };
+    foreach (var rogue in rogueSchemas)
+    {
+        try
+        {
+            await using var dropCmd = dataSource.CreateCommand($"DROP SCHEMA IF EXISTS \"{rogue}\" CASCADE");
+            await dropCmd.ExecuteNonQueryAsync();
+            await using var dropVCmd = dataSource.CreateCommand($"DROP SCHEMA IF EXISTS \"{rogue}_versions\" CASCADE");
+            await dropVCmd.ExecuteNonQueryAsync();
+            logger.LogInformation("Repair v3: Dropped rogue schema {Schema}", rogue);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Repair v3: Failed to drop schema {Schema}", rogue);
+        }
+    }
+    currentVersion = 3;
+    logger.LogInformation("Repair v3 completed.");
+}
+
+// ── Always: populate searchable_schemas from remaining content partitions ──
+// This runs every time (not versioned) since it's idempotent and schemas may change.
+{
+    // Discover content schemas (same logic as PostgreSqlPartitionedStoreFactory.DiscoverPartitionsAsync)
+    var contentSchemas = new List<string>();
+    var excludedSchemas = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "admin", "portal", "kernel",
+        "_access", "_address_", "_graph", "_settings", "_tracking", "_thread", "_source", "_test",
+        "login", "markdown", "onboarding", "welcome", "settings", "storage",
+        "p", "mesh", "thread", "agent", "partition", "organization", "vuser",
+        "public", "information_schema", "pg_catalog", "pg_toast"
+    };
+
+    await using (var discoverCmd = dataSource.CreateCommand("""
+        SELECT schema_name FROM information_schema.schemata s
+        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'mesh_nodes')
+        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+        ORDER BY s.schema_name
+        """))
+    {
+        await using var rdr = await discoverCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync())
+        {
+            var schema = rdr.GetString(0);
+            if (!excludedSchemas.Contains(schema))
+                contentSchemas.Add(schema);
+        }
+    }
+
+    // Populate searchable_schemas
+    await using (var clearCmd = dataSource.CreateCommand("DELETE FROM public.searchable_schemas"))
+        await clearCmd.ExecuteNonQueryAsync();
+
+    foreach (var schema in contentSchemas)
+    {
+        await using var insertCmd = dataSource.CreateCommand(
+            "INSERT INTO public.searchable_schemas (schema_name) VALUES ($1) ON CONFLICT DO NOTHING");
+        insertCmd.Parameters.AddWithValue(schema);
+        await insertCmd.ExecuteNonQueryAsync();
+    }
+
+    logger.LogInformation("Searchable schemas: [{Schemas}]", string.Join(", ", contentSchemas));
+}
+
 // Save current version
 await using (var saveVersion = dataSource.CreateCommand("""
     INSERT INTO admin.mesh_nodes (namespace, id, name, node_type, state, content, last_modified, main_node)

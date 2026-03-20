@@ -184,6 +184,8 @@ public partial class CollaborativeMarkdownView
         if (jsModule != null && !string.IsNullOrEmpty(RenderedHtml))
         {
             await jsModule.InvokeVoidAsync("highlightCodeBlocks", contentRef);
+            await jsModule.InvokeVoidAsync("renderMermaidDiagrams", contentRef);
+            await jsModule.InvokeVoidAsync("renderMathBlocks", contentRef);
         }
 
         // Enable comment-from-selection when user has comment permission

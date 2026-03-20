@@ -6,17 +6,19 @@ Description: Complete tools reference for AI agents
 
 MeshPlugin provides tools for interacting with the mesh data graph. All paths support the `@` prefix shorthand: `@graph/org1` resolves to `graph/org1`.
 
+**IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
+
 ## Get
 
 Retrieves a node from the mesh. Returns JSON.
 
 ### Single Node
 
-`Get('@path')` — Returns the full MeshNode JSON including all properties and Content.
+`Get('@Doc/Architecture')` — Returns the full MeshNode JSON including all properties and Content.
 
 ### Children
 
-`Get('@path/*')` — Returns a JSON array of direct children with `{path, name, nodeType, icon}`.
+`Get('@Doc/Architecture/*')` — Returns a JSON array of direct children with `{path, name, nodeType, icon}`.
 
 ### Unified Path Prefixes
 
@@ -24,19 +26,19 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 
 | Syntax | Returns |
 |--------|---------|
-| `Get('@path/data:')` | Node's Content data as JSON |
-| `Get('@path/data:Collection')` | All entities in a data collection |
-| `Get('@path/data:Collection/id')` | A specific entity by ID |
-| `Get('@path/schema:')` | JSON Schema for the node's content type |
-| `Get('@path/schema:TypeName')` | JSON Schema for a specific named type |
-| `Get('@path/model:')` | Full data model with all registered types |
-| `Get('@path/layoutAreas:')` | List of available layout areas (reports, charts) |
-| `Get('@path/area:AreaName')` | Download a layout area's data for analysis |
-| `Get('@path/content:file.txt')` | File content from the "content" collection |
-| `Get('@path/content:folder/file.png')` | File from a subfolder in a collection |
-| `Get('@path/assets:logo.svg')` | File from the "assets" collection (any collection name works) |
-| `Get('@path/collection:')` | All content collection configs (names, types, editability) |
-| `Get('@path/collection:content,assets')` | Specific collection configs |
+| `Get('@Doc/Architecture/data:')` | Node's Content data as JSON |
+| `Get('@Doc/Architecture/data:Collection')` | All entities in a data collection |
+| `Get('@Doc/Architecture/data:Collection/id')` | A specific entity by ID |
+| `Get('@Doc/Architecture/schema:')` | JSON Schema for the node's content type |
+| `Get('@Doc/Architecture/schema:TypeName')` | JSON Schema for a specific named type |
+| `Get('@Doc/Architecture/model:')` | Full data model with all registered types |
+| `Get('@Doc/Architecture/layoutAreas:')` | List of available layout areas (reports, charts) |
+| `Get('@Doc/Architecture/area:AreaName')` | Download a layout area's data for analysis |
+| `Get('@Doc/Architecture/content:icon.svg')` | File content from the "content" collection |
+| `Get('@Doc/Architecture/content:folder/file.png')` | File from a subfolder in a collection |
+| `Get('@Doc/Architecture/content:platform-overview.svg')` | File from a content collection |
+| `Get('@Doc/Architecture/collection:')` | All content collection configs (names, types, editability) |
+| `Get('@Doc/Architecture/collection:content,assets')` | Specific collection configs |
 
 #### Unified Path Reference
 
@@ -71,12 +73,12 @@ Any other prefix is treated as a **content collection name** (e.g., `content:`, 
 
 | Syntax | Behavior |
 |--------|----------|
-| `@path` | **Hyperlink** - navigates to content |
-| `@@path` | **Inline** - embeds content in place |
+| single @ prefix | **Hyperlink** - navigates to content |
+| double @@ prefix | **Inline** - embeds content in place |
 
 References must be at the **start of a line**.
 
-Without a prefix, `@path` / `@@path` refers to a **layout area** of the target node.
+Without a prefix, a reference refers to a **layout area** of the target node.
 With a reserved prefix (`data:`, `schema:`, `area:`), it accesses that specific resource type.
 With any other prefix, it accesses files from a content collection.
 
@@ -192,7 +194,7 @@ namespace:Doc/Architecture scope:descendants
 Displays a node's visual layout area in the chat UI.
 
 **CRITICAL:** When users ask to "show", "display", or "view" something:
-1. Use `NavigateTo('@path')` to render the visual representation
+1. Use `NavigateTo('@Doc/Architecture')` to render the visual representation
 2. Keep your text response minimal — just confirm what was displayed
 3. Do NOT dump raw JSON when a visual display is available
 
@@ -228,14 +230,14 @@ The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-l
 
 Before creating a node, discover what content fields are expected:
 
-- `Get('@path/schema:')` — Returns the JSON Schema for the node's content type
-- `Get('@path/schema:TypeName')` — Returns the JSON Schema for a specific named type
-- `Get('@path/model:')` — Returns the full data model with all registered types
+- `Get('@Doc/Architecture/schema:')` — Returns the JSON Schema for the node's content type
+- `Get('@Doc/Architecture/schema:TypeName')` — Returns the JSON Schema for a specific named type
+- `Get('@Doc/Architecture/model:')` — Returns the full data model with all registered types
 
 ### Workflow
 
 1. Find an existing node of the type you want to create, or the namespace where you want to create
-2. Retrieve its content schema: `Get('@path/schema:')`
+2. Retrieve its content schema: `Get('@Doc/Architecture/schema:')`
 3. Construct the MeshNode JSON with all required fields
 4. Call Create with the JSON
 
@@ -255,7 +257,7 @@ Updates one or more existing nodes in the mesh. The entire MeshNode is replaced,
 
 ### Workflow
 
-1. Retrieve existing nodes via `Get('@path')` or `Search('...')`
+1. Retrieve existing nodes via `Get('@Doc/Architecture')` or `Search('...')`
 2. Modify the returned MeshNode JSON
 3. Pass the modified node(s) to Update as a JSON array
 
@@ -294,7 +296,7 @@ When the user asks about **reports**, **views**, **charts**, **analysis**, **das
 Use the `layoutAreas:` prefix to list all available layout areas for a node:
 
 ```
-Get('@path/layoutAreas:')
+Get('@Doc/Architecture/layoutAreas:')
 ```
 
 This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `Description`, `Group`, and `Order` fields.
@@ -304,7 +306,7 @@ This returns an array of `LayoutAreaDefinition` objects with `Area`, `Title`, `D
 Use the `area:` prefix to download a layout area's data for analysis:
 
 ```
-Get('@path/area:AreaName')
+Get('@Doc/Architecture/area:AreaName')
 ```
 
 This returns the area's data as an EntityStore, which you can analyze and summarize.
@@ -314,23 +316,19 @@ This returns the area's data as an EntityStore, which you can analyze and summar
 Use `NavigateTo` to display a layout area visually in the chat UI:
 
 ```
-NavigateTo('@path/AreaName')
+NavigateTo('@Doc/Architecture/AreaName')
 ```
 
 ### Inline Embedding
 
-Use `@@` syntax to embed a layout area inline in markdown responses:
-
-```
-@@path/AreaName
-```
+Use double @@ prefix to embed a layout area inline in markdown responses. Write the double @@ followed by the node path and area name at the start of a line. Example:
 
 ### Workflow
 
-1. **Discover**: `Get('@path/layoutAreas:')` — list available areas
-2. **Analyze**: `Get('@path/area:AreaName')` — download area data
-3. **Display**: `NavigateTo('@path/AreaName')` — show visual chart/report
-4. **Embed**: `@@path/AreaName` — inline in markdown
+1. **Discover**: `Get('@Doc/Architecture/layoutAreas:')` — list available areas
+2. **Analyze**: `Get('@Doc/Architecture/area:AreaName')` — download area data
+3. **Display**: `NavigateTo('@Doc/Architecture/AreaName')` — show visual chart/report
+4. **Embed**: write double @@ followed by `Doc/Architecture/AreaName` at the start of a line
 
 ## Content Collections
 
@@ -340,35 +338,35 @@ Content collections store files (images, documents, markdown, etc.) associated w
 
 When you need to work with files in a content collection, follow this sequence:
 
-1. **Discover collections**: `Get('@path/collection:')` — lists all available collection configs (names, types, editability)
-2. **List files in collection root**: `Get('@path/content:')` — returns files and folders in the default "content" collection root
-3. **List files in a named collection**: `Get('@path/content:collectionName')` — returns files and folders in the named collection root
-4. **Browse a subfolder**: `Get('@path/content:collectionName/subfolder')` — if "subfolder" is a folder, returns its files and folders
-5. **Download a specific file**: `Get('@path/content:filename.md')` — downloads the file from the default "content" collection
-6. **Download from a named collection**: `Get('@path/content:collectionName/filename.md')` — downloads the file from the named collection
+1. **Discover collections**: `Get('@Doc/Architecture/collection:')` — lists all available collection configs (names, types, editability)
+2. **List files in collection root**: `Get('@Doc/Architecture/content:')` — returns files and folders in the default "content" collection root
+3. **List files in a named collection**: `Get('@Doc/Architecture/content:collectionName')` — returns files and folders in the named collection root
+4. **Browse a subfolder**: `Get('@Doc/Architecture/content:collectionName/subfolder')` — if "subfolder" is a folder, returns its files and folders
+5. **Download a specific file**: `Get('@Doc/Architecture/content:icon.svg')` — downloads the file from the default "content" collection
+6. **Download from a subfolder**: `Get('@Doc/Architecture/content:MeshGraph/overview.svg')` — downloads a file from a subfolder
 
 The system automatically detects whether a path refers to a file or folder. Files are downloaded, folders are listed. Each item in a listing has `name`, `path`, `isFolder`, and `lastModified` (for files).
 
 ### Examples
 
 ```
-Get('@path/collection:')                    -- List all collection configs
-Get('@path/content:')                       -- List files/folders in default "content" collection
-Get('@path/content:collectionName')         -- List files/folders in a named collection
-Get('@path/content:collectionName/subfolder') -- List files in a subfolder
-Get('@path/content:readme.md')             -- Download readme.md from default "content" collection
-Get('@path/content:collectionName/file.pdf') -- Download file from a named collection
+Get('@Doc/Architecture/collection:')                    -- List all collection configs
+Get('@Doc/Architecture/content:')                       -- List files/folders in default "content" collection
+Get('@Doc/Architecture/content:collectionName')         -- List files/folders in a named collection
+Get('@Doc/Architecture/content:collectionName/subfolder') -- List files in a subfolder
+Get('@Doc/Architecture/content:icon.svg')              -- Download icon.svg from default "content" collection
+Get('@Doc/Architecture/content:MeshGraph/overview.svg')  -- Download file from a subfolder
 ```
 
-The format is: `@{address}/content:{path}` where the path is automatically resolved as file (download) or folder (list contents).
+The format is: `@Doc/Architecture/content:{path}` where the path is automatically resolved as file (download) or folder (list contents).
 
 ### Embedding Content Files
 
-Use `@@` syntax to embed content files inline in markdown:
-```
-@@path/content:images/logo.svg              -- Embed image inline
-@@path/content:notes.md                     -- Embed markdown inline
-```
+Use double @@ prefix to embed content files inline in markdown. Write the double @@ followed by the node path and content reference at the start of a line. Only embed files that actually exist — use `Get` with the `content:` prefix first to verify the file is available.
+
+Here is a real inline embed of a content file:
+
+@@Doc/AI/content:inline-example.md
 
 ## Reading Documentation
 
