@@ -2,6 +2,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -26,50 +27,78 @@ public static class ThreadExtensions
         IMessageHub hub,
         IMessageDelivery<CreateThreadRequest> delivery)
     {
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var hubPath = hub.Address.ToString();
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
         var request = delivery.Message;
+        var hubPath = hub.Address.ToString();
 
-        var speakingId = ThreadNodeType.GenerateSpeakingId(request.UserMessageText);
-        var ns = string.IsNullOrEmpty(hubPath)
-            ? ThreadNodeType.ThreadPartition
-            : $"{hubPath}/{ThreadNodeType.ThreadPartition}";
-
-        var name = request.UserMessageText.Length > 60
-            ? request.UserMessageText[..57] + "..."
-            : request.UserMessageText;
-
-        // Capture current user for "my threads" filtering across partitions
+        // Log access context for diagnosing RLS failures
         var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+        var identity = delivery.AccessContext?.ObjectId
+                       ?? accessService?.Context?.ObjectId
+                       ?? accessService?.CircuitContext?.ObjectId;
+        logger.LogInformation("HandleCreateThread: namespace={Namespace}, hub={HubPath}, identity={Identity}",
+            request.Namespace, hubPath, identity ?? "(none)");
 
-        var threadNode = new MeshNode(speakingId, ns)
+        try
         {
-            Name = name,
-            NodeType = ThreadNodeType.NodeType,
-            Content = new AI.Thread { ParentPath = hubPath, CreatedBy = createdBy }
-        };
+            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        meshService.CreateNodeAsync(threadNode).ContinueWith(t =>
+            var speakingId = ThreadNodeType.GenerateSpeakingId(request.UserMessageText);
+            var ns = string.IsNullOrEmpty(hubPath)
+                ? ThreadNodeType.ThreadPartition
+                : $"{hubPath}/{ThreadNodeType.ThreadPartition}";
+
+            var name = request.UserMessageText.Length > 60
+                ? request.UserMessageText[..57] + "..."
+                : request.UserMessageText;
+
+            var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+
+            var threadNode = new MeshNode(speakingId, ns)
+            {
+                Name = name,
+                NodeType = ThreadNodeType.NodeType,
+                Content = new AI.Thread { ParentPath = hubPath, CreatedBy = createdBy }
+            };
+
+            logger.LogInformation("HandleCreateThread: creating node at {Path}, createdBy={CreatedBy}",
+                threadNode.Path, createdBy ?? "(none)");
+
+            meshService.CreateNodeAsync(threadNode).ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    var error = t.Exception?.Flatten().InnerExceptions.FirstOrDefault()?.Message
+                                ?? t.Exception?.Message ?? "Unknown error";
+                    logger.LogError(t.Exception, "HandleCreateThread: FAILED for {Path}: {Error}",
+                        threadNode.Path, error);
+                    hub.Post(new CreateThreadResponse
+                    {
+                        Success = false,
+                        Error = error
+                    }, o => o.ResponseFor(delivery));
+                }
+                else
+                {
+                    logger.LogInformation("HandleCreateThread: SUCCESS for {Path}", t.Result.Path);
+                    hub.Post(new CreateThreadResponse
+                    {
+                        Success = true,
+                        ThreadPath = t.Result.Path,
+                        ThreadName = t.Result.Name
+                    }, o => o.ResponseFor(delivery));
+                }
+            });
+        }
+        catch (Exception ex)
         {
-            if (t.IsFaulted)
+            logger.LogError(ex, "HandleCreateThread: UNHANDLED EXCEPTION for namespace={Namespace}", request.Namespace);
+            hub.Post(new CreateThreadResponse
             {
-                hub.Post(new CreateThreadResponse
-                {
-                    Success = false,
-                    Error = t.Exception?.InnerException?.Message ?? t.Exception?.Message ?? "Unknown error"
-                }, o => o.ResponseFor(delivery));
-            }
-            else
-            {
-                hub.Post(new CreateThreadResponse
-                {
-                    Success = true,
-                    ThreadPath = t.Result.Path,
-                    ThreadName = t.Result.Name
-                }, o => o.ResponseFor(delivery));
-            }
-        });
+                Success = false,
+                Error = ex.Message
+            }, o => o.ResponseFor(delivery));
+        }
 
         return delivery.Processed();
     }

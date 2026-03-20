@@ -57,6 +57,8 @@ var embeddingModel = builder.AddParameter("embedding-model", secret: false);
 // Authentication
 var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
+var googleClientId = builder.AddParameter("google-client-id", secret: false);
+var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
 
 // --- Custom domain (for deployed modes) ---
 var customDomain = builder.AddParameter("custom-domain", secret: false);
@@ -144,6 +146,8 @@ var portal = builder
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
+    .WithEnvironment("Authentication__Google__ClientId", googleClientId)
+    .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitFor(grainStateBlobs)

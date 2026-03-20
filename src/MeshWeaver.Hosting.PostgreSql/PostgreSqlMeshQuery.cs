@@ -39,6 +39,11 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
     }
 
     /// <summary>
+    /// Exposes the underlying adapter for cross-schema queries.
+    /// </summary>
+    public PostgreSqlStorageAdapter Adapter => _adapter;
+
+    /// <summary>
     /// Gets the effective user ID from the request or from the current access context.
     /// Returns WellKnownUsers.Anonymous for unauthenticated/virtual access.
     /// </summary>

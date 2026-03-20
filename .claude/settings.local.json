@@ -121,7 +121,8 @@
       "Bash(1 <<'EOF'\nusing HtmlAgilityPack;\n\nvar html = \"<td><a href='#'>Link</a><br/>→ <a href='#'>Link2</a></td>\";\nvar doc = new HtmlDocument\\(\\);\ndoc.LoadHtml\\(html\\);\n\nvar td = doc.DocumentNode.SelectSingleNode\\(\"//td\"\\);\nConsole.WriteLine\\(\"TD node found: \" + \\(td != null\\)\\);\nConsole.WriteLine\\(\"TD child nodes count: \" + \\(td?.ChildNodes.Count ?? 0\\)\\);\n\nforeach \\(var child in td?.ChildNodes ?? new List<HtmlNode>\\(\\)\\)\n{\n    Console.WriteLine\\($\"  Node type: {child.NodeType}, Name: '{child.Name}', HasChildNodes: {child.HasChildNodes}\"\\);\n    if \\(child.NodeType == HtmlNodeType.Text\\)\n        Console.WriteLine\\($\"    Text: '{child.InnerText}'\"\\);\n}\nEOF)",
       "Bash(file:*)",
       "Bash(aspire deploy:*)",
-      "Bash(az monitor:*)"
+      "Bash(az monitor:*)",
+      "mcp__aspire__select_apphost"
     ],
     "deny": []
   },

@@ -234,6 +234,89 @@ public class PostgreSqlSqlGenerator
         return (clause, parameters);
     }
 
+    /// <summary>
+    /// Generates a UNION ALL query across multiple schemas.
+    /// Each schema gets the same WHERE clause but different schema-qualified table names.
+    /// </summary>
+    public (string Sql, Dictionary<string, object> Parameters) GenerateCrossSchemaSelectQuery(
+        ParsedQuery query,
+        IReadOnlyList<string> schemas,
+        string? userId = null,
+        string tableName = "mesh_nodes")
+    {
+        var (whereClause, parameters) = GenerateWhereClause(query, userId);
+
+        var parts = new List<string>();
+        foreach (var schema in schemas)
+        {
+            var qualifiedTable = $"\"{schema}\".\"{tableName}\"";
+            var uepTable = $"\"{schema}\".\"user_effective_permissions\"";
+            var ntpTable = $"\"{schema}\".\"node_type_permissions\"";
+
+            var selectSql = "SELECT n.id, n.namespace, n.name, n.node_type, n.description, " +
+                "n.category, n.icon, n.display_order, n.last_modified, n.version, n.state, n.content, " +
+                $"n.desired_id, n.main_node FROM {qualifiedTable} n";
+
+            // Build per-schema access control inline (can't use the instance SchemaName for multi-schema)
+            var accessClause = BuildPerSchemaAccessClause(userId, schema, uepTable, ntpTable, parameters);
+
+            var fullWhere = string.IsNullOrEmpty(whereClause)
+                ? (string.IsNullOrEmpty(accessClause) ? "" : $"WHERE {accessClause}")
+                : (string.IsNullOrEmpty(accessClause) ? whereClause : $"{whereClause} AND {accessClause}");
+
+            parts.Add($"{selectSql} {fullWhere}");
+        }
+
+        var sql = string.Join(" UNION ALL ", parts);
+
+        if (query.OrderBy != null)
+        {
+            var direction = query.OrderBy.Descending ? "DESC" : "ASC";
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY {MapOrderBySelector(query.OrderBy.Property)} {direction}";
+        }
+
+        if (query.Limit.HasValue)
+            sql += $" LIMIT {query.Limit.Value}";
+
+        return (sql, parameters);
+    }
+
+    private string BuildPerSchemaAccessClause(
+        string? userId, string schema, string uepTable, string ntpTable,
+        Dictionary<string, object> parameters)
+    {
+        if (string.IsNullOrEmpty(userId))
+            return "";
+
+        // Reuse existing param if already added, else create new
+        var paramName = $"@acUser_cross";
+        if (!parameters.ContainsKey(paramName))
+            parameters[paramName] = userId;
+
+        var userList = userId == MeshWeaver.Mesh.Security.WellKnownUsers.Anonymous
+            ? paramName : $"{paramName}, 'Public'";
+
+        var publicReadClause = userId == MeshWeaver.Mesh.Security.WellKnownUsers.Anonymous ? "" :
+            $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)";
+
+        var partitionAccessExists = $"EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN ({userList}) AND pa.partition = '{schema}')";
+
+        var nodeAccess = $"""
+            n.main_node = {paramName}
+            OR (SELECT uep.is_allow FROM {uepTable} uep
+                WHERE uep.user_id IN ({userList}) AND uep.permission = 'Read'
+                  AND n.main_node LIKE uep.node_path_prefix || '%'
+                ORDER BY LENGTH(uep.node_path_prefix) DESC,
+                         CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
+                LIMIT 1) = true
+            """;
+
+        if (!string.IsNullOrEmpty(publicReadClause))
+            return $"({publicReadClause} OR ({partitionAccessExists} AND ({nodeAccess})))";
+
+        return $"({partitionAccessExists} AND ({nodeAccess}))";
+    }
+
     public (string Sql, Dictionary<string, object> Parameters) GenerateVectorSearchQuery(
         ParsedQuery? filterQuery,
         float[] queryVector,
@@ -557,42 +640,71 @@ public class PostgreSqlSqlGenerator
         var uepTable = QualifyTable("user_effective_permissions");
         var ntpTable = QualifyTable("node_type_permissions");
 
-        // Partition-level access: when querying a specific schema, check public.partition_access.
-        // Returns false immediately if user has no access to this partition (no fan-out waste).
-        var partitionAccessClause = !string.IsNullOrEmpty(SchemaName)
-            ? $"""
-                EXISTS (SELECT 1 FROM public.partition_access pa
-                        WHERE pa.user_id IN ({userList}) AND pa.partition = '{SchemaName}')
-                AND
-            """
+        // Partition-level access check (only for schema-qualified queries).
+        // partition_access controls which schemas the user can see.
+        // Public-read node types bypass the partition check — they're visible to all authenticated users.
+        var hasPartitionCheck = !string.IsNullOrEmpty(SchemaName);
+        var partitionAccessExists = hasPartitionCheck
+            ? $"EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN ({userList}) AND pa.partition = '{SchemaName}')"
             : "";
 
-        // Public-read node types (e.g. User, Organization) are visible to authenticated users
+        // Public-read node types (e.g. User, Organization) are visible to all authenticated users
+        // regardless of partition_access.
         var publicReadClause = userId == WellKnownUsers.Anonymous
             ? ""
-            : $"""
+            : $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)";
 
-                            OR EXISTS (SELECT 1 FROM {ntpTable} ntp
-                                       WHERE ntp.node_type = n.node_type AND ntp.public_read = true)
+        // Build the access control clause:
+        // A node is visible if:
+        //   (a) public-read node type (bypasses partition check), OR
+        //   (b) user has partition access AND (owns the node OR has Read permission)
+        var nodeAccessClause = $"""
+                n.main_node = {paramName}
+                OR
+                (SELECT uep.is_allow
+                 FROM {uepTable} uep
+                 WHERE uep.user_id IN ({userList})
+                   AND uep.permission = 'Read'
+                   AND n.main_node LIKE uep.node_path_prefix || '%'
+                 ORDER BY LENGTH(uep.node_path_prefix) DESC,
+                          CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
+                 LIMIT 1) = true
             """;
 
-        return $"""
-            (
-                {partitionAccessClause}
+        if (!string.IsNullOrEmpty(publicReadClause) && hasPartitionCheck)
+        {
+            // Schema-qualified + authenticated: public-read OR (partition_access AND node-level)
+            return $"""
                 (
-                    n.main_node = {paramName}{publicReadClause}
+                    {publicReadClause}
                     OR
-                    (SELECT uep.is_allow
-                     FROM {uepTable} uep
-                     WHERE uep.user_id IN ({userList})
-                       AND uep.permission = 'Read'
-                       AND n.main_node LIKE uep.node_path_prefix || '%'
-                     ORDER BY LENGTH(uep.node_path_prefix) DESC,
-                              CASE WHEN uep.user_id = {paramName} THEN 0 ELSE 1 END
-                     LIMIT 1) = true
+                    ({partitionAccessExists} AND ({nodeAccessClause}))
                 )
-            )
-            """;
+                """;
+        }
+
+        if (hasPartitionCheck)
+        {
+            // Schema-qualified + anonymous: partition_access AND node-level
+            return $"""
+                (
+                    {partitionAccessExists} AND ({nodeAccessClause})
+                )
+                """;
+        }
+
+        // No schema: just node-level access
+        if (!string.IsNullOrEmpty(publicReadClause))
+        {
+            return $"""
+                (
+                    {publicReadClause}
+                    OR {nodeAccessClause}
+                )
+                """;
+        }
+
+        return $"({nodeAccessClause})";
     }
 
     #endregion

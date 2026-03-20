@@ -277,4 +277,195 @@ public class CrossPartitionSearchTests
             });
         }
     }
+
+    // ── Stored Procedure: search_across_schemas ──────────────────────
+
+    [Fact(Timeout = 60000)]
+    public async Task StoredProc_SearchAcrossSchemas_ReturnsAllOrgs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        // Populate searchable_schemas
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        await PopulateSearchableSchemasAsync(schemas, ct);
+
+        // Call the stored proc
+        var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 50, ct);
+
+        results.Should().NotBeEmpty("stored proc should return nodes from all schemas");
+        results.Select(n => n.Id).Should().Contain("ACME");
+        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Select(n => n.Id).Should().Contain("Contoso");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StoredProc_SearchAcrossSchemas_TextSearch()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        await PopulateSearchableSchemasAsync(schemas, ct);
+
+        // Text search for "Partner"
+        var textFilter = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'') ILIKE '%partner%'";
+        var results = await CallSearchAcrossSchemasAsync(textFilter, null, "last_modified DESC", 50, ct);
+
+        results.Should().NotBeEmpty("should find PartnerRe by text search");
+        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Should().NotContain(n => n.Id == "ACME", "ACME doesn't match 'partner'");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StoredProc_SearchAcrossSchemas_WithLimit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        await PopulateSearchableSchemasAsync(schemas, ct);
+
+        var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 2, ct);
+
+        results.Should().HaveCount(2, "limit:2 should return exactly 2 results");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StoredProc_SearchAcrossSchemas_ExcludesUnsearchableSchemas()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adminAdapter, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        // Only include ACME and PartnerRe (exclude Contoso)
+        await PopulateSearchableSchemasAsync(["acme", "partnerre"], ct);
+
+        var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 50, ct);
+
+        results.Select(n => n.Id).Should().Contain("ACME");
+        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Should().NotContain(n => n.Id == "Contoso",
+            "Contoso is not in searchable_schemas");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StoredProc_SearchAcrossSchemas_AccessControlFilters()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        await PopulateSearchableSchemasAsync(schemas, ct);
+
+        // Give testuser access only to ACME via partition_access
+        await using (var cmd = _fixture.DataSource.CreateCommand(
+            "DELETE FROM public.partition_access; INSERT INTO public.partition_access VALUES ('testuser', 'acme')"))
+            await cmd.ExecuteNonQueryAsync(ct);
+
+        // Also set up effective permissions for testuser in ACME schema
+        await using (var cmd = _fixture.DataSource.CreateCommand(
+            "INSERT INTO acme.user_effective_permissions (user_id, node_path_prefix, permission, is_allow) " +
+            "VALUES ('testuser', 'ACME', 'Read', true) ON CONFLICT DO NOTHING"))
+            await cmd.ExecuteNonQueryAsync(ct);
+
+        // Also register Markdown as public_read in all schemas
+        foreach (var schema in schemas)
+        {
+            await using var cmd = _fixture.DataSource.CreateCommand(
+                $"INSERT INTO \"{schema}\".node_type_permissions (node_type, public_read) " +
+                "VALUES ('Markdown', true) ON CONFLICT (node_type) DO UPDATE SET public_read = true");
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        var results = await CallSearchAcrossSchemasAsync("", "testuser", "last_modified DESC", 50, ct);
+
+        // testuser should see public_read nodes from all schemas + ACME-specific nodes
+        results.Should().NotBeEmpty();
+        // ACME nodes should be visible (partition_access + effective permissions)
+        results.Select(n => n.Id).Should().Contain("ACME");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task StoredProc_NodeTypeFilter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        await PopulateSearchableSchemasAsync(schemas, ct);
+
+        var results = await CallSearchAcrossSchemasAsync(
+            "LOWER(n.node_type) = 'markdown'", null, "last_modified DESC", 50, ct);
+
+        results.Should().NotBeEmpty();
+        results.Should().OnlyContain(n => n.NodeType == "Markdown");
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task CrossSchema_QueryNodesAcrossSchemas_ReturnsResults()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
+
+        var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
+        var adapter = new PostgreSqlStorageAdapter(_fixture.DataSource);
+        var query = new QueryParser().Parse("is:main");
+
+        var results = new List<MeshNode>();
+        await foreach (var node in adapter.QueryNodesAcrossSchemasAsync(
+            query, _options, schemas, ct: ct))
+        {
+            results.Add(node);
+        }
+
+        results.Should().NotBeEmpty("cross-schema query should return nodes");
+        results.Select(n => n.Id).Should().Contain("ACME");
+        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Select(n => n.Id).Should().Contain("Contoso");
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+
+    private async Task PopulateSearchableSchemasAsync(IEnumerable<string> schemas, CancellationToken ct)
+    {
+        await using (var cmd = _fixture.DataSource.CreateCommand("DELETE FROM public.searchable_schemas"))
+            await cmd.ExecuteNonQueryAsync(ct);
+
+        foreach (var schema in schemas)
+        {
+            await using var cmd = _fixture.DataSource.CreateCommand(
+                "INSERT INTO public.searchable_schemas (schema_name) VALUES ($1) ON CONFLICT DO NOTHING");
+            cmd.Parameters.AddWithValue(schema);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    private async Task<List<MeshNode>> CallSearchAcrossSchemasAsync(
+        string whereClause, string? userId, string orderBy, int limit, CancellationToken ct)
+    {
+        var results = new List<MeshNode>();
+        await using var cmd = _fixture.DataSource.CreateCommand(
+            "SELECT * FROM public.search_across_schemas(@p_where, @p_user, @p_order, @p_limit) " +
+            "AS t(id TEXT, namespace TEXT, name TEXT, node_type TEXT, category TEXT, icon TEXT, " +
+            "display_order INT, last_modified TIMESTAMPTZ, version BIGINT, state SMALLINT, " +
+            "content JSONB, desired_id TEXT, main_node TEXT)");
+        cmd.Parameters.Add(new NpgsqlParameter("@p_where", string.IsNullOrEmpty(whereClause) ? "" : whereClause));
+        cmd.Parameters.Add(new NpgsqlParameter("@p_user", (object?)userId ?? DBNull.Value));
+        cmd.Parameters.Add(new NpgsqlParameter("@p_order", orderBy));
+        cmd.Parameters.Add(new NpgsqlParameter("@p_limit", limit));
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var id = reader.GetString(0);
+            var ns = reader.IsDBNull(1) ? null : reader.GetString(1);
+            results.Add(new MeshNode(id, string.IsNullOrEmpty(ns) ? null : ns)
+            {
+                Name = reader.IsDBNull(2) ? null : reader.GetString(2),
+                NodeType = reader.IsDBNull(3) ? null : reader.GetString(3),
+                MainNode = reader.IsDBNull(12) ? id : reader.GetString(12)
+            });
+        }
+        return results;
+    }
 }

@@ -21,6 +21,87 @@ public static class PostgreSqlSchemaInitializer
                 PRIMARY KEY (user_id, partition)
             );
             CREATE INDEX IF NOT EXISTS idx_partition_access_user ON public.partition_access (user_id);
+
+            -- Searchable schemas: content partitions that should be included in global search.
+            -- Managed by the app at startup; excludes admin, portal, kernel, and rogue schemas.
+            CREATE TABLE IF NOT EXISTS public.searchable_schemas (
+                schema_name TEXT PRIMARY KEY
+            );
+
+            -- Stored procedure: search across all searchable schemas in one query.
+            -- Dynamically builds UNION ALL across schemas, applies per-schema access control.
+            -- Returns mesh_nodes matching the WHERE clause from all content partitions.
+            CREATE OR REPLACE FUNCTION public.search_across_schemas(
+                p_where_clause TEXT DEFAULT '',
+                p_user_id TEXT DEFAULT NULL,
+                p_order_by TEXT DEFAULT 'n.last_modified DESC',
+                p_limit INT DEFAULT 50
+            ) RETURNS SETOF RECORD AS $$
+            DECLARE
+                schema_rec RECORD;
+                union_sql TEXT := '';
+                full_sql TEXT;
+                user_list TEXT;
+            BEGIN
+                -- Build user list for access control
+                IF p_user_id IS NOT NULL AND p_user_id != 'Anonymous' THEN
+                    user_list := quote_literal(p_user_id) || ', ''Public''';
+                ELSIF p_user_id IS NOT NULL THEN
+                    user_list := quote_literal(p_user_id);
+                END IF;
+
+                -- Build UNION ALL across all searchable schemas
+                FOR schema_rec IN SELECT schema_name FROM public.searchable_schemas ORDER BY schema_name
+                LOOP
+                    IF union_sql != '' THEN
+                        union_sql := union_sql || ' UNION ALL ';
+                    END IF;
+
+                    union_sql := union_sql || format(
+                        'SELECT n.id, n.namespace, n.name, n.node_type, n.category, n.icon, '
+                        || 'n.display_order, n.last_modified, n.version, n.state, n.content, '
+                        || 'n.desired_id, n.main_node '
+                        || 'FROM %I.mesh_nodes n WHERE n.main_node = n.path',
+                        schema_rec.schema_name);
+
+                    -- Add access control per schema
+                    IF user_list IS NOT NULL THEN
+                        union_sql := union_sql || format(
+                            ' AND ('
+                            || 'EXISTS (SELECT 1 FROM %I.node_type_permissions ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)'
+                            || ' OR ('
+                            || 'EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN (%s) AND pa.partition = %L)'
+                            || ' AND (SELECT uep.is_allow FROM %I.user_effective_permissions uep'
+                            || '  WHERE uep.user_id IN (%s) AND uep.permission = ''Read'''
+                            || '  AND n.main_node LIKE uep.node_path_prefix || ''%%'''
+                            || '  ORDER BY LENGTH(uep.node_path_prefix) DESC LIMIT 1) = true'
+                            || '))',
+                            schema_rec.schema_name,
+                            user_list, schema_rec.schema_name,
+                            schema_rec.schema_name,
+                            user_list);
+                    END IF;
+
+                    -- Add custom WHERE clause
+                    IF p_where_clause IS NOT NULL AND p_where_clause != '' THEN
+                        union_sql := union_sql || ' AND ' || p_where_clause;
+                    END IF;
+                END LOOP;
+
+                IF union_sql = '' THEN
+                    RETURN;
+                END IF;
+
+                full_sql := 'SELECT * FROM (' || union_sql || ') combined';
+                IF p_order_by IS NOT NULL AND p_order_by != '' THEN
+                    -- Strip table alias prefix (n.) since outer SELECT uses bare column names
+                    full_sql := full_sql || ' ORDER BY ' || REPLACE(p_order_by, 'n.', '');
+                END IF;
+                full_sql := full_sql || ' LIMIT ' || p_limit;
+
+                RETURN QUERY EXECUTE full_sql;
+            END;
+            $$ LANGUAGE plpgsql;
             """);
         await cmd.ExecuteNonQueryAsync(ct);
     }

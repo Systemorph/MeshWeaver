@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
@@ -97,13 +98,13 @@ public partial class SearchBar : IAsyncDisposable
 
         try
         {
-            string basePath;
-            string prefix;
-
             if (input.StartsWith("@"))
             {
+                // @ reference mode: use autocomplete for path-based navigation
                 var afterAt = input[1..];
                 var lastSlash = afterAt.LastIndexOf('/');
+                string basePath;
+                string prefix;
                 if (lastSlash >= 0)
                 {
                     basePath = afterAt[..lastSlash];
@@ -114,23 +115,41 @@ public partial class SearchBar : IAsyncDisposable
                     basePath = "";
                     prefix = afterAt;
                 }
+
+                var contextPath = NavigationService?.CurrentNamespace;
+                var results = await MeshQuery
+                    .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, contextPath, context: "search", ct)
+                    .ToArrayAsync(ct);
+
+                if (!ct.IsCancellationRequested)
+                {
+                    suggestions = results;
+                    isLoading = false;
+                    StateHasChanged();
+                }
             }
             else
             {
-                basePath = "";
-                prefix = input;
-            }
+                // Text search: use QueryAsync which goes through the stored proc.
+                // Don't use QueryAsync<MeshNode> — it adds $type:MeshNode which filters
+                // against content.$type (Organization, Markdown, etc.), not the record type.
+                var query = $"*{input}* scope:descendants context:search is:main sort:LastModified-desc limit:{MaxResults}";
+                var nodes = await MeshQuery
+                    .QueryAsync(new MeshQueryRequest { Query = query })
+                    .OfType<MeshNode>()
+                    .ToArrayAsync(ct);
 
-            var contextPath = NavigationService?.CurrentNamespace;
-            var results = await MeshQuery
-                .AutocompleteAsync(basePath, prefix, AutocompleteMode.RelevanceFirst, MaxResults, contextPath, context: "search", ct)
-                .ToArrayAsync(ct);
-
-            if (!ct.IsCancellationRequested)
-            {
-                suggestions = results;
-                isLoading = false;
-                StateHasChanged();
+                if (!ct.IsCancellationRequested)
+                {
+                    suggestions = nodes.Select(n => new QuerySuggestion(
+                        n.Path ?? "",
+                        n.Name ?? n.Id ?? "",
+                        n.NodeType,
+                        0,
+                        n.Icon)).ToArray();
+                    isLoading = false;
+                    StateHasChanged();
+                }
             }
         }
         catch (OperationCanceledException)
@@ -181,6 +200,12 @@ public partial class SearchBar : IAsyncDisposable
                 showDropdown = false;
                 highlightedIndex = -1;
                 break;
+
+            default:
+                // Don't re-render for regular typing keys — keydown fires before
+                // the input value updates, so re-rendering here would push the old
+                // searchTerm back to the FluentTextField, causing cursor jumps.
+                return Task.CompletedTask;
         }
 
         StateHasChanged();
@@ -227,8 +252,10 @@ public partial class SearchBar : IAsyncDisposable
         }
 
         // Plain search query - navigate to search page which uses QueryAsync
+        // Add scope:descendants as hidden query so search finds nodes at all levels
         var encodedPlainQuery = Uri.EscapeDataString(trimmed);
-        NavigationManager.NavigateTo($"/search?q={encodedPlainQuery}");
+        var hq = Uri.EscapeDataString("scope:descendants");
+        NavigationManager.NavigateTo($"/search?q={encodedPlainQuery}&hq={hq}");
         ClearSearch();
     }
 

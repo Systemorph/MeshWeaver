@@ -92,9 +92,49 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         Hub?.RegisterForDisposal(_ => DeactivateOnIdle());
 
-        // TODO V10: Find out which cancellation token to pass. (11.01.2025, Roland Bürgi)
-        var ret = Hub!.DeliverMessage(delivery);
-        return Task.FromResult(ret);
+        // Apply user identity from Orleans RequestContext.
+        // The client-side OrleansRoutingService sets UserId/UserName which Orleans
+        // propagates across process boundaries. Grains have no CircuitContext,
+        // so we must set the AccessService.Context (AsyncLocal) for this call scope.
+        var userId = RequestContext.Get("UserId") as string;
+        var userName = RequestContext.Get("UserName") as string;
+        var accessService = Hub!.ServiceProvider.GetService<AccessService>();
+
+        if (!string.IsNullOrEmpty(userId) && accessService != null)
+        {
+            using (new AccessScope(accessService, new AccessContext
+            {
+                ObjectId = userId,
+                Name = userName ?? userId
+            }))
+            {
+                var ret = Hub.DeliverMessage(delivery);
+                return Task.FromResult(ret);
+            }
+        }
+
+        var result = Hub.DeliverMessage(delivery);
+        return Task.FromResult(result);
+    }
+
+    /// <summary>
+    /// Sets AccessService.Context for the duration of a grain call,
+    /// then clears it to prevent leaking to other callers.
+    /// </summary>
+    private sealed class AccessScope : IDisposable
+    {
+        private readonly AccessService _accessService;
+
+        public AccessScope(AccessService accessService, AccessContext context)
+        {
+            _accessService = accessService;
+            _accessService.SetContext(context);
+        }
+
+        public void Dispose()
+        {
+            _accessService.SetContext(null);
+        }
     }
 
 
