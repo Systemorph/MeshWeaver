@@ -17,6 +17,12 @@ namespace MeshWeaver.Graph;
 public static class MeshNodeExtensions
 {
     /// <summary>
+    /// Gate name for MeshNode initialization. Messages are deferred until the node
+    /// is loaded from persistence (Active) or activated via CreateNodeRequest.
+    /// </summary>
+    public const string MeshNodeInitGateName = "MeshNodeInit";
+
+    /// <summary>
     /// Gets the parent path for this node.
     /// Returns null for root-level nodes.
     /// </summary>

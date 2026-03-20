@@ -2,9 +2,7 @@
 using System.Text;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -429,21 +427,10 @@ public static class ThreadLayoutAreas
                 });
             });
 
-            // 4) Get remote stream for response node and start execution
-            var responseStream = hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                .GetRemoteStream<EntityStore, CollectionsReference>(
-                    new Address(responsePath),
-                    new CollectionsReference(nameof(MeshNode)));
-
+            // 4) Start execution on hosted hub
             var executionHub = hub.GetHostedHub(
                 new Address($"{hub.Address}/_Exec"),
-                config => config
-                    .WithServices(services =>
-                    {
-                        services.AddSingleton(responseStream);
-                        return services;
-                    })
-                    .WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
                 HostedHubCreation.Always);
 
             executionHub!.Post(request with { ResponsePath = responsePath });
@@ -456,7 +443,7 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Async handler on the _Exec hosted hub.
     /// Prepares agent and await-streams the response.
-    /// Uses stream.Update on the response node's remote stream (passed via DI).
+    /// Progress updates posted to response node's hub via DataChangeRequest.
     /// Cancellation: CancelCurrentExecution() on the _Exec hub cancels ct.
     /// </summary>
     private static async Task<IMessageDelivery> ExecuteMessageAsync(
@@ -467,9 +454,9 @@ public static class ThreadLayoutAreas
         var request = delivery.Message;
         var parentHub = hub.Configuration.ParentHub!;
         var threadPath = request.ThreadPath;
+        var responsePath = request.ResponsePath!;
+        var responseMsgId = responsePath.Split('/').Last();
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        var stream = hub.ServiceProvider.GetRequiredService<ISynchronizationStream<EntityStore>>();
-        var responseMsgId = request.ResponsePath!.Split('/').Last();
 
         try
         {
@@ -484,7 +471,7 @@ public static class ThreadLayoutAreas
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
 
-            // 2. await streaming — update response node via stream.Update
+            // 2. await streaming
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
@@ -497,14 +484,14 @@ public static class ThreadLayoutAreas
 
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
                     {
-                        UpdateResponseNode(stream, responseMsgId, threadPath, responseText.ToString());
+                        PostResponseUpdate(parentHub, responseMsgId, threadPath, responsePath, responseText.ToString());
                         lastUpdate = DateTimeOffset.UtcNow;
                     }
                 }
             }
 
             // 3. Final update
-            UpdateResponseNode(stream, responseMsgId, threadPath, responseText.ToString());
+            PostResponseUpdate(parentHub, responseMsgId, threadPath, responsePath, responseText.ToString());
         }
         catch (OperationCanceledException)
         {
@@ -518,9 +505,8 @@ public static class ThreadLayoutAreas
         return delivery.Processed();
     }
 
-    private static void UpdateResponseNode(
-        ISynchronizationStream<EntityStore> stream,
-        string responseMsgId, string threadPath, string text)
+    private static void PostResponseUpdate(
+        IMessageHub hub, string responseMsgId, string threadPath, string responsePath, string text)
     {
         var updatedNode = new MeshNode(responseMsgId, threadPath)
         {
@@ -534,15 +520,8 @@ public static class ThreadLayoutAreas
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        stream.Update(state =>
-        {
-            var store = WorkspaceOperations.Update(
-                state ?? new(), nameof(MeshNode),
-                c => c.Update(responseMsgId, updatedNode));
-            return stream.ApplyChanges(new EntityStoreAndUpdates(store,
-                [new EntityUpdate(nameof(MeshNode), responseMsgId, updatedNode)],
-                stream.StreamId));
-        });
+        hub.Post(new DataChangeRequest { Updates = [updatedNode] },
+            o => o.WithTarget(new Address(responsePath)));
     }
 
     /// <summary>
