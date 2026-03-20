@@ -265,7 +265,8 @@ public record MessageHubConfiguration
     /// </summary>
     /// <param name="deferred">Whether to defer initialization (default: true)</param>
     /// <returns>Updated configuration</returns>
-    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) => this with { DeferredInitialization = deferred };
+    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) =>
+        this with { DeferredInitialization = deferred };
 
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)

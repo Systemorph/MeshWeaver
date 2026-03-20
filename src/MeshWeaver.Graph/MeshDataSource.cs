@@ -36,10 +36,11 @@ public static class MeshDataSourceExtensions
                     {
                         var hubPath = workspace.Hub.Address.ToString();
                         return workspace.GetStream<MeshNode>()
-                            ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath)?.Content)
+                            ?.Select(nodes => (object?)nodes?.FirstOrDefault(n => n.Path == hubPath))
                             ?? Observable.Return<object?>(null);
                     });
             })
+            .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
     }
 
@@ -223,21 +224,8 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         // Store ContentType for UI integration (editor generation, etc.)
         // Content is accessed via MeshNode.Content - there's no separate TypeSource
-        return this with { ContentType = dataType, UseDeferredInit = true };
+        return this with { ContentType = dataType };
     }
-
-    private bool UseDeferredInit { get; init; }
-
-    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
-        => CreateStream(identity, config =>
-        {
-            config = config.WithInitialization(GetInitialValueAsync);
-            if (UseDeferredInit)
-                config = config.WithDeferredInitialization(
-                    MeshNodeExtensions.MeshNodeInitGateName,
-                    d => d.Message is CreateNodeRequest);
-            return config;
-        });
 
     /// <summary>
     /// Adds a type source that loads objects from a sub-partition of the hub.
