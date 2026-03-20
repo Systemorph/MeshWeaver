@@ -257,18 +257,15 @@ internal class NavigationService : INavigationService
                     node = node with { PreRenderedHtml = html };
 
                     // Fire-and-forget: persist the generated PreRenderedHtml back
-                    _ = Task.Run(() =>
+                    try
                     {
-                        try
-                        {
-                            _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address));
-                        }
-                        catch (Exception ex)
-                        {
-                            var logger = _hub.ServiceProvider.GetService<ILogger<NavigationService>>();
-                            logger?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", node.Path);
-                        }
-                    });
+                        _hub.Post(new UpdateNodeRequest(node), o => o.WithTarget(_hub.Address));
+                    }
+                    catch (Exception ex)
+                    {
+                        var logger = _hub.ServiceProvider.GetService<ILogger<NavigationService>>();
+                        logger?.LogWarning(ex, "Failed to persist PreRenderedHtml for {Path}", node.Path);
+                    }
                 }
             }
 
@@ -295,8 +292,7 @@ internal class NavigationService : INavigationService
 
     /// <summary>
     /// Records a navigation activity for the "Recently Viewed" dashboard section.
-    /// Stores as MeshNode at User/{userId}/_UserActivity/{encodedPath}.
-    /// Fire-and-forget: failures are logged but don't affect navigation.
+    /// Posts TrackActivityRequest to the hub — handled asynchronously on a sub-hub.
     /// </summary>
     private void TrackNavigationActivity(MeshNode node)
     {
@@ -314,65 +310,7 @@ internal class NavigationService : INavigationService
         if (node.NodeType != null && ExcludedNodeTypes.Contains(node.NodeType))
             return;
 
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var now = DateTimeOffset.UtcNow;
-                var encodedPath = node.Path.Replace("/", "_");
-                var activityPath = $"User/{userId}/_UserActivity/{encodedPath}";
-
-                // Use unprotected storage — user activity is internal bookkeeping,
-                // no access control needed for reading/writing the user's own activity nodes.
-                var persistence = _hub.ServiceProvider.GetRequiredService<IMeshStorage>();
-                var existing = await persistence.GetNodeAsync(activityPath);
-
-                UserActivityRecord record;
-                if (existing?.Content is UserActivityRecord existingRecord)
-                {
-                    record = existingRecord with
-                    {
-                        ActivityType = ActivityType.Read,
-                        LastAccessedAt = now,
-                        AccessCount = existingRecord.AccessCount + 1,
-                        NodeName = node.Name ?? existingRecord.NodeName,
-                        NodeType = node.NodeType ?? existingRecord.NodeType,
-                        Namespace = node.Namespace ?? existingRecord.Namespace,
-                    };
-
-                    await persistence.SaveNodeAsync(existing with { Content = record });
-                }
-                else
-                {
-                    record = new UserActivityRecord
-                    {
-                        Id = encodedPath,
-                        NodePath = node.Path,
-                        UserId = userId,
-                        ActivityType = ActivityType.Read,
-                        FirstAccessedAt = now,
-                        LastAccessedAt = now,
-                        AccessCount = 1,
-                        NodeName = node.Name,
-                        NodeType = node.NodeType,
-                        Namespace = node.Namespace
-                    };
-
-                    await persistence.SaveNodeAsync(MeshNode.FromPath(activityPath) with
-                    {
-                        NodeType = "UserActivity",
-                        Name = node.Name ?? encodedPath,
-                        MainNode = $"User/{userId}",
-                        State = MeshNodeState.Active,
-                        Content = record
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogError(ex, "Failed to save activity for user={UserId} path={Path}", userId, node.Path);
-            }
-        });
+        _hub.Post(new TrackActivityRequest(node.Path, userId, node.Name, node.NodeType, node.Namespace));
     }
 
     private static (string? Area, string? Id) ParseRemainder(string? remainder)

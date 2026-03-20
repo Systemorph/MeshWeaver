@@ -36,6 +36,7 @@ public class AgentChatClient : IAgentChat
     private IReadOnlyList<string>? currentAttachments;
     private bool isPersistentFactory;
     private bool agentsInitialized;
+    private string? cachedToolDocs;
 
     // Tracks which attachment paths are agent nodes (for context filtering)
     private HashSet<string>? agentAttachmentPaths;
@@ -237,8 +238,8 @@ public class AgentChatClient : IAgentChat
         // For persistent agents, skip tool documentation (already on server-side agent definition)
         if (!isPersistentFactory)
         {
-            // Add resolved tool documentation
-            var toolDocs = await LoadToolDocumentationAsync();
+            // Add resolved tool documentation (use cache from InitializeAsync)
+            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync();
             if (!string.IsNullOrEmpty(toolDocs))
             {
                 messageText.AppendLine("# Available Tools Documentation");
@@ -702,6 +703,10 @@ public class AgentChatClient : IAgentChat
 
         // Create AIAgent instances
         await CreateAgentsAsync();
+
+        // Pre-compute tool documentation (expensive mesh queries)
+        if (!isPersistentFactory)
+            cachedToolDocs = await LoadToolDocumentationAsync();
     }
 
     /// <summary>

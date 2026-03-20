@@ -27,7 +27,7 @@ public static class ThreadExtensions
         IMessageHub hub,
         IMessageDelivery<CreateThreadRequest> delivery)
     {
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<ThreadSession>>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var request = delivery.Message;
         var hubPath = hub.Address.ToString();
 

@@ -15,6 +15,12 @@ public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
     public string? ModelName { get; init; }
     public string? ContextPath { get; init; }
     public IReadOnlyList<string>? Attachments { get; init; }
+
+    /// <summary>
+    /// Set by HandleSubmitMessage after creating the response node.
+    /// The execution hub uses this to post streaming progress updates.
+    /// </summary>
+    public string? ResponsePath { get; init; }
 }
 
 public record SubmitMessageResponse

@@ -2,8 +2,12 @@
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Activity;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -47,7 +51,62 @@ public static class MeshNodeExtensions
     public static MessageHubConfiguration WithGraphTypes(this MessageHubConfiguration config)
     {
         config.TypeRegistry.WithGraphTypes();
-        return config;
+        return config
+            .WithHandler<TrackActivityRequest>(HandleTrackActivity);
+    }
+
+    private static IMessageDelivery HandleTrackActivity(
+        IMessageHub hub,
+        IMessageDelivery<TrackActivityRequest> delivery)
+    {
+        var req = delivery.Message;
+        var storage = hub.ServiceProvider.GetService<IStorageService>();
+        if (storage == null)
+            return delivery.Processed();
+
+        var options = hub.JsonSerializerOptions;
+        var subHub = hub.GetHostedHub(new Address("_activity"));
+        subHub.InvokeAsync(async ct =>
+        {
+            var encodedPath = req.NodePath.Replace("/", "_");
+            var activityPath = $"User/{req.UserId}/_UserActivity/{encodedPath}";
+            var now = DateTimeOffset.UtcNow;
+
+            var existing = await storage.GetNodeAsync(activityPath, options, ct);
+            var existingRecord = existing?.Content as UserActivityRecord;
+
+            var record = new UserActivityRecord
+            {
+                Id = encodedPath,
+                NodePath = req.NodePath,
+                UserId = req.UserId,
+                ActivityType = ActivityType.Read,
+                FirstAccessedAt = existingRecord?.FirstAccessedAt ?? now,
+                LastAccessedAt = now,
+                AccessCount = (existingRecord?.AccessCount ?? 0) + 1,
+                NodeName = req.NodeName,
+                NodeType = req.NodeType,
+                Namespace = req.Namespace
+            };
+
+            await storage.SaveNodeAsync(
+                MeshNode.FromPath(activityPath) with
+                {
+                    NodeType = "UserActivity",
+                    Name = req.NodeName ?? encodedPath,
+                    MainNode = $"User/{req.UserId}",
+                    State = MeshNodeState.Active,
+                    Content = record
+                },
+                options, ct);
+        }, ex =>
+        {
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.ActivityTracking");
+            logger?.LogError(ex, "Failed to track activity for user={UserId} path={Path}", req.UserId, req.NodePath);
+            return Task.CompletedTask;
+        });
+
+        return delivery.Processed();
     }
 
     public static ITypeRegistry WithGraphTypes(this ITypeRegistry typeRegistry)
