@@ -2,7 +2,9 @@
 using System.Text;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -427,10 +429,21 @@ public static class ThreadLayoutAreas
                 });
             });
 
-            // 4) Start execution on hosted hub
+            // 4) Get remote stream for response node and start execution
+            var responseStream = hub.ServiceProvider.GetRequiredService<IWorkspace>()
+                .GetRemoteStream<EntityStore, CollectionsReference>(
+                    new Address(responsePath),
+                    new CollectionsReference(nameof(MeshNode)));
+
             var executionHub = hub.GetHostedHub(
                 new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                config => config
+                    .WithServices(services =>
+                    {
+                        services.AddSingleton(responseStream);
+                        return services;
+                    })
+                    .WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
                 HostedHubCreation.Always);
 
             executionHub!.Post(request with { ResponsePath = responsePath });
@@ -442,9 +455,8 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Async handler on the _Exec hosted hub.
-    /// Prepares agent and await-streams the response. No queries — all state comes from
-    /// the request or is loaded by AgentChatClient internally.
-    /// Progress updates are posted to parentHub since our own hub is blocked.
+    /// Prepares agent and await-streams the response.
+    /// Uses stream.Update on the response node's remote stream (passed via DI).
     /// Cancellation: CancelCurrentExecution() on the _Exec hub cancels ct.
     /// </summary>
     private static async Task<IMessageDelivery> ExecuteMessageAsync(
@@ -456,6 +468,8 @@ public static class ThreadLayoutAreas
         var parentHub = hub.Configuration.ParentHub!;
         var threadPath = request.ThreadPath;
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
+        var stream = hub.ServiceProvider.GetRequiredService<ISynchronizationStream<EntityStore>>();
+        var responseMsgId = request.ResponsePath!.Split('/').Last();
 
         try
         {
@@ -470,7 +484,7 @@ public static class ThreadLayoutAreas
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
 
-            // 2. await streaming
+            // 2. await streaming — update response node via stream.Update
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
@@ -483,14 +497,14 @@ public static class ThreadLayoutAreas
 
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
                     {
-                        PostResponseUpdate(parentHub, threadPath, request.ResponsePath!, responseText.ToString());
+                        UpdateResponseNode(stream, responseMsgId, threadPath, responseText.ToString());
                         lastUpdate = DateTimeOffset.UtcNow;
                     }
                 }
             }
 
             // 3. Final update
-            PostResponseUpdate(parentHub, threadPath, request.ResponsePath!, responseText.ToString());
+            UpdateResponseNode(stream, responseMsgId, threadPath, responseText.ToString());
         }
         catch (OperationCanceledException)
         {
@@ -504,34 +518,31 @@ public static class ThreadLayoutAreas
         return delivery.Processed();
     }
 
-    /// <summary>
-    /// Posts a response text update to the ThreadMessage hub via DataChangeRequest.
-    /// The ThreadMessage hub has AddMeshDataSource — its MeshNodeTypeSource handles
-    /// debounced persistence. No IMeshService/UpdateNodeAsync — that bypasses the hub
-    /// and causes file access races with CreateNodeAsync.
-    /// </summary>
-    private static void PostResponseUpdate(IMessageHub hub, string threadPath, string responsePath, string text)
+    private static void UpdateResponseNode(
+        ISynchronizationStream<EntityStore> stream,
+        string responseMsgId, string threadPath, string text)
     {
-        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        logger?.LogDebug("PostResponseUpdate: hub={HubAddress}, target={ResponsePath}, textLen={TextLen}",
-            hub.Address, responsePath, text?.Length ?? 0);
-
-        var nodeId = responsePath.Split('/').Last();
-        var updatedNode = new MeshNode(nodeId, threadPath)
+        var updatedNode = new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
             {
-                Id = nodeId,
+                Id = responseMsgId,
                 Role = "assistant",
                 Text = text,
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        // Post to the ThreadMessage hub's own address — it manages persistence exclusively
-        hub.Post(new DataChangeRequest { Updates = [updatedNode] },
-            o => o.WithTarget(new Address(responsePath)));
+        stream.Update(state =>
+        {
+            var store = WorkspaceOperations.Update(
+                state ?? new(), nameof(MeshNode),
+                c => c.Update(responseMsgId, updatedNode));
+            return stream.ApplyChanges(new EntityStoreAndUpdates(store,
+                [new EntityUpdate(nameof(MeshNode), responseMsgId, updatedNode)],
+                stream.StreamId));
+        });
     }
 
     /// <summary>
