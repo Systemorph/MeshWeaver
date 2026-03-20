@@ -1,6 +1,6 @@
-using MeshWeaver.Messaging;
+﻿using MeshWeaver.Mesh.Security;
 
-namespace MeshWeaver.Mesh.Security;
+namespace MeshWeaver.Messaging.Security;
 
 /// <summary>
 /// Marks a message type with the permission required to deliver it to a hub.

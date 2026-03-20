@@ -1,13 +1,11 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -211,14 +209,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// Content is accessed via MeshNode.Content - there's no separate TypeSource.
     /// </summary>
     public MeshDataSource WithContentType<T>() where T : class
-    {
-        // Register the content type in TypeRegistry for JSON serialization
-        Workspace.Hub.TypeRegistry.WithType(typeof(T), typeof(T).Name);
-
-        // Store ContentType for UI integration (editor generation, etc.)
-        // Content is accessed via MeshNode.Content - there's no separate TypeSource
-        return this with { ContentType = typeof(T) };
-    }
+        => WithContentType(typeof(T));
 
     /// <summary>
     /// Registers a content type for UI integration using a runtime Type.
@@ -232,8 +223,21 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
 
         // Store ContentType for UI integration (editor generation, etc.)
         // Content is accessed via MeshNode.Content - there's no separate TypeSource
-        return this with { ContentType = dataType };
+        return this with { ContentType = dataType, UseDeferredInit = true };
     }
+
+    private bool UseDeferredInit { get; init; }
+
+    protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity)
+        => CreateStream(identity, config =>
+        {
+            config = config.WithInitialization(GetInitialValueAsync);
+            if (UseDeferredInit)
+                config = config.WithDeferredInitialization(
+                    MeshNodeExtensions.MeshNodeInitGateName,
+                    d => d.Message is CreateNodeRequest);
+            return config;
+        });
 
     /// <summary>
     /// Adds a type source that loads objects from a sub-partition of the hub.

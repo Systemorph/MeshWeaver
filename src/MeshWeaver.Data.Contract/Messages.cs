@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
 
 namespace MeshWeaver.Data;
 

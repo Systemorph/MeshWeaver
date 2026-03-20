@@ -314,7 +314,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
+        {
             config = config.WithDeferredInitialization();
+            if (Configuration.DeferredGateName != null && Configuration.DeferredGatePredicate != null)
+                config = config.WithInitializationGate(Configuration.DeferredGateName, Configuration.DeferredGatePredicate);
+        }
 
         return config;
     }
@@ -472,6 +476,8 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// This is useful when the stream initialization depends on properties that are set after stream construction.
     /// </summary>
     internal bool DeferredInitialization { get; init; }
+    internal string? DeferredGateName { get; init; }
+    internal Predicate<IMessageDelivery>? DeferredGatePredicate { get; init; }
 
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
@@ -491,4 +497,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// <returns>Updated configuration</returns>
     public StreamConfiguration<TStream> WithDeferredInitialization(bool deferred = true)
         => this with { DeferredInitialization = deferred };
+
+    /// <summary>
+    /// Enables deferred initialization with a named gate. The gate is added to the stream's
+    /// sub-hub and allows matching messages through while initialization is deferred.
+    /// The gate is opened by calling Hub.OpenGate(gateName) when the data is ready.
+    /// </summary>
+    public StreamConfiguration<TStream> WithDeferredInitialization(
+        string gateName, Predicate<IMessageDelivery> allowDuringInit)
+        => this with { DeferredInitialization = true, DeferredGateName = gateName, DeferredGatePredicate = allowDuringInit };
 }
