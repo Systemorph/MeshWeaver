@@ -415,18 +415,15 @@ public static class CreateLayoutArea
                 {
                     logger?.LogInformation("Successfully created node at {NewPath}", newPath);
 
-                    // Delete the transient node asynchronously
-                    _ = Task.Run(async () =>
+                    // Delete the transient node on the hub's execution pipeline
+                    host.Hub.InvokeAsync(async ct =>
                     {
-                        try
-                        {
-                            await nodeFactory.DeleteNodeAsync(transientPath);
-                            logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
-                        }
+                        await nodeFactory.DeleteNodeAsync(transientPath);
+                        logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
+                    }, ex =>
+                    {
+                        logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
+                        return Task.CompletedTask;
                     });
 
                     // Navigate to the new node

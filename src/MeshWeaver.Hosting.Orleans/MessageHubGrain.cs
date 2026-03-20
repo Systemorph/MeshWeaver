@@ -92,49 +92,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         Hub?.RegisterForDisposal(_ => DeactivateOnIdle());
 
-        // Apply user identity from Orleans RequestContext.
+        // Apply user identity from Orleans RequestContext to the delivery.
         // The client-side OrleansRoutingService sets UserId/UserName which Orleans
-        // propagates across process boundaries. Grains have no CircuitContext,
-        // so we must set the AccessService.Context (AsyncLocal) for this call scope.
+        // propagates across process boundaries. We set it on the delivery itself
+        // so the hub's delivery pipeline (UserServiceDeliveryPipeline) picks it up
+        // and sets AccessService.Context for the entire async processing chain.
         var userId = RequestContext.Get("UserId") as string;
         var userName = RequestContext.Get("UserName") as string;
-        var accessService = Hub!.ServiceProvider.GetService<AccessService>();
 
-        if (!string.IsNullOrEmpty(userId) && accessService != null)
+        if (!string.IsNullOrEmpty(userId) &&
+            (delivery.AccessContext == null || delivery.AccessContext.ObjectId != userId))
         {
-            using (new AccessScope(accessService, new AccessContext
+            delivery = delivery.SetAccessContext(new AccessContext
             {
                 ObjectId = userId,
                 Name = userName ?? userId
-            }))
-            {
-                var ret = Hub.DeliverMessage(delivery);
-                return Task.FromResult(ret);
-            }
+            });
         }
 
-        var result = Hub.DeliverMessage(delivery);
-        return Task.FromResult(result);
-    }
-
-    /// <summary>
-    /// Sets AccessService.Context for the duration of a grain call,
-    /// then clears it to prevent leaking to other callers.
-    /// </summary>
-    private sealed class AccessScope : IDisposable
-    {
-        private readonly AccessService _accessService;
-
-        public AccessScope(AccessService accessService, AccessContext context)
-        {
-            _accessService = accessService;
-            _accessService.SetContext(context);
-        }
-
-        public void Dispose()
-        {
-            _accessService.SetContext(null);
-        }
+        var ret = Hub!.DeliverMessage(delivery);
+        return Task.FromResult(ret);
     }
 
 
