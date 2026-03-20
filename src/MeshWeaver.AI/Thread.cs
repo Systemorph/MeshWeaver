@@ -1,5 +1,5 @@
+﻿using System.Collections.Immutable;
 using System.Text.Json;
-using MeshWeaver.Mesh;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
@@ -42,12 +42,9 @@ public record Thread
     public JsonElement? SessionState { get; init; }
 
     /// <summary>
-    /// Legacy: Thread messages stored inline.
-    /// New threads use child MeshNodes instead.
-    /// Kept for backward compatibility with existing threads.
+    /// Child mesh nodes. Thread controls and keeps up to date.
     /// </summary>
-    [Obsolete("Use child MeshNodes with nodeType=ThreadMessage instead. Kept for backward compatibility.")]
-    public List<ThreadMessage>? Messages { get; init; }
+    public ImmutableList<string> Messages { get; init; } = [];
 
     /// <summary>
     /// The path of the parent node where this thread was created.
@@ -77,13 +74,6 @@ public record Thread
     /// </summary>
     public string? PrimaryNodePath => ParentPath;
 
-    /// <summary>
-    /// Ordered list of child message node IDs (e.g., "1", "2", "3").
-    /// Updated when messages are created via SubmitMessageRequest.
-    /// The layout area maps these to full paths ({threadPath}/{id}) for LayoutAreaControl cells.
-    /// IDs survive serialization events; full paths are derived at render time.
-    /// </summary>
-    public IReadOnlyList<string> ThreadMessages { get; init; } = [];
 }
 
 /// <summary>
@@ -97,62 +87,13 @@ public static class ThreadMessageExtensions
     public static List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages(this IEnumerable<ThreadMessage> messages)
     {
         return messages
-            .Where(msg => msg.Type != ThreadMessageType.EditingPrompt) // Exclude editing prompts
+            .Where(msg => msg.Type != ThreadMessageType.EditingPrompt)
             .Select(msg => new Microsoft.Extensions.AI.ChatMessage(
                 new Microsoft.Extensions.AI.ChatRole(msg.Role),
                 msg.Text)
             {
                 AuthorName = msg.AuthorName
             }).ToList();
-    }
-
-    /// <summary>
-    /// Creates ThreadMessage records from Microsoft.Extensions.AI.ChatMessage collection.
-    /// </summary>
-    public static List<ThreadMessage> FromChatMessages(
-        IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
-        ThreadMessageType defaultType = ThreadMessageType.ExecutedInput)
-    {
-        return messages.Select(msg => new ThreadMessage
-        {
-            Id = Guid.NewGuid().AsString(),
-            Role = msg.Role.Value,
-            AuthorName = msg.AuthorName,
-            Text = msg.Text ?? string.Empty,
-            Timestamp = DateTime.UtcNow,
-            Type = msg.Role.Value.Equals("user", StringComparison.OrdinalIgnoreCase)
-                ? ThreadMessageType.ExecutedInput
-                : ThreadMessageType.AgentResponse
-        }).ToList();
-    }
-
-    /// <summary>
-    /// Converts legacy Thread with inline Messages to ChatMessages.
-    /// </summary>
-#pragma warning disable CS0618 // Type or member is obsolete
-    public static List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages(this Thread thread)
-    {
-        if (thread.Messages == null || thread.Messages.Count == 0)
-            return [];
-
-        return thread.Messages.ToChatMessages();
-    }
-#pragma warning restore CS0618
-
-    /// <summary>
-    /// Creates a legacy Thread from Microsoft.Extensions.AI.ChatMessage collection.
-    /// For backward compatibility only - new code should use child MeshNodes.
-    /// </summary>
-    [Obsolete("Use child MeshNodes with nodeType=ThreadMessage instead.")]
-    public static Thread FromChatMessagesToThread(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, string? parentPath = null)
-    {
-#pragma warning disable CS0618 // Type or member is obsolete
-        return new Thread
-        {
-            Messages = FromChatMessages(messages),
-            ParentPath = parentPath
-        };
-#pragma warning restore CS0618
     }
 }
 

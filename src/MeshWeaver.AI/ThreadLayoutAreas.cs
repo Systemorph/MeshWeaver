@@ -1,19 +1,18 @@
-﻿using System.Reactive.Linq;
-using System.Text;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
-using MeshWeaver.Mesh;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Controls = MeshWeaver.Layout.Controls;
 using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI;
@@ -34,8 +33,6 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
-            .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
             .WithHandler<ResubmitMessageRequest>(HandleResubmitMessage)
             .WithHandler<DeleteFromMessageRequest>(HandleDeleteFromMessage)
             .WithHandler<EditMessageRequest>(HandleEditMessage)
@@ -140,7 +137,7 @@ public static class ThreadLayoutAreas
                 ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
             return new ThreadViewModel
             {
-                Messages = threadContent?.ThreadMessages ?? [],
+                Messages = threadContent?.Messages ?? [],
                 ThreadPath = hubPath,
                 InitialContext = contextPath,
                 InitialContextDisplayName = contextDisplayName
@@ -324,15 +321,6 @@ public static class ThreadLayoutAreas
             .ToList();
 
         // Fall back to legacy inline messages
-#pragma warning disable CS0618 // Type or member is obsolete
-        if (messages.Count == 0 && content?.Messages?.Count > 0)
-        {
-            messages = content.Messages
-                .Where(m => m.Type != ThreadMessageType.EditingPrompt)
-                .ToList()!;
-        }
-#pragma warning restore CS0618
-
         var messageCount = messages.Count;
 
         // Get preview from last message
@@ -360,195 +348,6 @@ public static class ThreadLayoutAreas
             .WithView(new NavLinkControl("", null, $"/{hubPath}/{ThreadNodeType.ThreadArea}"));
     }
 
-    /// <summary>
-    /// Handles SubmitMessageRequest on the thread hub.
-    /// 1) Create input cell with ContinueWith
-    /// 2) Create output cell with ContinueWith
-    /// 3) Update Thread.ThreadMessages as creations succeed
-    /// 4) Start execution on hosted hub
-    /// </summary>
-    private static IMessageDelivery HandleSubmitMessage(
-        IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var threadPath = request.ThreadPath;
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var userMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responsePath = $"{threadPath}/{responseMsgId}";
-
-        // 1+2) Create both cells concurrently
-        var inputTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = userMsgId,
-                Role = "user",
-                Text = request.UserMessageText,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput
-            }
-        });
-
-        var outputTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = responseMsgId,
-                Role = "assistant",
-                Text = "",
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse
-            }
-        });
-
-        Task.WhenAll(inputTask, outputTask).ContinueWith(_ =>
-        {
-            // 3) Update Thread.ThreadMessages (data-bound to ThreadViewModel)
-            hub.InvokeAsync(() =>
-            {
-                hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                    .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-                {
-                    var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                    if (threadNode == null) return;
-                    var currentContent = threadNode.Content as MeshThread ?? new MeshThread();
-                    var updatedMsgList = currentContent.ThreadMessages
-                        .Concat([userMsgId, responseMsgId]).ToList();
-                    hub.Post(new DataChangeRequest
-                    {
-                        Updates = [threadNode with
-                        {
-                            Content = currentContent with { ThreadMessages = updatedMsgList }
-                        }]
-                    });
-                });
-            });
-
-            // 4) Start execution on hosted hub
-            var executionHub = hub.GetHostedHub(
-                new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-                HostedHubCreation.Always);
-
-            executionHub!.Post(request with { ResponsePath = responsePath });
-        });
-
-        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
-        return delivery.Processed();
-    }
-
-    /// <summary>
-    /// Async handler on the _Exec hosted hub.
-    /// Prepares agent and await-streams the response.
-    /// Uses GetRemoteStream to the response node's hub and stream.Update to push text.
-    /// Cancellation: CancelCurrentExecution() on the _Exec hub cancels ct.
-    /// </summary>
-    private static async Task<IMessageDelivery> ExecuteMessageAsync(
-        IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery,
-        CancellationToken ct)
-    {
-        var request = delivery.Message;
-        var parentHub = hub.Configuration.ParentHub!;
-        var threadPath = request.ThreadPath;
-        var responsePath = request.ResponsePath!;
-        var responseMsgId = responsePath.Split('/').Last();
-        var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-
-        try
-        {
-            // 1. Get remote stream for the response node from parent hub's workspace
-            var responseStream = parentHub.ServiceProvider.GetRequiredService<IWorkspace>()
-                .GetRemoteStream<object, EntityReference>(
-                    new Address(responsePath),
-                    new EntityReference(nameof(MeshNode), responsePath));
-
-            // 2. Prepare agent
-            var chatClient = new AgentChatClient(parentHub.ServiceProvider);
-            chatClient.SetThreadId(threadPath);
-            await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
-
-            if (!string.IsNullOrEmpty(request.AgentName))
-                chatClient.SetSelectedAgent(request.AgentName);
-
-            if (request.Attachments is { Count: > 0 })
-                chatClient.SetAttachments(request.Attachments);
-
-            // 3. await streaming — update response node via stream.Update
-            var responseText = new StringBuilder();
-            var lastUpdate = DateTimeOffset.MinValue;
-            var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
-
-            await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
-            {
-                if (!string.IsNullOrEmpty(update.Text))
-                {
-                    responseText.Append(update.Text);
-
-                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
-                    {
-                        UpdateResponseNode(responseStream, responseMsgId, threadPath, responseText.ToString());
-                        lastUpdate = DateTimeOffset.UtcNow;
-                    }
-                }
-            }
-
-            // 4. Final update
-            UpdateResponseNode(responseStream, responseMsgId, threadPath, responseText.ToString());
-        }
-        catch (OperationCanceledException)
-        {
-            logger.LogInformation("ExecuteMessageAsync: cancelled for {ThreadPath}", threadPath);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "ExecuteMessageAsync: error for {ThreadPath}", threadPath);
-        }
-
-        return delivery.Processed();
-    }
-
-    private static void UpdateResponseNode(
-        ISynchronizationStream<object> stream,
-        string responseMsgId, string threadPath, string text)
-    {
-        var updatedNode = new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = responseMsgId,
-                Role = "assistant",
-                Text = text,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse
-            }
-        };
-        stream.Update(current => new ChangeItem<object>(
-            updatedNode,
-            stream.StreamId,
-            stream.StreamId,
-            ChangeType.Patch,
-            stream.Hub.Version,
-            [new EntityUpdate(nameof(MeshNode), responseMsgId, updatedNode) { OldValue = current }]));
-    }
-
-    /// <summary>
-    /// Handles CancelThreadStreamRequest — cancels the _Exec sub-hub's execution token,
-    /// which breaks the streaming loop in HandleExecStreaming.
-    /// </summary>
-    private static IMessageDelivery HandleCancelStream(
-        IMessageHub hub, IMessageDelivery<CancelThreadStreamRequest> delivery)
-    {
-        var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
-        execHub?.CancelCurrentExecution();
-        return delivery.Processed();
-    }
 
     /// <summary>
     /// Gets the thread title from node name or falls back to default.
@@ -557,7 +356,7 @@ public static class ThreadLayoutAreas
         => !string.IsNullOrEmpty(node?.Name) ? node.Name : "Thread";
 
     /// <summary>
-    /// Handles DeleteFromMessageRequest — truncates ThreadMessages from the given message onwards.
+    /// Handles DeleteFromMessageRequest — truncates Messages from the given message onwards.
     /// </summary>
     private static IMessageDelivery HandleDeleteFromMessage(
         IMessageHub hub,
@@ -576,12 +375,12 @@ public static class ThreadLayoutAreas
                 var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
                 var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
 
-                var msgList = currentContent.ThreadMessages.ToList();
+                var msgList = currentContent.Messages.ToList();
                 var msgIndex = msgList.IndexOf(request.MessageId);
                 if (msgIndex < 0) return;
 
-                var updatedMsgList = msgList.Take(msgIndex).ToList();
-                var newContent = currentContent with { ThreadMessages = updatedMsgList };
+                var updatedMsgList = msgList.Take(msgIndex).ToImmutableList();
+                var newContent = currentContent with { Messages = updatedMsgList };
                 var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
                 hub.Post(new DataChangeRequest { Updates = [updatedNode] });
             });
@@ -591,7 +390,7 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Handles ResubmitMessageRequest — truncates ThreadMessages from the given message onwards,
+    /// Handles ResubmitMessageRequest — truncates Messages from the given message onwards,
     /// then posts a new SubmitMessageRequest with the provided text.
     /// </summary>
     private static IMessageDelivery HandleResubmitMessage(
@@ -611,13 +410,12 @@ public static class ThreadLayoutAreas
                 var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
                 var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
 
-                var msgList = currentContent.ThreadMessages.ToList();
+                var msgList = currentContent.Messages.ToList();
                 var msgIndex = msgList.IndexOf(request.MessageId);
                 if (msgIndex < 0) return;
 
-                // Truncate messages from the clicked one onwards
-                var updatedMsgList = msgList.Take(msgIndex).ToList();
-                var newContent = currentContent with { ThreadMessages = updatedMsgList };
+                var updatedMsgList = msgList.Take(msgIndex).ToImmutableList();
+                var newContent = currentContent with { Messages = updatedMsgList };
                 var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
                 hub.Post(new DataChangeRequest { Updates = [updatedNode] });
 
@@ -634,8 +432,8 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Handles EditMessageRequest — truncates ThreadMessages from the given message onwards,
-    /// creates a new EditingPrompt message node, and appends it to ThreadMessages.
+    /// Handles EditMessageRequest — truncates Messages from the given message onwards,
+    /// creates a new EditingPrompt message node, and appends it to Messages.
     /// </summary>
     private static IMessageDelivery HandleEditMessage(
         IMessageHub hub,
@@ -669,7 +467,7 @@ public static class ThreadLayoutAreas
                 return;
             }
 
-            // Update ThreadMessages: truncate from the clicked message, append editing prompt
+            // Update Messages: truncate from the clicked message, append editing prompt
             hub.InvokeAsync(() =>
             {
                 hub.ServiceProvider.GetRequiredService<IWorkspace>()
@@ -678,12 +476,12 @@ public static class ThreadLayoutAreas
                     var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
                     var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
 
-                    var msgList = currentContent.ThreadMessages.ToList();
+                    var msgList = currentContent.Messages.ToList();
                     var msgIndex = msgList.IndexOf(request.MessageId);
                     if (msgIndex < 0) return;
 
-                    var updatedMsgList = msgList.Take(msgIndex).Concat([editMsgId]).ToList();
-                    var newContent = currentContent with { ThreadMessages = updatedMsgList };
+                    var updatedMsgList = msgList.Take(msgIndex).Concat([editMsgId]).ToImmutableList();
+                    var newContent = currentContent with { Messages = updatedMsgList };
                     var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
                     hub.Post(new DataChangeRequest { Updates = [updatedNode] });
                 });

@@ -515,37 +515,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public void ThreadMessageExtensions_FromChatMessages_ConvertsCorrectly()
-    {
-        // Arrange
-        var chatMessages = new List<Microsoft.Extensions.AI.ChatMessage>
-        {
-            new Microsoft.Extensions.AI.ChatMessage(
-                new Microsoft.Extensions.AI.ChatRole("user"),
-                "Hello")
-            { AuthorName = "Alice" },
-            new Microsoft.Extensions.AI.ChatMessage(
-                new Microsoft.Extensions.AI.ChatRole("assistant"),
-                "Hi there!")
-            { AuthorName = "Bot" }
-        };
-
-        // Act
-        var threadMessages = ThreadMessageExtensions.FromChatMessages(chatMessages);
-
-        // Assert
-        threadMessages.Should().HaveCount(2);
-        threadMessages[0].Role.Should().Be("user");
-        threadMessages[0].Text.Should().Be("Hello");
-        threadMessages[0].AuthorName.Should().Be("Alice");
-        threadMessages[0].Type.Should().Be(ThreadMessageType.ExecutedInput);
-        threadMessages[1].Role.Should().Be("assistant");
-        threadMessages[1].Text.Should().Be("Hi there!");
-        threadMessages[1].AuthorName.Should().Be("Bot");
-        threadMessages[1].Type.Should().Be(ThreadMessageType.AgentResponse);
-    }
-
-    [Fact]
     public void ThreadMessage_DefaultType_IsExecutedInput()
     {
         // Arrange & Act
@@ -605,45 +574,6 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
 #pragma warning disable CS0618 // Type or member is obsolete - testing backward compatibility
-    [Fact]
-    public void LegacyThread_ToChatMessages_StillWorks()
-    {
-        // Arrange - Test backward compatibility with legacy inline Messages
-        var thread = new MeshThread
-        {
-            Messages = new List<ThreadMessage>
-            {
-                new ThreadMessage
-                {
-                    Id = "1",
-                    Role = "user",
-                    Text = "Legacy message",
-                    Timestamp = DateTime.UtcNow
-                }
-            }
-        };
-
-        // Act
-        var chatMessages = thread.ToChatMessages();
-
-        // Assert
-        chatMessages.Should().HaveCount(1);
-        chatMessages[0].Text.Should().Be("Legacy message");
-    }
-
-    [Fact]
-    public void LegacyThread_EmptyMessages_ToChatMessages_ReturnsEmptyList()
-    {
-        // Arrange
-        var thread = new MeshThread { Messages = null };
-
-        // Act
-        var chatMessages = thread.ToChatMessages();
-
-        // Assert
-        chatMessages.Should().BeEmpty();
-    }
-#pragma warning restore CS0618
 }
 
 /// <summary>

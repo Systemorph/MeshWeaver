@@ -1,4 +1,6 @@
-﻿using MeshWeaver.Domain;
+﻿using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
+using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
@@ -21,6 +23,59 @@ public static class MeshNodeExtensions
     /// is loaded from persistence (Active) or activated via CreateNodeRequest.
     /// </summary>
     public const string MeshNodeInitGateName = "MeshNodeInit";
+
+    /// <summary>
+    /// Updates a MeshNode on an EntityStore stream.
+    /// Reads the current MeshNode, applies the update function, and pushes the change.
+    /// </summary>
+    public static void UpdateMeshNode(this ISynchronizationStream<EntityStore> stream,
+        string nodePath, Func<MeshNode, MeshNode> update)
+    {
+        stream.Update(state =>
+        {
+            var store = state ?? new EntityStore();
+            var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
+            var current = collection?.Instances.GetValueOrDefault(nodePath) as MeshNode;
+            if (current == null)
+                return null;
+
+            var updated = update(current);
+            var newStore = store.Update(nameof(MeshNode), c => c.Update(nodePath, updated));
+            return stream.ApplyChanges(new EntityStoreAndUpdates(newStore,
+                [new EntityUpdate(nameof(MeshNode), nodePath, updated) { OldValue = current }],
+                stream.StreamId));
+        });
+    }
+
+    /// <summary>
+    /// Updates a MeshNode via the workspace. Uses GetStream for the local hub
+    /// or GetRemoteStream for a remote hub address.
+    /// </summary>
+    public static void UpdateMeshNode(this IWorkspace workspace,
+        Address? address, string nodePath, Func<MeshNode, MeshNode> update)
+    {
+        var stream = address == null || address.Equals(workspace.Hub.Address)
+            ? workspace.GetStream(typeof(MeshNode))
+            : workspace.GetRemoteStream<EntityStore, CollectionsReference>(
+                address, new CollectionsReference(nameof(MeshNode)));
+        stream?.UpdateMeshNode(nodePath, update);
+    }
+
+    /// <summary>
+    /// Updates a MeshNode's content with a typed update function.
+    /// Reads the current content as TContent, applies the update, and pushes the change.
+    /// Uses GetStream for the local hub or GetRemoteStream for a remote address.
+    /// </summary>
+    public static void UpdateMeshNode<TContent>(this IWorkspace workspace,
+        Address? address, string nodePath, Func<MeshNode, TContent, MeshNode> update)
+        where TContent : class
+    {
+        workspace.UpdateMeshNode(address, nodePath, node =>
+        {
+            var content = node.Content as TContent;
+            return content != null ? update(node, content) : node;
+        });
+    }
 
     /// <summary>
     /// Gets the parent path for this node.

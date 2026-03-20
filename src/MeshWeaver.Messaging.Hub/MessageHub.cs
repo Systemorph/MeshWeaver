@@ -413,7 +413,8 @@ public sealed class MessageHub : IMessageHub
         var response2 = RegisterCallback(messageId, d => d, cancellationToken);
 
         // Now post the message with the pre-generated ID
-        var request = Post(r, opts => {
+        var request = Post(r, opts =>
+        {
             var configured = options(opts);
             return configured.WithMessageId(messageId);
         })!;

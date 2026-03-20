@@ -92,6 +92,7 @@ public static class ThreadNodeType
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             HubConfiguration = config => config
                 .AddThreadLayoutAreas()
+                .AddThreadExecution()
                 .AddMeshDataSource(source => source
                     .WithContentType<Thread>())
         };

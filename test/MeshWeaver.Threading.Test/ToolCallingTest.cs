@@ -63,7 +63,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return response.Message.ThreadPath!;
     }
 
-    private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
+    private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
         return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
@@ -71,7 +71,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
-                return (IReadOnlyList<string>)(content?.ThreadMessages ?? []);
+                return (IReadOnlyList<string>)(content?.Messages ?? []);
             });
     }
 
@@ -112,8 +112,8 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var threadPath = await CreateThreadAsync(client, "Tool calling test", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // 3. Subscribe to ThreadMessages
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        // 3. Subscribe to Messages
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         // 4. Submit message — the ToolCallingFakeChatClient will:
@@ -133,7 +133,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // 5. Wait for message IDs
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
-        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
+        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
         // 6. Wait for response to complete (poll until stable)
         ThreadMessage? responseContent = null;

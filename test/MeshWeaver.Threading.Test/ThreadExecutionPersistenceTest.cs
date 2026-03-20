@@ -70,7 +70,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         return response.Message.ThreadPath!;
     }
 
-    private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
+    private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
         return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
@@ -78,8 +78,8 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
-                var ids = content?.ThreadMessages ?? [];
-                Output.WriteLine($"ThreadMessages stream: {ids.Count} IDs = [{string.Join(", ", ids)}]");
+                var ids = content?.Messages ?? [];
+                Output.WriteLine($"Messages stream: {ids.Count} IDs = [{string.Join(", ", ids)}]");
                 return (IReadOnlyList<string>)ids;
             });
     }
@@ -88,7 +88,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     /// Verifies the full execution flow:
     /// 1. Create context → create thread → submit message
     /// 2. Thread and message nodes are created in persistence
-    /// 3. ThreadMessages IDs appear in the workspace stream
+    /// 3. Messages IDs appear in the workspace stream
     /// </summary>
     [Fact]
     public async Task ExecuteThread_PersistsToCorrectPartition()
@@ -104,7 +104,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         threadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
 
         // Submit message and wait for IDs
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         client.Post(new SubmitMessageRequest
@@ -116,7 +116,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
 
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
-        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
+        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
         // Verify nodes exist in persistence (created by meshService.CreateNodeAsync)
         var userMsgPath = $"{threadPath}/{msgIds[0]}";
@@ -151,7 +151,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         await CreateContextNodeAsync(ContextPath, ct);
         var threadPath = await CreateThreadAsync(client, ContextPath, "Child query test", ct);
 
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         client.Post(new SubmitMessageRequest
@@ -210,7 +210,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// Verifies Thread.ThreadMessages is persisted (debounced save completes).
+    /// Verifies Thread.Messages is persisted (debounced save completes).
     /// </summary>
     [Fact]
     public async Task ExecuteThread_ThreadContentPersisted()
@@ -221,7 +221,7 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         await CreateContextNodeAsync(ContextPath, ct);
         var threadPath = await CreateThreadAsync(client, ContextPath, "Persistence test", ct);
 
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         client.Post(new SubmitMessageRequest
@@ -233,22 +233,22 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
 
         var msgIds = await twoMessages;
 
-        // Poll persistence until ThreadMessages is flushed (debounce = 200ms + save)
+        // Poll persistence until Messages is flushed (debounce = 200ms + save)
         MeshThread? content = null;
         for (var attempt = 0; attempt < 30; attempt++)
         {
             var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}")
                 .FirstOrDefaultAsync(ct);
             content = threadNode?.Content as MeshThread;
-            if (content?.ThreadMessages?.Count >= 2)
+            if (content?.Messages?.Count >= 2)
                 break;
             await Task.Delay(300, ct);
         }
 
         content.Should().NotBeNull("thread content must be persisted");
-        content!.ThreadMessages.Should().HaveCountGreaterThanOrEqualTo(2,
-            "ThreadMessages must be persisted with message IDs");
-        Output.WriteLine($"Thread persisted: [{string.Join(", ", content.ThreadMessages)}]");
+        content!.Messages.Should().HaveCountGreaterThanOrEqualTo(2,
+            "Messages must be persisted with message IDs");
+        Output.WriteLine($"Thread persisted: [{string.Join(", ", content.Messages)}]");
     }
 
     #region Fake Chat Client Infrastructure

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -12,6 +13,7 @@ using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -59,7 +61,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         return response.Message.ThreadPath!;
     }
 
-    private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
+    private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
         return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
@@ -67,8 +69,8 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
-                var ids = content?.ThreadMessages ?? [];
-                Output.WriteLine($"ThreadMessages stream: {ids.Count} IDs");
+                var ids = content?.Messages ?? [];
+                Output.WriteLine($"Messages stream: {ids.Count} IDs");
                 return (IReadOnlyList<string>)ids;
             });
     }
@@ -99,7 +101,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 1. Create thread and submit
         var threadPath = await CreateThreadAsync(client, "Hello", ct);
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         var submitResponse = await client.AwaitResponse(
@@ -110,12 +112,12 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         // 2. Wait for message IDs to appear
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
-        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
+        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
         // 3. Verify thread content via GetDataRequest
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull("thread hub should return Thread content");
-        threadContent!.ThreadMessages.Should().HaveCount(2, "thread should have 2 message IDs");
+        threadContent!.Messages.Should().HaveCount(2, "thread should have 2 message IDs");
 
         // 4. Verify user message content via GetDataRequest
         var userContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
@@ -132,14 +134,14 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     [Fact]
-    public async Task SubmitMessage_SecondMessage_AccumulatesThreadMessages()
+    public async Task SubmitMessage_SecondMessage_AccumulatesMessages()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = GetClient();
 
         // 1. Create thread
         var threadPath = await CreateThreadAsync(client, "Multi-message", ct);
-        var messagesStream = ObserveThreadMessages(client, threadPath);
+        var messagesStream = ObserveMessages(client, threadPath);
 
         // 2. First message
         var twoMessages = messagesStream.Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
@@ -162,7 +164,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         // 4. Verify thread content via GetDataRequest — has 4 message IDs
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull();
-        threadContent!.ThreadMessages.Should().HaveCount(4, "thread should have 4 message IDs after 2 submits");
+        threadContent!.Messages.Should().HaveCount(4, "thread should have 4 message IDs after 2 submits");
 
         // 5. Verify each message node content via GetDataRequest
         for (var i = 0; i < allIds.Count; i++)
@@ -181,7 +183,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 1. Create thread and submit
         var threadPath = await CreateThreadAsync(client, "Content verification", ct);
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         var response = await client.AwaitResponse(
@@ -267,10 +269,10 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var currentContent = threadNode!.Content as MeshThread ?? new MeshThread();
         var updatedNode = threadNode with
         {
-            Content = currentContent with { ThreadMessages = ["test1", "test2"] }
+            Content = currentContent with { Messages = ["test1", "test2"] }
         };
 
-        var updatedMessages = ObserveThreadMessages(client, threadPath)
+        var updatedMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
         client.Post(new DataChangeRequest { Updates = [updatedNode] },
             o => o.WithTarget(new Address(threadPath)));
@@ -281,7 +283,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         // 3. Verify via GetDataRequest
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull();
-        threadContent!.ThreadMessages.Should().BeEquivalentTo(["test1", "test2"]);
+        threadContent!.Messages.Should().BeEquivalentTo(["test1", "test2"]);
     }
 
     /// <summary>
@@ -316,7 +318,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     /// 2. Subscribe to Thread hub's layout area stream (like Blazor does)
     /// 3. Submit message via SubmitMessageRequest
     /// 4. Verify ThreadViewModel arrives via the layout area data section
-    /// 5. Verify Thread content via GetDataRequest (Thread.ThreadMessages populated)
+    /// 5. Verify Thread content via GetDataRequest (Thread.Messages populated)
     /// 6. Verify each ThreadMessage content via GetDataRequest (correct role/text/type)
     /// 7. Wait for streaming to complete, verify response text is non-empty
     /// This catches issues that only manifest in the full GUI pipeline (e.g., PostgreSQL persistence).
@@ -339,8 +341,8 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             new LayoutAreaReference(ThreadNodeType.ThreadArea));
         layoutStream.Should().NotBeNull("Thread hub should serve the Thread layout area");
 
-        // 3. Subscribe to ThreadMessages via workspace stream (like ThreadChatView data binding)
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        // 3. Subscribe to Messages via workspace stream (like ThreadChatView data binding)
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         // 4. Submit message
@@ -358,15 +360,15 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         // 5. Wait for 2 message IDs
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2, "should have user + response message IDs");
-        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
+        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
         // 6. Verify Thread content via GetDataRequest
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull("Thread hub should return Thread content via GetDataRequest");
-        threadContent!.ThreadMessages.Should().HaveCount(2);
-        threadContent.ThreadMessages[0].Should().Be(msgIds[0]);
-        threadContent.ThreadMessages[1].Should().Be(msgIds[1]);
-        Output.WriteLine($"Thread content verified: {threadContent.ThreadMessages.Count} messages");
+        threadContent!.Messages.Should().HaveCount(2);
+        threadContent.Messages[0].Should().Be(msgIds[0]);
+        threadContent.Messages[1].Should().Be(msgIds[1]);
+        Output.WriteLine($"Thread content verified: {threadContent.Messages.Count} messages");
 
         // 7. Verify user message via GetDataRequest
         var userContent = await GetHubContentAsync<ThreadMessage>(
@@ -400,6 +402,44 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 9. Clean up layout stream
         layoutStream.Dispose();
+    }
+
+    /// <summary>
+    /// Tests UpdateMeshNode extension — updates Thread.Messages via workspace stream.
+    /// </summary>
+    [Fact]
+    public async Task UpdateMeshNode_UpdatesMessages_ViaStream()
+    {
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
+        var client = GetClient();
+
+        // 1. Create thread
+        var threadPath = await CreateThreadAsync(client, "UpdateMeshNode test", ct);
+
+        // 2. Observe Messages changing
+        var workspace = client.GetWorkspace();
+        var messagesChanged = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                return (node?.Content as MeshThread)?.Messages ?? [];
+            })
+            .Where(m => m.Count >= 2)
+            .FirstAsync().ToTask(ct);
+
+        // 3. Update Thread.Messages via UpdateMeshNode on the mesh hub's workspace
+        var meshWorkspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
+        meshWorkspace.UpdateMeshNode<MeshThread>(new Address(threadPath), threadPath,
+            (node, thread) => node with
+            {
+                Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
+            });
+
+        // 4. Verify
+        var messages = await messagesChanged;
+        messages.Should().Contain("msg1");
+        messages.Should().Contain("msg2");
+        Output.WriteLine($"Messages updated: [{string.Join(", ", messages)}]");
     }
 
     #region Fake Chat Client Infrastructure
