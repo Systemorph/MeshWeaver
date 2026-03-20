@@ -14,6 +14,7 @@ using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -54,11 +55,13 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = ContextPath, UserMessageText = text },
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.ThreadPath!;
+        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text, "Roland");
+        var delivery = client.Post(new CreateNodeRequest(threadNode),
+            o => o.WithTarget(Mesh.Address))!;
+        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
+        createResponse.Success.Should().BeTrue(createResponse.Error);
+        return createResponse.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
@@ -405,20 +408,73 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Tests UpdateMeshNode extension — updates Thread.Messages via workspace stream.
+    /// a) GetStream on own hub returns the MeshNode for the hub's address.
+    /// b) GetRemoteStream from client returns the same MeshNode.
     /// </summary>
     [Fact]
-    public async Task UpdateMeshNode_UpdatesMessages_ViaStream()
+    public async Task GetStream_OwnHub_ReturnsMeshNode()
+    {
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
+
+        // Create a thread node
+        var client = GetClient();
+        var threadPath = await CreateThreadAsync(client, "Stream test", ct);
+        Output.WriteLine($"Thread: {threadPath}");
+
+        // a) Get stream from own hub — use GetStream<MeshNode>()
+        // We access the thread hub's workspace via GetRemoteStream<MeshNode> from client
+        var nodes = await client.GetWorkspace()
+            .GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Timeout(5.Seconds())
+            .FirstAsync(n => n != null && n.Any());
+
+        var node = nodes.FirstOrDefault(n => n.Path == threadPath);
+        node.Should().NotBeNull("Thread node should be in the stream");
+        node!.Content.Should().BeOfType<MeshThread>("Content should be Thread");
+        Output.WriteLine($"a) Got MeshNode: {node.Path}, Content type: {node.Content?.GetType().Name}");
+    }
+
+    [Fact]
+    public async Task GetRemoteStream_FromClient_ReturnsMeshNode()
+    {
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
+
+        // Create a thread node
+        var client = GetClient();
+        var threadPath = await CreateThreadAsync(client, "Remote stream test", ct);
+        Output.WriteLine($"Thread: {threadPath}");
+
+        // b) Get remote stream for specific entity via EntityReference
+        var workspace = client.GetWorkspace();
+        var entityStream = workspace.GetRemoteStream<object, EntityReference>(
+            new Address(threadPath),
+            new EntityReference(nameof(MeshNode), threadPath));
+
+        var entity = await entityStream
+            .Timeout(5.Seconds())
+            .Select(ci => ci.Value)
+            .FirstAsync(v => v != null);
+
+        entity.Should().NotBeNull();
+        Output.WriteLine($"b) Got entity: {entity?.GetType().Name}");
+    }
+
+    /// <summary>
+    /// Tests UpdateMeshNode on LOCAL stream — thread hub updates its own MeshNode.
+    /// Uses GetStream(typeof(MeshNode)) internally.
+    /// </summary>
+    [Fact]
+    public async Task UpdateMeshNode_Local_UpdatesMessages()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
         var client = GetClient();
 
         // 1. Create thread
-        var threadPath = await CreateThreadAsync(client, "UpdateMeshNode test", ct);
+        var threadPath = await CreateThreadAsync(client, "Local update test", ct);
 
-        // 2. Observe Messages changing
-        var workspace = client.GetWorkspace();
-        var messagesChanged = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+        // 2. Observe Messages from client
+        var messagesChanged = client.GetWorkspace()
+            .GetRemoteStream<MeshNode>(new Address(threadPath))!
             .Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
@@ -427,19 +483,71 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(m => m.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        // 3. Update Thread.Messages via UpdateMeshNode on the mesh hub's workspace
-        var meshWorkspace = Mesh.ServiceProvider.GetRequiredService<IWorkspace>();
-        meshWorkspace.UpdateMeshNode<MeshThread>(new Address(threadPath), threadPath,
-            (node, thread) => node with
+        // 3. Update via local stream (null address = own hub)
+        // Post a DataChangeRequest to the thread hub to trigger the update on its own workspace
+        client.Post(new DataChangeRequest
+        {
+            Updates = [new MeshNode(threadPath)
             {
-                Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
-            });
+                NodeType = ThreadNodeType.NodeType,
+                Content = new MeshThread
+                {
+                    Messages = ImmutableList.Create("msg1", "msg2")
+                }
+            }]
+        }, o => o.WithTarget(new Address(threadPath)));
 
         // 4. Verify
         var messages = await messagesChanged;
         messages.Should().Contain("msg1");
         messages.Should().Contain("msg2");
-        Output.WriteLine($"Messages updated: [{string.Join(", ", messages)}]");
+        Output.WriteLine($"Local update: [{string.Join(", ", messages)}]");
+    }
+
+    /// <summary>
+    /// Tests UpdateMeshNode extension via stream.Update on own hub's EntityStore stream.
+    /// </summary>
+    [Fact]
+    public async Task UpdateMeshNode_ViaStreamUpdate_UpdatesMessages()
+    {
+        var ct = new CancellationTokenSource(10.Seconds()).Token;
+        var client = GetClient();
+
+        // 1. Create thread
+        var threadPath = await CreateThreadAsync(client, "Stream update test", ct);
+
+        // 2. Observe Messages from client
+        var messagesChanged = client.GetWorkspace()
+            .GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                return (node?.Content as MeshThread)?.Messages ?? [];
+            })
+            .Where(m => m.Count >= 2)
+            .FirstAsync().ToTask(ct);
+
+        // 3. Get the thread hub's own EntityStore stream and update via UpdateMeshNode
+        var threadHubStream = client.GetWorkspace()
+            .GetRemoteStream<EntityStore, CollectionsReference>(
+                new Address(threadPath),
+                new CollectionsReference(nameof(MeshNode)));
+        threadHubStream.Should().NotBeNull();
+
+        threadHubStream!.UpdateMeshNode(threadPath, node =>
+        {
+            var thread = node.Content as MeshThread ?? new MeshThread();
+            return node with
+            {
+                Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
+            };
+        });
+
+        // 4. Verify
+        var messages = await messagesChanged;
+        messages.Should().Contain("msg1");
+        messages.Should().Contain("msg2");
+        Output.WriteLine($"Stream update: [{string.Join(", ", messages)}]");
     }
 
     #region Fake Chat Client Infrastructure
