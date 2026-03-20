@@ -49,6 +49,17 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         instances = MergePartialUpdates(instances);
 
+        // Open MeshNode init gate when node becomes Active (e.g., via CreateNodeRequest)
+        {
+            var ownNode = instances.Instances.Values.OfType<MeshNode>()
+                .FirstOrDefault(n => n.Path == _hubPath);
+            if (ownNode is { State: MeshNodeState.Active })
+            {
+                _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node Active via update", _hubPath);
+                _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+            }
+        }
+
         var adds = instances.Instances
             .Where(x => !_lastSaved.Instances.ContainsKey(x.Key))
             .Select(x => (MeshNode)x.Value)
@@ -194,6 +205,9 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
                 _workspace.Hub.Address, ownNode.Version);
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
+
+        if (ownNode is { State: MeshNodeState.Active })
+            _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
         var allNodes = new List<MeshNode>();
         if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))

@@ -42,7 +42,9 @@ public static class MeshDataSourceExtensions
                             ?? Observable.Return<object?>(null);
                     });
             })
-            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
+            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest)
+            .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName,
+                d => d.Message is CreateNodeRequest or DataChangeRequest);
     }
 
     /// <summary>
@@ -147,6 +149,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// </summary>
     public Type? ContentType { get; private init; }
 
+
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
         _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageService>();
@@ -174,6 +177,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
         if (meshConfig != null && meshConfig.Nodes.TryGetValue(_hubPath, out var builtInNode))
         {
+            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
                 .WithKey(n => n.Path)
                 .WithInitialData([builtInNode]));
@@ -185,6 +189,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             .FirstOrDefault(n => string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
         if (staticNode != null)
         {
+            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
                 .WithKey(n => n.Path)
                 .WithInitialData([staticNode]));
@@ -193,13 +198,15 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         if (_persistenceCore == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
+            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
         }
 
         return WithTypeSource(typeof(MeshNode),
-            new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
-                .WithKey(n => n.Path));
+                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
+                    .WithKey(n => n.Path));
     }
+
 
     /// <summary>
     /// Registers a content type for UI integration (editor generation, etc.).
