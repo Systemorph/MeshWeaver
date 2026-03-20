@@ -2,7 +2,9 @@
 using System.Text;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
+using MeshWeaver.Mesh;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -443,7 +445,7 @@ public static class ThreadLayoutAreas
     /// <summary>
     /// Async handler on the _Exec hosted hub.
     /// Prepares agent and await-streams the response.
-    /// Progress updates posted to response node's hub via DataChangeRequest.
+    /// Uses GetRemoteStream to the response node's hub and stream.Update to push text.
     /// Cancellation: CancelCurrentExecution() on the _Exec hub cancels ct.
     /// </summary>
     private static async Task<IMessageDelivery> ExecuteMessageAsync(
@@ -460,7 +462,13 @@ public static class ThreadLayoutAreas
 
         try
         {
-            // 1. Prepare agent
+            // 1. Get remote stream for the response node from parent hub's workspace
+            var responseStream = parentHub.ServiceProvider.GetRequiredService<IWorkspace>()
+                .GetRemoteStream<object, EntityReference>(
+                    new Address(responsePath),
+                    new EntityReference(nameof(MeshNode), responsePath));
+
+            // 2. Prepare agent
             var chatClient = new AgentChatClient(parentHub.ServiceProvider);
             chatClient.SetThreadId(threadPath);
             await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
@@ -471,7 +479,7 @@ public static class ThreadLayoutAreas
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
 
-            // 2. await streaming
+            // 3. await streaming — update response node via stream.Update
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
@@ -484,14 +492,14 @@ public static class ThreadLayoutAreas
 
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
                     {
-                        PostResponseUpdate(parentHub, responseMsgId, threadPath, responsePath, responseText.ToString());
+                        UpdateResponseNode(responseStream, responseMsgId, threadPath, responseText.ToString());
                         lastUpdate = DateTimeOffset.UtcNow;
                     }
                 }
             }
 
-            // 3. Final update
-            PostResponseUpdate(parentHub, responseMsgId, threadPath, responsePath, responseText.ToString());
+            // 4. Final update
+            UpdateResponseNode(responseStream, responseMsgId, threadPath, responseText.ToString());
         }
         catch (OperationCanceledException)
         {
@@ -505,8 +513,9 @@ public static class ThreadLayoutAreas
         return delivery.Processed();
     }
 
-    private static void PostResponseUpdate(
-        IMessageHub hub, string responseMsgId, string threadPath, string responsePath, string text)
+    private static void UpdateResponseNode(
+        ISynchronizationStream<object> stream,
+        string responseMsgId, string threadPath, string text)
     {
         var updatedNode = new MeshNode(responseMsgId, threadPath)
         {
@@ -520,8 +529,13 @@ public static class ThreadLayoutAreas
                 Type = ThreadMessageType.AgentResponse
             }
         };
-        hub.Post(new DataChangeRequest { Updates = [updatedNode] },
-            o => o.WithTarget(new Address(responsePath)));
+        stream.Update(current => new ChangeItem<object>(
+            updatedNode,
+            stream.StreamId,
+            stream.StreamId,
+            ChangeType.Patch,
+            stream.Hub.Version,
+            [new EntityUpdate(nameof(MeshNode), responseMsgId, updatedNode) { OldValue = current }]));
     }
 
     /// <summary>

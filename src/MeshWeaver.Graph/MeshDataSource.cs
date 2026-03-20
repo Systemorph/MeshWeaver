@@ -42,9 +42,7 @@ public static class MeshDataSourceExtensions
                             ?? Observable.Return<object?>(null);
                     });
             })
-            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest)
-            .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName,
-                d => d.Message is CreateNodeRequest or DataChangeRequest);
+            .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
     }
 
     /// <summary>

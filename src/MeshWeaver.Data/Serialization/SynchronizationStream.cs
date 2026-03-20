@@ -117,7 +117,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || value == null)
         {
-            logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} to {Value} because the stream is disposed or value is null. IsDisposed={IsDisposed}", StreamId, value, isDisposed);
+            if (isDisposed)
+                logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} — stream is disposed", StreamId);
+            else
+                logger.LogDebug("[SYNC_STREAM] Skipping null value for {StreamId}", StreamId);
             return;
         }
 
