@@ -166,8 +166,10 @@ public static class WorkspaceOperations
                     {
                         if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
                         {
+                            var validInstances = g.Select(x => x.Instance)
+                                .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) != null);
                             var instances =
-                                new InstanceCollection(g.Select(x => x.Instance)
+                                new InstanceCollection(validInstances
                                     .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
                                 {
                                     GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
