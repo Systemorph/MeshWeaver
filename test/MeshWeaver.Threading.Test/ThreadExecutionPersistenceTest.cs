@@ -64,10 +64,10 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
     private async Task<string> CreateThreadAsync(IMessageHub client, string ns, string text, CancellationToken ct)
     {
         var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = ns, UserMessageText = text },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, text)),
             o => o.WithTarget(new Address(ns)), ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.ThreadPath!;
+        return response.Message.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)

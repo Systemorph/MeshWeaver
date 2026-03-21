@@ -14,7 +14,6 @@ using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
-using MeshWeaver.Mesh;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
@@ -317,7 +316,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// End-to-end test that verifies the full GUI data flow:
-    /// 1. Create thread via CreateThreadRequest
+    /// 1. Create thread via CreateNodeRequest
     /// 2. Subscribe to Thread hub's layout area stream (like Blazor does)
     /// 3. Submit message via SubmitMessageRequest
     /// 4. Verify ThreadViewModel arrives via the layout area data section

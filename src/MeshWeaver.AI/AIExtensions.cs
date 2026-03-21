@@ -35,9 +35,7 @@ public static class AIExtensions
             // MessageViewModel is not registered — handled as JsonElement on the wire
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
-            .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))
-            .WithType(typeof(CreateThreadResponse), nameof(CreateThreadResponse))
-            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
+.WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
             .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest));

@@ -400,7 +400,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             await UpdateExtractedReferencesAsync();
 
-            // Auto-create thread on first message via server-side CreateThreadRequest
+            // Auto-create thread on first message via CreateNodeRequest
             if (string.IsNullOrEmpty(threadPath))
             {
                 isCreatingThread = true;
@@ -415,14 +415,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
                         ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : "User";
                     }
+                    var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!);
                     var createResponse = await Hub.AwaitResponse(
-                        new CreateThreadRequest
-                        {
-                            Namespace = ns,
-                            UserMessageText = userMessageText!,
-                            InitialContext = initialContext,
-                            ModelName = selectedModelInfo?.Name
-                        },
+                        new CreateNodeRequest(threadNode),
                         o => o.WithTarget(new Address(ns)));
 
                     if (!createResponse.Message.Success)
@@ -433,8 +428,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         return;
                     }
 
-                    threadPath = createResponse.Message.ThreadPath;
-                    threadName = createResponse.Message.ThreadName;
+                    threadPath = createResponse.Message.Node?.Path;
+                    threadName = createResponse.Message.Node?.Name;
                     SidePanelState.SetContentPath(threadPath);
                     UpdateSidePanelTitle();
                     EnsureStreamForThread(threadPath!);
@@ -777,7 +772,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         return Task.CompletedTask;
     }
 
-    // Thread creation is handled server-side via CreateThreadRequest handler.
+    // Thread creation is handled server-side via CreateNodeRequest.
 
     private CompletionProviderConfig GetCompletionConfig()
     {

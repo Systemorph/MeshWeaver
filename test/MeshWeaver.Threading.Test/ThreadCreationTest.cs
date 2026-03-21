@@ -21,7 +21,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests for thread creation via CreateThreadRequest and IMeshService.CreateNodeAsync.
+/// Tests for thread creation via CreateNodeRequest + ThreadNodeType.BuildThreadNode and IMeshService.CreateNodeAsync.
 /// Threads are satellite nodes created under {namespace}/_Thread/{speakingId}.
 /// Messages are stored as child MeshNodes with nodeType="ThreadMessage".
 /// </summary>
@@ -42,7 +42,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task CreateThread_ViaCreateThreadRequest_UsesThreadPartitionAndSpeakingId()
+    public async Task CreateThread_ViaCreateNodeRequest_UsesThreadPartitionAndSpeakingId()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
@@ -51,23 +51,19 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(
             new MeshNode(contextPath) { Name = "ACME Corp", NodeType = "Markdown" }, ct);
 
-        // Act — send CreateThreadRequest to the context node's hub (production path)
+        // Act — send CreateNodeRequest to the context node's hub (production path)
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = contextPath,
-                UserMessageText = "Hello, can you help me with this project?"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Hello, can you help me with this project?")),
             o => o.WithTarget(new Address(contextPath)),
             ct);
 
         // Assert — response
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        response.Message.ThreadPath.Should().NotBeNullOrEmpty();
-        response.Message.ThreadName.Should().NotBeNullOrEmpty();
+        response.Message.Node?.Path.Should().NotBeNullOrEmpty();
+        response.Message.Node?.Name.Should().NotBeNullOrEmpty();
 
-        var threadPath = response.Message.ThreadPath!;
+        var threadPath = response.Message.Node?.Path!;
         Output.WriteLine($"Created thread at: {threadPath}");
 
         // Assert — path uses _Thread partition
@@ -96,7 +92,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact]
-    public async Task CreateThread_ViaCreateThreadRequest_OnDifferentContextNode()
+    public async Task CreateThread_ViaCreateNodeRequest_OnDifferentContextNode()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;
 
@@ -108,16 +104,12 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Act — send to the context node's hub
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = contextPath,
-                UserMessageText = "A thread on TestProject"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "A thread on TestProject")),
             o => o.WithTarget(new Address(contextPath)),
             ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        var threadPath = response.Message.ThreadPath!;
+        var threadPath = response.Message.Node?.Path!;
         Output.WriteLine($"Created thread at: {threadPath}");
 
         threadPath.Should().StartWith($"{contextPath}/{ThreadNodeType.ThreadPartition}/",
@@ -577,7 +569,7 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
 }
 
 /// <summary>
-/// Tests that CreateThreadRequest is denied when the user lacks Permission.Update.
+/// Tests that CreateNodeRequest for threads is denied when the user lacks Permission.Update.
 /// Uses ConfigureMeshBase (no PublicAdminAccess) so permissions are enforced.
 /// </summary>
 public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -624,16 +616,12 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Act — admin creates thread (has Update permission)
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = "SecureProject",
-                UserMessageText = "Admin creating a thread"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Admin creating a thread")),
             o => o.WithTarget(new Address("SecureProject")),
             ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        response.Message.ThreadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
+        response.Message.Node?.Path.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
     }
 
     [Fact]
@@ -652,11 +640,7 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Act — viewer tries to create thread (lacks Update permission)
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = "SecureProject",
-                UserMessageText = "Viewer trying to create a thread"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Viewer trying to create a thread")),
             o => o.WithTarget(new Address("SecureProject")),
             ct);
 

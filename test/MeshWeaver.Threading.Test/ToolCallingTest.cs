@@ -57,10 +57,10 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = ContextPath, UserMessageText = text },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)),
             o => o.WithTarget(new Address(ContextPath)), ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.ThreadPath!;
+        return response.Message.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
