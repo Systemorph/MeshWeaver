@@ -71,7 +71,8 @@ public static class JsonSynchronizationStream
         else
             reduced.RegisterForDisposal(
                 reduced
-                    .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
+                    .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId)
+                                              && reduced.ClientId.Equals(c.ChangedBy))
                     .Synchronize()
                     .Where(x => x.Creations.Any() || x.Deletions.Any() || x.Updates.Any())
                     .Subscribe(e =>
@@ -561,11 +562,11 @@ public static class JsonSynchronizationStream
 
                 if (last == null && first == null)
                     return e;
-                if (first == null)
-                    return e.WithCreations(last!);
                 if (last == null)
-                    return e.WithDeletions(first);
+                    return e.WithDeletions(first!);
 
+                // Treat as update regardless of OldValue — OldValue may be null
+                // when the change was deserialized from a remote stream (not serialized).
                 return e.WithUpdates(last);
             });
     }
