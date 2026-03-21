@@ -1151,4 +1151,103 @@ public class CommentMeshNodeTests
     }
 
     #endregion
+
+    #region Comment Insertion with Existing Annotations
+
+    /// <summary>
+    /// Simulates the OnCommentFromSelection flow: strip markers, find text in clean,
+    /// map back to annotated positions, insert new comment markers.
+    /// </summary>
+    private static string SimulateCommentFromSelection(string rawContent, string selectedText, string markerId)
+    {
+        var cleanContent = MarkdownAnnotationParser.StripAllMarkers(rawContent);
+        var idx = cleanContent.IndexOf(selectedText, StringComparison.Ordinal);
+        idx.Should().BeGreaterThanOrEqualTo(0, $"Selected text '{selectedText}' should be found in clean content");
+
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
+        var aStart = idx < map.Length ? map[idx] : rawContent.Length;
+        var aEnd = (idx + selectedText.Length) < map.Length
+            ? map[idx + selectedText.Length]
+            : rawContent.Length;
+
+        var openTag = $"<!--comment:{markerId}-->";
+        var closeTag = $"<!--/comment:{markerId}-->";
+        return rawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
+    }
+
+    [Fact]
+    public void CommentFromSelection_WithExistingAnnotation_MapsCleanPositionCorrectly()
+    {
+        var rawContent = "Hello <!--comment:c1-->world<!--/comment:c1--> today";
+
+        var result = SimulateCommentFromSelection(rawContent, "today", "c2");
+
+        // Both annotations should parse correctly
+        var annotations = AnnotationParser.ExtractAnnotations(result);
+        annotations.Should().HaveCount(2);
+        annotations.Should().Contain(a => a.Id == "c1" && a.HighlightedText == "world");
+        annotations.Should().Contain(a => a.Id == "c2" && a.HighlightedText == "today");
+    }
+
+    [Fact]
+    public void CommentFromSelection_WithExistingInsertDelete_InsertsCorrectly()
+    {
+        var rawContent = "Hello <!--insert:i1:Bob:Dec 16-->beautiful <!--/insert:i1-->" +
+                         "<!--delete:d1:Bob:Dec 16-->ugly <!--/delete:d1-->world";
+
+        var result = SimulateCommentFromSelection(rawContent, "world", "c1");
+
+        var annotations = AnnotationParser.ExtractAnnotations(result);
+        annotations.Should().HaveCount(3);
+        annotations.Should().Contain(a => a.Id == "i1" && a.Type == MarkdownAnnotationType.Insert);
+        annotations.Should().Contain(a => a.Id == "d1" && a.Type == MarkdownAnnotationType.Delete);
+        annotations.Should().Contain(a => a.Id == "c1" && a.Type == MarkdownAnnotationType.Comment && a.HighlightedText == "world");
+    }
+
+    [Fact]
+    public void CommentFromSelection_AdjacentToExistingAnnotation_InsertsCorrectly()
+    {
+        // Text immediately after an annotation's closing tag
+        var rawContent = "<!--comment:c1-->first<!--/comment:c1-->second";
+
+        var result = SimulateCommentFromSelection(rawContent, "second", "c2");
+
+        var annotations = AnnotationParser.ExtractAnnotations(result);
+        annotations.Should().HaveCount(2);
+        annotations.Should().Contain(a => a.Id == "c1" && a.HighlightedText == "first");
+        annotations.Should().Contain(a => a.Id == "c2" && a.HighlightedText == "second");
+    }
+
+    [Fact]
+    public void CommentFromSelection_TextBeforeExistingAnnotation_InsertsCorrectly()
+    {
+        var rawContent = "Hello world <!--comment:c1-->annotated<!--/comment:c1--> text";
+
+        var result = SimulateCommentFromSelection(rawContent, "Hello", "c2");
+
+        var annotations = AnnotationParser.ExtractAnnotations(result);
+        annotations.Should().HaveCount(2);
+        annotations.Should().Contain(a => a.Id == "c1" && a.HighlightedText == "annotated");
+        annotations.Should().Contain(a => a.Id == "c2" && a.HighlightedText == "Hello");
+    }
+
+    [Fact]
+    public void CommentFromSelection_MultipleExistingAnnotations_MapsAllPositionsCorrectly()
+    {
+        var rawContent = "A <!--comment:c1-->B<!--/comment:c1--> C <!--insert:i1-->D<!--/insert:i1--> E";
+
+        var result = SimulateCommentFromSelection(rawContent, "E", "c2");
+
+        var annotations = AnnotationParser.ExtractAnnotations(result);
+        annotations.Should().HaveCount(3);
+        annotations.Should().Contain(a => a.Id == "c1" && a.HighlightedText == "B");
+        annotations.Should().Contain(a => a.Id == "i1" && a.HighlightedText == "D");
+        annotations.Should().Contain(a => a.Id == "c2" && a.HighlightedText == "E");
+
+        // Verify the original annotations are untouched
+        result.Should().Contain("<!--comment:c1-->B<!--/comment:c1-->");
+        result.Should().Contain("<!--insert:i1-->D<!--/insert:i1-->");
+    }
+
+    #endregion
 }

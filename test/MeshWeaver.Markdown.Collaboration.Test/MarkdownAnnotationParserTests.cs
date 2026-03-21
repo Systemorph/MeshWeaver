@@ -483,4 +483,102 @@ public class MarkdownAnnotationParserTests
     }
 
     #endregion
+
+    #region BuildCleanToAnnotatedMap Tests
+
+    [Fact]
+    public void BuildCleanToAnnotatedMap_NoAnnotations_ReturnsIdentityMap()
+    {
+        var content = "Hello world";
+
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(content);
+
+        map.Should().HaveCount(content.Length);
+        for (int i = 0; i < content.Length; i++)
+            map[i].Should().Be(i);
+    }
+
+    [Fact]
+    public void BuildCleanToAnnotatedMap_SingleAnnotation_SkipsMarkerChars()
+    {
+        var content = "Hello <!--comment:c1-->world<!--/comment:c1-->!";
+        // Clean: "Hello world!" (12 chars)
+        // "Hello " = 6 chars at positions 0-5
+        // "<!--comment:c1-->" = 17 chars (positions 6-22) — SKIPPED
+        // "world" = 5 chars at positions 23-27
+        // "<!--/comment:c1-->" = 18 chars (positions 28-45) — SKIPPED
+        // "!" = 1 char at position 46
+
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(content);
+
+        map.Should().HaveCount(12); // "Hello world!" length
+        // "Hello " maps to 0-5
+        for (int i = 0; i < 6; i++)
+            map[i].Should().Be(i, $"map[{i}] should be {i}");
+        // "world" maps to 23-27
+        for (int i = 0; i < 5; i++)
+            map[6 + i].Should().Be(23 + i, $"map[{6 + i}] should be {23 + i}");
+        // "!" maps to 46
+        map[11].Should().Be(46);
+    }
+
+    [Fact]
+    public void BuildCleanToAnnotatedMap_MultipleAnnotations_SkipsAllMarkers()
+    {
+        var content = "<!--comment:c1-->first<!--/comment:c1--> <!--comment:c2-->second<!--/comment:c2-->";
+        // Clean: "first second" (12 chars)
+
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(content);
+
+        var clean = MarkdownAnnotationParser.StripAllMarkers(content);
+        clean.Should().Be("first second");
+        map.Should().HaveCount(12);
+
+        // Verify round-trip: each mapped position in annotated content has the correct char
+        for (int i = 0; i < clean.Length; i++)
+            content[map[i]].Should().Be(clean[i], $"map[{i}]={map[i]} should map to '{clean[i]}'");
+    }
+
+    [Fact]
+    public void BuildCleanToAnnotatedMap_AnnotationAtStart_SkipsOpeningTag()
+    {
+        var content = "<!--comment:c1-->text<!--/comment:c1-->";
+        // Clean: "text" (4 chars)
+
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(content);
+
+        map.Should().HaveCount(4);
+        // "text" starts after "<!--comment:c1-->" (17 chars)
+        map[0].Should().Be(17);
+        map[1].Should().Be(18);
+        map[2].Should().Be(19);
+        map[3].Should().Be(20);
+    }
+
+    [Fact]
+    public void BuildCleanToAnnotatedMap_ExtendedMetadata_SkipsFullTag()
+    {
+        var content = "before<!--comment:c1:Alice:Dec 15-->text<!--/comment:c1-->after";
+        // Clean: "beforetextafter"
+
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(content);
+
+        var clean = MarkdownAnnotationParser.StripAllMarkers(content);
+        clean.Should().Be("beforetextafter");
+        map.Should().HaveCount(clean.Length);
+
+        // Verify every mapped position has the correct character
+        for (int i = 0; i < clean.Length; i++)
+            content[map[i]].Should().Be(clean[i], $"map[{i}]={map[i]} should map to '{clean[i]}'");
+    }
+
+    [Fact]
+    public void BuildCleanToAnnotatedMap_EmptyContent_ReturnsEmptyMap()
+    {
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap("");
+
+        map.Should().BeEmpty();
+    }
+
+    #endregion
 }
