@@ -103,7 +103,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         var client = GetClient();
 
         // 1. Create thread and submit
-        var threadPath = await CreateThreadAsync(client, "Hello", ct);
+        var threadPath = await CreateThreadAsync(client, $"Hello {Guid.NewGuid():N}", ct);
         var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 

@@ -86,21 +86,33 @@ public static class ThreadExecution
                 return;
             }
 
-            // 2) Update Thread.ThreadMessages on the hub's own stream
-            var stream = hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                .GetStream(typeof(MeshNode));
-            stream?.UpdateMeshNode(threadPath, node =>
+            // 2) Update Thread.Messages on the hub's own stream
+            System.Diagnostics.Debug.WriteLine($"SUBMIT: ContinueWith fired for {threadPath}, faulted={t.IsFaulted}");
+            try
             {
-                var thread = node.Content as MeshThread ?? new MeshThread();
-                return node with
+                var workspace2 = hub.ServiceProvider.GetRequiredService<IWorkspace>();
+                var stream2 = workspace2.GetStream(typeof(MeshNode));
+
+                if (stream2 == null)
+                    throw new InvalidOperationException($"MeshNode stream is null for {threadPath}");
+
+                stream2.UpdateMeshNode(threadPath, node =>
                 {
-                    Content = thread with
+                    var thread = node.Content as MeshThread ?? new MeshThread();
+                    return node with
                     {
-                        Messages = thread.Messages
-                            .AddRange([userMsgId, responseMsgId])
-                    }
-                };
-            });
+                        Content = thread with
+                        {
+                            Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                        }
+                    };
+                });
+            }
+            catch (Exception ex)
+            {
+                hub.ServiceProvider.GetService<ILogger<AgentChatClient>>()
+                    ?.LogError(ex, "HandleSubmitMessage: Failed to update Thread.Messages for {ThreadPath}", threadPath);
+            }
 
             // 3) Start execution on hosted hub
             var executionHub = hub.GetHostedHub(
