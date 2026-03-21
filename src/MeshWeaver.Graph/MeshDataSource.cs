@@ -32,6 +32,7 @@ public static class MeshDataSourceExtensions
         return config
             .AddData(data =>
             {
+                data.Workspace.Hub.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
                 var dataSource = configuration(new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace).WithMeshNodes());
                 return data
                     .Configure(rm => rm
