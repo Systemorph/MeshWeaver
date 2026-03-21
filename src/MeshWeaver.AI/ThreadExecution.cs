@@ -76,27 +76,28 @@ public static class ThreadExecution
 
         Task.WhenAll(inputTask, outputTask).ContinueWith(t =>
         {
+            var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+            logger?.LogInformation("HandleSubmitMessage: ContinueWith fired for {ThreadPath}, IsFaulted={IsFaulted}",
+                threadPath, t.IsFaulted);
+
             if (t.IsFaulted)
             {
-                hub.Post(new SubmitMessageResponse
-                {
-                    Success = false,
-                    Error = t.Exception?.Flatten().InnerExceptions.FirstOrDefault()?.Message
-                }, o => o.ResponseFor(delivery));
+                var error = t.Exception?.Flatten().InnerExceptions.FirstOrDefault()?.Message
+                            ?? "Node creation failed";
+                logger?.LogError(t.Exception, "HandleSubmitMessage: node creation failed for {ThreadPath}: {Error}",
+                        threadPath, error);
+                hub.Post(new SubmitMessageResponse { Success = false, Error = error },
+                    o => o.ResponseFor(delivery));
                 return;
             }
 
-            // 2) Update Thread.Messages on the hub's own stream
-            System.Diagnostics.Debug.WriteLine($"SUBMIT: ContinueWith fired for {threadPath}, faulted={t.IsFaulted}");
-            try
+            // 2) Update Thread.Messages via InvokeAsync (runs on hub's execution queue
+            // where the workspace stream is guaranteed to have data)
+            hub.InvokeAsync(() =>
             {
-                var workspace2 = hub.ServiceProvider.GetRequiredService<IWorkspace>();
-                var stream2 = workspace2.GetStream(typeof(MeshNode));
-
-                if (stream2 == null)
-                    throw new InvalidOperationException($"MeshNode stream is null for {threadPath}");
-
-                stream2.UpdateMeshNode(threadPath, node =>
+                var stream = hub.ServiceProvider.GetRequiredService<IWorkspace>()
+                    .GetStream(typeof(MeshNode));
+                stream?.UpdateMeshNode(threadPath, node =>
                 {
                     var thread = node.Content as MeshThread ?? new MeshThread();
                     return node with
@@ -107,23 +108,19 @@ public static class ThreadExecution
                         }
                     };
                 });
-            }
-            catch (Exception ex)
-            {
-                hub.ServiceProvider.GetService<ILogger<AgentChatClient>>()
-                    ?.LogError(ex, "HandleSubmitMessage: Failed to update Thread.Messages for {ThreadPath}", threadPath);
-            }
 
-            // 3) Start execution on hosted hub
-            var executionHub = hub.GetHostedHub(
-                new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-                HostedHubCreation.Always);
+                // 3) Start execution on hosted hub
+                var executionHub = hub.GetHostedHub(
+                    new Address($"{hub.Address}/_Exec"),
+                    config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                    HostedHubCreation.Always);
 
-            executionHub!.Post(request with { ResponsePath = responsePath });
+                executionHub!.Post(request with { ResponsePath = responsePath });
+
+                // 4) Response — nodes created, streaming started
+                hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            });
         });
-
-        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
         return delivery.Processed();
     }
 
