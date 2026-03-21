@@ -637,16 +637,16 @@ public class ThreadPermissionTest(ITestOutputHelper output) : MonolithMeshTestBa
         // Switch to viewer (Read+Execute only, no Update)
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = ViewerUserId, Name = "Viewer" });
 
-        // Act — viewer tries to create thread (lacks Update permission)
+        // Act — viewer tries to create thread (lacks Create permission)
         var client = GetClient();
-        var response = await client.AwaitResponse(
+        var act = () => client.AwaitResponse(
             new CreateNodeRequest(ThreadNodeType.BuildThreadNode("SecureProject", "Viewer trying to create a thread")),
             o => o.WithTarget(new Address("SecureProject")),
             ct);
 
-        // Assert — should be denied
-        response.Message.Success.Should().BeFalse("viewer lacks Update permission");
-        response.Message.Error.Should().NotBeNullOrEmpty();
-        Output.WriteLine($"Denial message: {response.Message.Error}");
+        // Assert — should be denied with DeliveryFailureException
+        var ex = await act.Should().ThrowAsync<DeliveryFailureException>();
+        ex.Which.Message.Should().Contain("Access denied");
+        Output.WriteLine($"Denial message: {ex.Which.Message}");
     }
 }
