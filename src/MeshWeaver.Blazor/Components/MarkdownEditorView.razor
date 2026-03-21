@@ -295,40 +295,12 @@
         var closeTag = $"<!--/comment:{markerId}-->";
 
         // Map clean-content offsets to annotated-content positions
-        var map = BuildDisplayToAnnotatedMap();
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(AnnotatedContent);
         var aStart = selection.Start < map.Length ? map[selection.Start] : AnnotatedContent.Length;
         var aEnd = selection.End < map.Length ? map[selection.End] : AnnotatedContent.Length;
 
         var newContent = AnnotatedContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
         await UpdateContent(newContent);
-    }
-
-    /// <summary>
-    /// Builds a map from display (clean) character index to annotated character index.
-    /// </summary>
-    private int[] BuildDisplayToAnnotatedMap()
-    {
-        var tagRegex = new System.Text.RegularExpressions.Regex(@"<!--/?(comment|insert|delete):[^-]+-->");
-        var tags = tagRegex.Matches(AnnotatedContent).Cast<System.Text.RegularExpressions.Match>()
-            .OrderBy(m => m.Index).ToList();
-        var map = new List<int>();
-        int tagIdx = 0;
-
-        for (int i = 0; i < AnnotatedContent.Length;)
-        {
-            if (tagIdx < tags.Count && i == tags[tagIdx].Index)
-            {
-                i += tags[tagIdx].Length;
-                tagIdx++;
-            }
-            else
-            {
-                map.Add(i);
-                i++;
-            }
-        }
-
-        return map.ToArray();
     }
 
     private string? GetInitialValue()
