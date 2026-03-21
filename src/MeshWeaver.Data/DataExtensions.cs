@@ -556,6 +556,10 @@ public static class DataExtensions
                 o => o.ResponseFor(request));
         else activity.Complete(log =>
         {
+            var logger2 = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.ActivityCompletion");
+            logger2?.LogDebug("DataChangeRequest activity completed: Status={Status}, Messages={MsgCount}, SubActivities={SubCount}, SubStatuses=[{SubStatuses}]",
+                log.Status, log.Messages.Count, log.SubActivities.Count,
+                string.Join(", ", log.SubActivities.Select(s => $"{s.Category}:{s.Status}")));
             hub.Post(new DataChangeResponse(hub.Version, log),
                 o => o.ResponseFor(request));
         });

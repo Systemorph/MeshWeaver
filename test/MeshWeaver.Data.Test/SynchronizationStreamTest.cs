@@ -53,6 +53,12 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
             );
     }
 
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureClient(configuration)
+            .AddData(data => data);
+    }
+
     /// <summary>
     /// Tests parallel updates to the synchronization stream with concurrent modifications
     /// </summary>
@@ -200,4 +206,43 @@ public class SynchronizationStreamTest(ITestOutputHelper output) : HubTestBase(o
         receivedTexts.Should().ContainInOrder("Hello World", "Updated Text");
     }
 
+    /// <summary>
+    /// When a server-side stream errors via OnError, the client stream should also fail.
+    /// </summary>
+    [Fact]
+    public async Task ServerStreamError_PropagatesTo_ClientStream()
+    {
+        var host = GetHost();
+        var client = GetClient();
+        var hostWorkspace = host.GetWorkspace();
+        var collectionName = hostWorkspace.DataContext.GetTypeSource(typeof(MyData))!.CollectionName;
+
+        // Get the data source stream (the parent stream that all reduced streams subscribe to)
+        var dataSource = hostWorkspace.DataContext.GetDataSourceForType(typeof(MyData))!;
+        var dataSourceStream = dataSource.GetStreamForPartition(null);
+        dataSourceStream.Should().NotBeNull();
+
+        // Get client-side stream (subscribes remotely to host)
+        var clientWorkspace = client.GetWorkspace();
+        var clientStream = clientWorkspace.GetRemoteStream<EntityStore>(
+            CreateHostAddress(), new CollectionsReference(collectionName));
+
+        // Wait for initial data to arrive
+        var initial = await clientStream.Timeout(3.Seconds()).FirstAsync();
+        initial.Should().NotBeNull();
+
+        // Track errors on client stream
+        var errorReceived = new TaskCompletionSource<Exception>();
+        clientStream.Subscribe(_ => { }, ex => errorReceived.TrySetResult(ex));
+
+        // Fail the data source stream — this should propagate to all subscribers
+        dataSourceStream!.OnError(new InvalidOperationException("Server stream failed"));
+
+        // Client should receive the error
+        var error = await errorReceived.Task
+            .WaitAsync(1.Seconds(), TestContext.Current.CancellationToken);
+
+        error.Should().NotBeNull();
+        Output.WriteLine($"Client received error: {error.Message}");
+    }
 }

@@ -79,7 +79,24 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
-                        hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        var delivery = hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        if (delivery != null)
+                        {
+                            _ = hub.RegisterCallback(delivery, (response, _) =>
+                            {
+                                if (response is IMessageDelivery<DataChangeResponse> { Message.Status: DataChangeStatus.Failed } failed)
+                                {
+                                    logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
+                                        reduced.StreamId, failed.Message.Log?.Messages
+                                            .Where(m => m.LogLevel >= LogLevel.Error)
+                                            .Select(m => m.Message)
+                                            .FirstOrDefault() ?? "Unknown error");
+                                    reduced.OnError(new InvalidOperationException(
+                                        $"DataChangeRequest failed for stream {reduced.StreamId}"));
+                                }
+                                return Task.FromResult(response);
+                            }, CancellationToken.None);
+                        }
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );

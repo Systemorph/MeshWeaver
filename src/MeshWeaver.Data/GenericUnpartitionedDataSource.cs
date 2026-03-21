@@ -299,7 +299,8 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
                         return; // Skip processing on first emission (initialization)
                     }
                     Synchronize(change);
-                })
+                },
+                ex => Logger.LogWarning(ex, "Data source stream {Id} errored", Id))
         );
         // Always use async initialization to call GetInitialValueAsync properly
 
@@ -373,7 +374,8 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
                         return; // Skip processing on first emission (initialization)
                     }
                     Synchronize(change);
-                })
+                },
+                ex => Logger.LogWarning(ex, "Data source stream {Id} errored", Id))
         );
         return stream;
     }
