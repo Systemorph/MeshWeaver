@@ -359,7 +359,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
                     Host.Version));
-
+                Set(currentJson);
             }
             catch (Exception ex)
             {
