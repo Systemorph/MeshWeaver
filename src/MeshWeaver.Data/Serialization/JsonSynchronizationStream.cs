@@ -621,11 +621,11 @@ public static class JsonSynchronizationStream
 
     private static JsonPointer CreatePointerFromSegments(params string[] pointerSegments)
     {
-        // Use SegmentValueStandIn to create pointer with unescaped segment values
-        // The escaping happens automatically when the pointer is serialized
-#pragma warning disable CS0618 // SegmentValueStandIn is obsolete
-        return JsonPointer.Create(pointerSegments.Select(s => (SegmentValueStandIn)s).ToArray());
-#pragma warning restore CS0618
+        // Manually build RFC 6901 pointer with proper escaping:
+        // ~ → ~0, / → ~1 within each segment
+        var escaped = string.Concat(pointerSegments.Select(s =>
+            "/" + s.Replace("~", "~0").Replace("/", "~1")));
+        return JsonPointer.Parse(escaped);
     }
 
     private static JsonPatch CreateEntityStorePatch(JsonSerializerOptions options, IEnumerable<EntityUpdate> updates)
