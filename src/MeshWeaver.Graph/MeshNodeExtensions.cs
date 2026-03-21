@@ -59,11 +59,23 @@ public static class MeshNodeExtensions
     public static void UpdateMeshNode(this IWorkspace workspace,
         Address? address, string nodePath, Func<MeshNode, MeshNode> update)
     {
-        var stream = address == null || address.Equals(workspace.Hub.Address)
-            ? workspace.GetStream(typeof(MeshNode))
-            : workspace.GetRemoteStream<EntityStore, CollectionsReference>(
-                address, new CollectionsReference(nameof(MeshNode)));
-        stream?.UpdateMeshNode(nodePath, update);
+        if (address == null || address.Equals(workspace.Hub.Address))
+        {
+            workspace.GetStream(typeof(MeshNode))?.UpdateMeshNode(nodePath, update);
+        }
+        else
+        {
+            var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                address, new MeshNodeReference());
+            stream?.Update(current =>
+            {
+                if (current == null) return null;
+                var updated = update(current);
+                return new ChangeItem<MeshNode>(updated, stream.StreamId, stream.StreamId,
+                    ChangeType.Patch, stream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), nodePath, updated) { OldValue = current }]);
+            });
+        }
     }
 
     /// <summary>

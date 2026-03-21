@@ -1,6 +1,9 @@
 ﻿using System.Reactive.Linq;
 using System.Reflection;
+using System.Text.Json;
+using Json.Patch;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 
@@ -31,6 +34,20 @@ public static class MeshDataSourceExtensions
             {
                 var dataSource = configuration(new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace).WithMeshNodes());
                 return data
+                    .Configure(rm => rm
+                        .ForReducedStream<InstanceCollection>(reduced => reduced
+                            .AddWorkspaceReference<MeshNodeReference, MeshNode>(ReduceToMeshNode))
+                        .ForReducedStream<MeshNode>(reduced => reduced
+                            .AddPatchFunction(PatchMeshNode))
+                        .AddWorkspaceReferenceStream<MeshNode>(
+                            (workspace, reference, configuration) =>
+                            {
+                                if (reference is not MeshNodeReference) return null;
+                                var collectionStream = workspace.GetStream(
+                                    new CollectionReference(nameof(MeshNode)));
+                                return (collectionStream as ISynchronizationStream<InstanceCollection>)
+                                    ?.Reduce((WorkspaceReference<MeshNode>)reference, configuration);
+                            }))
                     .WithDataSource(_ => dataSource)
                     .WithDefaultDataReference(workspace =>
                     {
@@ -115,6 +132,36 @@ public static class MeshDataSourceExtensions
             // Fall through to default handler on any error
             return request;
         }
+    }
+
+    /// <summary>
+    /// Reduces InstanceCollection to MeshNode for MeshNodeReference.
+    /// Returns the hub's own MeshNode from the collection.
+    /// </summary>
+    private static ChangeItem<MeshNode> ReduceToMeshNode(
+        ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial)
+    {
+        var node = current.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
+        if (initial || current.ChangeType != ChangeType.Patch)
+            return new(node, current.StreamId, current.Version);
+
+        var change = current.Updates.FirstOrDefault();
+        if (change == null)
+            return null!;
+        return new(change.Value as MeshNode, current.ChangedBy, current.StreamId,
+            ChangeType.Patch, current.Version, [change]);
+    }
+
+    /// <summary>
+    /// PatchFunction for MeshNode — converts JsonElement back to MeshNode with proper EntityUpdate objects.
+    /// </summary>
+    private static ChangeItem<MeshNode> PatchMeshNode(
+        ISynchronizationStream<MeshNode> stream, MeshNode current,
+        JsonElement updated, JsonPatch? patch, string changedBy)
+    {
+        var updatedNode = updated.Deserialize<MeshNode>(stream.Hub.JsonSerializerOptions);
+        return new(updatedNode!, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version,
+            [new EntityUpdate(nameof(MeshNode), updatedNode?.Path, updatedNode) { OldValue = current }]);
     }
 
     /// <summary>

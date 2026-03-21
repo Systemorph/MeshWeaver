@@ -527,14 +527,9 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
             .Where(m => m.Count >= 2)
             .FirstAsync().ToTask(ct);
 
-        // 3. Get the thread hub's own EntityStore stream and update via UpdateMeshNode
-        var threadHubStream = client.GetWorkspace()
-            .GetRemoteStream<EntityStore, CollectionsReference>(
-                new Address(threadPath),
-                new CollectionsReference(nameof(MeshNode)));
-        threadHubStream.Should().NotBeNull();
-
-        threadHubStream!.UpdateMeshNode(threadPath, node =>
+        // 3. Update via MeshNodeReference stream
+        var workspace = client.GetWorkspace();
+        workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with
