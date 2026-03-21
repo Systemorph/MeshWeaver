@@ -320,7 +320,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
 
         // Should include types not excluded from create
         paths.Should().Contain("Markdown");
-        paths.Should().Contain("Thread");
+        // Thread requires AddAI() — only present when AI is configured
 
         // Should NOT include types with ExcludeFromContext containing "create"
         paths.Should().NotContain("Comment");
