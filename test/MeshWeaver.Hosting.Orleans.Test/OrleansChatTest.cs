@@ -32,7 +32,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.
-/// Verifies CreateThreadRequest, SubmitMessageRequest, ThreadMessages streaming,
+/// Verifies CreateNodeRequest, SubmitMessageRequest, ThreadMessages streaming,
 /// and GetDataRequest on Thread + ThreadMessage nodes.
 /// </summary>
 public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
@@ -76,10 +76,10 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = ContextPath, UserMessageText = text },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)),
             o => o.WithTarget(new Address(ContextPath)), ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.ThreadPath!;
+        return response.Message.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
