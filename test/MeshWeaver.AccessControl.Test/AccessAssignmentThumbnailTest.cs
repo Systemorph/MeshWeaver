@@ -334,12 +334,10 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         };
         var created = await CreateAssignmentNodeAsync("dave-access", assignment);
 
-        // Directly update the node's AccessObject via DataChangeRequest
+        // Update the node's AccessObject via NodeFactory
         var updatedAssignment = assignment with { AccessObject = "User/eve" };
         var updatedNode = created with { Content = updatedAssignment };
-        Mesh.Post(
-            new DataChangeRequest { ChangedBy = "test" }.WithUpdates(updatedNode),
-            o => o.WithTarget(Mesh.Address));
+        await NodeFactory.UpdateNodeAsync(updatedNode);
 
         // Verify the update was persisted
         var ct = TestContext.Current.CancellationToken;
@@ -405,9 +403,7 @@ public class AccessAssignmentThumbnailTest(ITestOutputHelper output) : MonolithM
         // Change AccessObject from a User to a Group path
         var updatedAssignment = assignment with { AccessObject = "Admin/engineering" };
         var updatedNode = created with { Content = updatedAssignment };
-        Mesh.Post(
-            new DataChangeRequest { ChangedBy = "test" }.WithUpdates(updatedNode),
-            o => o.WithTarget(Mesh.Address));
+        await NodeFactory.UpdateNodeAsync(updatedNode);
 
         // Verify the update was persisted — AccessObject can be any mesh node path
         var ct = TestContext.Current.CancellationToken;
