@@ -1,0 +1,59 @@
+@using MeshWeaver.Blazor.Portal.Layout
+@using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons
+@inherits PortalLayoutBase
+
+<style>
+    /* Override grid to remove nav column */
+    .layout[class],
+    div.layout[class] {
+        grid-template-columns: auto 1fr !important;
+        grid-template-areas:
+            "icon head"
+            "messagebar messagebar"
+            "main main" !important;
+    }
+
+    /* Hide nav bar */
+    .layout[class] > .fluent-appbar,
+    .layout[class] > .desktop-nav-menu {
+        display: none !important;
+    }
+
+    /* Full width - no left border since no nav */
+    .layout[class] > .body-content,
+    .layout[class] > .body-content-splitter,
+    .layout[class] > .messagebar-container,
+    .layout[class] > .main-with-chat {
+        border-left: none !important;
+    }
+
+    /* Main with chat splitter - full width */
+    .layout[class] > .main-with-chat {
+        grid-area: main;
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    /* Chat content in splitter - full width */
+    .ai-chat-content {
+        width: 100% !important;
+        height: 100% !important;
+    }
+
+    /* Mobile chat overlay - full width */
+    .ai-chat-overlay {
+        width: 100% !important;
+    }
+</style>
+
+@{
+    // No left navigation menu (GitHub-style full-width content)
+    DesktopNavMenu = null;
+
+    // Mobile: Hamburger menu with essential actions
+    MobileNavMenu = @<MemexMobileMenu IsOpen="@IsNavMenuOpen" OnClose="@CloseMobileNavMenu" />;
+}
+
+@{
+    base.BuildRenderTree(__builder);
+}

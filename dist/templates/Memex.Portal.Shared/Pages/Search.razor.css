@@ -1,0 +1,114 @@
+.search-page {
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.search-header {
+    margin-bottom: 24px;
+}
+
+.search-header h1 {
+    margin: 0 0 8px 0;
+}
+
+.search-query {
+    color: var(--neutral-foreground-hint);
+    margin: 0;
+}
+
+.no-results {
+    text-align: center;
+    padding: 48px;
+    color: var(--neutral-foreground-hint);
+}
+
+.search-tips {
+    margin-top: 16px;
+    font-size: 0.9em;
+}
+
+.search-tips code {
+    background: var(--neutral-layer-4);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.results-count {
+    color: var(--neutral-foreground-hint);
+    margin-bottom: 16px;
+}
+
+.type-header {
+    margin: 24px 0 12px 0;
+    font-size: 1.1em;
+    color: var(--neutral-foreground-rest);
+    border-bottom: 1px solid var(--neutral-stroke-rest);
+    padding-bottom: 8px;
+}
+
+.results-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.result-card {
+    cursor: pointer;
+    transition: box-shadow 0.2s ease;
+    padding: var(--design-unit) calc(var(--design-unit) * 3);
+}
+
+.result-card:hover {
+    box-shadow: var(--elevation-shadow-card-active);
+}
+
+.result-content {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    min-height: 60px;
+}
+
+.result-image {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+
+.result-placeholder {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    background: var(--accent-fill-rest);
+    color: var(--foreground-on-accent-rest);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.result-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.result-description {
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.result-path {
+    color: var(--neutral-foreground-hint);
+    font-size: 0.85em;
+}
