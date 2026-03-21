@@ -408,7 +408,7 @@ public class MessageService : IMessageService
                     if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
                                             && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
                                             && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
-                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
+                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}: {delivery.Message}"));
                 }
                 else
                 {

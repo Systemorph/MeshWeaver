@@ -107,6 +107,8 @@ public sealed class MessageHub : IMessageHub
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
+        TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
+        TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
