@@ -127,13 +127,19 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
     {
-        // Seed assignments at parent and at a deeper nested path
+        // Create actual nodes so the hubs exist
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("ACME", TestPartition) { Name = "ACME", NodeType = "Group" }, TestTimeout);
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("Documentation", $"{TestPartition}/ACME") { Name = "Documentation", NodeType = "Markdown" }, TestTimeout);
+
+        // Seed assignments
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("ParentUser", "Viewer", "ACME", "system", TestTimeout);
-        await svc.AddUserRoleAsync("NestedUser", "Editor", "ACME/Documentation", "system", TestTimeout);
+        await svc.AddUserRoleAsync("ParentUser", "Viewer", $"{TestPartition}/ACME", "system", TestTimeout);
+        await svc.AddUserRoleAsync("NestedUser", "Editor", $"{TestPartition}/ACME/Documentation", "system", TestTimeout);
 
         var client = GetClient();
-        var nestedPath = "ACME/Documentation";
+        var nestedPath = $"{TestPartition}/ACME/Documentation";
         var nodeAddress = new Address(nestedPath);
 
         await client.AwaitResponse(
