@@ -21,7 +21,7 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 9.0.x
+        dotnet-version: 10.0.x
     - name: Restore workloads
       run: dotnet workload restore
     - name: Restore dependencies
@@ -32,10 +32,9 @@ jobs:
       continue-on-error: true
       env:
         DOTNET_ENVIRONMENT: Development
-        Logging__LogLevel__Default: Debug
-        Logging__LogLevel__MeshWeaver.Messaging: Debug
+        Logging__LogLevel__Default: Warning
       run: |
-        dotnet test --no-build --verbosity detailed -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
+        dotnet test --no-build --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
     - name: Collect test logs for artifact
       if: always()
       run: |
