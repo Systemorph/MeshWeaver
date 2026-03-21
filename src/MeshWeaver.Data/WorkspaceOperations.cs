@@ -166,10 +166,20 @@ public static class WorkspaceOperations
                     {
                         if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
                         {
-                            var validInstances = g.Select(x => x.Instance)
-                                .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) != null);
+                            var allInstances = g.Select(x => x.Instance).ToList();
+                            var invalidInstances = allInstances
+                                .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) == null)
+                                .ToList();
+                            if (invalidInstances.Count > 0)
+                            {
+                                logger.LogError("Skipping {Count} instances with null key in collection {Collection}",
+                                    invalidInstances.Count, g.Key.TypeSource!.CollectionName);
+                                subActivity?.LogError("Skipping {Count} instances with null key in collection {Collection}",
+                                    invalidInstances.Count, g.Key.TypeSource!.CollectionName);
+                            }
                             var instances =
-                                new InstanceCollection(validInstances
+                                new InstanceCollection(allInstances
+                                    .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) != null)
                                     .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
                                 {
                                     GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
@@ -212,6 +222,7 @@ public static class WorkspaceOperations
         {
             subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
                 ex.Message);
+            logger.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity, ex.Message);
             return null;
         }
         finally
