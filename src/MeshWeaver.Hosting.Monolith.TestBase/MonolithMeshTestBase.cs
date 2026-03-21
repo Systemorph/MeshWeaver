@@ -24,12 +24,20 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Base mesh configuration without access control setup.
     /// Security tests can call this directly instead of base.ConfigureMesh().
     /// </summary>
+    /// <summary>
+    /// Default test partition name. Tests can create nodes under this path
+    /// (e.g., "TestData/mynode") and they'll have proper mesh node hubs.
+    /// Registered as a Markdown node so the hub gets AddMeshDataSource + WithNodeOperationHandlers.
+    /// </summary>
+    public const string TestPartition = "TestData";
+
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
             .AddRowLevelSecurity()
-            .AddGraph();
+            .AddGraph()
+            .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" });
 
     /// <summary>
     /// Default mesh configuration with PublicAdminAccess for in-memory tests.
