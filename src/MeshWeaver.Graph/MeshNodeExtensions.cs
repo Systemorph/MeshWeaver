@@ -37,9 +37,14 @@ public static class MeshNodeExtensions
             var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
             var current = collection?.Instances.GetValueOrDefault(nodePath) as MeshNode;
             if (current == null)
-                return null;
+                throw new InvalidOperationException(
+                    $"MeshNode '{nodePath}' not found in stream. Available: [{string.Join(", ", collection?.Instances.Keys.Select(k => k.ToString()) ?? [])}]");
 
             var updated = update(current);
+            if (string.IsNullOrEmpty(updated.Id))
+                throw new InvalidOperationException(
+                    $"UpdateMeshNode produced a node with empty Id for path '{nodePath}'");
+
             var newStore = store.Update(nameof(MeshNode), c => c.Update(nodePath, updated));
             return stream.ApplyChanges(new EntityStoreAndUpdates(newStore,
                 [new EntityUpdate(nameof(MeshNode), nodePath, updated) { OldValue = current }],
