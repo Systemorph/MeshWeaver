@@ -146,7 +146,11 @@ public static class ThreadExecution
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
 
-            // 2. await streaming — update response node via remote stream
+            // 2. Get remote stream ONCE for the response node
+            var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                new Address(responsePath), new MeshNodeReference());
+
+            // 3. await streaming — update response node via the stream
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
@@ -159,27 +163,36 @@ public static class ThreadExecution
 
                     if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
                     {
-                        workspace.UpdateMeshNode(new Address(responsePath), responsePath,
-                            node => node with
+                        var text = responseText.ToString();
+                        responseStream.Update(current =>
+                        {
+                            if (current == null) return null;
+                            var updated = current with
                             {
                                 Content = new ThreadMessage
                                 {
                                     Id = responseMsgId,
                                     Role = "assistant",
-                                    Text = responseText.ToString(),
+                                    Text = text,
                                     Timestamp = DateTime.UtcNow,
                                     Type = ThreadMessageType.AgentResponse
                                 }
-                            });
+                            };
+                            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+                        });
                         lastUpdate = DateTimeOffset.UtcNow;
                     }
                 }
             }
 
-            // 3. Final update
+            // 4. Final update
             var finalText = responseText.ToString();
-            workspace.UpdateMeshNode(new Address(responsePath), responsePath,
-                node => node with
+            responseStream.Update(current =>
+            {
+                if (current == null) return null;
+                var updated = current with
                 {
                     Content = new ThreadMessage
                     {
@@ -191,7 +204,11 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName
                     }
-                });
+                };
+                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
         }
         catch (OperationCanceledException)
         {
