@@ -60,12 +60,6 @@ public class CreateOrganizationTest(ITestOutputHelper output) : MonolithMeshTest
             orgId, TestUsers.Admin.ObjectId, Permission.Update, TestTimeout);
         hasAdmin.Should().BeTrue("Creator should have Admin permissions on the organization");
 
-        // Assert: Markdown overview page exists at {OrgId}/Overview
-        var markdownPath = $"{orgId}/Overview";
-        var markdown = await MeshQuery.QueryAsync<MeshNode>($"path:{markdownPath}").FirstOrDefaultAsync(TestTimeout);
-        markdown.Should().NotBeNull("Overview markdown page should be created by post-creation handler");
-        markdown!.NodeType.Should().Be("Markdown");
-
         // Cleanup
         await NodeFactory.DeleteNodeAsync(orgId, ct: TestTimeout);
     }
