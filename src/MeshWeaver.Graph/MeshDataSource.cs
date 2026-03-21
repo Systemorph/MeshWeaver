@@ -59,6 +59,7 @@ public static class MeshDataSourceExtensions
                     });
             })
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
+            .WithNodeOperationHandlers()
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
     }
 

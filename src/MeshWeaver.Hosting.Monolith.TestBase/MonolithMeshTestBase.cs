@@ -102,7 +102,9 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     }
 
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h));
+        configuration
+            .AddMeshTypes()
+            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h));
 
     private static readonly string DisposeLogFile = Path.Combine(
         AppContext.BaseDirectory, "test-logs", "dispose-trace.log");

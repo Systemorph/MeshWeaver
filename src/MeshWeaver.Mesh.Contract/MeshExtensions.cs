@@ -55,6 +55,7 @@ public static class MeshExtensions
     public static MessageHubConfiguration WithNodeOperationHandlers(this MessageHubConfiguration config)
     {
         return config
+            .AddMeshTypes()
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
