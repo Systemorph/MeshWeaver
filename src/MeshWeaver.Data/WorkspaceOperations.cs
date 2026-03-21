@@ -91,12 +91,8 @@ public static class WorkspaceOperations
 
     private static Task UpdateFailed(IMessageDelivery? delivery, Exception? exception)
     {
-        if (delivery is not null)
-        {
-            // Log the error instead of using DeliveryFailure which doesn't seem to exist
-            var errorMessage = $"Update failed: {exception?.ToString() ?? "Unknown error"}";
-            // We would need an activity context to log properly, for now we'll skip the error posting
-        }
+        if (exception != null)
+            throw new DataException($"Data update failed: {exception.Message}", exception);
         return Task.CompletedTask;
     }
 
@@ -141,9 +137,18 @@ public static class WorkspaceOperations
 
 
             // Use async update to allow proper retry logic if state changed during computation
-            stream!.Update((store, _) => Task.FromResult(UpdateDataChangeRequest(store, change, logger, stream, subActivity, group)),
-            ex => UpdateFailed(request, ex)
-                );
+            stream!.Update((store, _) =>
+                {
+                    var result = UpdateDataChangeRequest(store, change, logger, stream, subActivity, group);
+                    subActivity?.Complete();
+                    return Task.FromResult(result);
+                },
+                ex =>
+                {
+                    subActivity?.Complete();
+                    return UpdateFailed(request, ex);
+                }
+            );
         }
     }
 
@@ -223,6 +228,7 @@ public static class WorkspaceOperations
             subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
                 ex.Message);
             logger.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity, ex.Message);
+            stream.OnError(ex);
             return null;
         }
         finally

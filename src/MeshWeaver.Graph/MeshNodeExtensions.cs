@@ -49,6 +49,12 @@ public static class MeshNodeExtensions
             return stream.ApplyChanges(new EntityStoreAndUpdates(newStore,
                 [new EntityUpdate(nameof(MeshNode), nodePath, updated) { OldValue = current }],
                 stream.StreamId));
+        }, ex =>
+        {
+            var logger = stream.Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.Graph.UpdateMeshNode");
+            logger?.LogError(ex, "UpdateMeshNode failed for {NodePath}", nodePath);
+            return Task.CompletedTask;
         });
     }
 

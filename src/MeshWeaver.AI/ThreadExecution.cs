@@ -1,9 +1,7 @@
-using System.Collections.Immutable;
+﻿using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
 using MeshWeaver.Graph;
-using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -91,35 +89,41 @@ public static class ThreadExecution
                 return;
             }
 
-            // 2) Update Thread.Messages via InvokeAsync (runs on hub's execution queue
-            // where the workspace stream is guaranteed to have data)
+            // 2) Update Thread.Messages — subscribe to workspace stream to get current data
+            // 2) Update Thread.Messages — read current node, update, post DataChangeRequest
             hub.InvokeAsync(() =>
             {
-                var stream = hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                    .GetStream(typeof(MeshNode));
-                stream?.UpdateMeshNode(threadPath, node =>
+                hub.GetWorkspace().GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
                 {
-                    var thread = node.Content as MeshThread ?? new MeshThread();
-                    return node with
+                    var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                    if (threadNode == null) return;
+                    var thread = threadNode.Content as MeshThread ?? new MeshThread();
+                    hub.Post(new DataChangeRequest
                     {
-                        Content = thread with
-                        {
-                            Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
-                        }
-                    };
+                        Updates =
+                        [
+                            threadNode with
+                            {
+                                Content = thread with
+                                {
+                                    Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                                }
+                            }
+                        ]
+                    });
                 });
-
-                // 3) Start execution on hosted hub
-                var executionHub = hub.GetHostedHub(
-                    new Address($"{hub.Address}/_Exec"),
-                    config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-                    HostedHubCreation.Always);
-
-                executionHub!.Post(request with { ResponsePath = responsePath });
-
-                // 4) Response — nodes created, streaming started
-                hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
             });
+
+            // 3) Start execution on hosted hub
+            var executionHub = hub.GetHostedHub(
+                new Address($"{hub.Address}/_Exec"),
+                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                HostedHubCreation.Always);
+
+            executionHub!.Post(request with { ResponsePath = responsePath });
+
+            // 4) Response — nodes created successfully
+            hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
         });
         return delivery.Processed();
     }
