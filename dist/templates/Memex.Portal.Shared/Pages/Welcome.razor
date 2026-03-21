@@ -1,0 +1,91 @@
+@page "/welcome"
+@using MeshWeaver.Blazor.Layouts
+@layout EmptyLayout
+
+<PageTitle>Welcome - Memex Portal</PageTitle>
+
+<div class="mw-landing">
+    <!-- Hero -->
+    <div class="mw-hero">
+        <h1>Your Knowledge, Connected</h1>
+        <p class="mw-subtitle">
+            MeshWeaver brings together documents, collaboration, and AI-powered assistance into one unified platform for your team.
+        </p>
+        <div class="mw-hero-actions">
+            <a class="mw-btn mw-btn-primary" href="/login">Sign In</a>
+            <a class="mw-btn mw-btn-secondary" href="#features">Learn More</a>
+        </div>
+    </div>
+
+    <!-- Features -->
+    <h2 class="mw-section-title" id="features">Everything You Need</h2>
+    <p class="mw-section-subtitle">Powerful tools to organize, collaborate, and accelerate your work</p>
+
+    <div class="mw-features">
+        <div class="mw-feature-card">
+            <FluentIcon Value="@(new Icons.Regular.Size28.FolderOpen())" Color="Color.Accent" />
+            <h3>Organize</h3>
+            <p>Structure documents, code, and data in a flexible graph hierarchy. Find anything instantly with powerful search.</p>
+        </div>
+        <div class="mw-feature-card">
+            <FluentIcon Value="@(new Icons.Regular.Size28.PeopleTeam())" Color="Color.Accent" />
+            <h3>Collaborate</h3>
+            <p>Comment on documents, request approvals, and track changes in real time. Keep everyone aligned.</p>
+        </div>
+        <div class="mw-feature-card">
+            <FluentIcon Value="@(new Icons.Regular.Size28.Chat())" Color="Color.Accent" />
+            <h3>AI Chat</h3>
+            <p>Get instant answers, generate content, and automate workflows with built-in AI assistants.</p>
+        </div>
+        <div class="mw-feature-card">
+            <FluentIcon Value="@(new Icons.Regular.Size28.Alert())" Color="Color.Accent" />
+            <h3>Notifications</h3>
+            <p>Stay informed with real-time alerts for approval requests, decisions, mentions, and updates.</p>
+        </div>
+    </div>
+
+    <!-- How It Works -->
+    <h2 class="mw-section-title">Get Started in 3 Steps</h2>
+    <p class="mw-section-subtitle">From sign-up to productivity in minutes</p>
+
+    <div class="mw-steps">
+        <div class="mw-step">
+            <div class="mw-step-number">1</div>
+            <h3>Sign In</h3>
+            <p>Use your Microsoft, Google, LinkedIn, or Apple account to get started — no new passwords to remember.</p>
+        </div>
+        <div class="mw-step">
+            <div class="mw-step-number">2</div>
+            <h3>Set Up Your Profile</h3>
+            <p>Tell us a bit about yourself so your team can find and collaborate with you easily.</p>
+        </div>
+        <div class="mw-step">
+            <div class="mw-step-number">3</div>
+            <h3>Start Exploring</h3>
+            <p>Access your dashboard with recent activity, notifications, and AI-powered tools at your fingertips.</p>
+        </div>
+    </div>
+
+    <!-- Final CTA -->
+    <div class="mw-cta">
+        <h2>Ready to Get Started?</h2>
+        <p>Join your team on MeshWeaver and take your productivity to the next level.</p>
+        <a class="mw-btn mw-btn-cta" href="/login">Sign In Now</a>
+    </div>
+</div>
+
+@code {
+    private static class Icons
+    {
+        public static class Regular
+        {
+            public static class Size28
+            {
+                public class FolderOpen : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size28.FolderOpen { }
+                public class PeopleTeam : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size28.PeopleTeam { }
+                public class Chat : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size28.Chat { }
+                public class Alert : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size28.Alert { }
+            }
+        }
+    }
+}

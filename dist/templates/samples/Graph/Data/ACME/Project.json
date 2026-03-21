@@ -1,0 +1,19 @@
+{
+  "id": "Project",
+  "namespace": "ACME",
+  "name": "Project",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A project containing tasks and deliverables",
+  "icon": "/static/storage/content/ACME/Project/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "ACME",
+    "displayName": "Project",
+    "iconName": "Folder",
+    "description": "A project containing tasks and deliverables",
+    "childrenQuery": "",
+    "configuration": "config => config.WithContentType<Project>().AddData(data => data.AddSource(source => source.WithType<Status>(t => t.WithInitialData(Status.All)).WithType<Category>(t => t.WithInitialData(Category.All)).WithType<Priority>(t => t.WithInitialData(Priority.All)))).AddLayout(layout => layout.AddLayoutAreaCatalog().WithThumbnailPattern(area => $\"/static/storage/content/ACME/Project/thumbnails/{area}.svg\", area => $\"/static/storage/content/ACME/Project/thumbnails/{area}.svg\").AddProjectLayoutAreas().WithDefaultArea(\"LayoutAreas\"))",
+  }
+}

@@ -1,0 +1,31 @@
+@page "/"
+@using MeshWeaver.Blazor.Components
+@using MeshWeaver.Mesh.Security
+@using MeshWeaver.Messaging
+@inject AccessService AccessService
+@inject NavigationManager Navigation
+
+<PageTitle>Memex Portal</PageTitle>
+
+@if (IsRealUser)
+{
+    <LayoutArea Address="@UserAddress" Area="Activity" Top="true" />
+}
+
+@code {
+    private bool IsRealUser =>
+        AccessService?.Context != null
+        && !string.IsNullOrEmpty(AccessService.Context.ObjectId)
+        && !AccessService.Context.IsVirtual
+        && !string.Equals(AccessService.Context.ObjectId, WellKnownUsers.Anonymous, StringComparison.OrdinalIgnoreCase);
+
+    private string UserAddress => $"User/{AccessService?.Context?.ObjectId}";
+
+    protected override void OnInitialized()
+    {
+        if (!IsRealUser)
+        {
+            Navigation.NavigateTo("/welcome", replace: true);
+        }
+    }
+}

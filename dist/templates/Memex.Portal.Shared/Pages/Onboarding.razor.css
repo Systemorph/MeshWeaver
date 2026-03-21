@@ -1,0 +1,34 @@
+.onboarding-container {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 40px 20px;
+    min-height: 60vh;
+    background: var(--neutral-layer-4);
+}
+
+.onboarding-card {
+    background: var(--neutral-layer-1);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    padding: 40px 32px;
+    max-width: 500px;
+    width: 100%;
+}
+
+.onboarding-header {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.onboarding-header h1 {
+    margin: 12px 0 8px;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.onboarding-subtitle {
+    color: var(--neutral-foreground-hint);
+    margin: 0;
+    font-size: 0.95rem;
+}
