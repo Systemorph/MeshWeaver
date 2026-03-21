@@ -550,6 +550,56 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
         Output.WriteLine($"Stream update: [{string.Join(", ", messages)}]");
     }
 
+    /// <summary>
+    /// Creating a node with empty Id should return a validation failure, not crash.
+    /// </summary>
+    [Fact]
+    public async Task CreateNode_WithEmptyId_ReturnsValidationError()
+    {
+        var ct = new CancellationTokenSource(5.Seconds()).Token;
+        var client = GetClient();
+
+        var nodeWithEmptyId = new MeshNode("", "SomeNamespace")
+        {
+            NodeType = "Markdown",
+            Name = "Test"
+        };
+
+        var delivery = client.Post(new CreateNodeRequest(nodeWithEmptyId),
+            o => o.WithTarget(Mesh.Address))!;
+        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
+
+        createResponse.Success.Should().BeFalse("creating a node with empty Id should fail");
+        createResponse.Error.Should().Contain("Id");
+        Output.WriteLine($"Validation error: {createResponse.Error}");
+    }
+
+    /// <summary>
+    /// Creating a node with null Id should return a validation failure.
+    /// </summary>
+    [Fact]
+    public async Task CreateNode_WithNullId_ReturnsValidationError()
+    {
+        var ct = new CancellationTokenSource(5.Seconds()).Token;
+        var client = GetClient();
+
+        var nodeWithNullId = new MeshNode(null!, null)
+        {
+            NodeType = "Markdown",
+            Name = "Test"
+        };
+
+        var delivery = client.Post(new CreateNodeRequest(nodeWithNullId),
+            o => o.WithTarget(Mesh.Address))!;
+        var response = await client.RegisterCallback(delivery, (d, _) => Task.FromResult(d), ct);
+        var createResponse = ((IMessageDelivery<CreateNodeResponse>)response).Message;
+
+        createResponse.Success.Should().BeFalse("creating a node with null Id should fail");
+        createResponse.Error.Should().Contain("Id");
+        Output.WriteLine($"Validation error: {createResponse.Error}");
+    }
+
     #region Fake Chat Client Infrastructure
 
     private class FakeChatClient : IChatClient
