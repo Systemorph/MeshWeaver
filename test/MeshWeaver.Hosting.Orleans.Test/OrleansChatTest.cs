@@ -90,7 +90,7 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
-                return (IReadOnlyList<string>)(content?.ThreadMessages ?? []);
+                return (IReadOnlyList<string>)(content?.Messages ?? []);
             });
     }
 
@@ -147,8 +147,8 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
         // 5. Verify Thread content via GetDataRequest
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull("Thread hub should return Thread content");
-        threadContent!.ThreadMessages.Should().HaveCount(2);
-        Output.WriteLine($"Thread.ThreadMessages verified: {threadContent.ThreadMessages.Count}");
+        threadContent!.Messages.Should().HaveCount(2);
+        Output.WriteLine($"Thread.Messages verified: {threadContent.Messages.Count}");
 
         // 6. Verify user message via GetDataRequest
         var userContent = await GetHubContentAsync<ThreadMessage>(

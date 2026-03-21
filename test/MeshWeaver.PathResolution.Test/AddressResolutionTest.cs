@@ -187,7 +187,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new AI.Thread
             {
                 ParentPath = "User/Roland",
-                ThreadMessages = ["msg1"]
+                Messages = ["msg1"]
             }
         };
         await NodeFactory.CreateNodeAsync(threadNode);
@@ -232,7 +232,7 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             Content = new AI.Thread
             {
                 ParentPath = "User/Roland",
-                ThreadMessages = ["m1"]
+                Messages = ["m1"]
             }
         };
         await NodeFactory.CreateNodeAsync(threadNode);
