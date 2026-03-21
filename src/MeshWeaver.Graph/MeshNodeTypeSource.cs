@@ -207,20 +207,11 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
 
-        // If node not in persistence, create as Transient so the hub has data.
-        // The gate stays closed — only opens when CreateNodeRequest confirms to Active.
-        if (ownNode == null)
-        {
-            ownNode = MeshNode.FromPath(_hubPath) with { State = MeshNodeState.Transient };
-            await _persistenceCore.SaveNodeAsync(ownNode, _workspace.Hub.JsonSerializerOptions, ct);
-            _logger?.LogDebug("MeshNodeTypeSource: Created transient node for {HubPath}", _hubPath);
-        }
-
         if (ownNode is { State: MeshNodeState.Active })
             _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
         var allNodes = new List<MeshNode>();
-        if (!string.IsNullOrEmpty(ownNode.Path))
+        if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
             allNodes.Add(ownNode);
 
         _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
