@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
@@ -101,10 +102,13 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         return Mesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient)!;
     }
 
-    protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        configuration
+    protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.WithType(typeof(Graph.MeshNodeReference), nameof(Graph.MeshNodeReference));
+        return configuration
             .AddMeshTypes()
             .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h));
+    }
 
     private static readonly string DisposeLogFile = Path.Combine(
         AppContext.BaseDirectory, "test-logs", "dispose-trace.log");
