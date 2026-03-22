@@ -1,0 +1,17 @@
+{
+  "id": "Alice_Access",
+  "namespace": "User/Alice/_Access",
+  "name": "Alice Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Alice",
+    "displayName": "Alice Chen",
+    "roles": [
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}
