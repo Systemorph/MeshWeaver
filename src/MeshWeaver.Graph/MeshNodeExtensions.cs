@@ -35,19 +35,21 @@ public static class MeshNodeExtensions
         {
             var store = state ?? new EntityStore();
             var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
-            var current = collection?.Instances.GetValueOrDefault(nodePath) as MeshNode;
+            // Key is Id (last segment of path), not full path
+            var nodeId = nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
+            var current = collection?.Instances.GetValueOrDefault(nodeId) as MeshNode;
             if (current == null)
                 throw new InvalidOperationException(
-                    $"MeshNode '{nodePath}' not found in stream. Available: [{string.Join(", ", collection?.Instances.Keys.Select(k => k.ToString()) ?? [])}]");
+                    $"MeshNode '{nodePath}' (id='{nodeId}') not found in stream. Available: [{string.Join(", ", collection?.Instances.Keys.Select(k => k.ToString()) ?? [])}]");
 
             var updated = update(current);
             if (string.IsNullOrEmpty(updated.Id))
                 throw new InvalidOperationException(
                     $"UpdateMeshNode produced a node with empty Id for path '{nodePath}'");
 
-            var newStore = store.Update(nameof(MeshNode), c => c.Update(nodePath, updated));
+            var newStore = store.Update(nameof(MeshNode), c => c.Update(nodeId, updated));
             return stream.ApplyChanges(new EntityStoreAndUpdates(newStore,
-                [new EntityUpdate(nameof(MeshNode), nodePath, updated) { OldValue = current }],
+                [new EntityUpdate(nameof(MeshNode), nodeId, updated) { OldValue = current }],
                 stream.StreamId));
         }, ex =>
         {

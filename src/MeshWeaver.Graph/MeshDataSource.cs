@@ -163,7 +163,7 @@ public static class MeshDataSourceExtensions
     {
         var updatedNode = updated.Deserialize<MeshNode>(stream.Hub.JsonSerializerOptions);
         return new(updatedNode!, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version,
-            [new EntityUpdate(nameof(MeshNode), updatedNode?.Path, updatedNode) { OldValue = current }]);
+            [new EntityUpdate(nameof(MeshNode), updatedNode?.Id, updatedNode) { OldValue = current }]);
     }
 
     /// <summary>
@@ -225,7 +225,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         {
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Path)
+                .WithKey(n => n.Id)
                 .WithInitialData([builtInNode]));
         }
 
@@ -237,7 +237,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         {
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Path)
+                .WithKey(n => n.Id)
                 .WithInitialData([staticNode]));
         }
 
@@ -245,12 +245,12 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         {
             _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
-            return WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
+            return WithType<MeshNode>(ts => ts.WithKey(n => n.Id));
         }
 
         return WithTypeSource(typeof(MeshNode),
                 new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
-                    .WithKey(n => n.Path));
+                    .WithKey(n => n.Id));
     }
 
 
