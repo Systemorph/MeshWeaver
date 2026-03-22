@@ -139,7 +139,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl { Markdown: "0" });
+            .FirstAsync(x => x is MarkdownControl { Markdown: not "0" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("1");
 
@@ -148,7 +148,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl { Markdown: "1" });
+            .FirstAsync(x => x is MarkdownControl { Markdown: not "1" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
     }
