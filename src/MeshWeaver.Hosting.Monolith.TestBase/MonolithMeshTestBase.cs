@@ -1,14 +1,8 @@
-using System;
-using System.Diagnostics;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
-using MeshWeaver.Graph;
+﻿using System.Diagnostics;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -113,9 +107,12 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         configuration.TypeRegistry.WithType(typeof(Graph.MeshNodeReference), nameof(Graph.MeshNodeReference));
+        // Pre-resolve RoutingService to avoid re-entrant DI resolution deadlock
+        // during client hub's BuildupAction (which runs on a thread pool thread)
+        var routingService = RoutingService;
         return configuration
             .AddMeshTypes()
-            .WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h));
+            .WithInitialization((h, _) => routingService.RegisterStreamAsync(h));
     }
 
     private static readonly string DisposeLogFile = Path.Combine(

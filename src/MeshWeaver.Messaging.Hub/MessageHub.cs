@@ -140,8 +140,13 @@ public sealed class MessageHub : IMessageHub
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
         var actions = Configuration.BuildupActions;
-        foreach (var buildup in actions)
-            await buildup(this, cancellationToken);
+        logger.LogDebug("Message hub {address} has {count} BuildupActions to run", Address, actions.Count);
+        for (var i = 0; i < actions.Count; i++)
+        {
+            logger.LogDebug("Message hub {address} starting BuildupAction {i}/{count}", Address, i + 1, actions.Count);
+            await actions[i](this, cancellationToken);
+            logger.LogDebug("Message hub {address} completed BuildupAction {i}/{count}", Address, i + 1, actions.Count);
+        }
 
         logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
 

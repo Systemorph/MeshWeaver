@@ -24,7 +24,7 @@ internal class InMemoryMeshQuery(
     MeshConfiguration? meshConfiguration = null,
     IEnumerable<INodeValidator>? nodeValidators = null,
     ILogger<InMemoryMeshQuery>? logger = null)
-    : IMeshQueryProvider
+    : IMeshQueryProvider, IMeshQueryCore
 {
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
@@ -51,9 +51,31 @@ internal class InMemoryMeshQuery(
     }
 
     /// <inheritdoc />
+    /// <summary>
+    /// Core query without access control — for infrastructure use (NodeTypeService, compilation).
+    /// </summary>
+    async IAsyncEnumerable<object> IMeshQueryCore.QueryAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var item in QueryInternalAsync(request, options, skipAccessControl: true, ct))
+            yield return item;
+    }
+
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var item in QueryInternalAsync(request, options, skipAccessControl: false, ct))
+            yield return item;
+    }
+
+    private async IAsyncEnumerable<object> QueryInternalAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        bool skipAccessControl,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var parsedQuery = _parser.Parse(request.Query);
@@ -79,9 +101,6 @@ internal class InMemoryMeshQuery(
             {
                 effectivePath = request.DefaultPath;
             }
-            // When no path specified and scope is Exact, default to Children (items in current namespace only)
-            // This ensures queries like "nodeType:Organization" find root-level organizations
-            // Use scope:descendants explicitly for recursive search
             if (parsedQuery.Scope == QueryScope.Exact)
             {
                 effectiveScope = QueryScope.Children;
@@ -90,13 +109,9 @@ internal class InMemoryMeshQuery(
 
         var basePath = NormalizePath(effectivePath);
 
-        // Get the effective user ID for security filtering (from request or access context)
         var userId = GetEffectiveUserId(request);
-
-        // Context-based exclusion
         var context = request.Context ?? parsedQuery.Context;
 
-        // Collect matched + access-filtered results, then sort.
         var matched = new List<object>();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
@@ -106,21 +121,24 @@ internal class InMemoryMeshQuery(
             if (!seen.Add(node))
                 continue;
 
-            // Apply access control filtering.
-            if (node is MeshNode meshNode)
+            // Apply access control filtering (skipped for core/infrastructure queries).
+            if (!skipAccessControl)
             {
-                if (!await ValidateReadAsync(meshNode, userId, ct))
-                    continue;
-            }
-            else if (securityService != null)
-            {
-                var itemPath = GetItemPath(node);
-                if (!string.IsNullOrEmpty(itemPath))
+                if (node is MeshNode meshNode)
                 {
-                    var permissions = await securityService.GetEffectivePermissionsAsync(
-                        itemPath, userId, ct);
-                    if (!permissions.HasFlag(Permission.Read))
+                    if (!await ValidateReadAsync(meshNode, userId, ct))
                         continue;
+                }
+                else if (securityService != null)
+                {
+                    var itemPath = GetItemPath(node);
+                    if (!string.IsNullOrEmpty(itemPath))
+                    {
+                        var permissions = await securityService.GetEffectivePermissionsAsync(
+                            itemPath, userId, ct);
+                        if (!permissions.HasFlag(Permission.Read))
+                            continue;
+                    }
                 }
             }
 
