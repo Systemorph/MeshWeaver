@@ -92,7 +92,12 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
 
         // Update Messages to ["msg1"]
         var updated = stream
-            .Select(ci => ci.Value)
+            .Select(ci =>
+            {
+                var t = ci.Value?.Content as MeshThread;
+                Output.WriteLine($"[STREAM] ChangeType={ci.ChangeType}, Value={ci.Value?.Id}, Messages={t?.Messages.Count}");
+                return ci.Value;
+            })
             .Timeout(5.Seconds())
             .FirstAsync(n =>
             {
@@ -100,11 +105,14 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
                 return t?.Messages.Count >= 1;
             }).ToTask(ct);
 
+        Output.WriteLine($"[TEST] Calling UpdateMeshNode for {threadPath}");
         workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
         {
+            Output.WriteLine($"[TEST] UpdateMeshNode callback: node={node?.Id}, Content={node?.Content?.GetType().Name}");
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
         });
+        Output.WriteLine("[TEST] UpdateMeshNode called, waiting for stream emission");
 
         var result = await updated;
         result.Should().NotBeNull();

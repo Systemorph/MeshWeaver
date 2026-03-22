@@ -82,8 +82,10 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     /// </summary>
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
+        // MeshNode key is Id (last segment), not full path
+        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), path)),
+            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
@@ -444,9 +446,10 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         // b) Get remote stream for specific entity via EntityReference
         var workspace = client.GetWorkspace();
+        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
         var entityStream = workspace.GetRemoteStream<object, EntityReference>(
             new Address(threadPath),
-            new EntityReference(nameof(MeshNode), threadPath));
+            new EntityReference(nameof(MeshNode), nodeId));
 
         var entity = await entityStream
             .Timeout(5.Seconds())

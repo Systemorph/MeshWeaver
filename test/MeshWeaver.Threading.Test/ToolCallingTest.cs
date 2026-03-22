@@ -73,8 +73,10 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
+        // MeshNode key is Id (last segment), not full path
+        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), path)),
+            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
