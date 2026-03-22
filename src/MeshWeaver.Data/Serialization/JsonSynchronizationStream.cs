@@ -267,16 +267,18 @@ public static class JsonSynchronizationStream
                             stream.ClientId, x.ChangeType, x.ChangedBy);
                         return null;
                     }
-                    var opts = stream.Host.JsonSerializerOptions;
-                    var patch = x.Updates.ToJsonPatch(opts, stream.Reference as WorkspaceReference);
-                    currentJson = patch.Apply(currentJson.Value);
+                    var patch = x.Updates.ToJsonPatch(stream.Host.JsonSerializerOptions, stream.Reference as WorkspaceReference);
+                    var patchJson = JsonSerializer.Serialize(patch, stream.Host.JsonSerializerOptions);
+                    // Apply patch with correct RFC 6901 unescaping
+                    // The json-everything library doesn't properly unescape ~1 -> / in property names
+                    (currentJson, _) = ApplyPatchWithCorrectUnescaping(patchJson, currentJson.Value, stream.Host.JsonSerializerOptions);
                     stream.Set(currentJson);
                     return (TChange?)Activator.CreateInstance
                     (
                         typeof(TChange),
                         stream.ClientId,
                         x.Version,
-                        new RawJson(JsonSerializer.Serialize(patch, opts)),
+                        new RawJson(patchJson),
                         x.ChangeType,
                         x.ChangedBy ?? string.Empty
                     );
@@ -339,11 +341,185 @@ public static class JsonSynchronizationStream
         if (currentJson is null)
             throw new InvalidOperationException("Current state is null, cannot patch.");
 
-        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options)
-            ?? throw new InvalidOperationException("Failed to deserialize JSON patch");
-        return (patch.Apply(currentJson.Value), patch);
+        // Apply patch operations manually with correct RFC 6901 unescaping
+        // The json-everything library stores segments in escaped form and Apply uses
+        // escaped property names, which is incorrect per RFC 6901
+        return ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson.Value, options);
     }
 
+    private static (JsonElement, JsonPatch) ApplyPatchWithCorrectUnescaping(string patchJson, JsonElement currentJson, JsonSerializerOptions options)
+    {
+        using var doc = JsonDocument.Parse(patchJson);
+        var currentNode = JsonSerializer.SerializeToNode(currentJson, options);
+        var operations = new List<PatchOperation>();
+
+        foreach (var opElement in doc.RootElement.EnumerateArray())
+        {
+            var op = opElement.GetProperty("op").GetString();
+            var pathString = opElement.GetProperty("path").GetString()!;
+
+            // Parse path segments with RFC 6901 unescaping
+            var segments = ParsePathSegments(pathString);
+
+            JsonNode? value = null;
+            if (opElement.TryGetProperty("value", out var valueElement))
+            {
+                value = JsonSerializer.SerializeToNode(valueElement, options);
+            }
+
+            // Apply the operation manually with correct unescaping
+            switch (op)
+            {
+                case "add":
+                    ApplyAdd(currentNode!, segments, value);
+                    break;
+                case "replace":
+                    ApplyReplace(currentNode!, segments, value);
+                    break;
+                case "remove":
+                    ApplyRemove(currentNode!, segments);
+                    break;
+                default:
+                    // For other operations, fall back to the library's Apply
+                    var parsedPath = JsonPointer.Parse(pathString);
+                    var operation = op switch
+                    {
+                        "move" when opElement.TryGetProperty("from", out var fromEl) =>
+                            PatchOperation.Move(parsedPath, JsonPointer.Parse(fromEl.GetString()!)),
+                        "copy" when opElement.TryGetProperty("from", out var fromEl) =>
+                            PatchOperation.Copy(parsedPath, JsonPointer.Parse(fromEl.GetString()!)),
+                        "test" => PatchOperation.Test(parsedPath, value),
+                        _ => throw new InvalidOperationException($"Unknown patch operation: {op}")
+                    };
+                    operations.Add(operation);
+                    break;
+            }
+        }
+
+        // If there were any fallback operations, apply them
+        if (operations.Count > 0)
+        {
+            var fallbackPatch = new JsonPatch(operations);
+            var result = fallbackPatch.Apply(currentNode);
+            return (JsonSerializer.SerializeToElement(result, options), fallbackPatch);
+        }
+
+        // Serialize back to JsonElement
+        var resultElement = JsonSerializer.SerializeToElement(currentNode, options);
+        // Create a dummy patch for the return value (we don't use it on the receiving end)
+        var dummyPatch = JsonSerializer.Deserialize<JsonPatch>(patchJson, options)!;
+        return (resultElement, dummyPatch);
+    }
+
+    private static string[] ParsePathSegments(string path)
+    {
+        if (string.IsNullOrEmpty(path) || path == "/")
+            return Array.Empty<string>();
+
+        // Split on / (first char is always /)
+        var parts = path[1..].Split('/');
+        var segments = new string[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            // RFC 6901 unescape: ~1 -> / and ~0 -> ~ (order matters)
+            segments[i] = parts[i].Replace("~1", "/").Replace("~0", "~");
+        }
+        return segments;
+    }
+
+    private static void ApplyAdd(JsonNode root, string[] segments, JsonNode? value)
+    {
+        if (segments.Length == 0)
+            throw new InvalidOperationException("Cannot add at root path");
+
+        var parent = NavigateToParent(root, segments);
+        var key = segments[^1];
+
+        if (parent is JsonObject obj)
+        {
+            obj[key] = value;
+        }
+        else if (parent is JsonArray arr)
+        {
+            if (key == "-")
+                arr.Add(value);
+            else if (int.TryParse(key, out var index))
+                arr.Insert(index, value);
+            else
+                throw new InvalidOperationException($"Invalid array index: {key}");
+        }
+        else
+        {
+            throw new InvalidOperationException($"Cannot add property to {parent?.GetType().Name}");
+        }
+    }
+
+    private static void ApplyReplace(JsonNode root, string[] segments, JsonNode? value)
+    {
+        if (segments.Length == 0)
+            throw new InvalidOperationException("Cannot replace at root path");
+
+        var parent = NavigateToParent(root, segments);
+        var key = segments[^1];
+
+        if (parent is JsonObject obj)
+        {
+            obj[key] = value;
+        }
+        else if (parent is JsonArray arr && int.TryParse(key, out var index))
+        {
+            arr[index] = value;
+        }
+        else
+        {
+            throw new InvalidOperationException($"Cannot replace in {parent?.GetType().Name}");
+        }
+    }
+
+    private static void ApplyRemove(JsonNode root, string[] segments)
+    {
+        if (segments.Length == 0)
+            throw new InvalidOperationException("Cannot remove at root path");
+
+        var parent = NavigateToParent(root, segments);
+        var key = segments[^1];
+
+        if (parent is JsonObject obj)
+        {
+            obj.Remove(key);
+        }
+        else if (parent is JsonArray arr && int.TryParse(key, out var index))
+        {
+            arr.RemoveAt(index);
+        }
+        else
+        {
+            throw new InvalidOperationException($"Cannot remove from {parent?.GetType().Name}");
+        }
+    }
+
+    private static JsonNode? NavigateToParent(JsonNode root, string[] segments)
+    {
+        JsonNode? current = root;
+        // Navigate to parent (all segments except last)
+        for (int i = 0; i < segments.Length - 1; i++)
+        {
+            var segment = segments[i];
+            if (current is JsonObject obj)
+            {
+                current = obj[segment];
+            }
+            else if (current is JsonArray arr && int.TryParse(segment, out var index))
+            {
+                current = arr[index];
+            }
+            else
+            {
+                throw new InvalidOperationException($"Cannot navigate through {current?.GetType().Name} with segment {segment}");
+            }
+        }
+        return current;
+    }
     public static IReadOnlyCollection<EntityUpdate> ToEntityUpdates(
         this InstanceCollection current,
         CollectionReference reference,
@@ -376,8 +552,10 @@ public static class JsonSynchronizationStream
 
         if (current is null)
             throw new InvalidOperationException("Current state is null, cannot patch.");
-        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options)!;
-        var updated = patch.Apply(current);
+        // Serialize InstanceCollection to JsonElement, apply patch with correct unescaping, then deserialize back
+        var currentJson = JsonSerializer.SerializeToElement(current, options);
+        var (updatedJson, patch) = ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson, options);
+        var updated = updatedJson.Deserialize<InstanceCollection>(options);
         return (updated!, patch);
     }
 

@@ -41,7 +41,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
             TypeDefinition.CollectionName,
-            new KeyFunction(o => ((MeshNode)o).Path, typeof(string)));
+            new KeyFunction(o => ((MeshNode)o).Id, typeof(string)));
 
         workspace.Hub.RegisterForDisposal(new FlushOnDispose(this));
     }
@@ -214,7 +214,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
             allNodes.Add(ownNode);
 
-        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
+        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Id);
         return _lastSaved;
     }
 
