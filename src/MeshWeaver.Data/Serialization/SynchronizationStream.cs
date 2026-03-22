@@ -373,11 +373,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
-                SetCurrent(hub, this.ToChangeItem(Current!.Value!,
+                var changeItem = this.ToChangeItem(Current!.Value!,
                     currentJson.Value,
                     patch,
-                    delivery.Message.ChangedBy ?? ClientId));
+                    delivery.Message.ChangedBy ?? ClientId);
 
+                // PatchFunction may be null for single-object streams (e.g. MeshNodeReference).
+                // Fall back to full deserialization of the patched JSON.
+                changeItem ??= new ChangeItem<TStream>(
+                    currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
+                    delivery.Message.ChangedBy ?? ClientId,
+                    StreamId,
+                    ChangeType.Patch,
+                    delivery.Message.Version,
+                    null);
+
+                SetCurrent(hub, changeItem);
             }
             catch (Exception ex)
             {

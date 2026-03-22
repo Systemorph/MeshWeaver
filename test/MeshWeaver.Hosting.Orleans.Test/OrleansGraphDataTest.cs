@@ -77,7 +77,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
     public async Task OrganizationSearch_ShouldRender()
     {
         var portal = await CreatePortalHubAsync();
-        var organizationAddress = new Address("Organization");
+        var organizationAddress = AddressExtensions.CreateAppAddress("Kernel");
 
         // First ping to ensure Organization grain is activated and compiled
         var pingResponse = await portal
@@ -95,14 +95,14 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Should().NotBe(default(JsonElement), "Search view should render for Organization");
+        value.Should().NotBe(default(JsonElement), "Search view should render for Kernel");
     }
 
     [Fact(Timeout = 120000)]
     public async Task OrganizationDefault_ShouldRender()
     {
         var portal = await CreatePortalHubAsync();
-        var organizationAddress = new Address("Organization");
+        var organizationAddress = AddressExtensions.CreateAppAddress("Kernel");
 
         var pingResponse = await portal
             .AwaitResponse(new PingRequest(),
@@ -119,7 +119,7 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         var value = await stream.Timeout(TimeSpan.FromSeconds(30)).FirstAsync();
         Output.WriteLine($"Received value: {value.Value.ValueKind}");
-        value.Should().NotBe(default(JsonElement), "Default view should render for Organization");
+        value.Should().NotBe(default(JsonElement), "Default view should render for Kernel");
     }
 
     [Fact(Timeout = 60000)]
@@ -135,16 +135,16 @@ public class OrleansGraphDataTest(ITestOutputHelper output) : TestBase(output)
 
         // Check the path resolution (verifies both persistence and catalog are working)
         var pathResolver = siloServiceProvider.GetRequiredService<IPathResolver>();
-        var resolution = await pathResolver.ResolvePathAsync("Organization");
-        Output.WriteLine($"ResolvePathAsync('Organization'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
-        resolution.Should().NotBeNull("Organization path should resolve");
+        var resolution = await pathResolver.ResolvePathAsync("app/Kernel");
+        Output.WriteLine($"ResolvePathAsync('app/Kernel'): Prefix={resolution?.Prefix}, Remainder={resolution?.Remainder}");
+        resolution.Should().NotBeNull("app/Kernel path should resolve");
     }
 
     [Fact(Timeout = 120000)]
     public async Task PingOrganization()
     {
         var portal = await CreatePortalHubAsync();
-        var organizationAddress = new Address("Organization");
+        var organizationAddress = AddressExtensions.CreateAppAddress("Kernel");
 
         Output.WriteLine("Sending PingRequest to Organization via Orleans routing...");
         var response = await portal

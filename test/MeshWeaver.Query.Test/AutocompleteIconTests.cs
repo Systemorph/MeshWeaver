@@ -7,6 +7,7 @@ using Memex.Portal.Shared;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -32,11 +33,15 @@ public class AutocompleteIconTests : MonolithMeshTestBase
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return base.ConfigureMesh(builder)
+        return builder
+            .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddRowLevelSecurity()
             .AddSystemorph()
             .AddAcme()
-            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory));
+            .AddMeshNodes(TestUsers.PublicAdminAccess())
+            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
+            .AddGraph();
     }
 
     public override async ValueTask DisposeAsync()
@@ -188,16 +193,16 @@ public class AutocompleteIconTests : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Autocomplete_PathMatch_FindsByPathSubstring()
     {
-        // Search for a path segment that exists under a different name
+        // Search for "Project" which exists as ACME/Project
         var suggestions = await MeshQuery
-            .AutocompleteAsync("", "Organization", AutocompleteMode.RelevanceFirst, 10)
+            .AutocompleteAsync("", "Project", AutocompleteMode.RelevanceFirst, 10)
             .ToListAsync();
 
-        Output.WriteLine($"Got {suggestions.Count} suggestions for 'Organization':");
+        Output.WriteLine($"Got {suggestions.Count} suggestions for 'Project':");
         foreach (var s in suggestions)
             Output.WriteLine($"  - {s.Path}: {s.Name} (Score: {s.Score:F1})");
 
-        suggestions.Should().NotBeEmpty("'Organization' should match nodes with that in name or path");
+        suggestions.Should().NotBeEmpty("'Project' should match nodes with that in name or path");
     }
 
     [Fact(Timeout = 10000)]
