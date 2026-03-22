@@ -1,6 +1,4 @@
-﻿using MeshWeaver.AI.Persistence;
-using MeshWeaver.AI.Plugins;
-using MeshWeaver.AI.Threading;
+﻿using MeshWeaver.AI.Plugins;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,7 +20,11 @@ public static class AIExtensions
                     .AddThreadType()
                     .AddAgentType()
                     .ConfigureServices(services => services.AddAgentChatServices())
-                    .ConfigureDefaultNodeHub(config => config.AddThreadSupport())
+                    .ConfigureDefaultNodeHub(config =>
+                    {
+                        config.TypeRegistry.AddAITypes();
+                        return config;
+                    })
                 ;
         }
     }

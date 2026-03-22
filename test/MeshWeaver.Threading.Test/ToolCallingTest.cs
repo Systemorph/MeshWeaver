@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -10,7 +10,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -37,12 +36,12 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return base.ConfigureMesh(builder)
+            .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddSingleton<IChatClientFactory>(sp => new ToolCallingFakeChatClientFactory(sp));
+                services.AddSingleton<IChatClientFactory>(new ToolCallingFakeChatClientFactory());
                 return services;
             })
-            .AddAI()
             .AddSampleUsers();
     }
 
@@ -229,7 +228,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         public void Dispose() { }
     }
 
-    private class ToolCallingFakeChatClientFactory(IServiceProvider sp) : IChatClientFactory
+    private class ToolCallingFakeChatClientFactory : IChatClientFactory
     {
         public string Name => "ToolCallingFakeFactory";
         public IReadOnlyList<string> Models => ["tool-calling-model"];
@@ -241,16 +240,11 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             IReadOnlyList<AgentConfiguration> hierarchyAgents,
             string? modelName = null)
         {
-            // Wire the real MeshPlugin tools so the agent can actually execute them
-            var hub = sp.GetRequiredService<IMessageHub>();
-            var meshPlugin = new MeshPlugin(hub, chat);
-            var tools = meshPlugin.CreateTools(); // Get, Search, NavigateTo
-
             var agent = new ChatClientAgent(
                 chatClient: new ToolCallingFakeChatClient(),
                 instructions: config.Instructions ?? "You are a helpful test assistant that uses tools.",
                 name: config.Id, description: config.Description ?? config.Id,
-                tools: tools.ToList(), loggerFactory: null, services: null);
+                tools: [], loggerFactory: null, services: null);
             return Task.FromResult(agent);
         }
     }
