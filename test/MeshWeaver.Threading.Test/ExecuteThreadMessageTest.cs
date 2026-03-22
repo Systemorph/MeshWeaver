@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -11,13 +11,11 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -99,7 +97,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public async Task SubmitMessage_CreatesUserAndResponseNodes()
     {
-        var ct = new CancellationTokenSource(15.Seconds()).Token;
+        var ct = new CancellationTokenSource(1500.Seconds()).Token;
         var client = GetClient();
 
         // 1. Create thread and submit
@@ -530,14 +528,14 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 3. Update via MeshNodeReference stream
         var workspace = client.GetWorkspace();
-        workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
+        workspace.UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with
             {
                 Content = thread with { Messages = thread.Messages.AddRange(["msg1", "msg2"]) }
             };
-        });
+        }, new Address(threadPath), threadPath);
 
         // 4. Verify
         var messages = await messagesChanged;

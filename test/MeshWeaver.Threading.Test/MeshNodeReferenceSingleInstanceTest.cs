@@ -107,14 +107,14 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             }).ToTask(ct);
 
         Output.WriteLine($"[TEST] Calling UpdateMeshNode for {threadPath}");
-        workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
+        workspace.UpdateMeshNode(node =>
         {
             if (node?.Content is null)
                 throw new InvalidOperationException("Node content is null");
             Output.WriteLine($"[TEST] UpdateMeshNode callback: node={node.Id}, Content={node.Content.GetType().Name}");
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
-        });
+        }, new Address(threadPath), threadPath);
         Output.WriteLine("[TEST] UpdateMeshNode called, waiting for stream emission");
 
         var result = await updated;
@@ -154,11 +154,11 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 1)
             .ToTask(ct);
 
-        workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
+        workspace.UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = thread with { Messages = thread.Messages.Add("msg1") } };
-        });
+        }, new Address(threadPath), threadPath);
 
         var r1 = await afterFirst;
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", ((MeshThread)r1!.Content!).Messages)}]");
@@ -170,11 +170,11 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 2)
             .ToTask(ct);
 
-        workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
+        workspace.UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = thread with { Messages = thread.Messages.Add("msg2") } };
-        });
+        }, new Address(threadPath), threadPath);
 
         var r2 = await afterSecond;
         var finalContent = r2!.Content as MeshThread;
@@ -188,11 +188,11 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 3)
             .ToTask(ct);
 
-        workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
+        workspace.UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = thread with { Messages = thread.Messages.Add("msg3") } };
-        });
+        }, new Address(threadPath), threadPath);
 
         var r3 = await afterThird;
         var final3 = r3!.Content as MeshThread;

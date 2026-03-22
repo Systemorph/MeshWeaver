@@ -581,12 +581,8 @@ public class ThreadMessageChatTests : IAsyncLifetime
     {
         var schemaAc = new PostgreSqlAccessControl(_schemaDs);
         var scope = $"User/{userId}";
-        await schemaAc.GrantAsync(scope, userId, "Read", isAllow: true, ct);
-        await schemaAc.GrantAsync(scope, userId, "Create", isAllow: true, ct);
-        await schemaAc.GrantAsync(scope, userId, "Update", isAllow: true, ct);
-        await schemaAc.GrantAsync(scope, userId, "Delete", isAllow: true, ct);
-        await schemaAc.GrantAsync(scope, userId, "Comment", isAllow: true, ct);
-        await schemaAc.GrantAsync(scope, userId, "Execute", isAllow: true, ct);
+        foreach (var perm in new[] { "Read", "Create", "Update", "Delete", "Comment", "Execute" })
+            await schemaAc.GrantAsync(scope, userId, perm, isAllow: true, ct);
     }
 
     /// <summary>

@@ -89,29 +89,19 @@ public static class ThreadExecution
                 return;
             }
 
-            // 2) Update Thread.Messages — subscribe to workspace stream to get current data
-            // 2) Update Thread.Messages — read current node, update, post DataChangeRequest
-            hub.InvokeAsync(() =>
+
+            var workspace = hub.GetWorkspace();
+            workspace.UpdateMeshNode(threadNode =>
             {
-                hub.GetWorkspace().GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+                var thread = threadNode.Content as MeshThread;
+                if (thread is null)
+                    throw new InvalidOperationException($"Node at {threadPath} does not contain a Thread");
+
+                var ret = threadNode with
                 {
-                    var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                    if (threadNode == null) return;
-                    var thread = threadNode.Content as MeshThread ?? new MeshThread();
-                    hub.Post(new DataChangeRequest
-                    {
-                        Updates =
-                        [
-                            threadNode with
-                            {
-                                Content = thread with
-                                {
-                                    Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
-                                }
-                            }
-                        ]
-                    });
-                });
+                    Content = thread with { Messages = thread.Messages.AddRange([userMsgId, responseMsgId]) }
+                };
+                return ret;
             });
 
             // 3) Start execution on hosted hub
