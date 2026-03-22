@@ -181,14 +181,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         );
         deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
-        // asserts
-        var stream = GetClient()
-            .GetWorkspace()
-            .GetObservable<MyData>();
-        data = await stream
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(i => i.Count == 1);
-        data.Should().BeEquivalentTo(expectedItems);
+        // asserts — verify through host workspace (client filters out own changes via echo prevention)
         data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
