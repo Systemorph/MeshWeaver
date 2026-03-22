@@ -1,8 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -108,7 +109,9 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine($"[TEST] Calling UpdateMeshNode for {threadPath}");
         workspace.UpdateMeshNode(new Address(threadPath), threadPath, node =>
         {
-            Output.WriteLine($"[TEST] UpdateMeshNode callback: node={node?.Id}, Content={node?.Content?.GetType().Name}");
+            if (node?.Content is null)
+                throw new InvalidOperationException("Node content is null");
+            Output.WriteLine($"[TEST] UpdateMeshNode callback: node={node.Id}, Content={node.Content.GetType().Name}");
             var thread = node.Content as MeshThread ?? new MeshThread();
             return node with { Content = thread with { Messages = ImmutableList.Create("msg1") } };
         });
@@ -195,5 +198,67 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var final3 = r3!.Content as MeshThread;
         final3!.Messages.Should().BeEquivalentTo(new[] { "msg1", "msg2", "msg3" });
         Output.WriteLine($"After update 3: Messages=[{string.Join(", ", final3.Messages)}]");
+    }
+
+    /// <summary>
+    /// Tests the ThreadsCatalog view injected via AddAI → AddThreadType → AddThreadLayoutAreas.
+    /// Verifies that from a thread's Threads area we can create a new sub-thread (delegation).
+    /// </summary>
+    [Fact]
+    public async Task ThreadsCatalog_CreateNewThread_Succeeds()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // 1. Create a context node and a thread under it
+        var contextPath = "TestContext";
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode(contextPath) { Name = "Test Context", NodeType = "Markdown" }, ct);
+
+        var client = GetClient();
+        var response = await client.AwaitResponse(
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Parent thread for catalog test")),
+            o => o.WithTarget(new Address(contextPath)),
+            ct);
+
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var threadPath = response.Message.Node!.Path;
+        Output.WriteLine($"Created parent thread at: {threadPath}");
+
+        // 2. Subscribe to the ThreadsArea on the thread hub — this renders ThreadsCatalog
+        var workspace = client.GetWorkspace();
+        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(threadPath),
+            new LayoutAreaReference(MeshNodeLayoutAreas.ThreadsArea));
+        layoutStream.Should().NotBeNull("Thread hub should serve the Threads area (ThreadsCatalog)");
+
+        // Wait for the layout to render
+        var layout = await layoutStream!.Timeout(10.Seconds()).FirstAsync();
+        Output.WriteLine("ThreadsCatalog layout rendered");
+
+        // 3. Create a sub-thread (delegation) via CreateNodeRequest — same flow as the "Create Thread" button
+        var subResponse = await client.AwaitResponse(
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(threadPath, "Delegation sub-thread")),
+            o => o.WithTarget(new Address(threadPath)),
+            ct);
+
+        subResponse.Message.Success.Should().BeTrue(subResponse.Message.Error);
+        var subThreadPath = subResponse.Message.Node!.Path;
+        Output.WriteLine($"Created sub-thread at: {subThreadPath}");
+
+        subThreadPath.Should().StartWith($"{threadPath}/");
+        subThreadPath.Should().Contain($"/{ThreadNodeType.ThreadPartition}/");
+
+        // 4. Verify the sub-thread is queryable with the same query ThreadsCatalog uses
+        //    ThreadsCatalog queries: namespace:{hubPath}/_Thread nodeType:Thread
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var threads = await meshQuery.QueryAsync<MeshNode>(
+            $"namespace:{threadPath}/{ThreadNodeType.ThreadPartition} nodeType:{ThreadNodeType.NodeType}").ToListAsync(ct);
+
+        threads.Should().ContainSingle("should find the created sub-thread");
+        threads[0].Path.Should().Be(subThreadPath);
+        threads[0].Content.Should().BeOfType<MeshThread>();
+        var content = (MeshThread)threads[0].Content!;
+        content.ParentPath.Should().Be(threadPath);
+        Output.WriteLine($"Sub-thread verified: {threads[0].Path}, ParentPath={content.ParentPath}");
     }
 }

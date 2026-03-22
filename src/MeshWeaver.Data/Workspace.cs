@@ -99,10 +99,17 @@ public class Workspace : IWorkspace
         TReduced,
         TReference
     >(Address address, TReference reference)
-        where TReference : WorkspaceReference =>
-        (ISynchronizationStream<TReduced>)_remoteStreamCache.GetOrAdd(
-            (address, (WorkspaceReference)reference),
-            _ => (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference));
+        where TReference : WorkspaceReference
+    {
+        var key = (address, (WorkspaceReference)reference);
+        // Check if cached stream is still alive; if disposed, replace it
+        if (_remoteStreamCache.TryGetValue(key, out var cached) && cached.Hub.RunLevel <= MessageHubRunLevel.Started)
+            return (ISynchronizationStream<TReduced>)cached;
+
+        var stream = (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference);
+        _remoteStreamCache[key] = stream;
+        return (ISynchronizationStream<TReduced>)stream;
+    }
 
 
 
