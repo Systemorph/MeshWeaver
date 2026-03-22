@@ -57,13 +57,13 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         var client = GetClient();
 
         var resp1 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartnerRe", "Discussion about Partner Re portfolio")),
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartnerRe", "Discussion about Partner Re portfolio", AdminUserId)),
             o => o.WithTarget(new Address("PartnerRe")), TestTimeout);
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
         Output.WriteLine($"Thread 1 at: {resp1.Message.Node?.Path}");
 
         var resp2 = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("ACME", "ACME project review")),
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("ACME", "ACME project review", AdminUserId)),
             o => o.WithTarget(new Address("ACME")), TestTimeout);
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
         Output.WriteLine($"Thread 2 at: {resp2.Message.Node?.Path}");
@@ -98,7 +98,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
 
         var client = GetClient();
         var resp = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace")),
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)),
             o => o.WithTarget(new Address("External")), TestTimeout);
         resp.Message.Success.Should().BeTrue(resp.Message.Error);
 
@@ -249,7 +249,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         // Act: create thread via the production CreateNodeRequest path
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestCtx", "Verify created-by storage")),
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestCtx", "Verify created-by storage", AdminUserId)),
             o => o.WithTarget(new Address("TestCtx")), TestTimeout);
 
         response.Message.Success.Should().BeTrue(response.Message.Error);

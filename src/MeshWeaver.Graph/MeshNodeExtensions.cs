@@ -1,5 +1,5 @@
-﻿using MeshWeaver.Data;
-using MeshWeaver.Data.Serialization;
+﻿using System.ComponentModel;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
@@ -29,15 +29,19 @@ public static class MeshNodeExtensions
     /// Reads the current MeshNode, applies the update function, and pushes the change.
     /// </summary>
     public static void UpdateMeshNode(this ISynchronizationStream<EntityStore> stream,
-        string nodePath, Func<MeshNode, MeshNode> update)
+         Func<MeshNode, MeshNode> update, string? nodePath = null)
     {
         stream.Update(state =>
         {
             var store = state ?? new EntityStore();
             var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
-            // Key is Id (last segment of path), not full path
-            var nodeId = nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
-            var current = collection?.Instances.GetValueOrDefault(nodeId) as MeshNode;
+            if (collection is null)
+                throw new InvalidOperationException(
+                    $"MeshNode collection not found in stream. Available collections: [{string.Join(", ", store.Collections.Keys)}]");
+
+            var nodeId = nodePath is null ? null : nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
+            var current = (nodeId is null ?
+                collection.Instances.Values.FirstOrDefault() : collection?.Instances.GetValueOrDefault(nodeId)) as MeshNode;
             if (current == null)
                 throw new InvalidOperationException(
                     $"MeshNode '{nodePath}' (id='{nodeId}') not found in stream. Available: [{string.Join(", ", collection?.Instances.Keys.Select(k => k.ToString()) ?? [])}]");
@@ -47,7 +51,12 @@ public static class MeshNodeExtensions
                 throw new InvalidOperationException(
                     $"UpdateMeshNode produced a node with empty Id for path '{nodePath}'");
 
-            var newStore = store.Update(nameof(MeshNode), c => c.Update(nodeId, updated));
+            var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
+
+            //TODO: This should not be required but i don't seem to be able to get it to work without
+            stream.Host.Post(new DataChangeRequest() { Updates = [updated] });
+
+
             return stream.ApplyChanges(new EntityStoreAndUpdates(newStore,
                 [new EntityUpdate(nameof(MeshNode), nodeId, updated) { OldValue = current }],
                 stream.StreamId));
@@ -65,23 +74,29 @@ public static class MeshNodeExtensions
     /// or GetRemoteStream for a remote hub address.
     /// </summary>
     public static void UpdateMeshNode(this IWorkspace workspace,
-        Address? address, string nodePath, Func<MeshNode, MeshNode> update)
+        Func<MeshNode, MeshNode> update,
+        Address? address = null, string? nodePath = null)
     {
         if (address == null || address.Equals(workspace.Hub.Address))
         {
-            workspace.GetStream(typeof(MeshNode))?.UpdateMeshNode(nodePath, update);
+            workspace.GetStream(typeof(MeshNode))?.UpdateMeshNode(update, nodePath);
         }
         else
         {
-            var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                address, new MeshNodeReference());
+            var stream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+                address, new CollectionReference(nameof(MeshNode)));
             stream?.Update(current =>
             {
-                if (current == null) return null;
-                var updated = update(current);
-                return new ChangeItem<MeshNode>(updated, stream.StreamId, stream.StreamId,
+                if (current == null) throw new InvalidAsynchronousStateException("no state of mesh nodes");
+                if (nodePath is not null)
+                    nodePath = nodePath.Split('/').Last();
+                var node = (nodePath is null ? current.Instances.Values.First() : current.Instances.GetValueOrDefault(nodePath)) as MeshNode;
+                if (node is null)
+                    throw new InvalidAsynchronousStateException("State is not a mesh node.");
+                var updated = update(node);
+                return new ChangeItem<InstanceCollection>(current.SetItem(updated.Id, updated), stream.StreamId, stream.StreamId,
                     ChangeType.Patch, stream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), nodePath, updated) { OldValue = current }]);
+                    [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = node }]);
             });
         }
     }
@@ -95,11 +110,11 @@ public static class MeshNodeExtensions
         Address? address, string nodePath, Func<MeshNode, TContent, MeshNode> update)
         where TContent : class
     {
-        workspace.UpdateMeshNode(address, nodePath, node =>
+        workspace.UpdateMeshNode(node =>
         {
             var content = node.Content as TContent;
             return content != null ? update(node, content) : node;
-        });
+        }, address, nodePath);
     }
 
     /// <summary>

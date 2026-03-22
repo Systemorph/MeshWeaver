@@ -42,7 +42,6 @@ public class MeshNodeAutocompleteTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddOrganizationType()
             .AddSystemorph()
             .AddAcme()
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))

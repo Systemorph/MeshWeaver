@@ -44,7 +44,6 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddOrganizationType()
             .AddSystemorph()
             .AddAcme()
             .AddUserData()

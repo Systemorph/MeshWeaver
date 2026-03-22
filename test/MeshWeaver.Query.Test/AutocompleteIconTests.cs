@@ -32,14 +32,11 @@ public class AutocompleteIconTests : MonolithMeshTestBase
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return builder
-            .UseMonolithMesh()
+        return base.ConfigureMesh(builder)
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddOrganizationType()
             .AddSystemorph()
             .AddAcme()
-            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
-            .AddGraph();
+            .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory));
     }
 
     public override async ValueTask DisposeAsync()
