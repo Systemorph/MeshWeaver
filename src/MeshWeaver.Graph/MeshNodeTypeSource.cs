@@ -50,13 +50,13 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     {
         instances = MergePartialUpdates(instances);
 
-        // Open MeshNode init gate when node becomes Active (e.g., via CreateNodeRequest)
+        // Open MeshNode init gate when node becomes Active or Transient
         {
             var ownNode = instances.Instances.Values.OfType<MeshNode>()
                 .FirstOrDefault(n => n.Path == _hubPath);
-            if (ownNode is { State: MeshNodeState.Active })
+            if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
             {
-                _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node Active via update", _hubPath);
+                _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node {State} via update", _hubPath, ownNode.State);
                 _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             }
         }
@@ -207,7 +207,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
 
-        if (ownNode is { State: MeshNodeState.Active })
+        if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
             _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
 
         var allNodes = new List<MeshNode>();
