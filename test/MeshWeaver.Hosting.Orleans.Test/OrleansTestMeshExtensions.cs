@@ -37,7 +37,6 @@ public static class OrleansTestMeshExtensions
             .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })

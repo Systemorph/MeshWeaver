@@ -68,7 +68,7 @@ public static class JsonSynchronizationStream
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
 
-        else
+        else if (!owner.Equals(hub.Address))
             reduced.RegisterForDisposal(
                 reduced
                     .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))

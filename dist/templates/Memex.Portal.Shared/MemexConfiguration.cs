@@ -82,8 +82,7 @@ public static class MemexConfiguration
         // Configure Radzen
         services.AddRadzenServices();
 
-        // Configure AI services
-        services.AddMemoryChatPersistence();
+        // AI services — thread persistence is handled via MeshNodes
 
         // Configure AI factories (read from appsettings, including Order)
         services.AddAzureFoundryClaude(config =>
