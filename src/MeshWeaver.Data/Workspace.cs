@@ -93,12 +93,16 @@ public class Workspace : IWorkspace
             : (ISynchronizationStream<EntityStore>)this.CreateExternalClient<EntityStore, WorkspaceReference<EntityStore>>(owner, reference, impersonateAsHub: true);
 
 
+    private readonly ConcurrentDictionary<(Address, WorkspaceReference), ISynchronizationStream> _remoteStreamCache = new();
+
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
         TReference
     >(Address address, TReference reference)
         where TReference : WorkspaceReference =>
-        (ISynchronizationStream<TReduced>)this.CreateExternalClient<TReduced, TReference>(address, reference);
+        (ISynchronizationStream<TReduced>)_remoteStreamCache.GetOrAdd(
+            (address, (WorkspaceReference)reference),
+            _ => (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference));
 
 
 

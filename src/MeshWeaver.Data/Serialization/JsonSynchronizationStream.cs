@@ -596,10 +596,11 @@ public static class JsonSynchronizationStream
         return streamReference switch
         {
             CollectionReference collection => CreateCollectionPatch(collection, options, updates),
-            _ => CreateEntityStorePatch(options, updates)
+            WorkspaceReference<EntityStore> => CreateEntityStorePatch(options, updates),
+            null => CreateEntityStorePatch(options, updates),
+            // Single-object references (e.g. MeshNodeReference) — patch at root level
+            _ => CreateSingleObjectPatch(options, updates)
         };
-
-
     }
 
     private static JsonPatch CreateCollectionPatch(
@@ -634,6 +635,26 @@ public static class JsonSynchronizationStream
                     var newPath = parentPath.Combine(p.Path);
                     return CreatePatchOperation(p, newPath);
                 }).ToArray();
+                return e.Concat(patches);
+            }).ToArray());
+    }
+
+    private static JsonPatch CreateSingleObjectPatch(JsonSerializerOptions options, IEnumerable<EntityUpdate> updates)
+    {
+        // For single-object streams (e.g. MeshNodeReference), generate root-level patches
+        // without collection/id path segments
+        return new JsonPatch(updates
+            .Aggregate(Enumerable.Empty<PatchOperation>(), (e, u) =>
+            {
+                var first = u.OldValue;
+                var last = u.Value;
+                if (last == null && first == null)
+                    return e;
+                if (first == null)
+                    return e.Concat([PatchOperation.Add(JsonPointer.Empty, JsonSerializer.SerializeToNode(last, options))]);
+                if (last == null)
+                    return e.Concat([PatchOperation.Remove(JsonPointer.Empty)]);
+                var patches = first.CreatePatch(last, options).Operations;
                 return e.Concat(patches);
             }).ToArray());
     }
