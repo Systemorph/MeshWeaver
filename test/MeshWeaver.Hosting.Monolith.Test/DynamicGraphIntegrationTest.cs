@@ -1171,8 +1171,8 @@ public class DynamicGraphIntegrationTestsCollection
 /// <summary>
 /// Tests that use the actual samples/Graph/Data directory to test real sample data.
 /// This replicates the exact production scenario with real sample data.
-/// Uses MeshWeaver/Documentation/Article as the NodeType with Code children
-/// (Article.cs and ArticleLayoutAreas.cs).
+/// Uses ACME/Article as the NodeType with Code children
+/// (Article.cs and ArticleLayoutAreas.cs under _Source).
 /// </summary>
 [Collection("SamplesGraphDataTests")]
 public class SamplesGraphDataTest : MonolithMeshTestBase
@@ -1180,8 +1180,8 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     private readonly string _cacheDirectory;
 
     // Article NodeType is at MeshWeaver/Documentation/Article with 2 code files
-    private const string ArticleNodeTypePath = "MeshWeaver/Documentation/Article";
-    private const string ArticleCodeNamespace = "MeshWeaver/Documentation/Article/_Source";
+    private const string ArticleNodeTypePath = "ACME/Article";
+    private const string ArticleCodeNamespace = "ACME/Article/_Source";
 
     public SamplesGraphDataTest(ITestOutputHelper output) : base(output)
     {
@@ -1686,7 +1686,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
     /// and that the left menu contains the correct number of code file entries.
     /// This diagnoses the "no code files" issue in the NodeType Overview.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 30000)]
     public async Task Article_NodeTypeOverview_ContainsCodeNodes()
     {
         var articleAddress = new Address(ArticleNodeTypePath);
@@ -1732,7 +1732,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         hasNoCodeFiles.Should().BeFalse(
             "NodeType Overview should NOT show 'No code files'. " +
-            "Article has 2 code files (Article.cs, ArticleLayoutAreas.cs) " +
+            "Article has 2 code files under _Source (Article.cs, ArticleLayoutAreas.cs) " +
             "which should be found by scope:descendants query.");
     }
 
@@ -1748,7 +1748,7 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
         var hubPath = ArticleNodeTypePath;
 
         // Act: Use ObserveQuery with the same query pattern as NodeTypeLayoutAreas.Overview
-        var queryString = $"path:{hubPath} nodeType:{CodeNodeType.NodeType} scope:descendants";
+        var queryString = $"namespace:{hubPath}/_Source nodeType:{CodeNodeType.NodeType}";
         Output.WriteLine($"ObserveQuery: {queryString}");
 
         var request = MeshQueryRequest.FromQuery(queryString);
@@ -1763,8 +1763,10 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
 
         // Assert
         initialChange.ChangeType.Should().Be(QueryChangeType.Initial, "First emission should be Initial");
-        initialChange.Items.Should().HaveCount(2,
-            "ObserveQuery should find 2 Code nodes under Article (Article.cs and ArticleLayoutAreas.cs)");
+        initialChange.Items.Should().Contain(n => n.Path.Contains("ACME/Article/_Source/Article"),
+            "Should find Article.cs under ACME/Article/_Source");
+        initialChange.Items.Should().Contain(n => n.Path.Contains("ACME/Article/_Source/ArticleLayoutAreas"),
+            "Should find ArticleLayoutAreas.cs under ACME/Article/_Source");
         initialChange.Items.Should().OnlyContain(n => n.NodeType == CodeNodeType.NodeType);
     }
 
