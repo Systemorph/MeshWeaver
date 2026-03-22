@@ -39,7 +39,6 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         return base.ConfigureMesh(builder)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(sp => new ToolCallingFakeChatClientFactory(sp));
                 return services;
             })
@@ -56,11 +55,9 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)),
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.Node!.Path!;
+        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text);
+        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        return created.Path;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)

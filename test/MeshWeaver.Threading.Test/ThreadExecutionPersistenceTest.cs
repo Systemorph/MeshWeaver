@@ -39,7 +39,6 @@ public class ThreadExecutionPersistenceTest(ITestOutputHelper output) : Monolith
         return base.ConfigureMesh(builder)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })

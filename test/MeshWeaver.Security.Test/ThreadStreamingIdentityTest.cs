@@ -44,7 +44,6 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new TestChatClientFactory());
                 return services;
             })

@@ -38,19 +38,7 @@ public static class ThreadManagerExtensions
         return services;
     }
 
-    /// <summary>
-    /// Adds a thread manager that adapts the existing IChatPersistenceService.
-    /// Use this for backward compatibility with existing providers.
-    /// </summary>
-    public static IServiceCollection AddChatPersistenceThreadManager(this IServiceCollection services)
-    {
-        services.TryAddSingleton<IThreadManager>(sp =>
-        {
-            var persistenceService = sp.GetRequiredService<IChatPersistenceService>();
-            return new ChatPersistenceThreadManagerAdapter(persistenceService);
-        });
-        return services;
-    }
+
 
     /// <summary>
     /// Adds a custom thread manager implementation.

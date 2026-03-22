@@ -49,7 +49,6 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
-            services.AddMemoryChatPersistence();
             return services;
         }
 

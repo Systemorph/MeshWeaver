@@ -44,7 +44,6 @@ public class AttachmentContextTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new CapturingChatClientFactory());
                 return services;
             })
