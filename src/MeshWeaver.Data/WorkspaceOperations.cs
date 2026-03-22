@@ -99,6 +99,10 @@ public static class WorkspaceOperations
     private static void Update(Activity? activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
     {
         activity?.LogInformation("Starting Update");
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(WorkspaceOperations));
+        logger.LogDebug("Update called: Creations={Creations}, Updates={Updates}, Deletions={Deletions}",
+            change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
         workspace.UpdateStreams(change, activity, request);
     }
 
