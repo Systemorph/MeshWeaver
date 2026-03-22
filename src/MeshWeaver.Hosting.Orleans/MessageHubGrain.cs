@@ -25,15 +25,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var streamId = this.GetPrimaryKeyString();
 
         var address = meshHub.GetAddress(streamId);
+        var addressPath = address.ToString();
         // Use unprotected read — the grain needs its own node to activate,
         // and it's not the correct hub identity for security checks.
-        var node = await persistence.GetNodeAsync(address.ToString(), cancellationToken);
+        var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
+
+        // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
+        if (node is null)
+        {
+            var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+            meshConfig?.Nodes.TryGetValue(addressPath, out node);
+        }
 
         // Fallback to static node providers (e.g., DocumentationNodeProvider)
         // for nodes that are never persisted but served as embedded resources.
         node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, address.ToString(), StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
 
         if (node is null)
             throw new MeshException(

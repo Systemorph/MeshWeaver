@@ -97,7 +97,7 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
     [Fact]
     public async Task SubmitMessage_CreatesUserAndResponseNodes()
     {
-        var ct = new CancellationTokenSource(1500.Seconds()).Token;
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
         var client = GetClient();
 
         // 1. Create thread and submit

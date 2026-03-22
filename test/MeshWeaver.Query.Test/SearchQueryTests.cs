@@ -8,6 +8,7 @@ using Memex.Portal.Shared;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -40,10 +41,12 @@ public class SearchQueryTests : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddRowLevelSecurity()
             .AddAcme()
             .AddUserData()
             .AddNorthwind()
             .AddSystemorph()
+            .AddMeshNodes(TestUsers.PublicAdminAccess())
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph();
     }
