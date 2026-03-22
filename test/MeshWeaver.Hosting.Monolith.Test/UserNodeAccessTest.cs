@@ -19,7 +19,7 @@ namespace MeshWeaver.Hosting.Monolith.Test;
 /// Tests verifying that User node access control is correct:
 /// - The User node itself (User/Alice) is publicly readable
 /// - Child nodes under a User (User/Alice/SomeThread) are NOT publicly readable
-/// - The owner can read their own children (via UserScopeGrantHandler Viewer role)
+/// - The owner can manage their own children (via UserScopeGrantHandler Admin role)
 /// </summary>
 public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -66,8 +66,8 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     protected override async Task SetupAccessRightsAsync()
     {
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        // Grant Alice Viewer role on her user scope (simulating UserScopeGrantHandler)
-        await securityService.AddUserRoleAsync("Alice", Role.Viewer.Id, "User/Alice", "system", Ct);
+        // Grant Alice Admin role on her user scope (simulating UserScopeGrantHandler)
+        await securityService.AddUserRoleAsync("Alice", Role.Admin.Id, "User/Alice", "system", Ct);
         // Grant Alice Viewer role on ACME organization
         await securityService.AddUserRoleAsync("Alice", Role.Viewer.Id, "ACME", "system", Ct);
     }
@@ -110,11 +110,11 @@ public class UserNodeAccessTest(ITestOutputHelper output) : MonolithMeshTestBase
     [Fact(Timeout = 10000)]
     public async Task Owner_CanRead_OwnChildNode()
     {
-        // Alice checks permissions on her own child node (she has Viewer role on User/Alice)
+        // Alice checks permissions on her own child node (she has Admin role on User/Alice)
         var permissions = await GetPermissionsAsync("User/Alice/MyThread", "Alice");
 
         permissions.HasFlag(Permission.Read).Should().BeTrue(
-            "The User node owner should be able to read their own child nodes (via Viewer role on User/Alice scope)");
+            "The User node owner should be able to read their own child nodes (via Admin role on User/Alice scope)");
     }
 
     [Fact(Timeout = 10000)]

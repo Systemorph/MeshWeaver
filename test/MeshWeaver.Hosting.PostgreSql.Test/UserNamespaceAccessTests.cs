@@ -58,11 +58,17 @@ public class UserNamespaceAccessTests
             NodeType = "Markdown"
         }, _options, TestContext.Current.CancellationToken);
 
-        // Grant Alice access to her own user namespace (simulates UserScopeGrantHandler)
-        await ac.GrantAsync("User/Alice", "Alice", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        // Grant Alice Admin (full) access to her own user namespace (simulates UserScopeGrantHandler)
+        foreach (var perm in new[] { "Read", "Create", "Update", "Delete", "Comment", "Execute" })
+        {
+            await ac.GrantAsync("User/Alice", "Alice", perm, isAllow: true, TestContext.Current.CancellationToken);
+        }
 
-        // Grant Bob access to his own user namespace
-        await ac.GrantAsync("User/Bob", "Bob", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        // Grant Bob Admin (full) access to his own user namespace
+        foreach (var perm in new[] { "Read", "Create", "Update", "Delete", "Comment", "Execute" })
+        {
+            await ac.GrantAsync("User/Bob", "Bob", perm, isAllow: true, TestContext.Current.CancellationToken);
+        }
     }
 
     [Fact]

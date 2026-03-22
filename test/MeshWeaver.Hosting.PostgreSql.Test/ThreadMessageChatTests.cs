@@ -574,13 +574,19 @@ public class ThreadMessageChatTests : IAsyncLifetime
     #region User scope visibility tests — users see own threads, not others'
 
     /// <summary>
-    /// Grants a user Viewer (Read) access on their own User/{userId} scope
+    /// Grants a user Admin (full) access on their own User/{userId} scope
     /// in the effective permissions table — same as UserScopeGrantHandler does at runtime.
     /// </summary>
     private async Task GrantUserScopeAsync(string userId, CancellationToken ct)
     {
         var schemaAc = new PostgreSqlAccessControl(_schemaDs);
-        await schemaAc.GrantAsync($"User/{userId}", userId, "Read", isAllow: true, ct);
+        var scope = $"User/{userId}";
+        await schemaAc.GrantAsync(scope, userId, "Read", isAllow: true, ct);
+        await schemaAc.GrantAsync(scope, userId, "Create", isAllow: true, ct);
+        await schemaAc.GrantAsync(scope, userId, "Update", isAllow: true, ct);
+        await schemaAc.GrantAsync(scope, userId, "Delete", isAllow: true, ct);
+        await schemaAc.GrantAsync(scope, userId, "Comment", isAllow: true, ct);
+        await schemaAc.GrantAsync(scope, userId, "Execute", isAllow: true, ct);
     }
 
     /// <summary>
