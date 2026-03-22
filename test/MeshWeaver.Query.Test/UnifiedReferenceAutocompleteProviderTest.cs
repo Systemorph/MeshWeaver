@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Memex.Portal.Shared;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -43,6 +44,7 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddOrganizationType()
             .AddSystemorph()
             .AddAcme()
             .AddUserData()
