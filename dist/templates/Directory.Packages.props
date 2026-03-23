@@ -1,0 +1,64 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- MeshWeaver packages -->
+    <PackageVersion Include="MeshWeaver.AI" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.AI.AzureFoundry" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.AI.AzureOpenAI" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.AI.ClaudeCode" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.AI.Copilot" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Blazor" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Blazor.GoogleMaps" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Blazor.Graph" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Blazor.Portal" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Blazor.Radzen" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Connection.Orleans" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Documentation" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Graph" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Hosting" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Hosting.AzureBlob" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Hosting.Blazor" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Hosting.Monolith" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Hosting.Orleans" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Hosting.PostgreSql" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Import" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Kernel.Hub" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.Mesh.Contract" Version="3.0.0-local" />
+    <PackageVersion Include="MeshWeaver.ServiceProvider" Version="3.0.0-local" />
+    <!-- Third-party packages -->
+    <PackageVersion Include="Aspire.Azure.Data.Tables" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Azure.Npgsql" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Azure.Storage.Blobs" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.AppHost" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.AppContainers" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.ApplicationInsights" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.PostgreSQL" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Azure.Storage" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Hosting.PostgreSQL" Version="13.1.2" />
+    <PackageVersion Include="Aspire.Npgsql" Version="13.1.2" />
+    <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.4.0" />
+    <PackageVersion Include="Azure.Extensions.AspNetCore.DataProtection.Keys" Version="1.3.0" />
+    <PackageVersion Include="Azure.Identity" Version="1.17.1" />
+    <PackageVersion Include="Azure.Monitor.OpenTelemetry.AspNetCore" Version="1.4.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="9.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.2.0" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components" Version="4.13.2" />
+    <PackageVersion Include="Microsoft.FluentUI.AspNetCore.Components.Icons" Version="4.13.2" />
+    <PackageVersion Include="Microsoft.Identity.Web" Version="4.3.0" />
+    <PackageVersion Include="Microsoft.Identity.Web.Ui" Version="4.3.0" />
+    <PackageVersion Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Orleans.Server" Version="10.0.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.15.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.0" />
+  </ItemGroup>
+</Project>

@@ -68,7 +68,7 @@ public static class JsonSynchronizationStream
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
 
-        else
+        else if (!owner.Equals(hub.Address))
             reduced.RegisterForDisposal(
                 reduced
                     .ToDataChangeRequest(c => reduced.ClientId.Equals(c.StreamId))
@@ -79,7 +79,24 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
-                        hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        var delivery = hub.Post(e, o => o.WithTarget(reduced.Owner));
+                        if (delivery != null)
+                        {
+                            _ = hub.RegisterCallback(delivery, (response, _) =>
+                            {
+                                if (response is IMessageDelivery<DataChangeResponse> { Message.Status: DataChangeStatus.Failed } failed)
+                                {
+                                    logger.LogError("Stream {streamId} DataChangeRequest failed: {Error}",
+                                        reduced.StreamId, failed.Message.Log?.Messages
+                                            .Where(m => m.LogLevel >= LogLevel.Error)
+                                            .Select(m => m.Message)
+                                            .FirstOrDefault() ?? "Unknown error");
+                                    reduced.OnError(new InvalidOperationException(
+                                        $"DataChangeRequest failed for stream {reduced.StreamId}"));
+                                }
+                                return Task.FromResult(response);
+                            }, CancellationToken.None);
+                        }
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
@@ -535,8 +552,11 @@ public static class JsonSynchronizationStream
 
         if (current is null)
             throw new InvalidOperationException("Current state is null, cannot patch.");
-        var patch = JsonSerializer.Deserialize<JsonPatch>(request.Change.Content, options)!;
-        var updated = patch.Apply(current);
+        // Apply patch with correct RFC 6901 unescaping — the json-everything library's
+        // Apply(JsonNode) doesn't properly unescape ~1 in property names
+        var currentJson = JsonSerializer.SerializeToElement(current, typeof(InstanceCollection), options);
+        var (updatedJson, patch) = ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson, options);
+        var updated = updatedJson.Deserialize<InstanceCollection>(options);
         return (updated!, patch);
     }
 
@@ -561,11 +581,11 @@ public static class JsonSynchronizationStream
 
                 if (last == null && first == null)
                     return e;
-                if (first == null)
-                    return e.WithCreations(last!);
                 if (last == null)
-                    return e.WithDeletions(first);
+                    return e.WithDeletions(first!);
 
+                // Treat as update regardless of OldValue — OldValue may be null
+                // when the change was deserialized from a remote stream (not serialized).
                 return e.WithUpdates(last);
             });
     }
@@ -577,10 +597,11 @@ public static class JsonSynchronizationStream
         return streamReference switch
         {
             CollectionReference collection => CreateCollectionPatch(collection, options, updates),
-            _ => CreateEntityStorePatch(options, updates)
+            WorkspaceReference<EntityStore> => CreateEntityStorePatch(options, updates),
+            null => CreateEntityStorePatch(options, updates),
+            // Single-object references (e.g. MeshNodeReference) — patch at root level
+            _ => CreateSingleObjectPatch(options, updates)
         };
-
-
     }
 
     private static JsonPatch CreateCollectionPatch(
@@ -619,13 +640,33 @@ public static class JsonSynchronizationStream
             }).ToArray());
     }
 
+    private static JsonPatch CreateSingleObjectPatch(JsonSerializerOptions options, IEnumerable<EntityUpdate> updates)
+    {
+        // For single-object streams (e.g. MeshNodeReference), generate root-level patches
+        // without collection/id path segments
+        return new JsonPatch(updates
+            .Aggregate(Enumerable.Empty<PatchOperation>(), (e, u) =>
+            {
+                var first = u.OldValue;
+                var last = u.Value;
+                if (last == null && first == null)
+                    return e;
+                if (first == null)
+                    return e.Concat([PatchOperation.Add(JsonPointer.Empty, JsonSerializer.SerializeToNode(last, options))]);
+                if (last == null)
+                    return e.Concat([PatchOperation.Remove(JsonPointer.Empty)]);
+                var patches = first.CreatePatch(last, options).Operations;
+                return e.Concat(patches);
+            }).ToArray());
+    }
+
     private static JsonPointer CreatePointerFromSegments(params string[] pointerSegments)
     {
-        // Use SegmentValueStandIn to create pointer with unescaped segment values
-        // The escaping happens automatically when the pointer is serialized
-#pragma warning disable CS0618 // SegmentValueStandIn is obsolete
-        return JsonPointer.Create(pointerSegments.Select(s => (SegmentValueStandIn)s).ToArray());
-#pragma warning restore CS0618
+        // Manually build RFC 6901 pointer with proper escaping:
+        // ~ → ~0, / → ~1 within each segment
+        var escaped = string.Concat(pointerSegments.Select(s =>
+            "/" + s.Replace("~", "~0").Replace("/", "~1")));
+        return JsonPointer.Parse(escaped);
     }
 
     private static JsonPatch CreateEntityStorePatch(JsonSerializerOptions options, IEnumerable<EntityUpdate> updates)

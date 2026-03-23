@@ -1,13 +1,8 @@
-using System;
-using System.Diagnostics;
-using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using System.Diagnostics;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Security;
 using MeshWeaver.Mesh;
-using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,12 +18,20 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
     /// Base mesh configuration without access control setup.
     /// Security tests can call this directly instead of base.ConfigureMesh().
     /// </summary>
+    /// <summary>
+    /// Default test partition name. Tests can create nodes under this path
+    /// (e.g., "TestData/mynode") and they'll have proper mesh node hubs.
+    /// Registered as a Markdown node so the hub gets AddMeshDataSource + WithNodeOperationHandlers.
+    /// </summary>
+    public const string TestPartition = "TestData";
+
     protected MeshBuilder ConfigureMeshBase(MeshBuilder builder)
         => builder
             .UseMonolithMesh()
             .AddInMemoryPersistence()
             .AddRowLevelSecurity()
-            .AddGraph();
+            .AddGraph()
+            .AddMeshNodes(new MeshNode(TestPartition) { Name = "Test Data", NodeType = "Markdown" });
 
     /// <summary>
     /// Default mesh configuration with PublicAdminAccess for in-memory tests.
@@ -101,8 +104,16 @@ public abstract class MonolithMeshTestBase : Fixture.TestBase
         return Mesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient)!;
     }
 
-    protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
-        configuration.WithInitialization((h, _) => RoutingService.RegisterStreamAsync(h));
+    protected virtual MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        configuration.TypeRegistry.WithType(typeof(Graph.MeshNodeReference), nameof(Graph.MeshNodeReference));
+        // Pre-resolve RoutingService to avoid re-entrant DI resolution deadlock
+        // during client hub's BuildupAction (which runs on a thread pool thread)
+        var routingService = RoutingService;
+        return configuration
+            .AddMeshTypes()
+            .WithInitialization((h, _) => routingService.RegisterStreamAsync(h));
+    }
 
     private static readonly string DisposeLogFile = Path.Combine(
         AppContext.BaseDirectory, "test-logs", "dispose-trace.log");

@@ -47,7 +47,6 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })
@@ -382,12 +381,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         response1.ToString().Trim().Should().NotBeEmpty();
         response2.ToString().Trim().Should().NotBeEmpty();
 
-        // Persistence should have saved threads independently
-        var persistenceService = Mesh.ServiceProvider.GetRequiredService<IChatPersistenceService>();
-        var saved1 = await persistenceService.LoadThreadAsync(threadPath1, "shared");
-        var saved2 = await persistenceService.LoadThreadAsync(threadPath2, "shared");
-        saved1.Should().NotBeNull("thread 1 should be persisted");
-        saved2.Should().NotBeNull("thread 2 should be persisted");
+        // Thread persistence is now via MeshNodes — no separate IChatPersistenceService
     }
 
     #endregion

@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -40,7 +41,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
             TypeDefinition.CollectionName,
-            new KeyFunction(o => ((MeshNode)o).Path, typeof(string)));
+            new KeyFunction(o => ((MeshNode)o).Id, typeof(string)));
 
         workspace.Hub.RegisterForDisposal(new FlushOnDispose(this));
     }
@@ -48,6 +49,17 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
         instances = MergePartialUpdates(instances);
+
+        // Open MeshNode init gate when node becomes Active or Transient
+        {
+            var ownNode = instances.Instances.Values.OfType<MeshNode>()
+                .FirstOrDefault(n => n.Path == _hubPath);
+            if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
+            {
+                _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node {State} via update", _hubPath, ownNode.State);
+                _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+            }
+        }
 
         var adds = instances.Instances
             .Where(x => !_lastSaved.Instances.ContainsKey(x.Key))
@@ -195,11 +207,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
 
+        if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
+            _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+
         var allNodes = new List<MeshNode>();
         if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
             allNodes.Add(ownNode);
 
-        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
+        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Id);
         return _lastSaved;
     }
 

@@ -61,7 +61,7 @@ else
     <!-- Message history display (hidden in compact/dashboard mode) -->
     @if (!ViewModel.HideEmptyState)
     {
-        <div class="thread-chat-messages" @key="@ThreadMessages.Count">
+        <div class="thread-chat-messages">
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)

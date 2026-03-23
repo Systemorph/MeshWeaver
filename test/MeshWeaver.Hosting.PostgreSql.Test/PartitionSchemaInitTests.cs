@@ -273,13 +273,21 @@ public class PartitionSchemaInitTests
         await factory.InitializeDefaultPartitionsAsync(DefaultPartitions(),
             TestContext.Current.CancellationToken);
 
+        // Verify schemas were created (admin, portal, kernel are excluded from DiscoverPartitionsAsync
+        // because they are infrastructure partitions, not searchable content).
+        foreach (var schema in new[] { "admin", "user", "portal", "kernel" })
+        {
+            await using var cmd = _fixture.DataSource.CreateCommand(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = $1");
+            cmd.Parameters.AddWithValue(schema);
+            var exists = await cmd.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+            exists.Should().NotBeNull($"schema '{schema}' should have been created");
+        }
+
+        // DiscoverPartitionsAsync returns only content partitions (excludes admin, portal, kernel)
         var freshFactory = CreateFactory();
         var partitions = await freshFactory.DiscoverPartitionsAsync(TestContext.Current.CancellationToken);
-
-        partitions.Should().Contain("admin");
         partitions.Should().Contain("user");
-        partitions.Should().Contain("portal");
-        partitions.Should().Contain("kernel");
     }
 
     /// <summary>

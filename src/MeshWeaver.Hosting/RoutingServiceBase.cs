@@ -104,8 +104,8 @@ namespace MeshWeaver.Hosting
                 }
             }
 
-            // Get node - skip RLS validation for routing (RLS is enforced at handler level)
-            var node = await MeshCatalog.GetNodeAsync(address, skipValidation: true);
+            // Get node - catalog has no access control (RLS is enforced at query/handler level)
+            var node = await MeshCatalog.GetNodeAsync(address);
 
             var logger = Mesh.ServiceProvider.GetService<ILogger<RoutingServiceBase>>();
             logger?.LogDebug("RouteMessageAsync: {MessageType} to {Address} (original={OriginalAddress}). Resolution={Resolution}, Node={NodeFound}, NodeType={NodeType}, HubConfig={HasHubConfig}",

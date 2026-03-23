@@ -1,0 +1,85 @@
+.login-container {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 40px 20px;
+    min-height: 60vh;
+    background: var(--neutral-layer-4);
+}
+
+.login-card {
+    background: var(--neutral-layer-1);
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    padding: 40px 32px;
+    max-width: 440px;
+    width: 100%;
+}
+
+.login-header {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.login-header h1 {
+    margin: 0 0 8px;
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.login-subtitle {
+    color: var(--neutral-foreground-hint);
+    margin: 0;
+    font-size: 0.95rem;
+}
+
+.provider-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    border-radius: 6px;
+    font-size: 1rem;
+    font-weight: 500;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    border: 1px solid var(--neutral-stroke-rest);
+    color: var(--neutral-foreground-rest);
+    background: var(--neutral-layer-1);
+}
+
+.provider-btn:hover {
+    background: var(--neutral-layer-2);
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.provider-icon {
+    font-size: 1.2rem;
+    width: 24px;
+    text-align: center;
+}
+
+.provider-microsoft { border-left: 3px solid #00a4ef; }
+.provider-google { border-left: 3px solid #4285f4; }
+.provider-linkedin { border-left: 3px solid #0077b5; }
+.provider-apple { border-left: 3px solid #333333; }
+.provider-dev { border-left: 3px solid #f59e0b; }
+
+.divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 8px 0;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.85rem;
+}
+
+.divider::before,
+.divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--neutral-stroke-rest);
+}

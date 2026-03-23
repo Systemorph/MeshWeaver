@@ -112,7 +112,6 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 return services;
             })
             .AddGraph()

@@ -1,6 +1,4 @@
-﻿using MeshWeaver.AI.Persistence;
-using MeshWeaver.AI.Plugins;
-using MeshWeaver.AI.Threading;
+﻿using MeshWeaver.AI.Plugins;
 using MeshWeaver.Domain;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,7 +20,11 @@ public static class AIExtensions
                     .AddThreadType()
                     .AddAgentType()
                     .ConfigureServices(services => services.AddAgentChatServices())
-                    .ConfigureDefaultNodeHub(config => config.AddThreadSupport())
+                    .ConfigureDefaultNodeHub(config =>
+                    {
+                        config.TypeRegistry.AddAITypes();
+                        return config;
+                    })
                 ;
         }
     }
@@ -35,9 +37,7 @@ public static class AIExtensions
             // MessageViewModel is not registered — handled as JsonElement on the wire
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
-            .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))
-            .WithType(typeof(CreateThreadResponse), nameof(CreateThreadResponse))
-            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
+.WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
             .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest));
@@ -51,7 +51,6 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
-            services.AddMemoryChatPersistence();
             return services;
         }
 

@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Markdig;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
@@ -367,7 +368,7 @@ public partial class CollaborativeMarkdownView
             return; // Could not locate the selected text in the markdown
 
         // Map clean-content offsets to annotated-content positions
-        var map = BuildCleanToAnnotatedMap();
+        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(RawContent);
         var aStart = idx < map.Length ? map[idx] : RawContent.Length;
         var aEnd = (idx + selectedText.Length) < map.Length
             ? map[idx + selectedText.Length]
@@ -384,35 +385,34 @@ public partial class CollaborativeMarkdownView
         var previousContent = RawContent;
         UpdateContentLocally(newContent);
         if (!await PostContentUpdateAsync(newContent))
-            RevertContent(previousContent);
-    }
-
-    /// <summary>
-    /// Builds a map from clean (marker-stripped) character index to annotated character index.
-    /// </summary>
-    private int[] BuildCleanToAnnotatedMap()
-    {
-        var tagRegex = new Regex(@"<!--/?(comment|insert|delete):[^-]+-->");
-        var tags = tagRegex.Matches(RawContent).Cast<Match>()
-            .OrderBy(m => m.Index).ToList();
-        var map = new List<int>();
-        int tagIdx = 0;
-
-        for (int i = 0; i < RawContent.Length;)
         {
-            if (tagIdx < tags.Count && i == tags[tagIdx].Index)
-            {
-                i += tags[tagIdx].Length;
-                tagIdx++;
-            }
-            else
-            {
-                map.Add(i);
-                i++;
-            }
+            RevertContent(previousContent);
+            return;
         }
 
-        return map.ToArray();
+        // Create Comment MeshNode linked to the inline marker
+        var meshService = Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService != null && !string.IsNullOrEmpty(BoundNodePath))
+        {
+            var comment = new Comment
+            {
+                Id = markerId,
+                PrimaryNodePath = BoundNodePath,
+                MarkerId = markerId,
+                HighlightedText = selectedText,
+                Author = CurrentAuthor,
+                Text = "",
+                Status = CommentStatus.Active
+            };
+            var commentNode = new MeshNode(markerId, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
+            {
+                Name = $"Comment by {CurrentAuthor}",
+                NodeType = CommentNodeType.NodeType,
+                Content = comment
+            };
+            try { await meshService.CreateNodeAsync(commentNode); }
+            catch { /* markers in content, node creation failed */ }
+        }
     }
 
     // Comment helpers

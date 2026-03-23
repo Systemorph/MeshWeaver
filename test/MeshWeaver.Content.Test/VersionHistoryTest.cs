@@ -180,7 +180,7 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
     public async Task RollbackNode_RestoresHistoricalState()
     {
         // Arrange
-        var node = MeshNode.FromPath("test/rollback") with { Name = "Original", State = MeshNodeState.Active };
+        var node = new MeshNode("rollback", TestPartition) { Name = "Original", NodeType = "Markdown", State = MeshNodeState.Active };
         var created = await CreateNodeAsync(node);
 
         var versionQuery = Mesh.ServiceProvider.GetRequiredService<IVersionQuery>();
@@ -188,7 +188,8 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
 
         // Capture the original version
         var versionsAfterCreate = new List<MeshNodeVersion>();
-        await foreach (var v in versionQuery.GetVersionsAsync("test/rollback"))
+        var nodePath = $"{TestPartition}/rollback";
+        await foreach (var v in versionQuery.GetVersionsAsync(nodePath))
             versionsAfterCreate.Add(v);
         var originalVersion = versionsAfterCreate.LastOrDefault();
         originalVersion.Should().NotBeNull("there should be a version after create");
@@ -196,17 +197,17 @@ public class VersionHistoryTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Update to "Modified"
         await NodeFactory.UpdateNodeAsync(created with { Name = "Modified" });
 
-        // Act - post RollbackNodeRequest
+        // Act - post RollbackNodeRequest to the node hub
         var client = GetClient();
-        var rollbackRequest = new RollbackNodeRequest("test/rollback", originalVersion!.Version);
-        client.Post(rollbackRequest, o => o.WithTarget(Mesh.Address));
+        var rollbackRequest = new RollbackNodeRequest(nodePath, originalVersion!.Version);
+        client.Post(rollbackRequest, o => o.WithTarget(new Address(nodePath)));
 
         // Wait for the rollback to be processed
         await Task.Delay(2000, TestContext.Current.CancellationToken);
 
         // Assert - verify the node was rolled back
         var currentNode = await MeshQuery
-            .QueryAsync<MeshNode>("path:test/rollback", ct: TestContext.Current.CancellationToken)
+            .QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken)
             .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
 
         currentNode.Should().NotBeNull("the node should still exist after rollback");

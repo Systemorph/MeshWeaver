@@ -47,7 +47,6 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<CapturingChatClient>();
                 services.AddSingleton<IChatClientFactory, CapturingChatClientFactory>();
                 return services;

@@ -22,14 +22,16 @@ public class EntityStoreConverter(ITypeRegistry typeRegistry) : JsonConverter<En
 
     private JsonNode Serialize(EntityStore store, JsonSerializerOptions options)
     {
-        var ret = new JsonObject(
-            store.Collections.ToDictionary(
-                x => x.Key,
-                x => JsonSerializer.SerializeToNode(x.Value,  typeof(InstanceCollection), options)
-            ))
+        var ret = new JsonObject();
+
+        // $type MUST be the first property — STJ polymorphic deserializer requires it
+        ret["$type"] = typeof(EntityStore).FullName;
+
+        foreach (var x in store.Collections)
         {
-            ["$type"] = typeof(EntityStore).FullName
-        };
+            ret[x.Key] = JsonSerializer.SerializeToNode(x.Value, typeof(InstanceCollection), options);
+        }
+
         return ret;
     }
 

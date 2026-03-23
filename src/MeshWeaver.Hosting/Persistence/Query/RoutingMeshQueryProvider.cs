@@ -236,6 +236,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
+        // Discover and provision any new partitions (lazy init)
+        await foreach (var _ in _router.DiscoverNewProvidersAsync(ct))
+        { /* provisioning happens as a side effect */ }
+
         // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
         // Use searchable_schemas from cross-schema provider if available.
         var searchableSchemas = _crossSchemaProvider != null
@@ -296,6 +300,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 yield return s;
             yield break;
         }
+
+        // Discover and provision any new partitions (lazy init)
+        await foreach (var _ in _router.DiscoverNewProvidersAsync(ct))
+        { /* provisioning happens as a side effect */ }
 
         // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
         var searchableSchemas = _crossSchemaProvider != null

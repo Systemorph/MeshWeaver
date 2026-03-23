@@ -117,12 +117,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || value == null)
         {
-            logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} to {Value} because the stream is disposed or value is null. IsDisposed={IsDisposed}", StreamId, value, isDisposed);
+            if (isDisposed)
+                logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} — stream is disposed", StreamId);
+            else
+                logger.LogDebug("[SYNC_STREAM] Skipping null value for {StreamId}", StreamId);
             return;
         }
 
         var valuesEqual = current is not null && Equals(current.Value, value.Value);
-
 
         if (current is not null && valuesEqual)
         {
@@ -311,7 +313,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
+        {
             config = config.WithDeferredInitialization();
+            if (Configuration.DeferredGateName != null && Configuration.DeferredGatePredicate != null)
+                config = config.WithInitializationGate(Configuration.DeferredGateName, Configuration.DeferredGatePredicate);
+        }
 
         return config;
     }
@@ -352,7 +358,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
                     Host.Version));
-
+                Set(currentJson);
             }
             catch (Exception ex)
             {
@@ -367,11 +373,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
-                SetCurrent(hub, this.ToChangeItem(Current!.Value!,
+                var changeItem = this.ToChangeItem(Current!.Value!,
                     currentJson.Value,
                     patch,
-                    delivery.Message.ChangedBy ?? ClientId));
+                    delivery.Message.ChangedBy ?? ClientId);
 
+                // PatchFunction may be null for single-object streams (e.g. MeshNodeReference).
+                // Fall back to full deserialization of the patched JSON.
+                changeItem ??= new ChangeItem<TStream>(
+                    currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
+                    delivery.Message.ChangedBy ?? ClientId,
+                    StreamId,
+                    ChangeType.Patch,
+                    delivery.Message.Version,
+                    null);
+
+                SetCurrent(hub, changeItem);
             }
             catch (Exception ex)
             {
@@ -469,6 +486,8 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// This is useful when the stream initialization depends on properties that are set after stream construction.
     /// </summary>
     internal bool DeferredInitialization { get; init; }
+    internal string? DeferredGateName { get; init; }
+    internal Predicate<IMessageDelivery>? DeferredGatePredicate { get; init; }
 
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
@@ -488,4 +507,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// <returns>Updated configuration</returns>
     public StreamConfiguration<TStream> WithDeferredInitialization(bool deferred = true)
         => this with { DeferredInitialization = deferred };
+
+    /// <summary>
+    /// Enables deferred initialization with a named gate. The gate is added to the stream's
+    /// sub-hub and allows matching messages through while initialization is deferred.
+    /// The gate is opened by calling Hub.OpenGate(gateName) when the data is ready.
+    /// </summary>
+    public StreamConfiguration<TStream> WithDeferredInitialization(
+        string gateName, Predicate<IMessageDelivery> allowDuringInit)
+        => this with { DeferredInitialization = true, DeferredGateName = gateName, DeferredGatePredicate = allowDuringInit };
 }

@@ -20,7 +20,6 @@ public class AgentChatClient : IAgentChat
 {
     private readonly IMessageHub hub;
     private readonly ILogger<AgentChatClient> logger;
-    private readonly IChatPersistenceService persistenceService;
     private readonly IMeshService? meshQuery;
     private readonly IReadOnlyList<IChatClientFactory> chatClientFactories;
     private readonly Dictionary<string, ChatClientAgent> agents = new();
@@ -51,7 +50,6 @@ public class AgentChatClient : IAgentChat
     {
         hub = serviceProvider.GetRequiredService<IMessageHub>();
         logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        persistenceService = serviceProvider.GetRequiredService<IChatPersistenceService>();
         meshQuery = serviceProvider.GetService<IMeshService>();
         chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToList();
     }
@@ -113,15 +111,6 @@ public class AgentChatClient : IAgentChat
             return sharedThread;
         }
 
-        // Try to load persisted thread
-        var serializedThread = await persistenceService.LoadThreadAsync(currentThreadId, "shared");
-
-        if (serializedThread.HasValue)
-        {
-            sharedThread = await agent.DeserializeSessionAsync(serializedThread.Value, hub.JsonSerializerOptions);
-            return sharedThread;
-        }
-
         if (isPersistentFactory)
         {
             // For persistent factories without an existing thread, create a new server-side session
@@ -137,19 +126,10 @@ public class AgentChatClient : IAgentChat
         return sharedThread;
     }
 
-    private async Task SaveThreadAsync(ChatClientAgent agent, AgentSession thread, string? threadId = null)
+    private Task SaveThreadAsync(ChatClientAgent agent, AgentSession thread, string? threadId = null)
     {
-        // Save the thread with the specified key or current thread ID
-        var serialized = await agent.SerializeSessionAsync(thread, hub.JsonSerializerOptions);
-        var id = threadId ?? currentThreadId;
-        await persistenceService.SaveThreadAsync(id, "shared", serialized);
-        logger.LogInformation("Saved thread: {ThreadId}", id);
-
-        // For persistent threads, update the Thread MeshNode with the PersistentThreadId
-        if (isPersistentFactory && !string.IsNullOrEmpty(persistentThreadId))
-        {
-            await UpdateThreadPersistentIdAsync(id);
-        }
+        // Session state is ephemeral — persisted via Thread MeshNodes, not IChatPersistenceService
+        return Task.CompletedTask;
     }
 
     /// <summary>

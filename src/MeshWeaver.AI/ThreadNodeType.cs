@@ -55,6 +55,30 @@ public static class ThreadNodeType
     }
 
     /// <summary>
+    /// Builds a MeshNode for a new thread. Use with CreateNodeRequest.
+    /// </summary>
+    /// <param name="contextPath">The namespace/context path (e.g., "User/Roland")</param>
+    /// <param name="messageText">First message text — used for name and speaking ID</param>
+    /// <param name="createdBy">User ID who creates the thread</param>
+    public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null)
+    {
+        var speakingId = GenerateSpeakingId(messageText);
+        var ns = string.IsNullOrEmpty(contextPath)
+            ? ThreadPartition
+            : $"{contextPath}/{ThreadPartition}";
+        var name = messageText.Length > 60
+            ? messageText[..57] + "..."
+            : messageText;
+
+        return new MeshNode(speakingId, ns)
+        {
+            Name = name,
+            NodeType = NodeType,
+            Content = new Thread { ParentPath = contextPath, CreatedBy = createdBy }
+        };
+    }
+
+    /// <summary>
     /// Checks if a MeshNode is a Thread by checking its NodeType.
     /// </summary>
     /// <param name="nodeType">The node type to check.</param>
@@ -92,6 +116,7 @@ public static class ThreadNodeType
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             HubConfiguration = config => config
                 .AddThreadLayoutAreas()
+                .AddThreadExecution()
                 .AddMeshDataSource(source => source
                     .WithContentType<Thread>())
         };

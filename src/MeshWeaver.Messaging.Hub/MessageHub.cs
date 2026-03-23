@@ -107,6 +107,8 @@ public sealed class MessageHub : IMessageHub
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
+        TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
+        TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
@@ -138,8 +140,13 @@ public sealed class MessageHub : IMessageHub
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
         var actions = Configuration.BuildupActions;
-        foreach (var buildup in actions)
-            await buildup(this, cancellationToken);
+        logger.LogDebug("Message hub {address} has {count} BuildupActions to run", Address, actions.Count);
+        for (var i = 0; i < actions.Count; i++)
+        {
+            logger.LogDebug("Message hub {address} starting BuildupAction {i}/{count}", Address, i + 1, actions.Count);
+            await actions[i](this, cancellationToken);
+            logger.LogDebug("Message hub {address} completed BuildupAction {i}/{count}", Address, i + 1, actions.Count);
+        }
 
         logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
 
@@ -413,7 +420,8 @@ public sealed class MessageHub : IMessageHub
         var response2 = RegisterCallback(messageId, d => d, cancellationToken);
 
         // Now post the message with the pre-generated ID
-        var request = Post(r, opts => {
+        var request = Post(r, opts =>
+        {
             var configured = options(opts);
             return configured.WithMessageId(messageId);
         })!;

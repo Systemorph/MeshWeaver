@@ -109,7 +109,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     }
 
     [Fact(Timeout = 30000)]
-    public async Task PostMessages_WritesToThreadMessagesTable()
+    public async Task PostMessages_WritesToMessagesTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var now = DateTime.UtcNow;
@@ -470,7 +470,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
     /// finds messages in the satellite table.
     /// </summary>
     [Fact(Timeout = 30000)]
-    public async Task QueryThreadMessages_ByNamespace_FindsMessagesInSatelliteTable()
+    public async Task QueryMessages_ByNamespace_FindsMessagesInSatelliteTable()
     {
         var ct = TestContext.Current.CancellationToken;
         var now = DateTime.UtcNow;
@@ -574,13 +574,15 @@ public class ThreadMessageChatTests : IAsyncLifetime
     #region User scope visibility tests — users see own threads, not others'
 
     /// <summary>
-    /// Grants a user Viewer (Read) access on their own User/{userId} scope
+    /// Grants a user Admin (full) access on their own User/{userId} scope
     /// in the effective permissions table — same as UserScopeGrantHandler does at runtime.
     /// </summary>
     private async Task GrantUserScopeAsync(string userId, CancellationToken ct)
     {
         var schemaAc = new PostgreSqlAccessControl(_schemaDs);
-        await schemaAc.GrantAsync($"User/{userId}", userId, "Read", isAllow: true, ct);
+        var scope = $"User/{userId}";
+        foreach (var perm in new[] { "Read", "Create", "Update", "Delete", "Comment", "Execute" })
+            await schemaAc.GrantAsync(scope, userId, perm, isAllow: true, ct);
     }
 
     /// <summary>
@@ -707,7 +709,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Resolve Test",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice", ThreadMessages = ["r1"] }
+            Content = new MeshThread { ParentPath = "User/alice", Messages = ["r1"] }
         }, _options, ct);
 
         // Create ThreadMessage child
@@ -744,10 +746,10 @@ public class ThreadMessageChatTests : IAsyncLifetime
 
     /// <summary>
     /// Simulates the full HandleSubmitMessage persistence flow:
-    /// 1. Create Thread node with empty ThreadMessages
+    /// 1. Create Thread node with empty Messages
     /// 2. Create user ThreadMessage node
     /// 3. Create response ThreadMessage node
-    /// 4. Update Thread.ThreadMessages with the new IDs
+    /// 4. Update Thread.Messages with the new IDs
     /// 5. Update response node with streamed text
     /// 6. Verify ALL nodes in correct table with correct content
     /// This catches PostgreSQL-specific issues like missing satellite tables,
@@ -771,7 +773,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "E2E Chat",
             NodeType = "Thread",
             MainNode = threadNs,
-            Content = new MeshThread { ParentPath = "User/alice", ThreadMessages = [] }
+            Content = new MeshThread { ParentPath = "User/alice", Messages = [] }
         }, _options, ct);
 
         // 2. Create user message node
@@ -802,7 +804,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             }
         }, _options, ct);
 
-        // 4. Update Thread.ThreadMessages (simulates DataChangeRequest in HandleSubmitMessage)
+        // 4. Update Thread.Messages (simulates DataChangeRequest in HandleSubmitMessage)
         await _threadAdapter.WriteAsync(new MeshNode(threadId, threadNs)
         {
             Name = "E2E Chat",
@@ -811,7 +813,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread
             {
                 ParentPath = "User/alice",
-                ThreadMessages = [userMsgId, responseMsgId]
+                Messages = [userMsgId, responseMsgId]
             }
         }, _options, ct);
 
@@ -873,7 +875,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var threadJson = threadResults[0].Content is JsonElement tje ? tje
             : JsonSerializer.SerializeToElement(threadResults[0].Content, _options);
         var threadMsgs = threadJson.TryGetProperty("threadMessages", out var msgsEl)
-            ? msgsEl : threadJson.GetProperty("ThreadMessages");
+            ? msgsEl : threadJson.GetProperty("Messages");
         threadMsgs.GetArrayLength().Should().Be(2, "Thread should have 2 message IDs");
 
         // User message content
@@ -935,7 +937,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Content = new MeshThread
             {
                 ParentPath = "User/alice",
-                ThreadMessages = ["m1", "m2"]
+                Messages = ["m1", "m2"]
             }
         }, _options, ct);
 
@@ -974,7 +976,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
         var threadCount = (long)(await threadCmd.ExecuteScalarAsync(ct))!;
         threadCount.Should().Be(1, "Thread should be in the 'threads' table");
 
-        // Verify ThreadMessages are in the "threads" table too
+        // Verify Messages are in the "threads" table too
         await using var msg1Cmd = _schemaDs.CreateCommand(
             "SELECT COUNT(*) FROM threads WHERE namespace = $1 AND id = $2");
         msg1Cmd.Parameters.AddWithValue(threadPath);
@@ -1008,8 +1010,8 @@ public class ThreadMessageChatTests : IAsyncLifetime
             ? tje : JsonSerializer.SerializeToElement(readThread.Content, _options);
         // Property name depends on serializer — try camelCase and PascalCase
         var hasMsgs = threadJson.TryGetProperty("threadMessages", out var msgsEl)
-                      || threadJson.TryGetProperty("ThreadMessages", out msgsEl);
-        hasMsgs.Should().BeTrue("Thread content should have threadMessages/ThreadMessages property");
+                      || threadJson.TryGetProperty("Messages", out msgsEl);
+        hasMsgs.Should().BeTrue("Thread content should have threadMessages/Messages property");
         msgsEl.GetArrayLength().Should().Be(2);
 
         var readMsg1 = await _messageAdapter.ReadAsync(

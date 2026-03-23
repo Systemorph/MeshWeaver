@@ -1,13 +1,14 @@
-using System.Reactive.Linq;
+﻿using System.Reactive.Linq;
 using System.Reflection;
+using System.Text.Json;
+using Json.Patch;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Domain;
-using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -31,17 +32,34 @@ public static class MeshDataSourceExtensions
         return config
             .AddData(data =>
             {
+                data.Workspace.Hub.TypeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
                 var dataSource = configuration(new MeshDataSource(data.Workspace.Hub.Address.ToString(), data.Workspace).WithMeshNodes());
                 return data
+                    .Configure(rm => rm
+                        .ForReducedStream<InstanceCollection>(reduced => reduced
+                            .AddWorkspaceReference<MeshNodeReference, MeshNode>(ReduceToMeshNode))
+                        .ForReducedStream<MeshNode>(reduced => reduced
+                            .AddPatchFunction(PatchMeshNode))
+                        .AddWorkspaceReferenceStream<MeshNode>(
+                            (workspace, reference, configuration) =>
+                            {
+                                if (reference is not MeshNodeReference) return null;
+                                var collectionStream = workspace.GetStream(
+                                    new CollectionReference(nameof(MeshNode)));
+                                return (collectionStream as ISynchronizationStream<InstanceCollection>)
+                                    ?.Reduce((WorkspaceReference<MeshNode>)reference, configuration);
+                            }))
                     .WithDataSource(_ => dataSource)
                     .WithDefaultDataReference(workspace =>
                     {
                         var hubPath = workspace.Hub.Address.ToString();
                         return workspace.GetStream<MeshNode>()
-                            ?.Select(nodes => nodes?.FirstOrDefault(n => n.Path == hubPath)?.Content)
+                            ?.Select(nodes => (object?)nodes?.FirstOrDefault(n => n.Path == hubPath))
                             ?? Observable.Return<object?>(null);
                     });
             })
+            .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
+            .WithNodeOperationHandlers()
             .WithHandler<GetDataRequest>(HandleNodeTypeSchemaRequest);
     }
 
@@ -119,6 +137,36 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
+    /// Reduces InstanceCollection to MeshNode for MeshNodeReference.
+    /// Returns the hub's own MeshNode from the collection.
+    /// </summary>
+    private static ChangeItem<MeshNode> ReduceToMeshNode(
+        ChangeItem<InstanceCollection> current, MeshNodeReference reference, bool initial)
+    {
+        var node = current.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
+        if (initial || current.ChangeType != ChangeType.Patch)
+            return new(node, current.StreamId, current.Version);
+
+        var change = current.Updates.FirstOrDefault();
+        if (change == null)
+            return null!;
+        return new(change.Value as MeshNode, current.ChangedBy, current.StreamId,
+            ChangeType.Patch, current.Version, [change]);
+    }
+
+    /// <summary>
+    /// PatchFunction for MeshNode — converts JsonElement back to MeshNode with proper EntityUpdate objects.
+    /// </summary>
+    private static ChangeItem<MeshNode> PatchMeshNode(
+        ISynchronizationStream<MeshNode> stream, MeshNode current,
+        JsonElement updated, JsonPatch? patch, string changedBy)
+    {
+        var updatedNode = updated.Deserialize<MeshNode>(stream.Hub.JsonSerializerOptions);
+        return new(updatedNode!, changedBy, stream.StreamId, ChangeType.Patch, stream.Hub.Version,
+            [new EntityUpdate(nameof(MeshNode), updatedNode?.Id, updatedNode) { OldValue = current }]);
+    }
+
+    /// <summary>
     /// Adds a content type to the MeshDataSource. This calls AddMeshDataSource which includes MeshNodes.
     /// </summary>
     public static MessageHubConfiguration WithContentType<T>(this MessageHubConfiguration config) where T : class
@@ -147,6 +195,7 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
     /// </summary>
     public Type? ContentType { get; private init; }
 
+
     public MeshDataSource(object id, IWorkspace workspace) : base(id, workspace)
     {
         _persistenceCore = workspace.Hub.ServiceProvider.GetService<IStorageService>();
@@ -174,8 +223,9 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
         var meshConfig = Workspace.Hub.ServiceProvider.GetService<MeshConfiguration>();
         if (meshConfig != null && meshConfig.Nodes.TryGetValue(_hubPath, out var builtInNode))
         {
+            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Path)
+                .WithKey(n => n.Id)
                 .WithInitialData([builtInNode]));
         }
 
@@ -185,35 +235,31 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
             .FirstOrDefault(n => string.Equals(n.Path, _hubPath, StringComparison.OrdinalIgnoreCase));
         if (staticNode != null)
         {
+            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
             return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Path)
+                .WithKey(n => n.Id)
                 .WithInitialData([staticNode]));
         }
 
         if (_persistenceCore == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
-            return WithType<MeshNode>(ts => ts.WithKey(n => n.Path));
+            Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+            return WithType<MeshNode>(ts => ts.WithKey(n => n.Id));
         }
 
         return WithTypeSource(typeof(MeshNode),
-            new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
-                .WithKey(n => n.Path));
+                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath)
+                    .WithKey(n => n.Id));
     }
+
 
     /// <summary>
     /// Registers a content type for UI integration (editor generation, etc.).
     /// Content is accessed via MeshNode.Content - there's no separate TypeSource.
     /// </summary>
     public MeshDataSource WithContentType<T>() where T : class
-    {
-        // Register the content type in TypeRegistry for JSON serialization
-        Workspace.Hub.TypeRegistry.WithType(typeof(T), typeof(T).Name);
-
-        // Store ContentType for UI integration (editor generation, etc.)
-        // Content is accessed via MeshNode.Content - there's no separate TypeSource
-        return this with { ContentType = typeof(T) };
-    }
+        => WithContentType(typeof(T));
 
     /// <summary>
     /// Registers a content type for UI integration using a runtime Type.

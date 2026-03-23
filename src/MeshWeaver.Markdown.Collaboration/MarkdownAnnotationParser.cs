@@ -305,7 +305,7 @@ public static partial class MarkdownAnnotationParser
 
         string insertedText = newClean.Substring(prefixLen, newClean.Length - prefixLen - suffixLen);
 
-        var map = BuildDisplayToAnnotatedMap(annotated);
+        var map = BuildCleanToAnnotatedMap(annotated);
 
         // Map edit start to annotated position
         int aStart = prefixLen < map.Length ? map[prefixLen] : annotated.Length;
@@ -322,9 +322,9 @@ public static partial class MarkdownAnnotationParser
     }
 
     /// <summary>
-    /// Builds a map from display character index to annotated character index.
+    /// Builds a map from clean (marker-stripped) character index to annotated character index.
     /// </summary>
-    private static int[] BuildDisplayToAnnotatedMap(string annotated)
+    public static int[] BuildCleanToAnnotatedMap(string annotated)
     {
         var tags = AnyTagRegex().Matches(annotated).OrderBy(m => m.Index).ToList();
         var map = new List<int>();

@@ -1,5 +1,4 @@
-using System.Runtime.CompilerServices;
-using MeshWeaver.Hosting.Persistence.Query;
+﻿using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -12,19 +11,14 @@ namespace MeshWeaver.Hosting;
 /// Identity is always resolved from AccessService.Context.
 /// Use accessService.ImpersonateAsHub(hub) to temporarily switch identity.
 /// </summary>
-internal sealed class MeshService : IMeshService
+internal sealed class MeshService(
+    IEnumerable<IMeshQueryProvider> providers,
+    IMessageHub hub,
+    MeshCatalog? catalog = null)
+    : IMeshService
 {
-    private readonly HubNodePersistence? _persistence;
-    private readonly MeshQuery _query;
-
-    public MeshService(
-        IEnumerable<IMeshQueryProvider> providers,
-        IMessageHub hub,
-        MeshCatalog? catalog = null)
-    {
-        _persistence = catalog != null ? new HubNodePersistence(hub, catalog) : null;
-        _query = new MeshQuery(providers, hub);
-    }
+    private readonly HubNodePersistence? _persistence = catalog != null ? new HubNodePersistence(hub, catalog) : null;
+    private readonly MeshQuery _query = new(providers, hub);
 
     // === Node CRUD (delegated to HubNodePersistence) ===
 

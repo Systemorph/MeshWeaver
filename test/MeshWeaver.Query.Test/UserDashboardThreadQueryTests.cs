@@ -53,28 +53,20 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
         await NodeFactory.CreateNodeAsync(
             new MeshNode("ACME") { Name = "ACME Corp", NodeType = "Markdown" }, TestTimeout);
 
-        // Create threads in two different namespaces via CreateThreadRequest
+        // Create threads in two different namespaces via CreateNodeRequest
         var client = GetClient();
 
         var resp1 = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = "PartnerRe",
-                UserMessageText = "Discussion about Partner Re portfolio"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("PartnerRe", "Discussion about Partner Re portfolio", AdminUserId)),
             o => o.WithTarget(new Address("PartnerRe")), TestTimeout);
         resp1.Message.Success.Should().BeTrue(resp1.Message.Error);
-        Output.WriteLine($"Thread 1 at: {resp1.Message.ThreadPath}");
+        Output.WriteLine($"Thread 1 at: {resp1.Message.Node?.Path}");
 
         var resp2 = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = "ACME",
-                UserMessageText = "ACME project review"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("ACME", "ACME project review", AdminUserId)),
             o => o.WithTarget(new Address("ACME")), TestTimeout);
         resp2.Message.Success.Should().BeTrue(resp2.Message.Error);
-        Output.WriteLine($"Thread 2 at: {resp2.Message.ThreadPath}");
+        Output.WriteLine($"Thread 2 at: {resp2.Message.Node?.Path}");
 
         // Act: query threads by creator across all partitions (the fixed dashboard query)
         var myThreads = await MeshQuery
@@ -106,11 +98,7 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
 
         var client = GetClient();
         var resp = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = "External",
-                UserMessageText = "Thread in external namespace"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("External", "Thread in external namespace", AdminUserId)),
             o => o.WithTarget(new Address("External")), TestTimeout);
         resp.Message.Success.Should().BeTrue(resp.Message.Error);
 
@@ -252,24 +240,20 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
     // ── Thread CreatedBy storage ────────────────────────────────────────────
 
     [Fact(Timeout = 30000)]
-    public async Task CreateThreadRequest_StoresCreatedByInContent()
+    public async Task CreateNodeRequest_Thread_StoresCreatedByInContent()
     {
         // Arrange
         await NodeFactory.CreateNodeAsync(
             new MeshNode("TestCtx") { Name = "Test Context", NodeType = "Markdown" }, TestTimeout);
 
-        // Act: create thread via the production CreateThreadRequest path
+        // Act: create thread via the production CreateNodeRequest path
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = "TestCtx",
-                UserMessageText = "Verify created-by storage"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode("TestCtx", "Verify created-by storage", AdminUserId)),
             o => o.WithTarget(new Address("TestCtx")), TestTimeout);
 
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        var threadPath = response.Message.ThreadPath!;
+        var threadPath = response.Message.Node!.Path!;
 
         // Assert: retrieve and verify CreatedBy is set
         var node = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(TestTimeout);
