@@ -1,4 +1,6 @@
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
 
 namespace MeshWeaver.AI;
 
@@ -6,7 +8,9 @@ namespace MeshWeaver.AI;
 /// Request to submit a user message to a thread.
 /// The thread hub creates the user message node, response node, and streams the agent response.
 /// Thread must exist before submitting — create via IMeshService.CreateNodeAsync.
+/// Requires Thread permission on the thread hub.
 /// </summary>
+[RequiresPermission(Permission.Thread)]
 public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
 {
     public required string ThreadPath { get; init; }

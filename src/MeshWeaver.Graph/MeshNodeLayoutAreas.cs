@@ -719,17 +719,26 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
-    /// Uses activity-based sorting so the user sees their most recently accessed threads first.
+    /// Includes a "Create Thread" button for starting new conversations.
     /// </summary>
     [Browsable(false)]
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var createUrl = $"/{hubPath}/Create?type={Uri.EscapeDataString("Thread")}&namespace={Uri.EscapeDataString($"{hubPath}/_Thread")}";
 
-        return Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread")
-            .WithNamespace(hubPath)
-            .WithRenderMode(MeshSearchRenderMode.Flat);
+        return Controls.Stack
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: flex-end; padding: 0 0 12px 0;")
+                .WithView(Controls.Button("Create Thread")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Add())
+                    .WithNavigateToHref(createUrl)))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread")
+                .WithNamespace(hubPath)
+                .WithRenderMode(MeshSearchRenderMode.Flat));
     }
 
     /// <summary>

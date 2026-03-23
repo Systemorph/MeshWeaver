@@ -91,9 +91,16 @@ public static class InlineReferenceResolver
             using var doc = JsonDocument.Parse(rawJson);
             var root = doc.RootElement;
 
+            // Root must be an object to extract properties
+            if (root.ValueKind != JsonValueKind.Object)
+                return root.ValueKind == JsonValueKind.String ? root.GetString() ?? rawJson : rawJson;
+
             // Try to extract the "content" property from the MeshNode JSON
             if (root.TryGetProperty("content", out var contentProp))
             {
+                if (contentProp.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                    return rawJson;
+
                 // Content is a plain string (markdown body)
                 if (contentProp.ValueKind == JsonValueKind.String)
                     return contentProp.GetString() ?? rawJson;

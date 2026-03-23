@@ -37,11 +37,16 @@ public static class ThreadExecution
     {
         var request = delivery.Message;
         var threadPath = request.ThreadPath;
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        logger?.LogDebug("[ThreadExec] HandleSubmitMessage: threadPath={ThreadPath}, user={User}, hubAddress={Hub}",
+            threadPath, request.ContextPath, hub.Address);
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{threadPath}/{responseMsgId}";
+        logger?.LogDebug("[ThreadExec] Creating cells: userMsg={UserMsgId}, responseMsg={ResponseMsgId}",
+            userMsgId, responseMsgId);
 
         // 1) Create both cells concurrently
         var inputTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
@@ -140,9 +145,12 @@ public static class ThreadExecution
         try
         {
             // 1. Prepare agent
+            logger.LogDebug("[ThreadExec] ExecuteMessageAsync: preparing agent for {ThreadPath}, responsePath={ResponsePath}",
+                threadPath, responsePath);
             var chatClient = new AgentChatClient(parentHub.ServiceProvider);
             chatClient.SetThreadId(threadPath);
             await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
+            logger.LogDebug("[ThreadExec] ExecuteMessageAsync: agent initialized for {ThreadPath}", threadPath);
 
             if (!string.IsNullOrEmpty(request.AgentName))
                 chatClient.SetSelectedAgent(request.AgentName);

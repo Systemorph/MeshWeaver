@@ -1,5 +1,6 @@
 @inherits BlazorView<ThreadChatControl, ThreadChatView>
 @using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Components
 @using MeshWeaver.Blazor.Components.Monaco
 @using FluentOrientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using FluentVerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
@@ -11,49 +12,25 @@
 @if (viewMode == ChatViewMode.ResumeThreads)
 {
     <div class="thread-resume-view">
-        <div class="resume-search">
-            <FluentTextField Value="@resumeSearchQuery"
-                             ValueChanged="@((string v) => OnResumeSearchChanged(v))"
-                             Placeholder="Search threads..."
-                             Style="width: 100%;">
-                <FluentIcon Value="@(new Icons.Regular.Size16.Search())" Slot="start" Color="Color.Neutral" />
-            </FluentTextField>
+        <div class="resume-header">
+            <FluentButton Appearance="FluentAppearance.Stealth" OnClick="SwitchToChatMode" Title="Back to chat">
+                <FluentIcon Value="@(new Icons.Regular.Size16.ArrowLeft())" />
+            </FluentButton>
+            <span style="font-weight: 600;">Threads</span>
         </div>
-
-        @if (isLoadingRecentThreads)
+        @if (!string.IsNullOrEmpty(resumeNodeAddress))
         {
-            <div class="loading-overlay">
-                <FluentProgressRing />
-                <div class="loading-text">Loading threads...</div>
-            </div>
-        }
-        else if (recentThreads.Count == 0)
-        {
-            <div class="empty-thread-message">
-                <FluentIcon Value="@(new Icons.Regular.Size48.ChatEmpty())" Color="Color.Neutral" />
-                <p>No threads found</p>
+            <div class="resume-threads-catalog">
+                <LayoutAreaView ViewModel="@resumeThreadsCatalog" Stream="@resumeThreadsStream" Area="resume-threads" />
             </div>
         }
         else
         {
-            <div class="resume-thread-list">
-                @foreach (var thread in recentThreads)
-                {
-                    <div class="resume-thread-item" @onclick="() => OnSelectThread(thread)">
-                        <div class="resume-thread-name">@(thread.Name ?? thread.Id)</div>
-                        <div class="resume-thread-path">@thread.Path</div>
-                        @if (thread.LastModified != default)
-                        {
-                            <div class="resume-thread-date">@thread.LastModified.ToString("g")</div>
-                        }
-                    </div>
-                }
+            <div class="empty-thread-message">
+                <FluentIcon Value="@(new Icons.Regular.Size48.ChatEmpty())" Color="Color.Neutral" />
+                <p>Navigate to a node to see its threads</p>
             </div>
         }
-
-        <div class="resume-actions">
-            <FluentButton OnClick="SwitchToChatMode">Back</FluentButton>
-        </div>
     </div>
 }
 else
@@ -85,6 +62,13 @@ else
                     <p class="hint">Use @("@") references to include context from other nodes</p>
                 </div>
             }
+            @if (!submissionHandler.IsInputEnabled)
+            {
+                <div class="awaiting-response">
+                    <FluentProgressRing Style="width: 20px; height: 20px;" />
+                    <span>@(submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting ? "Sending..." : "Generating response...")</span>
+                </div>
+            }
         </div>
     }
 
@@ -110,59 +94,62 @@ else
                               AsyncCompletionCallback="@GetCompletionsAsync" />
         </div>
 
-        <!-- Selector bar (agent + model) and send button -->
-        <FluentGrid Spacing="2" Class="selector-bar">
-            <FluentGridItem xs="5">
-                <SimpleDropdown TOption="AgentDisplayInfo"
-                                SelectedItem="@selectedAgentInfo"
-                                SelectedItemChanged="@OnAgentChanged"
-                                Items="@agentDisplayInfos"
-                                GetDisplayText="@(a => a?.Name ?? "Select agent...")"
-                                Placeholder="Select agent..."
-                                Tooltip="@(selectedAgentInfo?.Path ?? "Select agent")"
-                                PanelWidth="320px"
-                                Class="selector-agent">
-                    <ItemTemplate Context="agent">
-                        <div class="simple-dropdown-item-name">@agent.Name</div>
-                        @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
-                        {
-                            <div class="simple-dropdown-item-path">@agent.Path</div>
-                        }
-                        @if (!string.IsNullOrEmpty(agent.Description))
-                        {
-                            <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
-                        }
-                    </ItemTemplate>
-                </SimpleDropdown>
-            </FluentGridItem>
+        <!-- Selector bar (agent + model + send) — right-aligned -->
+        <div class="selector-bar">
+            <SimpleDropdown TOption="AgentDisplayInfo"
+                            SelectedItem="@selectedAgentInfo"
+                            SelectedItemChanged="@OnAgentChanged"
+                            Items="@agentDisplayInfos"
+                            GetDisplayText="@(a => a?.Name ?? "Select agent...")"
+                            Placeholder="Select agent..."
+                            Tooltip="@(selectedAgentInfo?.Path ?? "Select agent")"
+                            PanelWidth="320px"
+                            Class="selector-agent">
+                <ItemTemplate Context="agent">
+                    <div class="simple-dropdown-item-name">@agent.Name</div>
+                    @if (!string.IsNullOrEmpty(agent.Path) && agent.Path != agent.Name)
+                    {
+                        <div class="simple-dropdown-item-path">@agent.Path</div>
+                    }
+                    @if (!string.IsNullOrEmpty(agent.Description))
+                    {
+                        <div class="simple-dropdown-item-description">@TruncateText(agent.Description, 80)</div>
+                    }
+                </ItemTemplate>
+            </SimpleDropdown>
 
             @if (availableModels.Count > 0)
             {
-                <FluentGridItem xs="5">
-                    <SimpleDropdown TOption="ModelInfo"
-                                    SelectedItem="@selectedModelInfo"
-                                    SelectedItemChanged="@OnModelChanged"
-                                    Items="@availableModels"
-                                    GetDisplayText="@(m => m?.Name ?? "Select model...")"
-                                    GetGroupKey="@(m => m.Provider)"
-                                    Placeholder="Select model..."
-                                    ShowSearch="false"
-                                    PanelWidth="280px"
-                                    Class="selector-model">
-                        <ItemTemplate Context="model">
-                            <div class="simple-dropdown-item-name">@model.Name</div>
-                        </ItemTemplate>
-                    </SimpleDropdown>
-                </FluentGridItem>
+                <SimpleDropdown TOption="ModelInfo"
+                                SelectedItem="@selectedModelInfo"
+                                SelectedItemChanged="@OnModelChanged"
+                                Items="@availableModels"
+                                GetDisplayText="@(m => m?.Name ?? "Select model...")"
+                                GetGroupKey="@(m => m.Provider)"
+                                Placeholder="Select model..."
+                                ShowSearch="false"
+                                PanelWidth="280px"
+                                Class="selector-model">
+                    <ItemTemplate Context="model">
+                        <div class="simple-dropdown-item-name">@model.Name</div>
+                    </ItemTemplate>
+                </SimpleDropdown>
             }
 
-            <FluentGridItem xs="2" Justify="FluentJustifyContent.FlexEnd">
+            @if (!submissionHandler.IsInputEnabled)
+            {
+                <FluentButton Appearance="FluentAppearance.Accent" Disabled="true" Title="Sending...">
+                    <FluentProgressRing Style="width: 20px; height: 20px;" />
+                </FluentButton>
+            }
+            else
+            {
                 <FluentButton Appearance="FluentAppearance.Accent" OnClick="SendMessageAsync"
-                              Disabled="@(string.IsNullOrWhiteSpace(MessageText) || !submissionHandler.IsInputEnabled)" Title="Send">
+                              Disabled="@(string.IsNullOrWhiteSpace(MessageText))" Title="Send">
                     <FluentIcon Value="@(new Icons.Regular.Size20.Send())" Color="Color.Neutral" />
                 </FluentButton>
-            </FluentGridItem>
-        </FluentGrid>
+            }
+        </div>
     </div>
 }
 </div>

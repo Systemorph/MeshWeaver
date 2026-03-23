@@ -94,10 +94,10 @@ public static class ThreadMessageLayoutAreas
             .WithAuthorName(authorName)
             .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")));
 
-        // Action buttons — small stealth icon buttons
+        // Action buttons — small stealth icon buttons, right-aligned
         var actionRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 2px; justify-content: " + (isUser ? "flex-end" : "flex-start") + "; margin-top: -4px; margin-bottom: 4px; opacity: 0.6;");
+            .WithStyle("gap: 2px; justify-content: flex-end; margin-top: -4px; margin-bottom: 4px; opacity: 0.6;");
 
         if (isUser)
         {

@@ -43,7 +43,12 @@ public enum Permission
     Execute = 32,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment, Execute).
+    /// Permission to create and use threads (chat conversations).
     /// </summary>
-    All = Read | Create | Update | Delete | Comment | Execute
+    Thread = 64,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment | Execute | Thread
 }

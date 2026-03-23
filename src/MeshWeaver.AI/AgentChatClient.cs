@@ -36,6 +36,7 @@ public class AgentChatClient : IAgentChat
     private bool isPersistentFactory;
     private bool agentsInitialized;
     private string? cachedToolDocs;
+    private string? cachedSystemPrompt;
 
     // Tracks which attachment paths are agent nodes (for context filtering)
     private HashSet<string>? agentAttachmentPaths;
@@ -168,32 +169,49 @@ public class AgentChatClient : IAgentChat
         }
     }
 
+    /// <summary>
+    /// Builds the static system prompt (agent instructions + tool docs) once,
+    /// then appends dynamic parts (context, attachments, history) on each call.
+    /// </summary>
     private async Task<string> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
     {
         var messageText = new StringBuilder();
 
-        // For persistent agents, skip agent instructions and tool docs — they're stored server-side.
-        // Only send the current context and user message.
-        if (!isPersistentFactory)
+        // Static part: agent instructions + tool docs (built once, cached)
+        if (cachedSystemPrompt == null && !isPersistentFactory)
         {
-            // Add selected agent's instructions as persona identity
+            var sb = new StringBuilder();
             if (!string.IsNullOrEmpty(agentName))
             {
                 var agentInfo = loadedAgents.FirstOrDefault(a => a.Name == agentName);
                 var agentInstructions = agentInfo?.AgentConfiguration?.Instructions;
                 if (!string.IsNullOrEmpty(agentInstructions))
                 {
-                    messageText.AppendLine("# Agent Identity and Instructions");
-                    messageText.AppendLine();
-                    messageText.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
-                    messageText.AppendLine();
-                    messageText.AppendLine(agentInstructions);
-                    messageText.AppendLine();
+                    sb.AppendLine("# Agent Identity and Instructions");
+                    sb.AppendLine();
+                    sb.AppendLine("You are acting as the following agent. Follow these instructions strictly:");
+                    sb.AppendLine();
+                    sb.AppendLine(agentInstructions);
+                    sb.AppendLine();
                 }
             }
+
+            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync();
+            if (!string.IsNullOrEmpty(toolDocs))
+            {
+                sb.AppendLine("# Available Tools Documentation");
+                sb.AppendLine();
+                sb.AppendLine(toolDocs);
+                sb.AppendLine();
+            }
+
+            cachedSystemPrompt = sb.ToString();
         }
 
-        // Add context if available (always sent, even for persistent agents)
+        if (!string.IsNullOrEmpty(cachedSystemPrompt))
+            messageText.Append(cachedSystemPrompt);
+
+        // Dynamic part: context (changes per navigation)
         if (Context != null)
         {
             var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
@@ -213,20 +231,6 @@ public class AgentChatClient : IAgentChat
             messageText.AppendLine();
             messageText.AppendLine("Use this context information when answering the user's questions or performing actions.");
             messageText.AppendLine();
-        }
-
-        // For persistent agents, skip tool documentation (already on server-side agent definition)
-        if (!isPersistentFactory)
-        {
-            // Add resolved tool documentation (use cache from InitializeAsync)
-            var toolDocs = cachedToolDocs ?? await LoadToolDocumentationAsync();
-            if (!string.IsNullOrEmpty(toolDocs))
-            {
-                messageText.AppendLine("# Available Tools Documentation");
-                messageText.AppendLine();
-                messageText.AppendLine(toolDocs);
-                messageText.AppendLine();
-            }
         }
 
         // Load and add attachment content

@@ -26,6 +26,7 @@ public partial class ThreadSidePanelContent : ComponentBase
     private bool positionMenuVisible;
     private string? selectedThreadPath;
     private string threadChatKey = Guid.NewGuid().ToString("N")[..8];
+    private ThreadChatControl? cachedChatControl;
 
     protected override void OnInitialized()
     {
@@ -33,9 +34,13 @@ public partial class ThreadSidePanelContent : ComponentBase
 
         // Restore thread from state if available
         selectedThreadPath = SidePanelState.ContentPath;
+        cachedChatControl = BuildThreadChatControl();
     }
 
     private ThreadChatControl GetThreadChatControl()
+        => cachedChatControl ??= BuildThreadChatControl();
+
+    private ThreadChatControl BuildThreadChatControl()
     {
         var context = NavigationService.Context;
         var contextPath = context?.PrimaryPath;
@@ -66,7 +71,8 @@ public partial class ThreadSidePanelContent : ComponentBase
             selectedThreadPath = threadPath;
             SidePanelState.SetContentPath(threadPath);
 
-            // Force re-render of ThreadChatView with new key
+            // Rebuild control and force re-render with new key
+            cachedChatControl = BuildThreadChatControl();
             threadChatKey = Guid.NewGuid().ToString("N")[..8];
 
             showChatHistory = false;
@@ -79,7 +85,8 @@ public partial class ThreadSidePanelContent : ComponentBase
         selectedThreadPath = null;
         SidePanelState.SetContentPath(null);
 
-        // Force re-render of ThreadChatView with new key
+        // Rebuild control and force re-render with new key
+        cachedChatControl = BuildThreadChatControl();
         threadChatKey = Guid.NewGuid().ToString("N")[..8];
 
         showChatHistory = false;
