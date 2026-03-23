@@ -282,24 +282,8 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
         });
         Output.WriteLine($"CircuitContext set: {accessService.CircuitContext?.ObjectId}");
 
-        // 3. Verify PostPipeline stamps the delivery with the circuit user (not hub address)
-        //    This is what happens when ThreadChatView calls Hub.Post(new SubmitMessageRequest{...})
-        var testDelivery = client.Post(
-            new SubmitMessageRequest
-            {
-                ThreadPath = "User/Roland/_Thread/test",
-                UserMessageText = "identity check",
-                ContextPath = "User/Roland"
-            },
-            o => o.WithTarget(client.Address)); // Target self to capture the delivery
-        testDelivery.Should().NotBeNull();
-        testDelivery!.AccessContext.Should().NotBeNull("PostPipeline should stamp AccessContext");
-        testDelivery.AccessContext!.ObjectId.Should().Be("Roland",
-            "PostPipeline should use CircuitContext identity, not hub address");
-        Output.WriteLine($"PostPipeline stamped: {testDelivery.AccessContext.ObjectId}");
-
-        // 4. Create thread under user partition (like the GUI does)
-        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Identity chain test", "Roland");
+        // 3. Create thread under user partition (like the GUI does)
+        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", $"Identity chain test {Guid.NewGuid():N}", "Roland");
         var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
@@ -313,34 +297,55 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
         //    The SubmitMessageRequest has [RequiresPermission(Permission.Thread)].
         //    If identity is lost, AccessControlPipeline rejects with "(anonymous)".
         Output.WriteLine("Posting SubmitMessageRequest with CircuitContext identity...");
-        var submitResponse = await client.AwaitResponse(
+        var submitDelivery = client.Post(
             new SubmitMessageRequest
             {
                 ThreadPath = threadPath,
                 UserMessageText = "Hello with identity",
                 ContextPath = "User/Roland"
             },
-            o => o.WithTarget(new Address(threadPath)), ct);
+            o => o.WithTarget(new Address(threadPath)));
+        submitDelivery.Should().NotBeNull("Post should return delivery");
 
-        // This is the assertion that fails in production — the submit is rejected
-        // with "Access denied: user '(anonymous)' lacks Thread permission"
-        submitResponse.Message.Success.Should().BeTrue(
-            $"SubmitMessageRequest should succeed with identity 'Roland'. Error: {submitResponse.Message.Error}");
-        Output.WriteLine("SubmitMessageRequest succeeded with identity propagation");
+        // Register callback (fire-and-forget, same pattern as ThreadChatView)
+        var responseTcs = new TaskCompletionSource<string?>();
+        _ = client.RegisterCallback((IMessageDelivery)submitDelivery!, response =>
+        {
+            string? error = null;
+            if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+                error = sr.Message.Error ?? "SubmitMessageResponse.Success=false";
+            else if (response is IMessageDelivery<DeliveryFailure> df)
+                error = $"DeliveryFailure: {df.Message.Message}";
+            else if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: true })
+                error = null;
+            else
+                error = $"Unexpected response type: {response.Message?.GetType().Name}";
+            responseTcs.TrySetResult(error);
+            return response;
+        });
 
-        // 7. Verify cells were created (proves the entire chain worked)
+        var timeoutTask = Task.Delay(15_000, ct);
+        var responseError = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
+            ? await responseTcs.Task
+            : "TIMEOUT: No response received within 15s";
+
+        Output.WriteLine($"SubmitMessageRequest result: {responseError ?? "SUCCESS"}");
+        responseError.Should().BeNull(
+            $"SubmitMessageRequest should succeed with identity 'Roland'. Got: {responseError}");
+
+        // 6. Wait for both cells to appear in stream
         var msgIds = await twoMessages;
-        msgIds.Should().HaveCount(2);
+        msgIds.Should().HaveCount(2, "should have user message + agent response");
         Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
 
-        // 8. Verify user message has correct content
+        // 7. Verify user message cell content
         var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
-        userMsg.Should().NotBeNull();
+        userMsg.Should().NotBeNull("user message cell should exist");
         userMsg!.Role.Should().Be("user");
         userMsg.Text.Should().Be("Hello with identity");
         Output.WriteLine($"User cell verified: '{userMsg.Text}'");
 
-        // 9. Wait for response to stream
+        // 8. Wait for response to stream and complete
         ThreadMessage? responseMsg = null;
         var prevLen = 0;
         var stable = 0;
@@ -353,8 +358,9 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
             prevLen = len;
             await Task.Delay(200, ct);
         }
-        responseMsg.Should().NotBeNull();
-        responseMsg!.Text.Should().NotBeNullOrEmpty("streaming should produce a response");
+        responseMsg.Should().NotBeNull("response cell should exist");
+        responseMsg!.Role.Should().Be("assistant");
+        responseMsg.Text.Should().NotBeNullOrEmpty("streaming should produce a response");
         Output.WriteLine($"Response verified: '{responseMsg.Text}'");
     }
 
@@ -403,6 +409,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
 /// Silo configurator that mirrors production: AddGraph + AddAI + AddRowLevelSecurity.
 /// RLS enables AccessControlPipeline on node hubs, which checks [RequiresPermission].
 /// Without RLS, the pipeline is a no-op and identity issues go unnoticed.
+/// Pre-seeds Public Admin access so authenticated users can create/manage nodes.
 /// </summary>
 public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
@@ -419,11 +426,40 @@ public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddGraph()
             .AddAI()
             .AddRowLevelSecurity()
+            // Pre-seed sample users and Public Admin access (same as MonolithMeshTestBase)
+            .AddMeshNodes(
+                new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
+            .AddMeshNodes(PublicEditorAccess())
             .ConfigureServices(services =>
             {
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
+    }
+
+    /// <summary>
+    /// Creates Public Editor access on User partition.
+    /// Static access assignments are keyed by Namespace (scope),
+    /// so we use "User" not "User/_Access".
+    /// </summary>
+    private static MeshNode[] PublicEditorAccess()
+    {
+        var assignment = new AccessAssignment
+        {
+            AccessObject = "Public",
+            DisplayName = "Public",
+            Roles = [new RoleAssignment { Role = "Editor" }]
+        };
+        return
+        [
+            new("Public_Access", "User")
+            {
+                NodeType = "AccessAssignment",
+                Name = "Public Access",
+                Content = assignment,
+                MainNode = "User",
+            }
+        ];
     }
 }

@@ -89,6 +89,7 @@ public abstract record MessageDelivery : IMessageDelivery
             Id = Id,
             ForwardedTo = ForwardedTo,
             RoutingPath = RoutingPath,
+            AccessContext = AccessContext,
         };
     }
 
