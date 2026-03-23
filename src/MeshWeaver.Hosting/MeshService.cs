@@ -2,7 +2,6 @@
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting;
 
@@ -27,45 +26,10 @@ internal sealed class MeshService(
         => _persistence ?? throw new InvalidOperationException(
             "Write operations require MeshCatalog. Register it via AddMeshCatalog().");
 
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
-        => Persistence.CreateNodeAsync(node, ct);
-
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, string identity, CancellationToken ct = default)
-        => WithIdentity(identity, () => Persistence.CreateNodeAsync(node, ct));
-
-    public Task<MeshNode> UpdateNodeAsync(MeshNode node, CancellationToken ct = default)
-        => Persistence.UpdateNodeAsync(node, ct);
-
-    public Task<MeshNode> UpdateNodeAsync(MeshNode node, string identity, CancellationToken ct = default)
-        => WithIdentity(identity, () => Persistence.UpdateNodeAsync(node, ct));
-
-    public Task DeleteNodeAsync(string path, CancellationToken ct = default)
-        => Persistence.DeleteNodeAsync(path, ct);
-
-    public Task DeleteNodeAsync(string path, string identity, CancellationToken ct = default)
-        => WithIdentity(identity, () => Persistence.DeleteNodeAsync(path, ct));
-
-    /// <summary>
-    /// Sets the identity on the AccessService before executing the operation.
-    /// The Post call inside HubNodePersistence reads AccessService.Context synchronously,
-    /// so setting it before the call is sufficient even though the method is async.
-    /// </summary>
-    private Task<T> WithIdentity<T>(string identity, Func<Task<T>> operation)
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        accessService?.SetContext(new AccessContext { ObjectId = identity, Name = identity });
-        return operation();
-    }
-
-    private Task WithIdentity(string identity, Func<Task> operation)
-    {
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        accessService?.SetContext(new AccessContext { ObjectId = identity, Name = identity });
-        return operation();
-    }
-
-    public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-        => Persistence.CreateTransientAsync(node, ct);
+    public IObservable<MeshNode> CreateNode(MeshNode node) => Persistence.CreateNode(node);
+    public IObservable<MeshNode> UpdateNode(MeshNode node) => Persistence.UpdateNode(node);
+    public IObservable<bool> DeleteNode(string path) => Persistence.DeleteNode(path);
+    public IObservable<MeshNode> CreateTransient(MeshNode node) => Persistence.CreateTransient(node);
 
     // === Query (delegated to MeshQuery) ===
 

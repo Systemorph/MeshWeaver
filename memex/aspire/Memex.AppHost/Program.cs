@@ -152,11 +152,16 @@ var portal = builder
     .WaitFor(orleansTables)
     .WaitFor(grainStateBlobs)
     .WaitForCompletion(dbMigration)
-    // ACA deployment: sticky sessions (Blazor Server) + custom domain
+    // ACA deployment: sticky sessions (Blazor Server) + custom domain + resources
     .PublishAsAzureContainerApp((module, app) =>
     {
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
         app.ConfigureCustomDomain(customDomain, certificateName);
+
+        // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
+        // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
+        app.Template.Scale.MinReplicas = 2;
+        app.Template.Scale.MaxReplicas = 6;
     });
 
 // --- Azure Blob Storage ---
