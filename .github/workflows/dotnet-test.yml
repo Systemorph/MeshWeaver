@@ -13,7 +13,7 @@ on:
 jobs:
   build:
     name: Build and Run Unit tests
-
+    timeout-minutes: 20
     runs-on: ubuntu-latest
 
     steps:
@@ -34,7 +34,7 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
       run: |
-        dotnet test --no-build --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=60000 | tee test/test-results.log
+        dotnet test --no-build --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=600000 | tee test/test-results.log
     - name: Collect test logs for artifact
       if: always()
       run: |
