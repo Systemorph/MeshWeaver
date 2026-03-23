@@ -142,6 +142,10 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
+        // Get remote stream ONCE for the response node — declared outside try for catch access
+        var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            new Address(responsePath), new MeshNodeReference());
+
         try
         {
             // 1. Prepare agent
@@ -157,10 +161,6 @@ public static class ThreadExecution
 
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
-
-            // 2. Get remote stream ONCE for the response node
-            var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath), new MeshNodeReference());
 
             // 3. await streaming — update response node via the stream
             var responseText = new StringBuilder();
