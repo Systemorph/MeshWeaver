@@ -228,7 +228,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             new Address(threadPath),
             new LayoutAreaReference(ThreadNodeType.ThreadArea));
         Stream = _ownedStream;
-        BindData();
+        // Bind ThreadViewModel to the stream's data section (same pointer the hub-side ThreadView uses)
+        DataBind(
+            new JsonPointerReference(LayoutAreaReference.GetDataPointer("thread")),
+            x => x.ThreadViewModel,
+            ConvertThreadViewModel);
         StateHasChanged();
     }
 

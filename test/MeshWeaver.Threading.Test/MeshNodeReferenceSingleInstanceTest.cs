@@ -39,7 +39,7 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
     }
 
     [Fact]
-    public async Task GetRemoteStream_MeshNodeReference_ReturnsSingleNode()
+    public async Task GetRemoteStream_CollectionReference_ReturnsMeshNode()
     {
         var ct = new CancellationTokenSource(10.Seconds()).Token;
 
@@ -48,16 +48,16 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
         var threadPath = created.Path;
 
-        // Get via MeshNodeReference — should be a single MeshNode, not a collection
+        // Get via CollectionReference for MeshNode collection
         var client = GetClient();
         var stream = client.GetWorkspace()
-            .GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(threadPath), new MeshNodeReference());
+            .GetRemoteStream<InstanceCollection, CollectionReference>(
+                new Address(threadPath), new CollectionReference(nameof(MeshNode)));
 
         stream.Should().NotBeNull();
 
         var node = await stream!
-            .Select(ci => ci.Value)
+            .Select(ci => ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault())
             .Timeout(5.Seconds())
             .FirstAsync(n => n != null);
 
@@ -79,25 +79,26 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        // Subscribe to the MeshNode stream
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(threadPath), new MeshNodeReference());
+        // Subscribe to the MeshNode collection stream
+        var collectionStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            new Address(threadPath), new CollectionReference(nameof(MeshNode)));
 
         // Wait for initial node
-        var initial = await stream!
-            .Select(ci => ci.Value)
+        var initial = await collectionStream!
+            .Select(ci => ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault())
             .Timeout(5.Seconds())
             .FirstAsync(n => n != null);
         var initialContent = initial!.Content as MeshThread;
         initialContent!.Messages.Should().BeEmpty();
 
         // Update Messages to ["msg1"]
-        var updated = stream
+        var updated = collectionStream
             .Select(ci =>
             {
-                var t = ci.Value?.Content as MeshThread;
-                Output.WriteLine($"[STREAM] ChangeType={ci.ChangeType}, Value={ci.Value?.Id}, Messages={t?.Messages.Count}");
-                return ci.Value;
+                var node = ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
+                var t = node?.Content as MeshThread;
+                Output.WriteLine($"[STREAM] ChangeType={ci.ChangeType}, Value={node?.Id}, Messages={t?.Messages.Count}");
+                return node;
             })
             .Timeout(5.Seconds())
             .FirstAsync(n =>
@@ -124,6 +125,21 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         resultContent.Should().NotBeNull();
         resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" });
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", resultContent.Messages)}]");
+
+        // Verify back-sync: GetDataRequest on the thread hub should return updated content
+        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
+        var response = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+            o => o.WithTarget(new Address(threadPath)), ct);
+        var serverNode = response.Message.Data as MeshNode;
+        if (serverNode == null && response.Message.Data is System.Text.Json.JsonElement je)
+            serverNode = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
+        serverNode.Should().NotBeNull("server should return the MeshNode via GetDataRequest");
+        var serverContent = serverNode!.Content as MeshThread;
+        serverContent.Should().NotBeNull("server MeshNode should have Thread content");
+        serverContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" },
+            "server should reflect the client's update (back-sync)");
+        Output.WriteLine($"Back-sync verified: server Messages=[{string.Join(", ", serverContent.Messages)}]");
     }
 
     [Fact]
@@ -138,18 +154,21 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         var client = GetClient();
         var workspace = client.GetWorkspace();
 
-        var stream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(threadPath), new MeshNodeReference());
+        var collectionStream = workspace.GetRemoteStream<InstanceCollection, CollectionReference>(
+            new Address(threadPath), new CollectionReference(nameof(MeshNode)));
+
+        MeshNode? ExtractNode(ChangeItem<InstanceCollection> ci) =>
+            ci.Value?.Instances.Values.OfType<MeshNode>().FirstOrDefault();
 
         // Wait for initial
-        await stream!
-            .Select(ci => ci.Value)
+        await collectionStream!
+            .Select(ExtractNode)
             .Timeout(5.Seconds())
             .FirstAsync(n => n != null);
 
         // Update 1: add msg1
-        var afterFirst = stream
-            .Select(ci => ci.Value)
+        var afterFirst = collectionStream
+            .Select(ExtractNode)
             .Timeout(5.Seconds())
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 1)
             .ToTask(ct);
@@ -164,8 +183,8 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", ((MeshThread)r1!.Content!).Messages)}]");
 
         // Update 2: add msg2
-        var afterSecond = stream
-            .Select(ci => ci.Value)
+        var afterSecond = collectionStream
+            .Select(ExtractNode)
             .Timeout(5.Seconds())
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 2)
             .ToTask(ct);
@@ -182,8 +201,8 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         Output.WriteLine($"After update 2: Messages=[{string.Join(", ", finalContent.Messages)}]");
 
         // Update 3: add msg3
-        var afterThird = stream
-            .Select(ci => ci.Value)
+        var afterThird = collectionStream
+            .Select(ExtractNode)
             .Timeout(5.Seconds())
             .FirstAsync(n => (n?.Content as MeshThread)?.Messages.Count >= 3)
             .ToTask(ct);

@@ -48,11 +48,23 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
     public void Dispose()
     {
         _changeNotifier.Dispose();
-        if (Directory.Exists(_testDirectory))
+        foreach (var dir in new[] { _testDirectory, _testDirectory + "_fresh" })
         {
-            try { Directory.Delete(_testDirectory, recursive: true); }
-            catch { /* ignore cleanup errors */ }
+            if (Directory.Exists(dir))
+            {
+                try { Directory.Delete(dir, recursive: true); }
+                catch { /* ignore cleanup errors */ }
+            }
         }
+    }
+
+    private static void CopyDirectory(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var file in Directory.GetFiles(source))
+            File.Copy(file, Path.Combine(dest, Path.GetFileName(file)));
+        foreach (var dir in Directory.GetDirectories(source))
+            CopyDirectory(dir, Path.Combine(dest, Path.GetFileName(dir)));
     }
 
     #region Save and Route
@@ -265,7 +277,10 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
             TestContext.Current.CancellationToken);
 
         // Act - Create a new router to discover existing partitions
-        var freshFactory = new FileSystemPartitionedStoreFactory(_testDirectory, null, _changeNotifier);
+        // Use a unique copy to avoid CachingStorageAdapter's static shared snapshot cache
+        var freshDir = _testDirectory + "_fresh";
+        CopyDirectory(_testDirectory, freshDir);
+        var freshFactory = new FileSystemPartitionedStoreFactory(freshDir, null, _changeNotifier);
         var freshRouter = new RoutingPersistenceServiceCore(freshFactory);
         await freshRouter.InitializeAsync(TestContext.Current.CancellationToken);
 
@@ -390,8 +405,8 @@ public class PartitionedFileSystemPersistenceTest : IDisposable
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso") with { Name = "Contoso", NodeType = "Organization" }, _jsonOptions, TestContext.Current.CancellationToken);
         await _router.SaveNodeAsync(MeshNode.FromPath("Contoso/Sales") with { Name = "Sales", NodeType = "Division" }, _jsonOptions, TestContext.Current.CancellationToken);
 
-        // Act - Query for all Organizations (no path constraint)
-        var request = MeshQueryRequest.FromQuery("nodeType:Organization scope:descendants");
+        // Act - Query for all Organizations (no path constraint, subtree scope includes root)
+        var request = MeshQueryRequest.FromQuery("nodeType:Organization scope:subtree");
         var results = await _queryProvider.QueryAsync(request, _jsonOptions, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
 
         // Assert - Should find organizations from both partitions

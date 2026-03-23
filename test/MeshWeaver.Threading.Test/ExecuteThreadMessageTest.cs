@@ -484,9 +484,11 @@ public class ExecuteThreadMessageTest(ITestOutputHelper output) : MonolithMeshTe
 
         // 3. Update via local stream (null address = own hub)
         // Post a DataChangeRequest to the thread hub to trigger the update on its own workspace
+        // MeshNode key is Id (last segment), not full path
+        var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
         client.Post(new DataChangeRequest
         {
-            Updates = [new MeshNode(threadPath)
+            Updates = [MeshNode.FromPath(threadPath) with
             {
                 NodeType = ThreadNodeType.NodeType,
                 Content = new MeshThread
