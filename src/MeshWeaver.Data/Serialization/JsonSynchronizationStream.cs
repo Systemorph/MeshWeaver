@@ -432,25 +432,15 @@ public static class JsonSynchronizationStream
         if (segments.Length == 0)
             throw new InvalidOperationException("Cannot add at root path");
 
-        var parent = NavigateToParent(root, segments);
+        var parent = EnsureParentPath(root, segments);
         var key = segments[^1];
 
         if (parent is JsonObject obj)
-        {
             obj[key] = value;
-        }
         else if (parent is JsonArray arr)
         {
-            if (key == "-")
-                arr.Add(value);
-            else if (int.TryParse(key, out var index))
-                arr.Insert(index, value);
-            else
-                throw new InvalidOperationException($"Invalid array index: {key}");
-        }
-        else
-        {
-            throw new InvalidOperationException($"Cannot add property to {parent?.GetType().Name}");
+            if (key == "-") arr.Add(value);
+            else if (int.TryParse(key, out var index)) arr.Insert(index, value);
         }
     }
 
@@ -459,21 +449,13 @@ public static class JsonSynchronizationStream
         if (segments.Length == 0)
             throw new InvalidOperationException("Cannot replace at root path");
 
-        var parent = NavigateToParent(root, segments);
+        var parent = EnsureParentPath(root, segments);
         var key = segments[^1];
 
         if (parent is JsonObject obj)
-        {
             obj[key] = value;
-        }
         else if (parent is JsonArray arr && int.TryParse(key, out var index))
-        {
             arr[index] = value;
-        }
-        else
-        {
-            throw new InvalidOperationException($"Cannot replace in {parent?.GetType().Name}");
-        }
     }
 
     private static void ApplyRemove(JsonNode root, string[] segments)
@@ -482,20 +464,43 @@ public static class JsonSynchronizationStream
             throw new InvalidOperationException("Cannot remove at root path");
 
         var parent = NavigateToParent(root, segments);
-        var key = segments[^1];
-
         if (parent is JsonObject obj)
-        {
-            obj.Remove(key);
-        }
-        else if (parent is JsonArray arr && int.TryParse(key, out var index))
-        {
+            obj.Remove(segments[^1]);
+        else if (parent is JsonArray arr && int.TryParse(segments[^1], out var index))
             arr.RemoveAt(index);
-        }
-        else
+    }
+
+    /// <summary>
+    /// Navigates to the parent, creating intermediate JsonObject nodes if a primitive
+    /// is encountered (e.g., replacing a string with an object tree).
+    /// </summary>
+    private static JsonNode? EnsureParentPath(JsonNode root, string[] segments)
+    {
+        JsonNode? current = root;
+        for (int i = 0; i < segments.Length - 1; i++)
         {
-            throw new InvalidOperationException($"Cannot remove from {parent?.GetType().Name}");
+            var segment = segments[i];
+            if (current is JsonObject obj)
+            {
+                var next = obj[segment];
+                if (next is null or JsonValue)
+                {
+                    // Replace primitive/null with an empty object so we can navigate deeper
+                    next = new JsonObject();
+                    obj[segment] = next;
+                }
+                current = next;
+            }
+            else if (current is JsonArray arr && int.TryParse(segment, out var index))
+            {
+                current = arr[index];
+            }
+            else
+            {
+                return null;
+            }
         }
+        return current;
     }
 
     private static JsonNode? NavigateToParent(JsonNode root, string[] segments)
@@ -515,7 +520,10 @@ public static class JsonSynchronizationStream
             }
             else
             {
-                throw new InvalidOperationException($"Cannot navigate through {current?.GetType().Name} with segment {segment}");
+                // Can't navigate through a primitive (string/number/null) —
+                // the patch replaces a leaf with a deeper structure.
+                // Return null so the caller can skip or handle gracefully.
+                return null;
             }
         }
         return current;
