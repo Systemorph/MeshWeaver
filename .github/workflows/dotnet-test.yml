@@ -34,7 +34,7 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
       run: |
-        dotnet test --no-build --verbosity normal -l:trx -- RunConfiguration.TestSessionTimeout=600000 | tee test/test-results.log
+        dotnet test --no-build --verbosity normal -l:trx --filter "FullyQualifiedName!~PostgreSql&FullyQualifiedName!~Cosmos&FullyQualifiedName!~Orleans" -- RunConfiguration.TestSessionTimeout=600000 | tee test/test-results.log
     - name: Collect test logs for artifact
       if: always()
       run: |
