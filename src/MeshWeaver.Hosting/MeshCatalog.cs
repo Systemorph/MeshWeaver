@@ -93,10 +93,10 @@ internal sealed class MeshCatalog(
     private HubNodePersistence NodePersistence => new(hub, this);
 
     public Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default)
-        => NodePersistence.CreateNodeAsync(node, ct);
+        => MeshServiceExtensions.ToTask(NodePersistence.CreateNode(node), ct);
 
     public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-        => NodePersistence.CreateTransientAsync(node, ct);
+        => MeshServiceExtensions.ToTask(NodePersistence.CreateTransient(node), ct);
 
 
     /// <summary>

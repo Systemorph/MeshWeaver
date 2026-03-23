@@ -41,18 +41,20 @@ public static class ThreadExecution
         logger?.LogDebug("[ThreadExec] HandleSubmitMessage: threadPath={ThreadPath}, user={User}, hubAddress={Hub}",
             threadPath, request.ContextPath, hub.Address);
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-        var userContext = delivery.AccessContext;
-        var userId = userContext?.ObjectId ?? "system";
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{threadPath}/{responseMsgId}";
-        logger?.LogDebug("[ThreadExec] Creating cells: userMsg={UserMsgId}, responseMsg={ResponseMsgId}, user={User}",
-            userMsgId, responseMsgId, userContext?.ObjectId ?? "(null)");
+        logger?.LogDebug("[ThreadExec] Creating cells: userMsg={UserMsgId}, responseMsg={ResponseMsgId}",
+            userMsgId, responseMsgId);
 
-        // 1) Create both cells concurrently — use explicit identity overload
-        //    so the user context flows correctly even in async continuations.
-        var inputTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
+        // Capture workspace BEFORE Subscribe — inside Subscribe callback, hub context may differ
+        var threadWorkspace = hub.GetWorkspace();
+
+        // 1) Create both cells concurrently via Observable.
+        //    CreateNode captures AccessContext eagerly at call time (inside the delivery
+        //    pipeline where it's set from delivery.AccessContext). No explicit identity needed.
+        var inputObs = meshService.CreateNode(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -62,11 +64,11 @@ public static class ThreadExecution
                 Text = request.UserMessageText,
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.ExecutedInput,
-                CreatedBy = userContext?.ObjectId
+                CreatedBy = delivery.AccessContext?.ObjectId
             }
-        }, userId);
+        });
 
-        var outputTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        var outputObs = meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -79,58 +81,45 @@ public static class ThreadExecution
                 AgentName = request.AgentName,
                 ModelName = request.ModelName
             }
-        }, userId);
-
-        // Capture workspace BEFORE ContinueWith — inside ContinueWith, hub context may differ
-        var threadWorkspace = hub.GetWorkspace();
-
-        Task.WhenAll(inputTask, outputTask).ContinueWith(t =>
-        {
-            // Restore user identity in continuation — ContinueWith runs on thread pool
-            // where AsyncLocal is null. Without this, all downstream operations
-            // (workspace updates, node creation in _Exec hub) run as anonymous.
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            accessService?.SetContext(userContext);
-
-            var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-            logger?.LogInformation("HandleSubmitMessage: ContinueWith fired for {ThreadPath}, user={User}, IsFaulted={IsFaulted}",
-                threadPath, userContext?.ObjectId ?? "(null)", t.IsFaulted);
-
-            if (t.IsFaulted)
-            {
-                var error = t.Exception?.Flatten().InnerExceptions.FirstOrDefault()?.Message
-                            ?? "Node creation failed";
-                logger?.LogError(t.Exception, "HandleSubmitMessage: node creation failed for {ThreadPath}: {Error}",
-                        threadPath, error);
-                hub.Post(new SubmitMessageResponse { Success = false, Error = error },
-                    o => o.ResponseFor(delivery));
-                return;
-            }
-
-            // 2) Update Thread.Messages via workspace (uses DataContext.GetDataSourceForType internally)
-            threadWorkspace.UpdateMeshNode(node =>
-            {
-                var thread = node.Content as MeshThread ?? new MeshThread();
-                return node with
-                {
-                    Content = thread with
-                    {
-                        Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
-                    }
-                };
-            });
-
-            // 3) Start execution on hosted hub
-            var executionHub = hub.GetHostedHub(
-                new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-                HostedHubCreation.Always);
-
-            executionHub!.Post(request with { ResponsePath = responsePath });
-
-            // 4) Response — nodes created successfully
-            hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
         });
+
+        inputObs.Zip(outputObs).Subscribe(
+            pair =>
+            {
+                logger?.LogInformation("HandleSubmitMessage: cells created for {ThreadPath}", threadPath);
+
+                // 2) Update Thread.Messages via workspace
+                threadWorkspace.UpdateMeshNode(node =>
+                {
+                    var thread = node.Content as MeshThread ?? new MeshThread();
+                    return node with
+                    {
+                        Content = thread with
+                        {
+                            Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                        }
+                    };
+                });
+
+                // 3) Start execution on hosted hub
+                var executionHub = hub.GetHostedHub(
+                    new Address($"{hub.Address}/_Exec"),
+                    config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                    HostedHubCreation.Always);
+
+                executionHub!.Post(request with { ResponsePath = responsePath });
+
+                // 4) Response — nodes created successfully
+                hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            },
+            error =>
+            {
+                var errorMsg = error.Message ?? "Node creation failed";
+                logger?.LogError(error, "HandleSubmitMessage: node creation failed for {ThreadPath}: {Error}",
+                    threadPath, errorMsg);
+                hub.Post(new SubmitMessageResponse { Success = false, Error = errorMsg },
+                    o => o.ResponseFor(delivery));
+            });
         return delivery.Processed();
     }
 

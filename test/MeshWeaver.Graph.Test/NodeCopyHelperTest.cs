@@ -63,17 +63,20 @@ public class NodeCopyHelperTest(ITestOutputHelper output) : HubTestBase(output)
     /// </summary>
     private class TestNodeFactory(InMemoryPersistenceService persistence, JsonSerializerOptions jsonOptions) : IMeshService
     {
-        public async Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
-            => await persistence.SaveNodeAsync(node, jsonOptions, ct);
+        public IObservable<MeshNode> CreateNode(MeshNode node)
+            => FromTask(() => persistence.SaveNodeAsync(node, jsonOptions));
 
-        public async Task<MeshNode> UpdateNodeAsync(MeshNode node, CancellationToken ct = default)
-            => await persistence.SaveNodeAsync(node, jsonOptions, ct);
+        public IObservable<MeshNode> UpdateNode(MeshNode node)
+            => FromTask(() => persistence.SaveNodeAsync(node, jsonOptions));
 
-        public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-            => persistence.SaveNodeAsync(node, jsonOptions, ct);
+        public IObservable<MeshNode> CreateTransient(MeshNode node)
+            => FromTask(() => persistence.SaveNodeAsync(node, jsonOptions));
 
-        public Task DeleteNodeAsync(string path, CancellationToken ct = default)
-            => persistence.DeleteNodeAsync(path, true, ct);
+        public IObservable<bool> DeleteNode(string path)
+            => FromTask(async () => { await persistence.DeleteNodeAsync(path, true); return true; });
+
+        private static IObservable<T> FromTask<T>(Func<Task<T>> factory)
+            => System.Reactive.Linq.Observable.FromAsync(factory);
 
         public async IAsyncEnumerable<object> QueryAsync(MeshQueryRequest request, [EnumeratorCancellation] CancellationToken ct = default)
         {
