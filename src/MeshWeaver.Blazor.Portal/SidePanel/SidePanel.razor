@@ -39,6 +39,12 @@
         </div>
         <div class="side-panel-actions">
             @ToolbarContent
+            @if (HasThread)
+            {
+                <FluentButton BackgroundColor="transparent" OnClick="MoveToMainPanel" Title="Open in main panel">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.ArrowMaximize())" Color="Color.Neutral" />
+                </FluentButton>
+            }
             <FluentButton BackgroundColor="transparent" OnClick="CloseAsync" Title="Close">
                 <FluentIcon Value="@(new Icons.Regular.Size20.Dismiss())" Color="Color.Neutral" />
             </FluentButton>

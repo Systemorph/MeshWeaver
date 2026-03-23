@@ -66,6 +66,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         base.OnInitialized();
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
+        NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
         _menuSubscription = MenuItemsProvider.MenuItems.Subscribe(items =>
         {
             _menuItems = items;
@@ -162,6 +163,13 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 // Circuit disconnected during initialization
             }
         }
+    }
+
+    private void OnSidePanelNavigation(string path)
+    {
+        SidePanelState.SetContentPath(path);
+        if (!SidePanelState.IsVisible)
+            SidePanelState.SetVisible(true);
     }
 
     private void OnSidePanelStateChanged()
@@ -319,6 +327,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
+        NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
         _menuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();

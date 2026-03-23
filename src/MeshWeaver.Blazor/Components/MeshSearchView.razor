@@ -186,10 +186,17 @@
     private RenderFragment RenderCard(MeshNode node) => __builder =>
     {
         var cardControl = GetCardControl(node);
+        var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
 
         if (OnNodeSelected.HasDelegate)
         {
             <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
+                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+            </div>
+        }
+        else if (!string.IsNullOrEmpty(clickAddress))
+        {
+            <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
                 <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
             </div>
         }
@@ -198,4 +205,10 @@
             <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
         }
     };
+
+    private void PostClickMessage(MeshNode node, string targetAddress)
+    {
+        Hub.Post(new NavigationRequest($"/{node.Path}") { Target = "SidePanel" },
+            o => o.WithTarget(new MeshWeaver.Messaging.Address(targetAddress)));
+    }
 }

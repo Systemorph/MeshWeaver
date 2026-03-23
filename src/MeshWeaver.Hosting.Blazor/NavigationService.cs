@@ -109,9 +109,20 @@ internal class NavigationService : INavigationService
         => NavigateTo(new MeshWeaver.Mesh.Services.NavigationOptions(uri) { ForceLoad = forceLoad, Replace = replace });
 
     /// <inheritdoc />
+    public event Action<string>? SidePanelNavigationRequested;
+
+    /// <inheritdoc />
     public void NavigateTo(MeshWeaver.Mesh.Services.NavigationOptions options)
     {
-        _navigationManager.NavigateTo(options.Uri, options.ForceLoad, options.Replace);
+        if (options.Target == "SidePanel")
+        {
+            var path = options.Uri.TrimStart('/');
+            SidePanelNavigationRequested?.Invoke(path);
+        }
+        else
+        {
+            _navigationManager.NavigateTo(options.Uri, options.ForceLoad, options.Replace);
+        }
     }
 
     /// <inheritdoc />

@@ -9,6 +9,7 @@ namespace MeshWeaver.Blazor.Portal.SidePanel;
 public partial class SidePanel : ComponentBase, IDisposable
 {
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
 
     /// <summary>
     /// Main content rendered inside the panel body.
@@ -61,6 +62,16 @@ public partial class SidePanel : ComponentBase, IDisposable
     {
         isMenuOpen = false;
         SidePanelState.RequestAction("Resume");
+    }
+
+    private void MoveToMainPanel()
+    {
+        var contentPath = SidePanelState.ContentPath;
+        SidePanelState.SetContentPath(null);
+        SidePanelState.SetTitle(null);
+        SidePanelState.SetVisible(false);
+        if (!string.IsNullOrEmpty(contentPath))
+            NavigationManager.NavigateTo($"/{contentPath}");
     }
 
     private async Task CloseAsync()
