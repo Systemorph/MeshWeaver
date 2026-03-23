@@ -148,4 +148,9 @@ public record ThreadMessage
     /// The model used to generate this response (for AgentResponse messages).
     /// </summary>
     public string? ModelName { get; init; }
+
+    /// <summary>
+    /// The user who created this message. Set from the delivery's AccessContext.
+    /// </summary>
+    public string? CreatedBy { get; init; }
 }

@@ -15,8 +15,16 @@ public interface IMeshService
     /// <summary>
     /// Creates a new node with validation.
     /// Routes through CreateNodeRequest for proper security enforcement.
+    /// Identity is resolved from AccessService.Context (AsyncLocal).
     /// </summary>
     Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default);
+
+    /// <summary>
+    /// Creates a new node with explicit identity.
+    /// Use this overload when calling from outside hub context (e.g., ContinueWith, background tasks)
+    /// where AsyncLocal identity is not available.
+    /// </summary>
+    Task<MeshNode> CreateNodeAsync(MeshNode node, string identity, CancellationToken ct = default);
 
     /// <summary>
     /// Updates an existing node with validation.
@@ -25,11 +33,21 @@ public interface IMeshService
     Task<MeshNode> UpdateNodeAsync(MeshNode node, CancellationToken ct = default);
 
     /// <summary>
+    /// Updates an existing node with explicit identity.
+    /// </summary>
+    Task<MeshNode> UpdateNodeAsync(MeshNode node, string identity, CancellationToken ct = default);
+
+    /// <summary>
     /// Deletes a node and all its descendants (bottom to top).
     /// Routes through DeleteNodeRequest for proper security enforcement.
     /// If a descendant cannot be deleted, the parent is not deleted either.
     /// </summary>
     Task DeleteNodeAsync(string path, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes a node with explicit identity.
+    /// </summary>
+    Task DeleteNodeAsync(string path, string identity, CancellationToken ct = default);
 
     /// <summary>
     /// Creates a transient node for UI creation flows.

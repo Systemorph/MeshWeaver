@@ -365,6 +365,79 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
     }
 
     /// <summary>
+    /// Verifies that when a user lacks Thread permission, the SubmitMessageRequest
+    /// returns a clear DeliveryFailure error — NOT a silent timeout/hang.
+    /// Uses Viewer role which has Read+Execute but NOT Thread.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SubmitChat_WithoutThreadPermission_ReturnsError()
+    {
+        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        var client = await GetClientAsync();
+
+        // Set CircuitContext as a Viewer user (no Thread permission)
+        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(new AccessContext
+        {
+            ObjectId = "ViewerUser",
+            Name = "Viewer Only"
+        });
+
+        // Create thread (Thread permission maps to Thread, Viewer doesn't have it)
+        // But first we need the thread to exist — create with a privileged context
+        accessService.SetCircuitContext(new AccessContext
+        {
+            ObjectId = "Roland",
+            Name = "Roland"
+        });
+        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland",
+            $"Error test {Guid.NewGuid():N}", "Roland");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        Output.WriteLine($"Thread created: {threadPath}");
+
+        // Switch to unprivileged user
+        accessService.SetCircuitContext(new AccessContext
+        {
+            ObjectId = "ViewerUser",
+            Name = "Viewer Only"
+        });
+
+        // Submit message — should fail with a clear error, not hang
+        var submitDelivery = client.Post(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Should be denied",
+                ContextPath = "User/Roland"
+            },
+            o => o.WithTarget(new Address(threadPath)));
+        submitDelivery.Should().NotBeNull();
+
+        var responseTcs = new TaskCompletionSource<string?>();
+        _ = client.RegisterCallback((IMessageDelivery)submitDelivery!, response =>
+        {
+            if (response is IMessageDelivery<DeliveryFailure> df)
+                responseTcs.TrySetResult(df.Message.Message);
+            else if (response is IMessageDelivery<SubmitMessageResponse> sr)
+                responseTcs.TrySetResult(sr.Message.Success ? null : sr.Message.Error);
+            else
+                responseTcs.TrySetResult($"Unexpected: {response.Message?.GetType().Name}");
+            return response;
+        });
+
+        var timeoutTask = Task.Delay(15_000, ct);
+        var error = await Task.WhenAny(responseTcs.Task, timeoutTask) == responseTcs.Task
+            ? await responseTcs.Task
+            : "TIMEOUT: No error response received — UI would hang silently!";
+
+        Output.WriteLine($"Error response: {error}");
+        error.Should().NotBeNull("should receive an error, not succeed");
+        error.Should().NotStartWith("TIMEOUT", "error response must arrive promptly, not hang");
+        error.Should().Contain("Thread", "error message should mention the missing permission");
+        Output.WriteLine("Error message test passed: user gets clear feedback on permission denial");
+    }
+
+    /// <summary>
     /// Verifies that ThreadMessage nodes (cells) are created as children of the Thread.
     /// In PostgreSQL, these go to the satellite "threads" table.
     /// </summary>

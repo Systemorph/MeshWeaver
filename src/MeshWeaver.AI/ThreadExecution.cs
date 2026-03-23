@@ -41,14 +41,17 @@ public static class ThreadExecution
         logger?.LogDebug("[ThreadExec] HandleSubmitMessage: threadPath={ThreadPath}, user={User}, hubAddress={Hub}",
             threadPath, request.ContextPath, hub.Address);
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var userContext = delivery.AccessContext;
+        var userId = userContext?.ObjectId ?? "system";
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{threadPath}/{responseMsgId}";
-        logger?.LogDebug("[ThreadExec] Creating cells: userMsg={UserMsgId}, responseMsg={ResponseMsgId}",
-            userMsgId, responseMsgId);
+        logger?.LogDebug("[ThreadExec] Creating cells: userMsg={UserMsgId}, responseMsg={ResponseMsgId}, user={User}",
+            userMsgId, responseMsgId, userContext?.ObjectId ?? "(null)");
 
-        // 1) Create both cells concurrently
+        // 1) Create both cells concurrently — use explicit identity overload
+        //    so the user context flows correctly even in async continuations.
         var inputTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
@@ -58,9 +61,10 @@ public static class ThreadExecution
                 Role = "user",
                 Text = request.UserMessageText,
                 Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput
+                Type = ThreadMessageType.ExecutedInput,
+                CreatedBy = userContext?.ObjectId
             }
-        });
+        }, userId);
 
         var outputTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
         {
@@ -75,16 +79,22 @@ public static class ThreadExecution
                 AgentName = request.AgentName,
                 ModelName = request.ModelName
             }
-        });
+        }, userId);
 
         // Capture workspace BEFORE ContinueWith — inside ContinueWith, hub context may differ
         var threadWorkspace = hub.GetWorkspace();
 
         Task.WhenAll(inputTask, outputTask).ContinueWith(t =>
         {
+            // Restore user identity in continuation — ContinueWith runs on thread pool
+            // where AsyncLocal is null. Without this, all downstream operations
+            // (workspace updates, node creation in _Exec hub) run as anonymous.
+            var accessService = hub.ServiceProvider.GetService<AccessService>();
+            accessService?.SetContext(userContext);
+
             var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-            logger?.LogInformation("HandleSubmitMessage: ContinueWith fired for {ThreadPath}, IsFaulted={IsFaulted}",
-                threadPath, t.IsFaulted);
+            logger?.LogInformation("HandleSubmitMessage: ContinueWith fired for {ThreadPath}, user={User}, IsFaulted={IsFaulted}",
+                threadPath, userContext?.ObjectId ?? "(null)", t.IsFaulted);
 
             if (t.IsFaulted)
             {
