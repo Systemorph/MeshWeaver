@@ -40,7 +40,8 @@ public class DocumentationNodeProvider : IStaticNodeProvider
                 Create = false,
                 Update = false,
                 Delete = false,
-                Comment = false
+                Comment = false,
+                Thread = false
             }
         };
 

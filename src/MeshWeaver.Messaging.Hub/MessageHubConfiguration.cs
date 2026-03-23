@@ -224,13 +224,19 @@ public record MessageHubConfiguration
                     Name = hubAddress.ToString()
                 });
             }
-            logger?.LogDebug(
-                "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
-                syncPipeline.Hub.Address,
-                d.Message?.GetType().Name ?? "(null)",
-                d.AccessContext?.ObjectId ?? "(no-context)",
-                userService?.Context?.ObjectId ?? "(null)",
-                userService?.CircuitContext?.ObjectId ?? "(null)");
+            var msgType = d.Message?.GetType().Name ?? "(null)";
+            var resolvedUser = d.AccessContext?.ObjectId ?? "(no-context)";
+            var asyncLocal = userService?.Context?.ObjectId ?? "(null)";
+            var circuit = userService?.CircuitContext?.ObjectId ?? "(null)";
+            // Use Warning for identity-sensitive messages so they're visible in production
+            if (resolvedUser == "(no-context)" || msgType.Contains("Submit", StringComparison.Ordinal))
+                logger?.LogWarning(
+                    "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
+                    syncPipeline.Hub.Address, msgType, resolvedUser, asyncLocal, circuit);
+            else
+                logger?.LogDebug(
+                    "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
+                    syncPipeline.Hub.Address, msgType, resolvedUser, asyncLocal, circuit);
             return next(d);
         });
     }

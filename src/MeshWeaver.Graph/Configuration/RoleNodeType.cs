@@ -63,7 +63,8 @@ public static class RoleNodeType
                     Create = false,
                     Update = false,
                     Delete = false,
-                    Comment = false
+                    Comment = false,
+                    Thread = false
                 }
             },
             new("Admin", "Role") { Name = "Admin", NodeType = NodeType, Content = Role.Admin },

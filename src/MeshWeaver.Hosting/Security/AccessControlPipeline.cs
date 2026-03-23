@@ -47,6 +47,19 @@ public static class AccessControlPipeline
 
                 var userId = ResolveIdentity(delivery, accessService);
 
+                // Log identity resolution details for debugging access issues
+                if (string.IsNullOrEmpty(userId))
+                    logger?.LogWarning(
+                        "AccessControlPipeline: ANONYMOUS delivery — hub={Hub}, message={MessageType}, " +
+                        "delivery.AccessContext={DeliveryContext}, accessService.Context={ServiceContext}, " +
+                        "circuitContext={CircuitContext}, sender={Sender}",
+                        hub.Address,
+                        delivery.Message.GetType().Name,
+                        delivery.AccessContext?.ObjectId ?? "(null)",
+                        accessService.Context?.ObjectId ?? "(null)",
+                        accessService.CircuitContext?.ObjectId ?? "(null)",
+                        delivery.Sender);
+
                 var hubPath = string.Join("/", hub.Address.Segments);
 
                 foreach (var (path, permission) in attr.GetPermissionChecks(delivery, hubPath))

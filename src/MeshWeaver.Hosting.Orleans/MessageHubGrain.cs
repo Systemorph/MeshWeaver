@@ -107,6 +107,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         // and sets AccessService.Context for the entire async processing chain.
         var userId = RequestContext.Get("UserId") as string;
         var userName = RequestContext.Get("UserName") as string;
+        var msgType = delivery.Message?.GetType().Name ?? "(null)";
+        var deliveryUser = delivery.AccessContext?.ObjectId;
 
         if (!string.IsNullOrEmpty(userId) &&
             (delivery.AccessContext == null || delivery.AccessContext.ObjectId != userId))
@@ -117,6 +119,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 Name = userName ?? userId
             });
         }
+
+        // Log identity chain for debugging — Warning level for identity-sensitive messages
+        if (string.IsNullOrEmpty(userId) || msgType.Contains("Submit", StringComparison.Ordinal))
+            logger.LogWarning(
+                "GrainDeliver: grain={Grain}, message={MessageType}, requestContextUserId={RequestContextUser}, deliveryUser={DeliveryUser}, finalUser={FinalUser}",
+                this.GetPrimaryKeyString(), msgType, userId ?? "(null)", deliveryUser ?? "(null)",
+                delivery.AccessContext?.ObjectId ?? "(null)");
 
         var ret = Hub!.DeliverMessage(delivery);
         return Task.FromResult(ret);
