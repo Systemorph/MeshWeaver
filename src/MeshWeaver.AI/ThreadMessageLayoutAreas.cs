@@ -61,6 +61,28 @@ public static class ThreadMessageLayoutAreas
             .DistinctUntilChanged()
             .Subscribe(text => host.UpdateData("text", text)));
 
+        // Push IsExecuting flag to data section
+        host.RegisterForDisposal(nodeStream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var msg = node?.Content as ThreadMessage;
+                return msg?.IsExecuting ?? false;
+            })
+            .DistinctUntilChanged()
+            .Subscribe(isExec => host.UpdateData("isExecuting", isExec)));
+
+        // Push ExecutionStatus to data section
+        host.RegisterForDisposal(nodeStream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var msg = node?.Content as ThreadMessage;
+                return msg?.ExecutionStatus ?? "";
+            })
+            .DistinctUntilChanged()
+            .Subscribe(status => host.UpdateData("executionStatus", status)));
+
         // Emit control ONCE — role/author/type are fixed, text is data-bound
         return nodeStream!
             .Select(nodes =>
@@ -92,7 +114,18 @@ public static class ThreadMessageLayoutAreas
         var bubble = new ThreadMessageBubbleControl()
             .WithRole(msg.Role)
             .WithAuthorName(authorName)
-            .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")));
+            .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")))
+            .WithIsExecuting(new JsonPointerReference(LayoutAreaReference.GetDataPointer("isExecuting")))
+            .WithExecutionStatus(new JsonPointerReference(LayoutAreaReference.GetDataPointer("executionStatus")))
+            .WithThreadPath(threadPath)
+            .WithClickAction(_ =>
+            {
+                // Cancel execution — posted when the bubble's cancel button is clicked
+                host.Hub.Post(new CancelThreadStreamRequest
+                {
+                    ThreadPath = threadPath
+                }, o => o.WithTarget(new Address(threadPath)));
+            });
 
         // Action buttons — small stealth icon buttons, right-aligned
         var actionRow = Controls.Stack

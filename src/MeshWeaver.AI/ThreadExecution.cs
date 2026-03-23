@@ -79,7 +79,8 @@ public static class ThreadExecution
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = request.AgentName,
-                ModelName = request.ModelName
+                ModelName = request.ModelName,
+                IsExecuting = true
             }
         });
 
@@ -164,10 +165,56 @@ public static class ThreadExecution
             // 3. await streaming — update response node via the stream
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
+            var lastStatusUpdate = DateTimeOffset.MinValue;
+            string? currentStatus = null;
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
 
             await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
             {
+                // Capture function call / delegation activity for execution status
+                foreach (var content in update.Contents)
+                {
+                    if (content is FunctionCallContent functionCall)
+                    {
+                        currentStatus = $"Calling {functionCall.Name}...";
+                    }
+                    else if (content is FunctionResultContent)
+                    {
+                        currentStatus = null; // Tool call completed
+                    }
+                }
+
+                // Update execution status when it changes (throttled)
+                if (currentStatus != null && responseText.Length == 0
+                    && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
+                {
+                    var status = currentStatus;
+                    responseStream.Update(current =>
+                    {
+                        if (current == null) return null;
+                        var msg = current.Content as ThreadMessage;
+                        var updated = current with
+                        {
+                            Content = new ThreadMessage
+                            {
+                                Id = responseMsgId,
+                                Role = "assistant",
+                                Text = "",
+                                Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
+                                Type = ThreadMessageType.AgentResponse,
+                                AgentName = request.AgentName,
+                                ModelName = request.ModelName,
+                                IsExecuting = true,
+                                ExecutionStatus = status
+                            }
+                        };
+                        return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                            responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                            [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+                    });
+                    lastStatusUpdate = DateTimeOffset.UtcNow;
+                }
+
                 if (!string.IsNullOrEmpty(update.Text))
                 {
                     responseText.Append(update.Text);
@@ -186,7 +233,8 @@ public static class ThreadExecution
                                     Role = "assistant",
                                     Text = text,
                                     Timestamp = DateTime.UtcNow,
-                                    Type = ThreadMessageType.AgentResponse
+                                    Type = ThreadMessageType.AgentResponse,
+                                    IsExecuting = true
                                 }
                             };
                             return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -198,7 +246,7 @@ public static class ThreadExecution
                 }
             }
 
-            // 4. Final update
+            // 4. Final update — mark execution as complete
             var finalText = responseText.ToString();
             responseStream.Update(current =>
             {
@@ -213,7 +261,9 @@ public static class ThreadExecution
                         Timestamp = DateTime.UtcNow,
                         Type = ThreadMessageType.AgentResponse,
                         AgentName = request.AgentName,
-                        ModelName = request.ModelName
+                        ModelName = request.ModelName,
+                        IsExecuting = false,
+                        ExecutionStatus = null
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -224,10 +274,58 @@ public static class ThreadExecution
         catch (OperationCanceledException)
         {
             logger.LogInformation("ExecuteMessageAsync: cancelled for {ThreadPath}", threadPath);
+            // Mark execution as stopped on cancellation
+            responseStream.Update(current =>
+            {
+                if (current == null) return null;
+                var msg = current.Content as ThreadMessage;
+                var updated = current with
+                {
+                    Content = new ThreadMessage
+                    {
+                        Id = responseMsgId,
+                        Role = "assistant",
+                        Text = (msg?.Text ?? "") + "\n\n*Cancelled*",
+                        Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.AgentResponse,
+                        AgentName = request.AgentName,
+                        ModelName = request.ModelName,
+                        IsExecuting = false,
+                        ExecutionStatus = null
+                    }
+                };
+                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "ExecuteMessageAsync: error for {ThreadPath}", threadPath);
+            // Mark execution as stopped on error
+            responseStream.Update(current =>
+            {
+                if (current == null) return null;
+                var msg = current.Content as ThreadMessage;
+                var updated = current with
+                {
+                    Content = new ThreadMessage
+                    {
+                        Id = responseMsgId,
+                        Role = "assistant",
+                        Text = (msg?.Text ?? "") + $"\n\n*Error: {ex.Message}*",
+                        Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.AgentResponse,
+                        AgentName = request.AgentName,
+                        ModelName = request.ModelName,
+                        IsExecuting = false,
+                        ExecutionStatus = null
+                    }
+                };
+                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
         }
 
         return delivery.Processed();
