@@ -156,7 +156,15 @@ public record MeshSearchControl()
     /// </summary>
     public object? CreateHref { get; init; }
 
+    /// <summary>
+    /// When set, clicking a result posts a ClickMessage to this address
+    /// with the clicked node's path, instead of navigating the browser.
+    /// The receiving hub handles the message (e.g., side panel navigation).
+    /// </summary>
+    public object? ClickMessageAddress { get; init; }
+
     // Basic fluent methods
+    public MeshSearchControl WithClickMessageAddress(object address) => this with { ClickMessageAddress = address };
     public MeshSearchControl WithHiddenQuery(string query) => this with { HiddenQuery = query };
     public MeshSearchControl WithVisibleQuery(string query) => this with { VisibleQuery = query };
     public MeshSearchControl WithPlaceholder(string placeholder) => this with { Placeholder = placeholder };
