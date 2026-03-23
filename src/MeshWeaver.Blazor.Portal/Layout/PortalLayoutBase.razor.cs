@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
@@ -20,6 +21,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected IMessageHub Hub { get; set; } = null!;
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
+    [Inject] protected IPathResolver PathResolver { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";
@@ -75,6 +77,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         await base.OnInitializedAsync();
         await NavigationService.InitializeAsync();
+        await ResolveSidePanelContentAsync();
     }
 
     private void ToggleNodeMenu()
@@ -163,7 +166,11 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
     private void OnSidePanelStateChanged()
     {
-        InvokeAsync(StateHasChanged);
+        InvokeAsync(async () =>
+        {
+            await ResolveSidePanelContentAsync();
+            StateHasChanged();
+        });
     }
 
     protected override void OnParametersSet()
@@ -208,9 +215,9 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             var navigateTo = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
             NavigationManager.NavigateTo(navigateTo);
 
-            // Open panel with thread
+            // Open panel with thread and set title
+            SidePanelState.SetTitle(context.Node.Name ?? "Thread");
             SidePanelState.OpenWithContent(threadPath);
-            sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
             await ApplyPersistedSizeAsync();
         }
         else
@@ -244,6 +251,48 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;
+
+    private LayoutAreaControl? sidePanelViewModel;
+    private string? resolvedSidePanelPath;
+
+    /// <summary>
+    /// Resolves ContentPath via IPathResolver (same as AreaPage) and builds LayoutAreaControl.
+    /// </summary>
+    private async Task ResolveSidePanelContentAsync()
+    {
+        var contentPath = SidePanelState.ContentPath;
+        if (contentPath == resolvedSidePanelPath)
+            return;
+
+        resolvedSidePanelPath = contentPath;
+
+        if (string.IsNullOrEmpty(contentPath))
+        {
+            sidePanelViewModel = null;
+            return;
+        }
+
+        var resolution = await PathResolver.ResolvePathAsync(contentPath);
+        if (resolution == null)
+        {
+            sidePanelViewModel = null;
+            return;
+        }
+
+        var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
+        var reference = new LayoutAreaReference(area) { Id = id ?? "" };
+        sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+    }
+
+    private static (string? Area, string? Id) ParseSidePanelRemainder(string? remainder)
+    {
+        if (string.IsNullOrEmpty(remainder))
+            return (null, null);
+        var parts = remainder.Split('/', 2);
+        var area = parts[0];
+        var id = parts.Length > 1 ? parts[1] : null;
+        return (area, id);
+    }
 
     private ThreadChatControl GetSidePanelControl()
     {

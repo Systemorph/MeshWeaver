@@ -26,7 +26,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private bool _isDisposed;
     private IDisposable? agentSubscription;
-    private ISynchronizationStream<JsonElement>? _ownedStream;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
     // Thread state
@@ -153,11 +152,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             Logger.LogWarning(ex, "[ThreadChat:{InstanceId}] Failed to initialize agent/model selections", _instanceId);
         }
 
-        // If we already have a thread path (side panel resuming existing thread),
-        // create the stream so cells load immediately
-        if (!string.IsNullOrEmpty(threadPath))
-            EnsureStreamForThread(threadPath);
-
         Logger.LogDebug("[ThreadChat:{InstanceId}] OnInitializedAsync completed", _instanceId);
     }
 
@@ -214,39 +208,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override void BindData()
     {
         base.BindData();
-        // Use the JsonPointerReference from the side panel's owned stream,
-        // or ViewModel.ThreadViewModel (JsonPointerReference from main panel, or null for new chat)
-        var binding = _ownedStream != null
-            ? new JsonPointerReference(LayoutAreaReference.GetDataPointer("thread"))
-            : ViewModel.ThreadViewModel;
-        DataBind(binding, x => x.ThreadViewModel, ConvertThreadViewModel);
+        DataBind(ViewModel.ThreadViewModel, x => x.ThreadViewModel, ConvertThreadViewModel);
     }
 
-    /// <summary>
-    /// Establishes a remote stream to the thread hub's layout area when the view
-    /// is used in the side panel (where Stream is null). This enables DataBind
-    /// for cells to work via JsonPointerReference.
-    /// </summary>
-    private void EnsureStreamForThread(string threadPath)
-    {
-        // Skip if main panel already has a bound ThreadViewModel via JsonPointerReference
-        if (ViewModel.ThreadViewModel is JsonPointerReference)
-            return;
-
-        // Skip if we already have a stream for this thread
-        if (_ownedStream != null && Stream == _ownedStream)
-            return;
-
-        _ownedStream?.Dispose();
-        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
-        if (workspace == null) return;
-        _ownedStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(threadPath),
-            new LayoutAreaReference(ThreadNodeType.ThreadArea));
-        Stream = _ownedStream;
-        BindData(); // Re-bind with the new stream — BindData() uses JsonPointerReference when _ownedStream exists
-        StateHasChanged();
-    }
 
     private Task InitializeAgentAndModelSelectionsAsync()
     {
@@ -473,11 +437,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         return;
                     }
 
-                    threadPath = createResult.Node?.Path;
                     threadName = createResult.Node?.Name;
+                    threadPath = createResult.Node?.Path;
+                    // Tell side panel to switch to the new thread — it will re-render with LayoutAreaView
                     SidePanelState.SetContentPath(threadPath);
                     UpdateSidePanelTitle();
-                    EnsureStreamForThread(threadPath!);
                 }
                 finally
                 {
@@ -736,7 +700,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             switch (action)
             {
                 case "New":
-                    StartNewThread();
+                    SidePanelState.SetContentPath(null);
                     break;
                 case "Resume":
                     _ = SwitchToResumeModeAsync();
@@ -747,19 +711,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     // --- Mode switching ---
 
-    private void StartNewThread()
-    {
-        threadPath = null;
-        threadName = null;
-        SidePanelState.SetContentPath(null);
-        UpdateSidePanelTitle();
-        _ownedStream?.Dispose();
-        _ownedStream = null;
-        Stream = null;
-        ThreadViewModel = null;
-        viewMode = ChatViewMode.Chat;
-        StateHasChanged();
-    }
 
     private Task SwitchToResumeModeAsync()
     {
@@ -803,14 +754,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private Task OnSelectThread(MeshNode node)
     {
-        threadPath = node.Path;
         threadName = node.Name;
         viewMode = ChatViewMode.Chat;
-        SidePanelState.SetContentPath(threadPath);
+        SidePanelState.SetContentPath(node.Path);
         UpdateSidePanelTitle();
-        if (!string.IsNullOrEmpty(threadPath))
-            EnsureStreamForThread(threadPath);
-        StateHasChanged();
         return Task.CompletedTask;
     }
 
@@ -1183,7 +1130,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
-            _ownedStream?.Dispose();
             resumeThreadsStream?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
