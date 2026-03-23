@@ -51,7 +51,7 @@ public static class MarkdownEditLayoutArea
         string initialContent,
         bool trackChanges)
     {
-        var backHref = $"/{hubPath}";
+        var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MarkdownLayoutAreas.OverviewArea);
 
         var container = Controls.Stack
             .WithWidth("100%")
@@ -116,7 +116,7 @@ public static class MarkdownEditLayoutArea
 
         var editorWrapper = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("flex: 1; width: 100%; padding: 0; min-height: 0;")
+            .WithStyle("flex: 1; width: 100%; padding: 0; min-height: 0; overflow: hidden;")
             .WithView(editor);
 
         container = container.WithView(editorWrapper);
