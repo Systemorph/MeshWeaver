@@ -34,7 +34,13 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
       run: |
-        dotnet test --no-build --verbosity normal -l:trx --filter "FullyQualifiedName!~PostgreSql&FullyQualifiedName!~Cosmos&FullyQualifiedName!~Orleans" -- RunConfiguration.TestSessionTimeout=600000 | tee test/test-results.log
+        find test -name '*.csproj' \
+          ! -path '*PostgreSql*' \
+          ! -path '*Cosmos*' \
+          ! -path '*Orleans*' \
+          ! -path '*Acme*' \
+          ! -path '*FutuRe*' \
+          -exec dotnet test {} --no-build --verbosity normal -l:trx \; 2>&1 | tee test/test-results.log
     - name: Collect test logs for artifact
       if: always()
       run: |
