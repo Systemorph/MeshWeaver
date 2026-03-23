@@ -14,11 +14,14 @@ using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Orleans.Hosting;
@@ -45,7 +48,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<ChatSiloConfigurator>();
+        builder.AddSiloBuilderConfigurator<RlsChatSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
@@ -254,6 +257,108 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
     }
 
     /// <summary>
+    /// Reproduces the production identity chain failure:
+    /// Simulates the Blazor GUI flow where UserContextMiddleware sets CircuitContext
+    /// on the portal hub's AccessService, then the component posts SubmitMessageRequest.
+    /// Verifies that the user identity propagates through:
+    ///   PostPipeline → OrleansRoutingService → MessageHubGrain → AccessControlPipeline
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SubmitChat_WithCircuitContext_IdentityPropagates()
+    {
+        var ct = new CancellationTokenSource(50.Seconds()).Token;
+
+        // 1. Create client hub simulating a portal circuit
+        var client = await GetClientAsync();
+
+        // 2. Set CircuitContext on the client hub — exactly what UserContextMiddleware does
+        //    in Blazor after authentication. This is the persistent session identity.
+        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(new AccessContext
+        {
+            ObjectId = "Roland",
+            Name = "Roland Buergi",
+            Email = "rbuergi@systemorph.com"
+        });
+        Output.WriteLine($"CircuitContext set: {accessService.CircuitContext?.ObjectId}");
+
+        // 3. Verify PostPipeline stamps the delivery with the circuit user (not hub address)
+        //    This is what happens when ThreadChatView calls Hub.Post(new SubmitMessageRequest{...})
+        var testDelivery = client.Post(
+            new SubmitMessageRequest
+            {
+                ThreadPath = "User/Roland/_Thread/test",
+                UserMessageText = "identity check",
+                ContextPath = "User/Roland"
+            },
+            o => o.WithTarget(client.Address)); // Target self to capture the delivery
+        testDelivery.Should().NotBeNull();
+        testDelivery!.AccessContext.Should().NotBeNull("PostPipeline should stamp AccessContext");
+        testDelivery.AccessContext!.ObjectId.Should().Be("Roland",
+            "PostPipeline should use CircuitContext identity, not hub address");
+        Output.WriteLine($"PostPipeline stamped: {testDelivery.AccessContext.ObjectId}");
+
+        // 4. Create thread under user partition (like the GUI does)
+        var threadNode = ThreadNodeType.BuildThreadNode("User/Roland", "Identity chain test", "Roland");
+        var threadPath = await CreateNodeAsync(client, threadNode, "User/Roland", ct);
+        Output.WriteLine($"Thread created: {threadPath}");
+
+        // 5. Subscribe to thread messages (like ThreadChatView subscribes)
+        var twoMessages = ObserveThreadMessages(client, threadPath)
+            .Where(ids => ids.Count >= 2)
+            .FirstAsync()
+            .ToTask(ct);
+
+        // 6. Submit message — this is the critical path that fails in production.
+        //    The SubmitMessageRequest has [RequiresPermission(Permission.Thread)].
+        //    If identity is lost, AccessControlPipeline rejects with "(anonymous)".
+        Output.WriteLine("Posting SubmitMessageRequest with CircuitContext identity...");
+        var submitResponse = await client.AwaitResponse(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Hello with identity",
+                ContextPath = "User/Roland"
+            },
+            o => o.WithTarget(new Address(threadPath)), ct);
+
+        // This is the assertion that fails in production — the submit is rejected
+        // with "Access denied: user '(anonymous)' lacks Thread permission"
+        submitResponse.Message.Success.Should().BeTrue(
+            $"SubmitMessageRequest should succeed with identity 'Roland'. Error: {submitResponse.Message.Error}");
+        Output.WriteLine("SubmitMessageRequest succeeded with identity propagation");
+
+        // 7. Verify cells were created (proves the entire chain worked)
+        var msgIds = await twoMessages;
+        msgIds.Should().HaveCount(2);
+        Output.WriteLine($"Message IDs: [{string.Join(", ", msgIds)}]");
+
+        // 8. Verify user message has correct content
+        var userMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[0]}", ct);
+        userMsg.Should().NotBeNull();
+        userMsg!.Role.Should().Be("user");
+        userMsg.Text.Should().Be("Hello with identity");
+        Output.WriteLine($"User cell verified: '{userMsg.Text}'");
+
+        // 9. Wait for response to stream
+        ThreadMessage? responseMsg = null;
+        var prevLen = 0;
+        var stable = 0;
+        for (var i = 0; i < 50; i++)
+        {
+            responseMsg = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
+            var len = responseMsg?.Text?.Length ?? 0;
+            if (len > 0 && len == prevLen && ++stable >= 2) break;
+            else stable = 0;
+            prevLen = len;
+            await Task.Delay(200, ct);
+        }
+        responseMsg.Should().NotBeNull();
+        responseMsg!.Text.Should().NotBeNullOrEmpty("streaming should produce a response");
+        Output.WriteLine($"Response verified: '{responseMsg.Text}'");
+    }
+
+    /// <summary>
     /// Verifies that ThreadMessage nodes (cells) are created as children of the Thread.
     /// In PostgreSQL, these go to the satellite "threads" table.
     /// </summary>
@@ -291,5 +396,34 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
             msg!.Id.Should().Be(msgId);
             Output.WriteLine($"Child node verified: {fullPath} => role={msg.Role}, type={msg.Type}");
         }
+    }
+}
+
+/// <summary>
+/// Silo configurator that mirrors production: AddGraph + AddAI + AddRowLevelSecurity.
+/// RLS enables AccessControlPipeline on node hubs, which checks [RequiresPermission].
+/// Without RLS, the pipeline is a no-op and identity issues go unnoticed.
+/// </summary>
+public class RlsChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
+{
+    public void Configure(ISiloBuilder siloBuilder)
+    {
+        siloBuilder.ConfigureMeshWeaverServer()
+            .AddMemoryGrainStorageAsDefault();
+    }
+
+    public void Configure(IHostBuilder hostBuilder)
+    {
+        hostBuilder.UseOrleansMeshServer()
+            .ConfigurePortalMesh()
+            .AddGraph()
+            .AddAI()
+            .AddRowLevelSecurity()
+            .ConfigureServices(services =>
+            {
+                services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
+                return services;
+            })
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 }
