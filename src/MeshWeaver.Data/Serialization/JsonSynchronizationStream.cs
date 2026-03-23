@@ -552,8 +552,9 @@ public static class JsonSynchronizationStream
 
         if (current is null)
             throw new InvalidOperationException("Current state is null, cannot patch.");
-        // Serialize InstanceCollection to JsonElement, apply patch with correct unescaping, then deserialize back
-        var currentJson = JsonSerializer.SerializeToElement(current, options);
+        // Apply patch with correct RFC 6901 unescaping — the json-everything library's
+        // Apply(JsonNode) doesn't properly unescape ~1 in property names
+        var currentJson = JsonSerializer.SerializeToElement(current, typeof(InstanceCollection), options);
         var (updatedJson, patch) = ApplyPatchWithCorrectUnescaping(request.Change.Content, currentJson, options);
         var updated = updatedJson.Deserialize<InstanceCollection>(options);
         return (updated!, patch);

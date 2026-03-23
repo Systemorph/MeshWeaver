@@ -72,6 +72,9 @@ public static class ThreadExecution
             }
         });
 
+        // Capture workspace BEFORE ContinueWith — inside ContinueWith, hub context may differ
+        var threadWorkspace = hub.GetWorkspace();
+
         Task.WhenAll(inputTask, outputTask).ContinueWith(t =>
         {
             var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
@@ -89,19 +92,17 @@ public static class ThreadExecution
                 return;
             }
 
-
-            var workspace = hub.GetWorkspace();
-            workspace.UpdateMeshNode(threadNode =>
+            // 2) Update Thread.Messages via workspace (uses DataContext.GetDataSourceForType internally)
+            threadWorkspace.UpdateMeshNode(node =>
             {
-                var thread = threadNode.Content as MeshThread;
-                if (thread is null)
-                    throw new InvalidOperationException($"Node at {threadPath} does not contain a Thread");
-
-                var ret = threadNode with
+                var thread = node.Content as MeshThread ?? new MeshThread();
+                return node with
                 {
-                    Content = thread with { Messages = thread.Messages.AddRange([userMsgId, responseMsgId]) }
+                    Content = thread with
+                    {
+                        Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                    }
                 };
-                return ret;
             });
 
             // 3) Start execution on hosted hub
