@@ -1,7 +1,7 @@
 @inherits BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 @using MeshWeaver.Layout
 
-<div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
+<div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant") @(isExecuting ? "thread-msg-is-executing" : "")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
 
     @if (ShowSpinner)
@@ -37,6 +37,39 @@
             <span class="thread-msg-exec-status">@(executionStatus ?? "Processing...")</span>
             <button class="thread-msg-cancel-btn-small" @onclick="OnCancelClick">Cancel</button>
         </div>
+    }
+
+    @* Collapsible tool calls — shown during execution (open) and after (collapsed) *@
+    @if (HasToolCalls)
+    {
+        <details class="thread-msg-tool-calls" open="@isExecuting">
+            <summary class="thread-msg-tool-summary">
+                <svg class="thread-msg-tool-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 0a.5.5 0 0 1 .5.5V2h4V.5a.5.5 0 0 1 1 0V2h1a2 2 0 0 1 2 2v1H2V4a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5M2 7v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7z"/></svg>
+                @toolCalls!.Count tool call(s)
+            </summary>
+            <div class="thread-msg-tool-list">
+                @foreach (var call in toolCalls!)
+                {
+                    <details class="thread-msg-tool-entry">
+                        <summary class="thread-msg-tool-entry-name">
+                            <span class="@(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.DisplayName ?? call.Name)</span>
+                            @if (!string.IsNullOrEmpty(call.DelegationPath))
+                            {
+                                <a href="/@call.DelegationPath/Thread" class="thread-msg-delegation-link">View sub-thread</a>
+                            }
+                        </summary>
+                        @if (!string.IsNullOrEmpty(call.Arguments))
+                        {
+                            <pre class="thread-msg-tool-args">@call.Arguments</pre>
+                        }
+                        @if (!string.IsNullOrEmpty(call.Result))
+                        {
+                            <pre class="thread-msg-tool-result">@call.Result</pre>
+                        }
+                    </details>
+                }
+            </div>
+        </details>
     }
 </div>
 
@@ -149,6 +182,74 @@
     }
     .thread-msg-cancel-btn-small:hover {
         background: var(--neutral-layer-3);
+    }
+
+    /* Hide action row (edit/delete/resubmit) when bubble is executing */
+    fluent-stack-item:has(.thread-msg-is-executing) ~ fluent-stack-item .thread-msg-actions {
+        display: none;
+    }
+
+    /* Collapsible tool calls */
+    .thread-msg-tool-calls {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--neutral-stroke-rest);
+    }
+    .thread-msg-tool-summary {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.8rem;
+        color: var(--neutral-foreground-hint);
+        cursor: pointer;
+        user-select: none;
+    }
+    .thread-msg-tool-summary:hover {
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-tool-icon {
+        opacity: 0.6;
+    }
+    .thread-msg-tool-list {
+        margin-top: 4px;
+        padding-left: 4px;
+    }
+    .thread-msg-tool-entry {
+        margin-bottom: 2px;
+    }
+    .thread-msg-tool-entry-name {
+        font-size: 0.78rem;
+        color: var(--neutral-foreground-hint);
+        cursor: pointer;
+        padding: 2px 0;
+    }
+    .thread-msg-tool-entry-name:hover {
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-tool-error {
+        color: var(--error);
+    }
+    .thread-msg-delegation-link {
+        margin-left: 8px;
+        font-size: 0.75rem;
+        color: var(--accent-fill-rest);
+        text-decoration: none;
+    }
+    .thread-msg-delegation-link:hover {
+        text-decoration: underline;
+    }
+    .thread-msg-tool-args,
+    .thread-msg-tool-result {
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        background: var(--neutral-layer-3);
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin: 2px 0;
+        max-height: 120px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
     }
 
     @@keyframes thread-dots-blink {

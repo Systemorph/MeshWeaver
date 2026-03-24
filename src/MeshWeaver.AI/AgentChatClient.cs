@@ -57,6 +57,18 @@ public class AgentChatClient : IAgentChat
 
     public AgentContext? Context { get; private set; }
 
+    /// <inheritdoc />
+    public ThreadExecutionContext? ExecutionContext { get; private set; }
+
+    /// <inheritdoc />
+    public string? LastDelegationPath { get; set; }
+
+    /// <inheritdoc />
+    public Action<string>? UpdateDelegationStatus { get; set; }
+
+    /// <summary>Sets the execution context for delegation sub-thread creation.</summary>
+    public void SetExecutionContext(ThreadExecutionContext? ctx) => ExecutionContext = ctx;
+
     public void SetThreadId(string threadId)
     {
         if (string.IsNullOrEmpty(threadId))

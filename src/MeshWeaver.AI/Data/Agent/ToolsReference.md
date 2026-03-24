@@ -366,6 +366,34 @@ Use double @@ prefix to embed content files inline in markdown. Write the double
 
 Example syntax: `@@Doc/Architecture/ActorModel` embeds the Actor Model documentation inline.
 
+## Satellite Namespaces
+
+Nodes can have satellite data stored in dedicated sub-namespaces with underscore prefixes. These are persisted in separate database tables per partition.
+
+| Prefix | Table | Node Types | Purpose |
+|--------|-------|------------|---------|
+| `_Thread` | threads | Thread, ThreadMessage | Chat/discussion threads |
+| `_Comment` | comments | Comment | Document comments and replies |
+| `_Activity` | activities | ActivityLog | Activity tracking |
+| `_UserActivity` | user_activities | UserActivity | Per-user activity (recently viewed) |
+| `_Access` | access | AccessAssignment | Permission grants |
+| `_Approval` | approvals | Approval | Approval workflows |
+| `_Tracking` | tracking | TrackedChange | Track changes / collaborative editing |
+
+### Path Patterns
+
+- Satellite nodes: `{parentPath}/{_Prefix}/{nodeId}`
+- Thread messages (children of threads): `{contextPath}/_Thread/{threadId}/{msgId}`
+- Comment replies: `{docPath}/_Comment/{commentId}/{replyId}`
+
+### Querying Satellites
+
+```
+Search('namespace:{parentPath}/_Thread nodeType:Thread')     # Find threads under a node
+Search('namespace:{parentPath}/_Comment nodeType:Comment')   # Find comments
+Search('namespace:{parentPath}/_Activity')                   # Find activity logs
+```
+
 ## Reading Documentation
 
 To browse all available documentation:

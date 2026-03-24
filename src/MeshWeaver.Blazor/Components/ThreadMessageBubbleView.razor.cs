@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Layout;
 
 namespace MeshWeaver.Blazor.Components;
@@ -9,9 +10,11 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private string? messageText;
     private bool isExecuting;
     private string? executionStatus;
+    private ImmutableList<ToolCallEntry>? toolCalls;
 
     private bool ShowSpinner => isExecuting && string.IsNullOrEmpty(messageText);
     private bool ShowExecutingIndicator => isExecuting && !string.IsNullOrEmpty(messageText);
+    private bool HasToolCalls => toolCalls is { Count: > 0 };
 
     private MarkdownControl MarkdownVm => new MarkdownControl(messageText ?? "")
         .WithStyle("background: transparent;");
@@ -22,6 +25,7 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
         DataBind(ViewModel.Text, x => x.messageText);
         DataBind(ViewModel.IsExecuting, x => x.isExecuting);
         DataBind(ViewModel.ExecutionStatus, x => x.executionStatus);
+        DataBind(ViewModel.ToolCalls, x => x.toolCalls);
     }
 
     private void OnCancelClick()

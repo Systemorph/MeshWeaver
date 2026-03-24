@@ -83,6 +83,17 @@ public static class ThreadMessageLayoutAreas
             .DistinctUntilChanged()
             .Subscribe(status => host.UpdateData("executionStatus", status)));
 
+        // Push ToolCalls to data section
+        host.RegisterForDisposal(nodeStream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var msg = node?.Content as ThreadMessage;
+                return (object)(msg?.ToolCalls ?? System.Collections.Immutable.ImmutableList<ToolCallEntry>.Empty);
+            })
+            .DistinctUntilChanged()
+            .Subscribe(calls => host.UpdateData("toolCalls", calls)));
+
         // Emit control ONCE — role/author/type are fixed, text is data-bound
         return nodeStream!
             .Select(nodes =>
@@ -117,6 +128,7 @@ public static class ThreadMessageLayoutAreas
             .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")))
             .WithIsExecuting(new JsonPointerReference(LayoutAreaReference.GetDataPointer("isExecuting")))
             .WithExecutionStatus(new JsonPointerReference(LayoutAreaReference.GetDataPointer("executionStatus")))
+            .WithToolCalls(new JsonPointerReference(LayoutAreaReference.GetDataPointer("toolCalls")))
             .WithThreadPath(threadPath)
             .WithClickAction(_ =>
             {
@@ -128,8 +140,10 @@ public static class ThreadMessageLayoutAreas
             });
 
         // Action buttons — small stealth icon buttons, right-aligned
+        // Hidden during execution via CSS :has() on the parent container
         var actionRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
+            .WithClass("thread-msg-actions")
             .WithStyle("gap: 2px; justify-content: flex-end; margin-top: -4px; margin-bottom: 4px; opacity: 0.6;");
 
         if (isUser)
@@ -178,6 +192,7 @@ public static class ThreadMessageLayoutAreas
                 }));
 
         return Controls.Stack
+            .WithClass("thread-msg-container")
             .WithView(bubble)
             .WithView(actionRow);
     }

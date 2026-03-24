@@ -1,7 +1,10 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -167,6 +170,17 @@ public static class ThreadExecution
             var lastUpdate = DateTimeOffset.MinValue;
             var lastStatusUpdate = DateTimeOffset.MinValue;
             string? currentStatus = null;
+            var toolCallLog = new List<ToolCallEntry>();
+            var pendingCalls = new Dictionary<string, FunctionCallContent>();
+            string? firstDelegationPath = null;
+
+            // Set execution context for delegation sub-thread creation
+            chatClient.SetExecutionContext(new ThreadExecutionContext
+            {
+                ThreadPath = threadPath,
+                ResponseMessageId = responseMsgId
+            });
+            chatClient.UpdateDelegationStatus = status => { currentStatus = status; };
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
 
             await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
@@ -176,10 +190,34 @@ public static class ThreadExecution
                 {
                     if (content is FunctionCallContent functionCall)
                     {
-                        currentStatus = $"Calling {functionCall.Name}...";
+                        currentStatus = ToolStatusFormatter.Format(functionCall);
+                        pendingCalls[functionCall.CallId] = functionCall;
                     }
-                    else if (content is FunctionResultContent)
+                    else if (content is FunctionResultContent functionResult)
                     {
+                        // Track completed tool call
+                        if (pendingCalls.TryGetValue(functionResult.CallId, out var originalCall))
+                        {
+                            string? delegationPath = null;
+                            if (originalCall.Name.StartsWith("delegate_to"))
+                            {
+                                delegationPath = chatClient.LastDelegationPath;
+                                chatClient.LastDelegationPath = null;
+                                firstDelegationPath ??= delegationPath;
+                            }
+
+                            toolCallLog.Add(new ToolCallEntry
+                            {
+                                Name = originalCall.Name,
+                                DisplayName = ToolStatusFormatter.Format(originalCall),
+                                Arguments = SerializeArgs(originalCall.Arguments),
+                                Result = Truncate(functionResult.Result?.ToString()),
+                                IsSuccess = functionResult.Result?.ToString()?.StartsWith("Error") != true,
+                                DelegationPath = delegationPath,
+                                Timestamp = DateTime.UtcNow
+                            });
+                            pendingCalls.Remove(functionResult.CallId);
+                        }
                         currentStatus = null; // Tool call completed
                     }
                 }
@@ -248,6 +286,7 @@ public static class ThreadExecution
 
             // 4. Final update — mark execution as complete
             var finalText = responseText.ToString();
+            var finalToolCalls = toolCallLog.ToImmutableList();
             responseStream.Update(current =>
             {
                 if (current == null) return null;
@@ -263,7 +302,9 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
                         IsExecuting = false,
-                        ExecutionStatus = null
+                        ExecutionStatus = null,
+                        ToolCalls = finalToolCalls,
+                        DelegationPath = firstDelegationPath
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -329,6 +370,28 @@ public static class ThreadExecution
         }
 
         return delivery.Processed();
+    }
+
+    private static string? SerializeArgs(IDictionary<string, object?>? args)
+    {
+        if (args == null || args.Count == 0)
+            return null;
+        try
+        {
+            var result = JsonSerializer.Serialize(args);
+            return Truncate(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? Truncate(string? value, int maxLength = 500)
+    {
+        if (value == null || value.Length <= maxLength)
+            return value;
+        return value[..(maxLength - 3)] + "...";
     }
 
     private static IMessageDelivery HandleCancelStream(

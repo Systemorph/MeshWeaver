@@ -67,4 +67,22 @@ public interface IAgentChat
     void RequestHandoff(HandoffRequest request) { }
 
     AgentContext? Context { get; }
+
+    /// <summary>
+    /// Current execution context (thread path, response message ID).
+    /// Set by ThreadExecution during streaming, used by delegation tools for sub-thread persistence.
+    /// </summary>
+    ThreadExecutionContext? ExecutionContext { get; }
+
+    /// <summary>
+    /// Path of the last delegation sub-thread created. Consumed by ThreadExecution
+    /// after each delegation tool call completes.
+    /// </summary>
+    string? LastDelegationPath { get; set; }
+
+    /// <summary>
+    /// Callback to update delegation status on the parent execution context.
+    /// Set by ThreadExecution, called by delegation tools to forward sub-agent progress.
+    /// </summary>
+    Action<string>? UpdateDelegationStatus { get; set; }
 }

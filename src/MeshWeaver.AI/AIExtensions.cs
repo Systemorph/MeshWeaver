@@ -1,5 +1,6 @@
 ﻿using MeshWeaver.AI.Plugins;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -40,7 +41,9 @@ public static class AIExtensions
 .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
-            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest));
+            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
+            .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
+            .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext));
 
     extension(IServiceCollection services)
     {
@@ -51,6 +54,8 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
+            services.AddOptions<ModelTierConfiguration>()
+                .BindConfiguration("ModelTier");
             return services;
         }
 

@@ -1,9 +1,14 @@
+using System.Text;
 using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI;
 
@@ -55,6 +60,15 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
+        // Resolve model tier to concrete model name if PreferredModel isn't set
+        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
+        {
+            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
+            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
+            if (!string.IsNullOrEmpty(resolvedModel))
+                config = config with { PreferredModel = resolvedModel };
+        }
+
         var name = config.Id;
         var description = config.Description ?? string.Empty;
         var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
@@ -88,6 +102,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 || description.Contains("delete", StringComparison.OrdinalIgnoreCase);
             tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
         }
+
+        // Add store_plan tool to all agents
+        tools = tools.Append(PlanStorageTool.Create(Hub, chat));
 
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
@@ -179,19 +196,55 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
                         agentConfig.Id, targetId, task);
 
-                    // Create an isolated session for the target agent
+                    // Create sub-thread MeshNode if execution context is available
+                    string? subThreadPath = null;
+                    var execCtx = chat.ExecutionContext;
+                    if (execCtx != null)
+                    {
+                        try
+                        {
+                            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
+                            var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
+                            subThreadPath = $"{parentMsgPath}/{ThreadNodeType.ThreadPartition}/{subThreadId}";
+
+                            var subThreadNode = new MeshNode(subThreadId, $"{parentMsgPath}/{ThreadNodeType.ThreadPartition}")
+                            {
+                                Name = task.Length > 60 ? task[..57] + "..." : task,
+                                NodeType = ThreadNodeType.NodeType,
+                                Content = new MeshThread { ParentPath = execCtx.ThreadPath }
+                            };
+                            await meshService.CreateNodeAsync(subThreadNode, cancellationToken);
+                            chat.LastDelegationPath = subThreadPath;
+                            Logger.LogInformation("Created delegation sub-thread at {Path}", subThreadPath);
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Failed to create delegation sub-thread");
+                        }
+                    }
+
+                    // Create an isolated session and stream the target agent
                     var session = await targetAgent.CreateSessionAsync();
+                    var resultBuilder = new StringBuilder();
 
-                    // Run the target agent to completion
-                    var response = await targetAgent.RunAsync(task, session, cancellationToken: cancellationToken);
+                    await foreach (var update in targetAgent.RunStreamingAsync(task, session, cancellationToken: cancellationToken))
+                    {
+                        // Forward sub-agent tool call status to parent
+                        foreach (var content in update.Contents)
+                        {
+                            if (content is FunctionCallContent subCall)
+                            {
+                                var subStatus = $"{targetId}: {ToolStatusFormatter.Format(subCall)}";
+                                chat.UpdateDelegationStatus?.Invoke(subStatus);
+                            }
+                        }
 
-                    // Extract text from the response messages
-                    var resultText = string.Join("\n", response.Messages
-                        .Where(m => m.Role == ChatRole.Assistant)
-                        .SelectMany(m => m.Contents)
-                        .OfType<TextContent>()
-                        .Select(t => t.Text)
-                        .Where(t => !string.IsNullOrEmpty(t)));
+                        if (!string.IsNullOrEmpty(update.Text))
+                            resultBuilder.Append(update.Text);
+                    }
+
+                    var resultText = resultBuilder.ToString();
 
                     Logger.LogInformation("Delegation to {Target} completed, result length: {Length}",
                         targetId, resultText.Length);
@@ -201,7 +254,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         AgentName = targetId,
                         Task = task,
                         Result = resultText,
-                        Success = true
+                        Success = true,
+                        ThreadId = subThreadPath
                     };
                 },
                 Logger);
@@ -241,6 +295,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var allTools = pluginRef.Name switch
         {
             "Mesh" => (IEnumerable<AITool>)new MeshPlugin(Hub, chat).CreateAllTools(),
+            "Collaboration" => new CollaborationPlugin(Hub, chat).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
                     .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
                     ?.CreateTools()
