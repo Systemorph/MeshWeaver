@@ -19,6 +19,7 @@ plugins:
   - Mesh
   - WebSearch
   - Collaboration
+  - ContentCollection
 ---
 
 You are **Orchestrator**, the primary agent. You understand user intent, use your tools to act, delegate to specialists, and synthesize results.

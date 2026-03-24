@@ -366,6 +366,25 @@ Use double @@ prefix to embed content files inline in markdown. Write the double
 
 Example syntax: `@@Doc/Architecture/ActorModel` embeds the Actor Model documentation inline.
 
+### Uploading Content Files
+
+Use `UploadContent` to save text-based files (SVG, markdown, JSON, CSS) to a node's content collection:
+
+```
+UploadContent('@Doc/Architecture', 'diagram.svg', '<svg>...</svg>')
+UploadContent('@Doc/Architecture', 'images/overview.svg', svgContent, 'content')
+```
+
+Parameters:
+- `nodePath` — the node that owns the collection
+- `filePath` — file name/path within the collection (e.g., `diagram.svg`, `images/arch.svg`)
+- `content` — the text content (SVG markup, markdown, JSON, etc.)
+- `collectionName` — collection name (default: `content`)
+
+After uploading, reference the file with `@Doc/Architecture/content:diagram.svg` or embed inline with `@@Doc/Architecture/content:diagram.svg`.
+
+**Tip for icons:** Set a node's `icon` property to inline SVG (starting with `<svg`) and it renders directly — no upload needed.
+
 ## Satellite Namespaces
 
 Nodes can have satellite data stored in dedicated sub-namespaces with underscore prefixes. These are persisted in separate database tables per partition.

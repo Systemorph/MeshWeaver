@@ -34,6 +34,7 @@ public static class ToolStatusFormatter
             "store_plan" => "Storing plan...",
             "AddComment" => FormatArg("Adding comment on \"{0}\"...", args, "selectedText"),
             "SuggestEdit" => "Suggesting edit...",
+            "UploadContent" => FormatArg("Uploading {0}...", args, "filePath"),
             _ when name.StartsWith("delegate_to_") => $"Delegating to {name["delegate_to_".Length..]}...",
             _ => $"Calling {name}..."
         };

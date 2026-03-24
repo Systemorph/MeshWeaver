@@ -22,11 +22,53 @@ public static class ThreadExecution
 {
     /// <summary>
     /// Registers thread execution handlers on a hub configuration.
+    /// Includes a startup recovery check for stale executing cells from crashed sessions.
     /// </summary>
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
-            .WithHandler<CancelThreadStreamRequest>(HandleCancelStream);
+            .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
+            .WithInitialization(RecoverStaleExecutingCells);
+
+    /// <summary>
+    /// On hub startup, find any ThreadMessage nodes that are still marked as IsExecuting=true.
+    /// These are from crashed/restarted sessions. Mark them as cancelled so the UI shows the correct state.
+    /// </summary>
+    private static async Task RecoverStaleExecutingCells(IMessageHub hub, CancellationToken ct)
+    {
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService == null) return;
+
+        var threadPath = hub.Address.ToString();
+        try
+        {
+            await foreach (var node in meshService.QueryAsync<MeshNode>(
+                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+            {
+                if (node.Content is ThreadMessage { IsExecuting: true } tmsg)
+                {
+                    logger?.LogInformation("[ThreadExec] Recovery: marking stale executing cell {MsgId} as crashed in {ThreadPath}",
+                        tmsg.Id, threadPath);
+
+                    var recovered = node with
+                    {
+                        Content = tmsg with
+                        {
+                            IsExecuting = false,
+                            ExecutionStatus = null,
+                            Text = (tmsg.Text ?? "") + (string.IsNullOrEmpty(tmsg.Text) ? "*Interrupted — session restarted*" : "\n\n*Interrupted — session restarted*")
+                        }
+                    };
+                    await meshService.UpdateNodeAsync(recovered, ct);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "[ThreadExec] Recovery failed for {ThreadPath}", threadPath);
+        }
+    }
 
     /// <summary>
     /// Handles SubmitMessageRequest on the thread hub.
@@ -149,6 +191,10 @@ public static class ThreadExecution
         var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(responsePath), new MeshNodeReference());
 
+        // Declared outside try so catch blocks can include partial results
+        var toolCallLog = new List<ToolCallEntry>();
+        string? firstDelegationPath = null;
+
         try
         {
             // Set user access context for the entire execution scope
@@ -211,9 +257,7 @@ public static class ThreadExecution
             var lastUpdate = DateTimeOffset.MinValue;
             var lastStatusUpdate = DateTimeOffset.MinValue;
             string? currentStatus = null;
-            var toolCallLog = new List<ToolCallEntry>();
             var pendingCalls = new Dictionary<string, FunctionCallContent>();
-            string? firstDelegationPath = null;
             string? lastCallKey = null;
 
             // Set execution context for delegation sub-thread creation
@@ -396,7 +440,9 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
                         IsExecuting = false,
-                        ExecutionStatus = null
+                        ExecutionStatus = null,
+                        ToolCalls = toolCallLog.ToImmutableList(),
+                        DelegationPath = firstDelegationPath
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -424,7 +470,9 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
                         IsExecuting = false,
-                        ExecutionStatus = null
+                        ExecutionStatus = null,
+                        ToolCalls = toolCallLog.ToImmutableList(),
+                        DelegationPath = firstDelegationPath
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
