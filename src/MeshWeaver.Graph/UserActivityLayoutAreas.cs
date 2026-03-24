@@ -332,7 +332,8 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(true)
             .WithItemLimit(10)
             .WithCollapsibleSections(true)
-            .WithCreateHref($"/{nodePath}/{MeshNodeLayoutAreas.CreateNodeArea}"));
+            .WithCreateNodeType("Markdown")
+            .WithCreateNamespace(nodePath));
 
         return section;
     }

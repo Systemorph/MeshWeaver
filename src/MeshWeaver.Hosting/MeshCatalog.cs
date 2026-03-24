@@ -241,6 +241,8 @@ internal sealed class MeshCatalog(
         return true;
     }
 
+    private static readonly MemoryCacheEntryOptions ResolveCacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
+
     /// <inheritdoc />
     public async Task<AddressResolution?> ResolvePathAsync(string path)
     {
@@ -252,6 +254,22 @@ internal sealed class MeshCatalog(
         if (string.IsNullOrEmpty(path))
             return null;
 
+        // Check resolution cache first
+        var cacheKey = $"resolve:{path}";
+        if (cache.TryGetValue(cacheKey, out var cachedResolution) && cachedResolution is AddressResolution cached)
+            return cached;
+
+        var resolution = await ResolvePathCoreAsync(path);
+
+        // Cache the result (including null → cache as sentinel)
+        if (resolution != null)
+            cache.Set(cacheKey, resolution, ResolveCacheOptions);
+
+        return resolution;
+    }
+
+    private async Task<AddressResolution?> ResolvePathCoreAsync(string path)
+    {
         var segments = path.Split('/');
 
         // 1. Try configuration first (existing behavior)
@@ -301,12 +319,27 @@ internal sealed class MeshCatalog(
     {
         var fullPath = string.Join("/", segments);
 
-        // 1. Try dedicated prefix match query (single SQL call in PostgreSQL)
+        // 1. Try dedicated prefix match query (single SQL call in PostgreSQL).
+        //    For file-system backed stores this is a no-op (returns null).
         var (prefixMatch, prefixSegments) = await Persistence.FindBestPrefixMatchAsync(fullPath);
         if (prefixMatch != null)
         {
             logger.LogDebug("FindBestPersistenceMatchAsync: prefix match found node at path={Path}", prefixMatch.Path);
             return (prefixMatch, prefixSegments);
+        }
+
+        // 2. Walk from deepest to shallowest using simple GetNodeAsync lookups.
+        //    Each call routes to the correct partition via the first segment (in-memory dictionary),
+        //    then does an O(1) dictionary lookup on the partition's node cache.
+        for (int depth = segments.Length; depth >= 1; depth--)
+        {
+            var testPath = string.Join("/", segments.Take(depth));
+            var node = await Persistence.GetNodeAsync(testPath);
+            if (node != null)
+            {
+                logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", node.Path);
+                return (node, depth);
+            }
         }
 
         // 2. Check for virtual namespaces (paths with children but no explicit node)
