@@ -126,16 +126,21 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         resultContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" });
         Output.WriteLine($"After update 1: Messages=[{string.Join(", ", resultContent.Messages)}]");
 
-        // Verify back-sync: GetDataRequest on the thread hub should return updated content
+        // Verify back-sync: poll GetDataRequest until the hub reflects the update
         var nodeId = threadPath.Contains('/') ? threadPath[(threadPath.LastIndexOf('/') + 1)..] : threadPath;
-        var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
-            o => o.WithTarget(new Address(threadPath)), ct);
-        var serverNode = response.Message.Data as MeshNode;
-        if (serverNode == null && response.Message.Data is System.Text.Json.JsonElement je)
-            serverNode = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
-        serverNode.Should().NotBeNull("server should return the MeshNode via GetDataRequest");
-        var serverContent = serverNode!.Content as MeshThread;
+        MeshThread? serverContent = null;
+        for (var i = 0; i < 20; i++)
+        {
+            var response = await client.AwaitResponse(
+                new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
+                o => o.WithTarget(new Address(threadPath)), ct);
+            var serverNode = response.Message.Data as MeshNode;
+            if (serverNode == null && response.Message.Data is System.Text.Json.JsonElement je)
+                serverNode = je.Deserialize<MeshNode>(Mesh.JsonSerializerOptions);
+            serverContent = serverNode?.Content as MeshThread;
+            if (serverContent?.Messages.Count >= 1) break;
+            await Task.Delay(100, ct);
+        }
         serverContent.Should().NotBeNull("server MeshNode should have Thread content");
         serverContent!.Messages.Should().BeEquivalentTo(new[] { "msg1" },
             "server should reflect the client's update (back-sync)");

@@ -26,17 +26,10 @@ internal sealed class MeshService(
         => _persistence ?? throw new InvalidOperationException(
             "Write operations require MeshCatalog. Register it via AddMeshCatalog().");
 
-    public Task<MeshNode> CreateNodeAsync(MeshNode node, CancellationToken ct = default)
-        => Persistence.CreateNodeAsync(node, ct);
-
-    public Task<MeshNode> UpdateNodeAsync(MeshNode node, CancellationToken ct = default)
-        => Persistence.UpdateNodeAsync(node, ct);
-
-    public Task DeleteNodeAsync(string path, CancellationToken ct = default)
-        => Persistence.DeleteNodeAsync(path, ct);
-
-    public Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default)
-        => Persistence.CreateTransientAsync(node, ct);
+    public IObservable<MeshNode> CreateNode(MeshNode node) => Persistence.CreateNode(node);
+    public IObservable<MeshNode> UpdateNode(MeshNode node) => Persistence.UpdateNode(node);
+    public IObservable<bool> DeleteNode(string path) => Persistence.DeleteNode(path);
+    public IObservable<MeshNode> CreateTransient(MeshNode node) => Persistence.CreateTransient(node);
 
     // === Query (delegated to MeshQuery) ===
 

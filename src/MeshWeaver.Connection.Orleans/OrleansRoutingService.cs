@@ -90,8 +90,13 @@ public class OrleansRoutingService : IRoutingService, IDisposable
                 }
 
                 var grain = grainFactory.GetGrain<IRoutingGrain>("default");
-                logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
-                    delivery.Message.GetType().Name, address, delivery.Sender, delivery.Target);
+                var msgType = delivery.Message.GetType().Name;
+                if (accessContext == null || msgType.Contains("Submit", StringComparison.Ordinal))
+                    logger.LogWarning("Orleans: delivering {MessageType} to {Address}, accessContext={AccessUser}, sender={Sender}",
+                        msgType, address, accessContext?.ObjectId ?? "(null)", delivery.Sender);
+                else
+                    logger.LogDebug("Orleans: delivering {MessageType} to {Address}, sender={Sender}, target={Target}",
+                        msgType, address, delivery.Sender, delivery.Target);
                 var result = await grain.RouteMessage(delivery);
 
                 if (result.State == MessageDeliveryState.Failed)

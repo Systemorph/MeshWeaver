@@ -3,7 +3,41 @@
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
-    <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+
+    @if (ShowSpinner)
+    {
+        <div class="thread-msg-spinner">
+            <span class="thread-msg-dots">
+                <span class="thread-msg-dot" style="animation-delay: 0s;"></span>
+                <span class="thread-msg-dot" style="animation-delay: 0.2s;"></span>
+                <span class="thread-msg-dot" style="animation-delay: 0.4s;"></span>
+            </span>
+            <span class="thread-msg-status">@(executionStatus ?? "Generating response...")</span>
+        </div>
+        <div class="thread-msg-cancel-row">
+            <button class="thread-msg-cancel-btn" @onclick="OnCancelClick">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854z"/></svg>
+                Cancel
+            </button>
+        </div>
+    }
+    else
+    {
+        <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+    }
+
+    @if (ShowExecutingIndicator)
+    {
+        <div class="thread-msg-executing-indicator">
+            <span class="thread-msg-dots thread-msg-dots-small">
+                <span class="thread-msg-dot-small"></span>
+                <span class="thread-msg-dot-small" style="animation-delay: 0.2s;"></span>
+                <span class="thread-msg-dot-small" style="animation-delay: 0.4s;"></span>
+            </span>
+            <span class="thread-msg-exec-status">@(executionStatus ?? "Processing...")</span>
+            <button class="thread-msg-cancel-btn-small" @onclick="OnCancelClick">Cancel</button>
+        </div>
+    }
 </div>
 
 <style>
@@ -33,5 +67,92 @@
     }
     .thread-msg-author-user {
         color: var(--accent-fill-rest);
+    }
+
+    .thread-msg-spinner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+    }
+    .thread-msg-dots {
+        display: inline-flex;
+        gap: 4px;
+    }
+    .thread-msg-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--neutral-foreground-hint);
+        animation: thread-dots-blink 1.4s infinite both;
+    }
+    .thread-msg-status {
+        font-size: 0.85rem;
+        color: var(--neutral-foreground-hint);
+    }
+    .thread-msg-cancel-row {
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 4px;
+    }
+    .thread-msg-cancel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 12px;
+        border: 1px solid var(--neutral-stroke-rest);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--neutral-foreground-rest);
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+    }
+    .thread-msg-cancel-btn:hover {
+        background: var(--neutral-layer-3);
+        border-color: var(--neutral-foreground-hint);
+    }
+
+    .thread-msg-executing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+        padding-top: 4px;
+        border-top: 1px solid var(--neutral-stroke-rest);
+    }
+    .thread-msg-dots-small {
+        display: inline-flex;
+        gap: 3px;
+    }
+    .thread-msg-dot-small {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--neutral-foreground-hint);
+        animation: thread-dots-blink 1.4s infinite both;
+    }
+    .thread-msg-exec-status {
+        font-size: 0.75rem;
+        color: var(--neutral-foreground-hint);
+        flex: 1;
+    }
+    .thread-msg-cancel-btn-small {
+        padding: 2px 8px;
+        border: 1px solid var(--neutral-stroke-rest);
+        border-radius: 4px;
+        background: transparent;
+        color: var(--neutral-foreground-hint);
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+    .thread-msg-cancel-btn-small:hover {
+        background: var(--neutral-layer-3);
+    }
+
+    @@keyframes thread-dots-blink {
+        0%, 80%, 100% { opacity: 0.3; }
+        40% { opacity: 1; }
     }
 </style>

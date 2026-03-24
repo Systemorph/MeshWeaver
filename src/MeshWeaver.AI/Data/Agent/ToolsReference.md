@@ -366,7 +366,7 @@ Use double @@ prefix to embed content files inline in markdown. Write the double
 
 Here is a real inline embed of a content file:
 
-@@Doc/AI/content:inline-example.md
+@@Doc/content:DocContent/AI/inline-example.md
 
 ## Reading Documentation
 

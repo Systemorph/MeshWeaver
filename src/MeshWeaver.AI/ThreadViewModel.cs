@@ -6,7 +6,8 @@ namespace MeshWeaver.AI;
 /// - Messages: ordered list of child message node IDs
 /// - ThreadPath: the thread node's full path
 /// - InitialContext: the context path for agent initialization
-/// - InitialContextDisplayName: display name for the context chip
+/// - IsSubmitting: true while a message is being submitted
+/// - IsLoading: true while initial thread data is being loaded
 ///
 /// Custom equality: uses SequenceEqual for Messages to prevent redundant UI updates
 /// when the stream re-emits with a new list instance containing the same elements.
@@ -18,6 +19,12 @@ public record ThreadViewModel
     public string? InitialContext { get; init; }
     public string? InitialContextDisplayName { get; init; }
 
+    /// <summary>True while a message is being submitted (cells not yet created).</summary>
+    public bool IsSubmitting { get; init; }
+
+    /// <summary>True while initial thread data is loading.</summary>
+    public bool IsLoading { get; init; }
+
     public virtual bool Equals(ThreadViewModel? other)
     {
         if (other is null) return false;
@@ -25,6 +32,8 @@ public record ThreadViewModel
         return ThreadPath == other.ThreadPath
                && InitialContext == other.InitialContext
                && InitialContextDisplayName == other.InitialContextDisplayName
+               && IsSubmitting == other.IsSubmitting
+               && IsLoading == other.IsLoading
                && Messages.SequenceEqual(other.Messages);
     }
 
@@ -34,6 +43,8 @@ public record ThreadViewModel
         hash.Add(ThreadPath);
         hash.Add(InitialContext);
         hash.Add(InitialContextDisplayName);
+        hash.Add(IsSubmitting);
+        hash.Add(IsLoading);
         foreach (var msg in Messages)
             hash.Add(msg);
         return hash.ToHashCode();

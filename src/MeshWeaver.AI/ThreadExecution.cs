@@ -37,14 +37,24 @@ public static class ThreadExecution
     {
         var request = delivery.Message;
         var threadPath = request.ThreadPath;
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        logger?.LogDebug("[ThreadExec] HandleSubmitMessage: threadPath={ThreadPath}, user={User}, hubAddress={Hub}",
+            threadPath, request.ContextPath, hub.Address);
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
         var userMsgId = Guid.NewGuid().ToString("N")[..8];
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{threadPath}/{responseMsgId}";
+        logger?.LogDebug("[ThreadExec] Creating cells: userMsg={UserMsgId}, responseMsg={ResponseMsgId}",
+            userMsgId, responseMsgId);
 
-        // 1) Create both cells concurrently
-        var inputTask = meshService.CreateNodeAsync(new MeshNode(userMsgId, threadPath)
+        // Capture workspace BEFORE Subscribe — inside Subscribe callback, hub context may differ
+        var threadWorkspace = hub.GetWorkspace();
+
+        // 1) Create both cells concurrently via Observable.
+        //    CreateNode captures AccessContext eagerly at call time (inside the delivery
+        //    pipeline where it's set from delivery.AccessContext). No explicit identity needed.
+        var inputObs = meshService.CreateNode(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -53,11 +63,12 @@ public static class ThreadExecution
                 Role = "user",
                 Text = request.UserMessageText,
                 Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput
+                Type = ThreadMessageType.ExecutedInput,
+                CreatedBy = delivery.AccessContext?.ObjectId
             }
         });
 
-        var outputTask = meshService.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        var outputObs = meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
@@ -68,54 +79,48 @@ public static class ThreadExecution
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = request.AgentName,
-                ModelName = request.ModelName
+                ModelName = request.ModelName,
+                IsExecuting = true
             }
         });
 
-        // Capture workspace BEFORE ContinueWith — inside ContinueWith, hub context may differ
-        var threadWorkspace = hub.GetWorkspace();
-
-        Task.WhenAll(inputTask, outputTask).ContinueWith(t =>
-        {
-            var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-            logger?.LogInformation("HandleSubmitMessage: ContinueWith fired for {ThreadPath}, IsFaulted={IsFaulted}",
-                threadPath, t.IsFaulted);
-
-            if (t.IsFaulted)
+        inputObs.Zip(outputObs).Subscribe(
+            pair =>
             {
-                var error = t.Exception?.Flatten().InnerExceptions.FirstOrDefault()?.Message
-                            ?? "Node creation failed";
-                logger?.LogError(t.Exception, "HandleSubmitMessage: node creation failed for {ThreadPath}: {Error}",
-                        threadPath, error);
-                hub.Post(new SubmitMessageResponse { Success = false, Error = error },
-                    o => o.ResponseFor(delivery));
-                return;
-            }
+                logger?.LogInformation("HandleSubmitMessage: cells created for {ThreadPath}", threadPath);
 
-            // 2) Update Thread.Messages via workspace (uses DataContext.GetDataSourceForType internally)
-            threadWorkspace.UpdateMeshNode(node =>
-            {
-                var thread = node.Content as MeshThread ?? new MeshThread();
-                return node with
+                // 2) Update Thread.Messages via workspace
+                threadWorkspace.UpdateMeshNode(node =>
                 {
-                    Content = thread with
+                    var thread = node.Content as MeshThread ?? new MeshThread();
+                    return node with
                     {
-                        Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
-                    }
-                };
+                        Content = thread with
+                        {
+                            Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                        }
+                    };
+                });
+
+                // 3) Start execution on hosted hub
+                var executionHub = hub.GetHostedHub(
+                    new Address($"{hub.Address}/_Exec"),
+                    config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                    HostedHubCreation.Always);
+
+                executionHub!.Post(request with { ResponsePath = responsePath });
+
+                // 4) Response — nodes created successfully
+                hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            },
+            error =>
+            {
+                var errorMsg = error.Message ?? "Node creation failed";
+                logger?.LogError(error, "HandleSubmitMessage: node creation failed for {ThreadPath}: {Error}",
+                    threadPath, errorMsg);
+                hub.Post(new SubmitMessageResponse { Success = false, Error = errorMsg },
+                    o => o.ResponseFor(delivery));
             });
-
-            // 3) Start execution on hosted hub
-            var executionHub = hub.GetHostedHub(
-                new Address($"{hub.Address}/_Exec"),
-                config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-                HostedHubCreation.Always);
-
-            executionHub!.Post(request with { ResponsePath = responsePath });
-
-            // 4) Response — nodes created successfully
-            hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
-        });
         return delivery.Processed();
     }
 
@@ -137,12 +142,19 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
+        // Get remote stream ONCE for the response node — declared outside try for catch access
+        var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+            new Address(responsePath), new MeshNodeReference());
+
         try
         {
             // 1. Prepare agent
+            logger.LogDebug("[ThreadExec] ExecuteMessageAsync: preparing agent for {ThreadPath}, responsePath={ResponsePath}",
+                threadPath, responsePath);
             var chatClient = new AgentChatClient(parentHub.ServiceProvider);
             chatClient.SetThreadId(threadPath);
             await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
+            logger.LogDebug("[ThreadExec] ExecuteMessageAsync: agent initialized for {ThreadPath}", threadPath);
 
             if (!string.IsNullOrEmpty(request.AgentName))
                 chatClient.SetSelectedAgent(request.AgentName);
@@ -150,17 +162,59 @@ public static class ThreadExecution
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
 
-            // 2. Get remote stream ONCE for the response node
-            var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-                new Address(responsePath), new MeshNodeReference());
-
             // 3. await streaming — update response node via the stream
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
+            var lastStatusUpdate = DateTimeOffset.MinValue;
+            string? currentStatus = null;
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
 
             await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
             {
+                // Capture function call / delegation activity for execution status
+                foreach (var content in update.Contents)
+                {
+                    if (content is FunctionCallContent functionCall)
+                    {
+                        currentStatus = $"Calling {functionCall.Name}...";
+                    }
+                    else if (content is FunctionResultContent)
+                    {
+                        currentStatus = null; // Tool call completed
+                    }
+                }
+
+                // Update execution status when it changes (throttled)
+                if (currentStatus != null && responseText.Length == 0
+                    && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
+                {
+                    var status = currentStatus;
+                    responseStream.Update(current =>
+                    {
+                        if (current == null) return null;
+                        var msg = current.Content as ThreadMessage;
+                        var updated = current with
+                        {
+                            Content = new ThreadMessage
+                            {
+                                Id = responseMsgId,
+                                Role = "assistant",
+                                Text = "",
+                                Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
+                                Type = ThreadMessageType.AgentResponse,
+                                AgentName = request.AgentName,
+                                ModelName = request.ModelName,
+                                IsExecuting = true,
+                                ExecutionStatus = status
+                            }
+                        };
+                        return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                            responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                            [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+                    });
+                    lastStatusUpdate = DateTimeOffset.UtcNow;
+                }
+
                 if (!string.IsNullOrEmpty(update.Text))
                 {
                     responseText.Append(update.Text);
@@ -179,7 +233,8 @@ public static class ThreadExecution
                                     Role = "assistant",
                                     Text = text,
                                     Timestamp = DateTime.UtcNow,
-                                    Type = ThreadMessageType.AgentResponse
+                                    Type = ThreadMessageType.AgentResponse,
+                                    IsExecuting = true
                                 }
                             };
                             return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -191,7 +246,7 @@ public static class ThreadExecution
                 }
             }
 
-            // 4. Final update
+            // 4. Final update — mark execution as complete
             var finalText = responseText.ToString();
             responseStream.Update(current =>
             {
@@ -206,7 +261,9 @@ public static class ThreadExecution
                         Timestamp = DateTime.UtcNow,
                         Type = ThreadMessageType.AgentResponse,
                         AgentName = request.AgentName,
-                        ModelName = request.ModelName
+                        ModelName = request.ModelName,
+                        IsExecuting = false,
+                        ExecutionStatus = null
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -217,10 +274,58 @@ public static class ThreadExecution
         catch (OperationCanceledException)
         {
             logger.LogInformation("ExecuteMessageAsync: cancelled for {ThreadPath}", threadPath);
+            // Mark execution as stopped on cancellation
+            responseStream.Update(current =>
+            {
+                if (current == null) return null;
+                var msg = current.Content as ThreadMessage;
+                var updated = current with
+                {
+                    Content = new ThreadMessage
+                    {
+                        Id = responseMsgId,
+                        Role = "assistant",
+                        Text = (msg?.Text ?? "") + "\n\n*Cancelled*",
+                        Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.AgentResponse,
+                        AgentName = request.AgentName,
+                        ModelName = request.ModelName,
+                        IsExecuting = false,
+                        ExecutionStatus = null
+                    }
+                };
+                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
         }
         catch (Exception ex)
         {
             logger.LogError(ex, "ExecuteMessageAsync: error for {ThreadPath}", threadPath);
+            // Mark execution as stopped on error
+            responseStream.Update(current =>
+            {
+                if (current == null) return null;
+                var msg = current.Content as ThreadMessage;
+                var updated = current with
+                {
+                    Content = new ThreadMessage
+                    {
+                        Id = responseMsgId,
+                        Role = "assistant",
+                        Text = (msg?.Text ?? "") + $"\n\n*Error: {ex.Message}*",
+                        Timestamp = DateTime.UtcNow,
+                        Type = ThreadMessageType.AgentResponse,
+                        AgentName = request.AgentName,
+                        ModelName = request.ModelName,
+                        IsExecuting = false,
+                        ExecutionStatus = null
+                    }
+                };
+                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
         }
 
         return delivery.Processed();

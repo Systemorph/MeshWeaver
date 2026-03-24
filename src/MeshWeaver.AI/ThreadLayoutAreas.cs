@@ -126,7 +126,6 @@ public static class ThreadLayoutAreas
         var stream = host.Workspace.GetStream<MeshNode>();
 
         // Push ThreadViewModel to data section — contains all thread state for the Blazor view.
-        // Wrapped in an object (not raw array) so GetStream<object> can deserialize it.
         var vmStream = stream!.Select(nodes =>
         {
             var node = nodes!.First(n => n.Path == hubPath);
@@ -153,15 +152,22 @@ public static class ThreadLayoutAreas
         }).DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
+        // Header: chat icon + h1 title (matching standard MeshNodeLayoutAreas.BuildHeader pattern)
+        var header = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithWidth("100%")
+            .WithStyle("align-items: center; gap: 16px; padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
+            .WithView(Controls.Html(
+                "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: contain;\" />"))
+            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
+                .WithStyle("margin: 0; font-size: 2rem; font-weight: bold;"));
+
         // Static container — never rebuilt
         return Controls.Stack
             .WithWidth("100%")
             .WithHeight("100%")
             .WithStyle("display: flex; flex-direction: column;")
-            // 1. Title — data-bound, not observable control rebuild
-            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
-                .WithStyle("margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0; font-size: 1.5rem; font-weight: bold;"))
-            // 2. ThreadChatControl — all state data-bound via ThreadViewModel
+            .WithView(header)
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
                 .WithStyle("flex: 1; overflow: hidden;"));

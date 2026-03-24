@@ -57,9 +57,19 @@ public partial class MarkdownFileParser : IFileFormatParser
             ? content.Substring(yamlBlock.Span.End + 1).TrimStart('\r', '\n')
             : content;
 
-        // Get file last modified time
-        var fileInfo = new FileInfo(filePath);
-        var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
+        // Get file last modified time (graceful fallback if path is inaccessible)
+        DateTimeOffset lastModified;
+        try
+        {
+            var fileInfo = new FileInfo(filePath);
+            lastModified = fileInfo.Exists
+                ? new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero)
+                : DateTimeOffset.UtcNow;
+        }
+        catch
+        {
+            lastModified = DateTimeOffset.UtcNow;
+        }
 
         // Use Published date if available, otherwise file last modified
         if (frontMatter?.Published != null && DateTimeOffset.TryParse(frontMatter.Published, out var publishedDate))

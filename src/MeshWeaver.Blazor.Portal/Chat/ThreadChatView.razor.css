@@ -19,6 +19,7 @@
     border-radius: 8px;
     background: var(--neutral-layer-card-container);
     overflow: visible;
+    min-width: 320px;
 }
 
 .input-container {
@@ -26,8 +27,13 @@
 }
 
 .selector-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
     padding-top: 8px;
     overflow: visible;
+    flex-wrap: nowrap;
 }
 
 .loading-overlay {
@@ -62,6 +68,49 @@
 .empty-thread-message .hint {
     font-size: 0.85rem;
     opacity: 0.8;
+}
+
+.msg-skeleton {
+    max-width: 60%;
+    padding: 16px;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.msg-skeleton-user {
+    background: var(--neutral-layer-4);
+    align-self: flex-end;
+    margin-left: auto;
+}
+
+.msg-skeleton-assistant {
+    background: var(--neutral-layer-2);
+    align-self: flex-start;
+}
+
+.msg-skeleton-line {
+    height: 12px;
+    border-radius: 6px;
+    background: var(--neutral-stroke-rest);
+    opacity: 0.3;
+    animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+@@keyframes skeleton-pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.15; }
+}
+
+.awaiting-response {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    color: var(--neutral-foreground-hint);
+    font-size: 0.85rem;
 }
 
 .selector-agent, .selector-model {
@@ -99,52 +148,17 @@
     overflow: hidden;
 }
 
-.resume-search {
-    padding: 16px 16px 8px 16px;
+.resume-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--neutral-stroke-rest);
     flex-shrink: 0;
 }
 
-.resume-thread-list {
+.resume-threads-catalog {
     flex: 1;
     overflow-y: auto;
-    padding: 0 8px;
-}
-
-.resume-thread-item {
-    padding: 10px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: background-color 0.15s;
-}
-
-.resume-thread-item:hover {
-    background-color: var(--neutral-fill-secondary-hover);
-}
-
-.resume-thread-name {
-    font-weight: 500;
-    font-size: 0.95rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.resume-thread-path {
-    font-size: 0.8rem;
-    color: var(--neutral-foreground-hint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.resume-thread-date {
-    font-size: 0.75rem;
-    color: var(--neutral-foreground-hint);
-    margin-top: 2px;
-}
-
-.resume-actions {
-    padding: 12px 16px;
-    flex-shrink: 0;
-    border-top: 1px solid var(--neutral-stroke-divider);
+    padding: 12px;
 }

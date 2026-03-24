@@ -39,6 +39,9 @@ public partial class MeshSearchView : IDisposable
     [Inject]
     private NavigationManager Navigation { get; set; } = default!;
 
+    [Inject]
+    private MeshWeaver.Messaging.IMessageHub Hub { get; set; } = default!;
+
     [Parameter]
     public MeshSearchControl? ViewModel { get; set; }
 

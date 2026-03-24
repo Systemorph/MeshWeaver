@@ -46,6 +46,14 @@ public record PostOptions(Address Sender)
     internal AccessContext? ImpersonateContext { get; init; }
 
     /// <summary>
+    /// Stamps a pre-captured AccessContext on this message.
+    /// The post pipeline will use this identity instead of reading AsyncLocal.
+    /// Use when posting from outside hub context (ContinueWith, background tasks).
+    /// </summary>
+    public PostOptions WithAccessContext(AccessContext context)
+        => this with { ImpersonateContext = context };
+
+    /// <summary>
     /// Instructs the post pipeline to use the hub's own address as the identity
     /// for this message, instead of the current user's context.
     /// The hub address comes from the Sender property.

@@ -148,4 +148,21 @@ public record ThreadMessage
     /// The model used to generate this response (for AgentResponse messages).
     /// </summary>
     public string? ModelName { get; init; }
+
+    /// <summary>
+    /// The user who created this message. Set from the delivery's AccessContext.
+    /// </summary>
+    public string? CreatedBy { get; init; }
+
+    /// <summary>
+    /// Whether the agent is currently executing (generating response, calling tools, etc.).
+    /// Set to true when the response node is created, false when execution completes.
+    /// </summary>
+    public bool IsExecuting { get; init; }
+
+    /// <summary>
+    /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").
+    /// Updated during streaming when tool calls or delegations occur.
+    /// </summary>
+    public string? ExecutionStatus { get; init; }
 }

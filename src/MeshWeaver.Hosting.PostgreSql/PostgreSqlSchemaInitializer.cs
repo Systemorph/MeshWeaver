@@ -405,9 +405,9 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 63
-                            WHEN 'PlatformAdmin' THEN 63
-                            WHEN 'Editor' THEN 55
+                            WHEN 'Admin' THEN 127
+                            WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119
                             WHEN 'Viewer' THEN 33
                             WHEN 'Commenter' THEN 49
                             ELSE 0
@@ -422,6 +422,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
@@ -467,9 +468,9 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 63
-                            WHEN 'PlatformAdmin' THEN 63
-                            WHEN 'Editor' THEN 55
+                            WHEN 'Admin' THEN 127
+                            WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119
                             WHEN 'Viewer' THEN 33
                             WHEN 'Commenter' THEN 49
                             ELSE 0
@@ -484,6 +485,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL
@@ -823,9 +825,9 @@ public static class PostgreSqlSchemaInitializer
                          LIMIT 1),
                         -- Fallback: built-in role lookup
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 63
-                            WHEN 'PlatformAdmin' THEN 63
-                            WHEN 'Editor' THEN 55
+                            WHEN 'Admin' THEN 127
+                            WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119
                             WHEN 'Viewer' THEN 33
                             WHEN 'Commenter' THEN 49
                             ELSE 0
@@ -840,6 +842,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->>'accessObject' IS NOT NULL
@@ -886,9 +889,9 @@ public static class PostgreSqlSchemaInitializer
                            AND role_node.id = role_entry->>'role'
                          LIMIT 1),
                         CASE role_entry->>'role'
-                            WHEN 'Admin' THEN 63
-                            WHEN 'PlatformAdmin' THEN 63
-                            WHEN 'Editor' THEN 55
+                            WHEN 'Admin' THEN 127
+                            WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119
                             WHEN 'Viewer' THEN 33
                             WHEN 'Commenter' THEN 49
                             ELSE 0
@@ -903,6 +906,7 @@ public static class PostgreSqlSchemaInitializer
                         || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
                         || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
                     ) AS permission
                 ) perm
                 WHERE aa.content->'roles' IS NOT NULL

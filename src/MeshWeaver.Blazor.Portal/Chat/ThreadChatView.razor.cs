@@ -5,6 +5,7 @@ using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -25,7 +26,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private bool _isDisposed;
     private IDisposable? agentSubscription;
-    private ISynchronizationStream<JsonElement>? _ownedStream;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
     // Thread state
@@ -94,9 +94,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private ChatViewMode viewMode = ChatViewMode.Chat;
 
     // Resume threads state
-    private List<MeshNode> recentThreads = new();
-    private string resumeSearchQuery = "";
-    private bool isLoadingRecentThreads;
+    private string? resumeNodeAddress;
+    private LayoutAreaControl? resumeThreadsCatalog;
+    private ISynchronizationStream<JsonElement>? resumeThreadsStream;
 
     // Agent/model selection
     private AgentDisplayInfo? selectedAgentInfo;
@@ -208,33 +208,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override void BindData()
     {
         base.BindData();
-        Logger.LogDebug("[ThreadChat:{InstanceId}] BindData called, ViewModel.ThreadViewModel={VmType}, Stream={HasStream}",
-            _instanceId, ViewModel.ThreadViewModel?.GetType().Name ?? "null", Stream != null);
         DataBind(ViewModel.ThreadViewModel, x => x.ThreadViewModel, ConvertThreadViewModel);
     }
 
-    /// <summary>
-    /// Establishes a remote stream to the thread hub's layout area when the view
-    /// is used in the side panel (where Stream is null). This enables DataBind
-    /// for cells to work via JsonPointerReference.
-    /// </summary>
-    private void EnsureStreamForThread(string threadPath)
-    {
-        if (Stream != null) return; // Already have a stream (full-screen case)
-        _ownedStream?.Dispose();
-        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
-        if (workspace == null) return;
-        _ownedStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(threadPath),
-            new LayoutAreaReference(ThreadNodeType.ThreadArea));
-        Stream = _ownedStream;
-        // Bind ThreadViewModel to the stream's data section (same pointer the hub-side ThreadView uses)
-        DataBind(
-            new JsonPointerReference(LayoutAreaReference.GetDataPointer("thread")),
-            x => x.ThreadViewModel,
-            ConvertThreadViewModel);
-        StateHasChanged();
-    }
 
     private Task InitializeAgentAndModelSelectionsAsync()
     {
@@ -388,9 +364,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!submissionHandler.TryBeginSubmit(userMessageText))
             return;
 
-        // Disable input and clear the editor immediately
+        // Disable input and clear the editor immediately — flush render so spinner shows
         MessageText = null;
         StateHasChanged();
+        await Task.Yield(); // Let Blazor flush the render before continuing
 
         if (monacoEditor != null)
         {
@@ -419,24 +396,52 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                         var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
                         ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : "User";
                     }
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] Creating thread: namespace={Namespace}, text='{Text}'",
+                        _instanceId, ns, userMessageText?[..Math.Min(30, userMessageText?.Length ?? 0)]);
                     var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!);
-                    var createResponse = await Hub.AwaitResponse(
-                        new CreateNodeRequest(threadNode),
-                        o => o.WithTarget(new Address(ns)));
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeRequest: nodeId={NodeId}, nodePath={NodePath}, target={Target}",
+                        _instanceId, threadNode.Id, threadNode.Path, ns);
 
-                    if (!createResponse.Message.Success)
+                    // Use Post + RegisterCallback to avoid blocking the UI thread
+                    var tcs = new TaskCompletionSource<CreateNodeResponse>();
+                    var delivery = Hub.Post(new CreateNodeRequest(threadNode),
+                        o => o.WithTarget(new Address(ns)));
+                    if (delivery != null)
+                    {
+                        _ = Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+                        {
+                            if (response is IMessageDelivery<CreateNodeResponse> cnr)
+                                tcs.TrySetResult(cnr.Message);
+                            else if (response is IMessageDelivery<DeliveryFailure> df)
+                                tcs.TrySetResult(new CreateNodeResponse(null) { Error = $"Delivery failed: {df.Message.Message}" });
+                            else
+                                tcs.TrySetResult(new CreateNodeResponse(null) { Error = $"Unexpected response: {response.Message?.GetType().Name}" });
+                            return response;
+                        });
+                    }
+                    else
+                    {
+                        tcs.SetResult(new CreateNodeResponse(null) { Error = "Failed to post CreateNodeRequest" });
+                    }
+
+                    var createResult = await tcs.Task;
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeResponse: success={Success}, error={Error}, path={Path}",
+                        _instanceId, createResult.Success, createResult.Error ?? "(none)",
+                        createResult.Node?.Path ?? "(null)");
+
+                    if (!createResult.Success)
                     {
                         Logger.LogError("[ThreadChat:{InstanceId}] Failed to create thread: {Error}",
-                            _instanceId, createResponse.Message.Error);
+                            _instanceId, createResult.Error);
                         submissionHandler.ForceRelease();
                         return;
                     }
 
-                    threadPath = createResponse.Message.Node?.Path;
-                    threadName = createResponse.Message.Node?.Name;
+                    threadName = createResult.Node?.Name;
+                    threadPath = createResult.Node?.Path;
+                    // Tell side panel to switch to the new thread — it will re-render with LayoutAreaView
                     SidePanelState.SetContentPath(threadPath);
                     UpdateSidePanelTitle();
-                    EnsureStreamForThread(threadPath!);
                 }
                 finally
                 {
@@ -447,8 +452,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // Post execution request to thread hub — hub creates both user and response nodes.
             // Use Post + RegisterCallback (non-blocking) instead of AwaitResponse to avoid
             // blocking the hub execution pipeline.
-            Logger.LogInformation("[ThreadChat:{InstanceId}] Posting SubmitMessageRequest to {ThreadPath}",
-                _instanceId, threadPath);
+            Logger.LogInformation("[ThreadChat:{InstanceId}] Posting SubmitMessageRequest to {ThreadPath}, agent={Agent}, model={Model}, context={Context}",
+                _instanceId, threadPath, selectedAgentInfo?.Name ?? "(default)", selectedModelInfo?.Name ?? "(default)", initialContext);
             var submitDelivery = Hub.Post(new SubmitMessageRequest
             {
                 ThreadPath = threadPath!,
@@ -463,16 +468,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, response =>
                 {
+                    string? error = null;
                     if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+                        error = sr.Message.Error;
+                    else if (response is IMessageDelivery<DeliveryFailure> df)
+                        error = $"Delivery failed: {df.Message.Message}";
+
+                    if (error != null)
                     {
                         Logger.LogError("[ThreadChat:{InstanceId}] SubmitMessageRequest FAILED: {Error}",
-                            _instanceId, sr.Message.Error);
+                            _instanceId, error);
+                        // Restore text so user can retry, release spinner
+                        InvokeAsync(() =>
+                        {
+                            MessageText = userMessageText;
+                            submissionHandler.ForceRelease();
+                            StateHasChanged();
+                        });
                     }
                     return response;
                 });
             }
 
-            // Transition to WaitingForResponse — input stays disabled until new cells appear
+            // Transition to WaitingForResponse — spinner stays until new cells appear
             submissionHandler.OnMessagePosted();
 
             // In compact/dashboard mode: navigate to full-screen thread chat
@@ -682,7 +700,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             switch (action)
             {
                 case "New":
-                    StartNewThread();
+                    SidePanelState.SetContentPath(null);
                     break;
                 case "Resume":
                     _ = SwitchToResumeModeAsync();
@@ -693,86 +711,53 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     // --- Mode switching ---
 
-    private void StartNewThread()
-    {
-        threadPath = null;
-        threadName = null;
-        SidePanelState.SetContentPath(null);
-        UpdateSidePanelTitle();
-        _ownedStream?.Dispose();
-        _ownedStream = null;
-        Stream = null;
-        ThreadViewModel = null;
-        viewMode = ChatViewMode.Chat;
-        StateHasChanged();
-    }
 
-    private async Task SwitchToResumeModeAsync()
+    private Task SwitchToResumeModeAsync()
     {
+        // Get current node address from NavigationService
+        resumeNodeAddress = NavigationService.CurrentNamespace;
+        if (string.IsNullOrEmpty(resumeNodeAddress))
+        {
+            var accessService = Hub.ServiceProvider.GetService<AccessService>();
+            var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+            resumeNodeAddress = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : null;
+        }
+
+        if (!string.IsNullOrEmpty(resumeNodeAddress))
+        {
+            // Create a LayoutAreaControl for the Threads area of the current node
+            resumeThreadsCatalog = new LayoutAreaControl(
+                resumeNodeAddress,
+                new LayoutAreaReference(MeshNodeLayoutAreas.ThreadsArea))
+                .WithShowProgress(true);
+
+            // Create a stream to the node's Threads layout area
+            resumeThreadsStream?.Dispose();
+            var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
+            resumeThreadsStream = workspace?.GetRemoteStream<JsonElement, LayoutAreaReference>(
+                new Address(resumeNodeAddress),
+                new LayoutAreaReference(MeshNodeLayoutAreas.ThreadsArea));
+        }
+
         viewMode = ChatViewMode.ResumeThreads;
-        resumeSearchQuery = "";
-        isLoadingRecentThreads = true;
         StateHasChanged();
-
-        await LoadRecentThreadsAsync();
+        return Task.CompletedTask;
     }
 
     private void SwitchToChatMode()
     {
         viewMode = ChatViewMode.Chat;
+        resumeThreadsStream?.Dispose();
+        resumeThreadsStream = null;
         StateHasChanged();
-    }
-
-    // --- Resume threads ---
-
-    private async Task LoadRecentThreadsAsync(string? searchText = null)
-    {
-        try
-        {
-            isLoadingRecentThreads = true;
-            StateHasChanged();
-
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-            if (meshQuery == null)
-            {
-                recentThreads = [];
-                return;
-            }
-
-            var query = string.IsNullOrWhiteSpace(searchText)
-                ? "nodeType:Thread limit:20 sort:LastModified-desc"
-                : $"nodeType:Thread limit:20 sort:LastModified-desc {searchText}";
-
-            recentThreads = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error loading recent threads", _instanceId);
-            recentThreads = [];
-        }
-        finally
-        {
-            isLoadingRecentThreads = false;
-            StateHasChanged();
-        }
-    }
-
-    private void OnResumeSearchChanged(string query)
-    {
-        resumeSearchQuery = query;
-        _ = LoadRecentThreadsAsync(query);
     }
 
     private Task OnSelectThread(MeshNode node)
     {
-        threadPath = node.Path;
         threadName = node.Name;
         viewMode = ChatViewMode.Chat;
-        SidePanelState.SetContentPath(threadPath);
+        SidePanelState.SetContentPath(node.Path);
         UpdateSidePanelTitle();
-        if (!string.IsNullOrEmpty(threadPath))
-            EnsureStreamForThread(threadPath);
-        StateHasChanged();
         return Task.CompletedTask;
     }
 
@@ -1131,7 +1116,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         => new LayoutAreaControl(
             $"{threadPath}/{msgId}",
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
-            .WithShowProgress(false);
+            .WithSpinnerType(SpinnerType.Skeleton);
 
     private static string TruncateText(string text, int maxLength)
     {
@@ -1145,7 +1130,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
-            _ownedStream?.Dispose();
+            resumeThreadsStream?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
