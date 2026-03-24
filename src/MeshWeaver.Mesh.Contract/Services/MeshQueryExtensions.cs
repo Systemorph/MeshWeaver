@@ -191,6 +191,11 @@ public static class MeshQueryExtensions
 
     private static MeshQueryRequest AddTypeFilter(MeshQueryRequest request, string typeName)
     {
+        // MeshNode is the base type — all rows in mesh_nodes are MeshNodes,
+        // so adding $type:MeshNode would incorrectly filter on content.$type instead.
+        if (typeName == nameof(MeshNode))
+            return request;
+
         var typeFilter = $"$type:{typeName}";
         var newQuery = string.IsNullOrWhiteSpace(request.Query)
             ? typeFilter

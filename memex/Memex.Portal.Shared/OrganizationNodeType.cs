@@ -89,10 +89,9 @@ public static class OrganizationNodeType
                 .WithContentType<Organization>())
             .WithPublicRead()
             .AddContentCollections()
-            .AddDefaultLayoutAreas()
+            .AddNodeTypeLayoutAreas()
             .AddLayout(layout => layout
-                .WithView(MeshNodeLayoutAreas.OverviewArea, OrganizationLayoutAreas.Overview)
-                .WithDefaultArea(MeshNodeLayoutAreas.SearchArea))
+                .WithView(MeshNodeLayoutAreas.OverviewArea, OrganizationLayoutAreas.Overview))
     };
 
     /// <summary>

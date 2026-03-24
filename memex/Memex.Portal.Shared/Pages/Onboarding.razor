@@ -178,13 +178,13 @@
 
                 await NodeFactory.CreateNodeAsync(node);
 
-                // First user becomes PlatformAdmin
+                // First user becomes global Admin (stored in admin.access table)
                 if (isFirstUser)
                 {
                     var securityService = PortalApplication.Hub.ServiceProvider
                         .GetService<ISecurityService>();
                     if (securityService != null)
-                        await securityService.AddUserRoleAsync(username, "PlatformAdmin", "Admin", username);
+                        await securityService.AddUserRoleAsync(username, Role.Admin.Id, "Admin", username);
                 }
             }
 
