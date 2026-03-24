@@ -178,6 +178,9 @@ public class MeshOperations
             if (meshNode == null)
                 return "Invalid node: deserialized to null.";
 
+            if (string.IsNullOrWhiteSpace(meshNode.Name))
+                return "Error: 'name' property is required. Provide a human-readable display name.";
+
             var created = await mesh.CreateNodeAsync(meshNode);
             return $"Created: {created.Path}";
         }
