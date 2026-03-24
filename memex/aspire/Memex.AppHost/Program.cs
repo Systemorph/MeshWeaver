@@ -137,6 +137,10 @@ var portal = builder
     .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
     .WithEnvironment("Anthropic__Models__1", "claude-opus-4-6")
     .WithEnvironment("Anthropic__Models__2", "claude-haiku-4-5")
+    // Model tiers: map agent tiers to concrete models
+    .WithEnvironment("ModelTier__Heavy", "claude-opus-4-6")
+    .WithEnvironment("ModelTier__Standard", "claude-sonnet-4-6")
+    .WithEnvironment("ModelTier__Light", "claude-haiku-4-5")
     // LLM: Azure OpenAI
     .WithEnvironment("AzureOpenAIS__Endpoint", "https://s-meshweaver.cognitiveservices.azure.com")
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
