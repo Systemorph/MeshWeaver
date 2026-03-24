@@ -81,23 +81,20 @@ else
             OnChipClick="@OnChipClicked" />
 
         @* Monaco editor for markdown input with completion *@
-        @if (submissionHandler.IsInputEnabled)
-        {
-            <div class="input-container">
-                <MonacoEditorView @ref="monacoEditor"
-                                  Value="@MessageText"
-                                  ValueChanged="@OnMessageTextChanged"
-                                  OnSubmit="SendMessageAsync"
-                                  OnCompletionAccepted="OnCompletionItemAccepted"
-                                  IsDisabled="false"
-                                  Placeholder="@placeholderText"
-                                  Height="80px"
-                                  MaxHeight="200px"
-                                  CompletionProvider="@GetCompletionConfig()"
-                                  AsyncCompletionCallback="@GetCompletionsAsync" />
-            </div>
-        }
-        else
+        <div class="input-container" style="@(!submissionHandler.IsInputEnabled ? "display: none;" : "")">
+            <MonacoEditorView @ref="monacoEditor"
+                              Value="@MessageText"
+                              ValueChanged="@OnMessageTextChanged"
+                              OnSubmit="SendMessageAsync"
+                              OnCompletionAccepted="OnCompletionItemAccepted"
+                              IsDisabled="@(!submissionHandler.IsInputEnabled)"
+                              Placeholder="@placeholderText"
+                              Height="80px"
+                              MaxHeight="200px"
+                              CompletionProvider="@GetCompletionConfig()"
+                              AsyncCompletionCallback="@GetCompletionsAsync" />
+        </div>
+        @if (!submissionHandler.IsInputEnabled)
         {
             <div class="input-container input-submitting">
                 <FluentProgressBar />

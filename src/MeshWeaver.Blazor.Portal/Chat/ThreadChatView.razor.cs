@@ -190,12 +190,31 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         try
         {
+            // Strip layout area suffixes (e.g., "/Thread", "/Overview") from the path
+            var cleanPath = path;
+            var lastSlash = cleanPath.LastIndexOf('/');
+            if (lastSlash > 0)
+            {
+                var lastSegment = cleanPath[(lastSlash + 1)..];
+                // Known area names that are not part of the node path
+                if (lastSegment is "Thread" or "Overview" or "History" or "Settings" or "Metadata")
+                    cleanPath = cleanPath[..lastSlash];
+            }
+
             var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
             if (meshQuery == null)
-                return path;
+                return cleanPath;
 
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
-            if (node != null && node.MainNode != node.Path)
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{cleanPath}").FirstOrDefaultAsync();
+            if (node == null)
+                return cleanPath;
+
+            // For Thread nodes: use ParentPath (the original content node), not MainNode
+            if (node.Content is AI.Thread threadContent && !string.IsNullOrEmpty(threadContent.ParentPath))
+                return threadContent.ParentPath;
+
+            // For other satellite nodes: use MainNode
+            if (node.MainNode != node.Path)
                 return node.MainNode;
         }
         catch (Exception ex)
