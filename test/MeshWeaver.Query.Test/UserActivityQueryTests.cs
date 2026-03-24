@@ -338,7 +338,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
         });
 
         // Wait for any bundled activity to flush
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         // Check: no activity log should exist under the AccessAssignment node
         var activityNodes = await MeshQuery.QueryAsync<MeshNode>(
@@ -368,7 +368,7 @@ public class ActivityTrackingFilterTests(ITestOutputHelper output) : MonolithMes
             Name = "Discussion", NodeType = "Thread"
         });
 
-        await Task.Delay(500);
+        await Task.Delay(500, TestContext.Current.CancellationToken);
 
         var activityNodes = await MeshQuery.QueryAsync<MeshNode>(
             $"path:{p}/_Thread/t1/_activity scope:descendants")
