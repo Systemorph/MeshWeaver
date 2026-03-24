@@ -420,6 +420,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             var initialCount = 0;
             var initialTarget = observables.Count;
             var gate = new object();
+            var fanOutParsed = _parser.Parse(fanOutQuery);
+            var globalLimit = request.Limit ?? fanOutParsed.Limit;
 
             var subscriptions = new List<IDisposable>();
 
@@ -437,7 +439,17 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
                                 if (initialCount == initialTarget)
                                 {
-                                    observer.OnNext(change with { Items = initialItems.ToList() });
+                                    // Re-sort merged results across all partitions
+                                    IEnumerable<T> merged = initialItems;
+                                    if (fanOutParsed.OrderBy != null)
+                                    {
+                                        var evaluator = new QueryEvaluator();
+                                        merged = evaluator.OrderResults(merged, fanOutParsed.OrderBy);
+                                    }
+                                    if (globalLimit.HasValue)
+                                        merged = merged.Take(globalLimit.Value);
+
+                                    observer.OnNext(change with { Items = merged.ToList() });
                                 }
                             }
                         }

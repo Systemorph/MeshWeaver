@@ -222,7 +222,7 @@ public partial class CollaborativeMarkdownView
         RenderedHtml = RenderMarkdown(content);
     }
 
-    private static string RenderMarkdown(string content)
+    private string RenderMarkdown(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
             return "";
@@ -230,8 +230,9 @@ public partial class CollaborativeMarkdownView
         // Transform annotation markers to HTML spans before markdown rendering
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        // Use the standard pipeline that includes LayoutAreaMarkdownExtension for @@ syntax
-        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
+        // Use the standard pipeline that includes LayoutAreaMarkdownExtension for @@ syntax.
+        // Pass BoundNodePath so relative @references resolve correctly.
+        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
         return Markdig.Markdown.ToHtml(transformed, pipeline);
     }
 

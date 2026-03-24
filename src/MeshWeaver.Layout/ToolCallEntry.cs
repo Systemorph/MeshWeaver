@@ -1,6 +1,31 @@
 namespace MeshWeaver.Layout;
 
 /// <summary>
+/// Tracks a MeshNode change made during agent execution.
+/// Stores path, operation, and version numbers so the version repo can load before/after content.
+/// </summary>
+public record NodeChangeEntry
+{
+    /// <summary>Path of the affected node.</summary>
+    public required string Path { get; init; }
+
+    /// <summary>Operation type: "Created", "Updated", or "Deleted".</summary>
+    public required string Operation { get; init; }
+
+    /// <summary>Version before the change (null for creates).</summary>
+    public long? VersionBefore { get; init; }
+
+    /// <summary>Version after the change (null for deletes).</summary>
+    public long? VersionAfter { get; init; }
+
+    /// <summary>Node type of the affected node.</summary>
+    public string? NodeType { get; init; }
+
+    /// <summary>Display name of the affected node.</summary>
+    public string? NodeName { get; init; }
+}
+
+/// <summary>
 /// Records a completed tool call during agent execution.
 /// Persisted on ThreadMessage for post-execution inspection.
 /// Defined in Layout so Blazor views can render it without depending on AI.

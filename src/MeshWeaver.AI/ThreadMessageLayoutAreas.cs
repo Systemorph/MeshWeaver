@@ -6,7 +6,9 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
 
@@ -191,10 +193,110 @@ public static class ThreadMessageLayoutAreas
                     }, o => o.WithTarget(new Address(threadPath)));
                 }));
 
-        return Controls.Stack
+        var container = Controls.Stack
             .WithClass("thread-msg-container")
-            .WithView(bubble)
-            .WithView(actionRow);
+            .WithView(bubble);
+
+        // For assistant messages: show delegation sub-threads as navigable links
+        if (!isUser)
+        {
+            var messagePath = $"{threadPath}/{messageId}";
+            var subThreadNamespace = messagePath;
+            var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+            if (meshService != null)
+            {
+                var subThreadsObs = Observable.FromAsync(async () =>
+                {
+                    try
+                    {
+                        return await meshService
+                            .QueryAsync<MeshNode>($"namespace:{subThreadNamespace} nodeType:{ThreadNodeType.NodeType}")
+                            .ToListAsync() as IReadOnlyList<MeshNode>;
+                    }
+                    catch { return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>; }
+                });
+
+                host.RegisterForDisposal(subThreadsObs.Subscribe(subThreads =>
+                {
+                    if (subThreads.Count > 0)
+                    {
+                        host.UpdateData("subThreads", subThreads.Select(st => new
+                        {
+                            st.Path,
+                            st.Name,
+                            Href = $"/{st.Path}/{ThreadNodeType.ThreadArea}"
+                        }).ToList());
+                    }
+                }));
+
+                // Render sub-thread links as HTML below the bubble
+                container = container.WithView(
+                    Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subThreadsHtml")))
+                        .WithStyle("margin-top: 4px;"));
+
+                // Build HTML from sub-threads data
+                host.RegisterForDisposal(subThreadsObs.Subscribe(async subThreads =>
+                {
+                    if (subThreads.Count > 0)
+                    {
+                        var linksHtml = new System.Text.StringBuilder();
+                        foreach (var st in subThreads)
+                        {
+                            var name = System.Web.HttpUtility.HtmlEncode(
+                                st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
+                            var href = $"/{st.Path}/{ThreadNodeType.ThreadArea}";
+
+                            // Try to get last message preview from the sub-thread
+                            var preview = "";
+                            try
+                            {
+                                var thread = st.Content as AI.Thread;
+                                if (thread?.Messages.Count > 0)
+                                {
+                                    var lastMsgId = thread.Messages.Last();
+                                    var lastMsgPath = $"{st.Path}/{lastMsgId}";
+                                    await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{lastMsgPath}"))
+                                    {
+                                        if (msgNode.Content is ThreadMessage tmsg && !string.IsNullOrEmpty(tmsg.Text))
+                                        {
+                                            var lines = tmsg.Text.Split('\n');
+                                            var lastLines = lines.Length > 5 ? lines[^5..] : lines;
+                                            preview = System.Web.HttpUtility.HtmlEncode(
+                                                string.Join("\n", lastLines).Trim());
+                                            if (preview.Length > 200) preview = preview[..197] + "...";
+                                        }
+                                    }
+                                }
+                            }
+                            catch { /* ignore preview errors */ }
+
+                            var previewHtml = !string.IsNullOrEmpty(preview)
+                                ? $"<div style=\"font-size: 0.72rem; color: var(--neutral-foreground-hint); " +
+                                  $"white-space: pre-wrap; margin: 2px 0 0 18px; max-height: 80px; overflow: hidden;\">{preview}</div>"
+                                : "";
+
+                            linksHtml.Append(
+                                $"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 4px 8px; " +
+                                $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none; " +
+                                $"border-left: 2px solid var(--accent-fill-rest); margin-bottom: 2px;\">" +
+                                $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>{previewHtml}");
+                        }
+
+                        var html = $"<div style=\"margin-left: 12px; margin-bottom: 8px;\">" +
+                                   $"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-bottom: 2px;\">Delegations:</div>" +
+                                   $"{linksHtml}</div>";
+                        host.UpdateData("subThreadsHtml", html);
+                    }
+                    else
+                    {
+                        host.UpdateData("subThreadsHtml", "");
+                    }
+                }));
+            }
+        }
+
+        container = container.WithView(actionRow);
+        return container;
     }
 
     /// <summary>

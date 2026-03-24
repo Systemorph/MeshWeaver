@@ -173,6 +173,7 @@ public static class ThreadExecution
             var toolCallLog = new List<ToolCallEntry>();
             var pendingCalls = new Dictionary<string, FunctionCallContent>();
             string? firstDelegationPath = null;
+            string? lastCallKey = null;
 
             // Set execution context for delegation sub-thread creation
             chatClient.SetExecutionContext(new ThreadExecutionContext
@@ -191,12 +192,21 @@ public static class ThreadExecution
                     if (content is FunctionCallContent functionCall)
                     {
                         currentStatus = ToolStatusFormatter.Format(functionCall);
-                        pendingCalls[functionCall.CallId] = functionCall;
+                        // Track pending call — use CallId if available, fall back to Name+counter
+                        var callKey = functionCall.CallId ?? $"{functionCall.Name}_{pendingCalls.Count}";
+                        pendingCalls[callKey] = functionCall;
+                        lastCallKey = callKey;
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
-                        // Track completed tool call
-                        if (pendingCalls.TryGetValue(functionResult.CallId, out var originalCall))
+                        // Match result to pending call — try CallId first, then last pending call
+                        var resultKey = functionResult.CallId ?? lastCallKey;
+                        FunctionCallContent? originalCall = null;
+                        if (resultKey != null)
+                            pendingCalls.Remove(resultKey, out originalCall);
+                        originalCall ??= pendingCalls.Values.LastOrDefault();
+
+                        if (originalCall != null)
                         {
                             string? delegationPath = null;
                             if (originalCall.Name.StartsWith("delegate_to"))
@@ -216,7 +226,6 @@ public static class ThreadExecution
                                 DelegationPath = delegationPath,
                                 Timestamp = DateTime.UtcNow
                             });
-                            pendingCalls.Remove(functionResult.CallId);
                         }
                         currentStatus = null; // Tool call completed
                     }

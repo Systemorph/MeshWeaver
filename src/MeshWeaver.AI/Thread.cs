@@ -185,4 +185,11 @@ public record ThreadMessage
     /// Populated when execution finishes, used for post-execution inspection.
     /// </summary>
     public ImmutableList<ToolCallEntry> ToolCalls { get; init; } = [];
+
+    /// <summary>
+    /// MeshNode changes made during this message's execution.
+    /// Tracks path, operation (Created/Updated/Deleted), and version before/after
+    /// so the version repo can load content at each point.
+    /// </summary>
+    public ImmutableList<NodeChangeEntry> NodeChanges { get; init; } = [];
 }

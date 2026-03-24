@@ -23,6 +23,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
+    [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
 
     private bool _isDisposed;
     private IDisposable? agentSubscription;
@@ -389,16 +390,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 try
                 {
                     var ns = NavigationService.CurrentNamespace ?? initialContext;
+                    var accessService = Hub.ServiceProvider.GetService<AccessService>();
+                    var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
                     if (string.IsNullOrEmpty(ns))
                     {
                         // No context available — use the logged-in user's namespace as default
-                        var accessService = Hub.ServiceProvider.GetService<AccessService>();
-                        var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-                        ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : "User";
+                        ns = !string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User";
                     }
                     Logger.LogDebug("[ThreadChat:{InstanceId}] Creating thread: namespace={Namespace}, text='{Text}'",
                         _instanceId, ns, userMessageText?[..Math.Min(30, userMessageText?.Length ?? 0)]);
-                    var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!);
+                    var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!, createdBy: createdBy);
                     Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeRequest: nodeId={NodeId}, nodePath={NodePath}, target={Target}",
                         _instanceId, threadNode.Id, threadNode.Path, ns);
 
@@ -792,17 +793,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         try
         {
             var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
-            var orchestrator = Hub.ServiceProvider.GetService<IChatCompletionOrchestrator>();
-            if (orchestrator == null)
-            {
-                Logger.LogWarning("[ThreadChat] IChatCompletionOrchestrator not registered, falling back to empty results");
-                return [];
-            }
 
             var allItems = new List<CompletionItem>();
             var isFirst = true;
 
-            await foreach (var batch in orchestrator.GetCompletionsAsync(query, currentAddress, ct))
+            await foreach (var batch in CompletionOrchestrator.GetCompletionsAsync(query, currentAddress, ct))
             {
                 foreach (var item in batch.Items)
                 {
@@ -814,7 +809,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     isFirst = false;
                     // Return first batch immediately; collect remaining in background
                     var firstResults = allItems.ToArray();
-                    _ = CollectRemainingBatchesAsync(orchestrator, query, currentAddress, allItems, ct);
+                    _ = CollectRemainingBatchesAsync(query, currentAddress, allItems, ct);
                     return firstResults;
                 }
             }
@@ -837,7 +832,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     /// Pushes progressive updates to the Monaco widget via PushCompletionUpdateAsync.
     /// </summary>
     private async Task CollectRemainingBatchesAsync(
-        IChatCompletionOrchestrator orchestrator,
         string query,
         string currentAddress,
         List<CompletionItem> allItems,
@@ -845,10 +839,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         try
         {
-            // The first batch was already consumed in GetCompletionsAsync.
-            // We continue the same enumeration by collecting from the orchestrator again.
-            // Since the first call already returned, we start a new streaming call for background batches.
-            await foreach (var batch in orchestrator.GetCompletionsAsync(query, currentAddress, ct))
+            // Start a new streaming call to get all batches (including any we already have).
+            // Deduplication below ensures we only push genuinely new items.
+            await foreach (var batch in CompletionOrchestrator.GetCompletionsAsync(query, currentAddress, ct))
             {
                 var hadNew = false;
                 foreach (var item in batch.Items)

@@ -43,6 +43,7 @@ public static class AIExtensions
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
             .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
+            .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext));
 
     extension(IServiceCollection services)

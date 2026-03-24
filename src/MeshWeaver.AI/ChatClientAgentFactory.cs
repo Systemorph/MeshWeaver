@@ -196,7 +196,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
                         agentConfig.Id, targetId, task);
 
-                    // Create sub-thread MeshNode if execution context is available
+                    // Create sub-thread and submit via SubmitMessageRequest (same as regular threads)
                     string? subThreadPath = null;
                     var execCtx = chat.ExecutionContext;
                     if (execCtx != null)
@@ -206,9 +206,10 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
                             var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
                             var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
-                            subThreadPath = $"{parentMsgPath}/{ThreadNodeType.ThreadPartition}/{subThreadId}";
+                            subThreadPath = $"{parentMsgPath}/{subThreadId}";
 
-                            var subThreadNode = new MeshNode(subThreadId, $"{parentMsgPath}/{ThreadNodeType.ThreadPartition}")
+                            // 1. Create the sub-thread node (directly under the message, no extra _Thread)
+                            var subThreadNode = new MeshNode(subThreadId, parentMsgPath)
                             {
                                 Name = task.Length > 60 ? task[..57] + "..." : task,
                                 NodeType = ThreadNodeType.NodeType,
@@ -217,43 +218,105 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             await meshService.CreateNodeAsync(subThreadNode, cancellationToken);
                             chat.LastDelegationPath = subThreadPath;
                             Logger.LogInformation("Created delegation sub-thread at {Path}", subThreadPath);
+
+                            // 2. Submit message to sub-thread via SubmitMessageRequest
+                            //    This goes through the full ThreadExecution pipeline:
+                            //    creates input/output cells, streams agent response, persists everything.
+                            var submitResponse = await Hub.AwaitResponse(
+                                new SubmitMessageRequest
+                                {
+                                    ThreadPath = subThreadPath,
+                                    UserMessageText = task,
+                                    AgentName = targetId,
+                                    ContextPath = execCtx.ThreadPath
+                                },
+                                o => o.WithTarget(new Address(subThreadPath)),
+                                cancellationToken);
+
+                            if (!submitResponse.Message.Success)
+                            {
+                                Logger.LogWarning("Delegation submit failed for {Path}: {Error}",
+                                    subThreadPath, submitResponse.Message.Error);
+                            }
+                            else
+                            {
+                                // 3. Wait for execution to complete by polling the thread messages
+                                //    The response message will have IsExecuting=false when done.
+                                var completed = false;
+                                var timeout = DateTime.UtcNow.AddMinutes(5);
+                                while (!completed && DateTime.UtcNow < timeout && !cancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(1000, cancellationToken);
+                                    chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
+
+                                    // Check if execution completed
+                                    await foreach (var node in meshService.QueryAsync<MeshNode>(
+                                        $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                                    {
+                                        if (node.Content is ThreadMessage tmsg
+                                            && tmsg.Role == "assistant"
+                                            && !tmsg.IsExecuting)
+                                        {
+                                            completed = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 4. Read the result from the sub-thread's assistant message
+                            var resultText = "";
+                            await foreach (var node in meshService.QueryAsync<MeshNode>(
+                                $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                            {
+                                if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
+                                {
+                                    resultText = tmsg.Text ?? "";
+                                    break;
+                                }
+                            }
+
+                            Logger.LogInformation("Delegation to {Target} completed via sub-thread, result length: {Length}",
+                                targetId, resultText.Length);
+
+                            return new DelegationResult
+                            {
+                                AgentName = targetId,
+                                Task = task,
+                                Result = resultText,
+                                Success = true,
+                                ThreadId = subThreadPath
+                            };
                         }
                         catch (Exception ex)
                         {
-                            Logger.LogWarning(ex, "Failed to create delegation sub-thread");
+                            Logger.LogWarning(ex, "Failed delegation via sub-thread for {Target}", targetId);
                         }
                     }
 
-                    // Create an isolated session and stream the target agent
+                    // Fallback: run in-memory if no execution context or sub-thread creation failed
+                    Logger.LogInformation("Delegation to {Target}: running in-memory (no sub-thread)", targetId);
                     var session = await targetAgent.CreateSessionAsync();
                     var resultBuilder = new StringBuilder();
 
                     await foreach (var update in targetAgent.RunStreamingAsync(task, session, cancellationToken: cancellationToken))
                     {
-                        // Forward sub-agent tool call status to parent
                         foreach (var content in update.Contents)
                         {
                             if (content is FunctionCallContent subCall)
                             {
-                                var subStatus = $"{targetId}: {ToolStatusFormatter.Format(subCall)}";
-                                chat.UpdateDelegationStatus?.Invoke(subStatus);
+                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {ToolStatusFormatter.Format(subCall)}");
                             }
                         }
-
                         if (!string.IsNullOrEmpty(update.Text))
                             resultBuilder.Append(update.Text);
                     }
-
-                    var resultText = resultBuilder.ToString();
-
-                    Logger.LogInformation("Delegation to {Target} completed, result length: {Length}",
-                        targetId, resultText.Length);
 
                     return new DelegationResult
                     {
                         AgentName = targetId,
                         Task = task,
-                        Result = resultText,
+                        Result = resultBuilder.ToString(),
                         Success = true,
                         ThreadId = subThreadPath
                     };

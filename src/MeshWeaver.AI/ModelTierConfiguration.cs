@@ -13,19 +13,19 @@ public class ModelTierConfiguration
 {
     /// <summary>
     /// Model name for the "heavy" tier (e.g., "claude-opus-4-6").
-    /// Used by the Orchestrator for planning and complex reasoning.
+    /// Best for complex reasoning, planning, and synthesis. Not always best at tool calling.
     /// </summary>
     public string? Heavy { get; set; }
 
     /// <summary>
     /// Model name for the "standard" tier (e.g., "claude-sonnet-4-6").
-    /// Used by the Worker for CRUD operations and tool execution.
+    /// Balanced: strong reasoning AND reliable tool calling. Default for orchestration and execution.
     /// </summary>
     public string? Standard { get; set; }
 
     /// <summary>
     /// Model name for the "light" tier (e.g., "claude-haiku-4-5").
-    /// Used by the Researcher for information gathering and classification.
+    /// Fast and cheap. Good for information gathering, classification, simple lookups.
     /// </summary>
     public string? Light { get; set; }
 

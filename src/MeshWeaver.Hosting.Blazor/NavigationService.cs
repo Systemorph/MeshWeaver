@@ -258,8 +258,10 @@ internal class NavigationService : INavigationService
                 var html = md.PrerenderedHtml;
                 if (html == null)
                 {
-                    // PrerenderedHtml not on the MarkdownContent either — generate it
-                    var parsed = MarkdownContent.Parse(md.Content, node.Path);
+                    // PrerenderedHtml not on the MarkdownContent either — generate it.
+                    // Pass node.Path as both hubPath (for content collection) and currentNodePath
+                    // (for resolving relative @references like @../SiblingNode).
+                    var parsed = MarkdownContent.Parse(md.Content, node.Path, node.Path);
                     html = parsed.PrerenderedHtml;
                 }
 
