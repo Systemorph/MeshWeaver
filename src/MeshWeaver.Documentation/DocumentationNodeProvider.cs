@@ -113,7 +113,10 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             ? content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n')
             : content;
 
-        var markdownDocument = MarkdownContent.Parse(markdownBody, ns) with
+        // Full node path for resolving relative links in markdown
+        var fullPath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+
+        var markdownDocument = MarkdownContent.Parse(markdownBody, ns, fullPath) with
         {
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,

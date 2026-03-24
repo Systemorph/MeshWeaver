@@ -33,7 +33,7 @@ Embed the schema definition of MeshNode:
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/schema:MeshNode
+@@../schema:MeshNode
 
 # Example: Self Schema
 
@@ -46,7 +46,7 @@ Show the schema of this node (empty path means self-reference):
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/SchemaPrefix/schema:
+@@schema:
 
 # Schema Rendering
 

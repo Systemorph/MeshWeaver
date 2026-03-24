@@ -30,7 +30,7 @@ Get supports Unified Path syntax with reserved prefixes for accessing specific r
 
 For the complete Unified Path reference:
 
-@@Doc/DataMesh/UnifiedPath
+@@../../../DataMesh/UnifiedPath
 
 ### Examples
 
@@ -59,7 +59,7 @@ Searches the mesh using a GitHub-style query syntax. Returns a JSON array of mat
 
 ### Full Query Syntax Reference
 
-@@Doc/DataMesh/QuerySyntax
+@@../../../DataMesh/QuerySyntax
 
 ## NavigateTo
 

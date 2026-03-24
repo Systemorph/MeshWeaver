@@ -29,6 +29,7 @@ public partial class MeshSearchView : IDisposable
     private IDisposable? _reactiveSubscription;
     private HashSet<string> _collapsedGroups = new();
     private string _lastBoundVisibleQuery = "";
+    private string _lastBoundHiddenQuery = "";
     private bool _showSearchOptions;
     private string _editableHiddenQuery = "";
     private string? _overriddenHiddenQuery;
@@ -178,11 +179,25 @@ public partial class MeshSearchView : IDisposable
             _lastBoundVisibleQuery = BoundVisibleQuery;
         }
 
-        // Re-query when VisibleQuery changes from parent (e.g. picker typing)
+        if (!_initialized)
+        {
+            _lastBoundHiddenQuery = BoundHiddenQuery;
+        }
+
+        // Re-query when VisibleQuery or HiddenQuery changes from parent
         if (_initialized && BoundVisibleQuery != _lastBoundVisibleQuery)
         {
             _lastBoundVisibleQuery = BoundVisibleQuery;
             _currentValue = BoundVisibleQuery;
+            if (!IsPrecomputedMode)
+            {
+                _ = LoadResultsAsync();
+            }
+        }
+
+        if (_initialized && BoundHiddenQuery != _lastBoundHiddenQuery)
+        {
+            _lastBoundHiddenQuery = BoundHiddenQuery;
             if (!IsPrecomputedMode)
             {
                 _ = LoadResultsAsync();

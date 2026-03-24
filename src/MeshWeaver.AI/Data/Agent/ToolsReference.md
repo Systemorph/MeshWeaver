@@ -364,9 +364,7 @@ The format is: `@Doc/Architecture/content:{path}` where the path is automaticall
 
 Use double @@ prefix to embed content files inline in markdown. Write the double @@ followed by the node path and content reference at the start of a line. Only embed files that actually exist — use `Get` with the `content:` prefix first to verify the file is available.
 
-Here is a real inline embed of a content file:
-
-@@Doc/content:DocContent/AI/inline-example.md
+Example syntax: `@@Doc/Architecture/ActorModel` embeds the Actor Model documentation inline.
 
 ## Reading Documentation
 

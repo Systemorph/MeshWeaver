@@ -56,7 +56,7 @@ The `address` portion is matched against nodes in the MeshCatalog using score-ba
 
 Result:
 
-@Doc/DataMesh/QuerySyntax
+@../../QuerySyntax
 
 ## Embedded Content
 
@@ -66,12 +66,12 @@ Result:
 
 Result:
 
-@@Doc/DataMesh/UnifiedPath/Thumbnail
+@@../Thumbnail
 
 # Related
 
-@Doc/DataMesh/UnifiedPath/ContentPrefix
+@../ContentPrefix
 
-@Doc/DataMesh/UnifiedPath/DataPrefix
+@../DataPrefix
 
-@Doc/DataMesh/UnifiedPath/AreaPrefix
+@../AreaPrefix

@@ -158,7 +158,7 @@ Controls.Button("Cancel").WithNavigateToHref(cancelHref);
 
 # See Also
 
-- [Adding Controls to a UI](Doc/GUI/ContainerControl) - Container types and WithView
-- [Data Binding](Doc/GUI/DataBinding) - How data flows between server and UI
-- [Adding Editable Forms](Doc/GUI/Editor) - Auto-generated forms from records
-- [Observables](Doc/GUI/Observables) - Reactive views that update when data changes
+- [Adding Controls to a UI](../ContainerControl) - Container types and WithView
+- [Data Binding](../DataBinding) - How data flows between server and UI
+- [Adding Editable Forms](../Editor) - Auto-generated forms from records
+- [Observables](../Observables) - Reactive views that update when data changes

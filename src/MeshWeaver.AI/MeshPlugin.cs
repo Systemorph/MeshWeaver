@@ -27,9 +27,9 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
         => ops.Search(query, basePath);
 
-    [Description("Creates a new node in the mesh.")]
+    [Description("Creates a new node in the mesh. ALWAYS set the 'name' property to a human-readable display name.")]
     public Task<string> Create(
-        [Description("JSON MeshNode object to create")] string node)
+        [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
         => ops.Create(node);
 
     [Description("Updates existing nodes in the mesh. Pass a JSON array of MeshNode objects.")]

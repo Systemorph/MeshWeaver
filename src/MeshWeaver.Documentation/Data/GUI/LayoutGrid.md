@@ -187,6 +187,6 @@ Configure individual items via the skin function parameter:
 
 # See Also
 
-- [Container Control](Doc/GUI/ContainerControl) - Stack, Tabs, Toolbar
-- [DataGrid](Doc/GUI/DataGrid) - Tabular data display
+- [Container Control](../ContainerControl) - Stack, Tabs, Toolbar
+- [DataGrid](../DataGrid) - Tabular data display
 

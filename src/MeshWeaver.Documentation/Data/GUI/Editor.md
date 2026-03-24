@@ -158,7 +158,7 @@ Each property becomes a named area in the `EditorControl`. The reactive variant 
 
 # See Also
 
-- [Property Attributes](Doc/GUI/Attributes) - All supported attributes in detail
-- [Data Binding](Doc/GUI/DataBinding) - How form data flows
-- [Stack Control](Doc/GUI/ContainerControl/Stack) - Container for layouts
-- [DataGrid Control](Doc/GUI/DataGrid) - Tabular data display
+- [Property Attributes](../Attributes) - All supported attributes in detail
+- [Data Binding](../DataBinding) - How form data flows
+- [Stack Control](../ContainerControl/Stack) - Container for layouts
+- [DataGrid Control](../DataGrid) - Tabular data display

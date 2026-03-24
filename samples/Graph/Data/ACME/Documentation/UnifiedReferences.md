@@ -11,7 +11,7 @@ Tags:
   - "References"
 ---
 
-This document demonstrates unified references in the Software sample organization. For the complete Unified Path syntax reference, see [Unified Path](Doc/DataMesh/UnifiedPath).
+This document demonstrates unified references in the Software sample organization. For the complete Unified Path syntax reference, see [Unified Path](/Doc/DataMesh/UnifiedPath).
 
 It covers namespace hierarchy, data queries, content paths, and layout areas specific to the Software sample.
 
@@ -81,7 +81,7 @@ ACME/                                # Organization
 
 # Query Syntax
 
-MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](Doc/DataMesh/QuerySyntax).
+MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](/Doc/DataMesh/QuerySyntax).
 
 ## Software Query Examples
 
@@ -115,7 +115,7 @@ nodeType:ACME/Project/Todo
 
 # Data References
 
-See [Data Prefix](Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
+See [Data Prefix](/Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
 ## Display All Tasks in CustomerOnboarding
 
@@ -207,7 +207,7 @@ Defined in `ACME/Project/Todo/_Source/Category.cs`:
 
 # Layout Area References
 
-Layout areas are defined in `ProjectViews.cs` and available for all projects. See [Area Prefix](Doc/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
+Layout areas are defined in `ProjectViews.cs` and available for all projects. See [Area Prefix](/Doc/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
 
 ## TodaysFocus - Urgent Tasks
 

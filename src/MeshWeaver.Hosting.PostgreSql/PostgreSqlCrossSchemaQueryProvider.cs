@@ -96,6 +96,20 @@ public class PostgreSqlCrossSchemaQueryProvider : ICrossSchemaQueryProvider
         var filterClause = whereClause.StartsWith("WHERE ")
             ? whereClause[6..] : whereClause;
 
+        // Add scope clause (e.g., namespace:'' → n.namespace = '' for root-level nodes)
+        if (query.Path != null)
+        {
+            var (scopeClause, scopeParams) = _sqlGenerator.GenerateScopeClause(query.Path, query.Scope);
+            if (!string.IsNullOrEmpty(scopeClause))
+            {
+                if (!string.IsNullOrEmpty(filterClause))
+                    filterClause += " AND ";
+                filterClause += scopeClause;
+                foreach (var (k, v) in scopeParams)
+                    parameters[k] = v;
+            }
+        }
+
         // Inline parameter values into the SQL string
         foreach (var (name, value) in parameters.OrderByDescending(p => p.Key.Length))
         {
