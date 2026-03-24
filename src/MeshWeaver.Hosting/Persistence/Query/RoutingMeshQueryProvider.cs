@@ -109,7 +109,7 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             && parsed.Source == QuerySource.Default;
         if (useCrossSchema)
         {
-            var schemas = await _crossSchemaProvider.GetSearchableSchemasAsync(ct);
+            var schemas = await _crossSchemaProvider!.GetSearchableSchemasAsync(ct);
             var crossParsed = _parser.Parse(fanOutQuery);
             var userId = GetEffectiveUserId();
 

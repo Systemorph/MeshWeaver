@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace MeshWeaver.Messaging;
 
 public class AccessService
@@ -5,10 +7,22 @@ public class AccessService
     private readonly AsyncLocal<AccessContext?> context = new();
 
     /// <summary>
-    /// Persistent user context for the circuit/session.
-    /// This persists across SignalR calls within the same Blazor circuit.
+    /// Per-circuit user context, scoped via AsyncLocal.
+    /// Set by CircuitAccessHandler at the start of each Blazor inbound activity
+    /// and cleared in its finally block. This ensures each circuit's events
+    /// see the correct user without cross-circuit contamination.
+    /// In Orleans grains, this is always null (identity flows per-message only).
     /// </summary>
-    private AccessContext? circuitContext;
+    private readonly AsyncLocal<AccessContext?> circuitContext = new();
+
+    private readonly ILogger? _logger;
+
+    public AccessService() { }
+
+    public AccessService(ILoggerFactory? loggerFactory)
+    {
+        _logger = loggerFactory?.CreateLogger("MeshWeaver.AccessContext");
+    }
 
     /// <summary>
     /// Gets the current request-scoped access context (AsyncLocal only).
@@ -19,11 +33,11 @@ public class AccessService
     public AccessContext? Context => context.Value;
 
     /// <summary>
-    /// Gets the persistent circuit-level context.
-    /// In Blazor Server, this persists across SignalR calls within the same circuit.
+    /// Gets the circuit-level context (AsyncLocal, set per inbound activity by CircuitAccessHandler).
+    /// In Blazor Server, this is restored at the start of each inbound activity by the CircuitHandler.
     /// In Orleans grains, this is always null (identity flows per-message only).
     /// </summary>
-    public AccessContext? CircuitContext => circuitContext;
+    public AccessContext? CircuitContext => circuitContext.Value;
 
     /// <summary>
     /// Sets the request-specific context (AsyncLocal).
@@ -31,17 +45,23 @@ public class AccessService
     /// </summary>
     public void SetContext(AccessContext? accessContext)
     {
+        var prev = context.Value?.ObjectId;
         context.Value = accessContext;
+        if (prev != accessContext?.ObjectId)
+            _logger?.LogDebug("SetContext: {Previous} -> {Current}", prev ?? "(null)", accessContext?.ObjectId ?? "(null)");
     }
 
     /// <summary>
-    /// Sets the persistent circuit-level context.
-    /// This should be called during initial authentication to persist
-    /// the user context across SignalR calls within the circuit.
+    /// Sets the circuit-level context (AsyncLocal).
+    /// Called by CircuitAccessHandler to restore per-circuit identity
+    /// at the start of each Blazor inbound activity.
     /// </summary>
     public void SetCircuitContext(AccessContext? accessContext)
     {
-        circuitContext = accessContext;
+        var prev = circuitContext.Value?.ObjectId;
+        circuitContext.Value = accessContext;
+        if (prev != accessContext?.ObjectId)
+            _logger?.LogDebug("SetCircuitContext: {Previous} -> {Current}", prev ?? "(null)", accessContext?.ObjectId ?? "(null)");
     }
 
     /// <summary>

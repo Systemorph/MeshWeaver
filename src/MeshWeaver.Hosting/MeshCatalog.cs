@@ -159,7 +159,7 @@ internal sealed class MeshCatalog(
         // 8. Update cache with enriched transient node
         cache.Set(savedNode.Path, savedNode, cacheOptions);
 
-        logger.LogInformation("Created transient node at path {Path}", savedNode.Path);
+        logger?.LogInformation("Created transient node at path {Path}", savedNode.Path);
 
         return savedNode;
     }
@@ -195,7 +195,7 @@ internal sealed class MeshCatalog(
         // Update cache with enriched node
         cache.Set(confirmedNode.Path, confirmedNode, cacheOptions);
 
-        logger.LogInformation("Confirmed node at path {Path}", confirmedNode.Path);
+        logger?.LogInformation("Confirmed node at path {Path}", confirmedNode.Path);
 
         return confirmedNode;
     }
@@ -213,7 +213,7 @@ internal sealed class MeshCatalog(
         }
         cache.Remove(path);
         await Persistence.DeleteNodeAsync(path, recursive, ct);
-        logger.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
+        logger?.LogInformation("Deleted node at path {Path}, recursive: {Recursive}", path, recursive);
     }
 
     private static bool ValidatePath(MeshNode node)
@@ -306,12 +306,12 @@ internal sealed class MeshCatalog(
             var remainder = segments.Length > 1
                 ? string.Join("/", segments.Skip(1))
                 : null;
-            logger.LogDebug("ResolvePathAsync: cache fallback found node at path={Path} for input={Input}",
+            logger?.LogDebug("ResolvePathAsync: cache fallback found node at path={Path} for input={Input}",
                 cachedNode.Path, path);
             return new AddressResolution(cachedNode.Path, remainder);
         }
 
-        logger.LogDebug("ResolvePathAsync: no match found for path={Path}", path);
+        logger?.LogDebug("ResolvePathAsync: no match found for path={Path}", path);
         return null;
     }
 
@@ -324,7 +324,7 @@ internal sealed class MeshCatalog(
         var (prefixMatch, prefixSegments) = await Persistence.FindBestPrefixMatchAsync(fullPath);
         if (prefixMatch != null)
         {
-            logger.LogDebug("FindBestPersistenceMatchAsync: prefix match found node at path={Path}", prefixMatch.Path);
+            logger?.LogDebug("FindBestPersistenceMatchAsync: prefix match found node at path={Path}", prefixMatch.Path);
             return (prefixMatch, prefixSegments);
         }
 
@@ -337,7 +337,7 @@ internal sealed class MeshCatalog(
             var node = await Persistence.GetNodeAsync(testPath);
             if (node != null)
             {
-                logger.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", node.Path);
+                logger?.LogDebug("FindBestPersistenceMatchAsync: found node at path={Path}", node.Path);
                 return (node, depth);
             }
         }
@@ -350,7 +350,7 @@ internal sealed class MeshCatalog(
             await using var enumerator = Persistence.GetChildrenAsync(testPath).GetAsyncEnumerator();
             if (await enumerator.MoveNextAsync())
             {
-                logger.LogDebug("FindBestPersistenceMatchAsync: found virtual namespace at path={Path}", testPath);
+                logger?.LogDebug("FindBestPersistenceMatchAsync: found virtual namespace at path={Path}", testPath);
                 var ns = depth > 1 ? string.Join("/", segments.Take(depth - 1)) : null;
                 var virtualNode = new MeshNode(segments[depth - 1], ns)
                 {
@@ -372,7 +372,7 @@ internal sealed class MeshCatalog(
                 string.Equals(n.Path, testPath, StringComparison.OrdinalIgnoreCase));
             if (node != null)
             {
-                logger.LogDebug("FindBestPersistenceMatchAsync: found static node at path={Path}", testPath);
+                logger?.LogDebug("FindBestPersistenceMatchAsync: found static node at path={Path}", testPath);
                 return (node, depth);
             }
         }

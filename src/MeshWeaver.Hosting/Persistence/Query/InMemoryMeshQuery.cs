@@ -45,8 +45,9 @@ internal class InMemoryMeshQuery(
         if (!string.IsNullOrEmpty(request.UserId))
             return request.UserId;
 
-        // Get from access context, defaulting to Anonymous for unauthenticated users
-        var userId = accessService?.Context?.ObjectId;
+        // Get from access context, falling back to circuit context
+        var userId = accessService?.Context?.ObjectId
+                     ?? accessService?.CircuitContext?.ObjectId;
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
