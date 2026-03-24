@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text.Json;
 using FluentAssertions;
 using MeshWeaver.AI;
@@ -122,6 +123,41 @@ public class ToolStatusFormatterTest
     {
         var call = MakeCall("AddComment", new() { ["selectedText"] = "quarterly results" });
         ToolStatusFormatter.Format(call).Should().Be("Adding comment on \"quarterly results\"...");
+    }
+
+    // --- Reference link conversion tests ---
+
+    [Fact]
+    public void ConvertReferences_InlinePathBecomesLink()
+    {
+        var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)
+            .GetMethod("ConvertReferencesToLinks", BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        var result = (string)method!.Invoke(null, ["Check out @User/rbuergi/agents-comparison for details"])!;
+        // Should produce markdown link with @prefix in href for LinkUrlCleanupExtension to resolve
+        result.Should().Contain("[`@User/rbuergi/agents-comparison`](@User/rbuergi/agents-comparison)");
+    }
+
+    [Fact]
+    public void ConvertReferences_AlreadyLinkedSkipped()
+    {
+        var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)
+            .GetMethod("ConvertReferencesToLinks", BindingFlags.NonPublic | BindingFlags.Static);
+
+        var result = (string)method!.Invoke(null, ["Already linked [@Doc/Foo](/Doc/Foo) here"])!;
+        result.Should().NotContain("[[");
+    }
+
+    [Fact]
+    public void ConvertReferences_AbsolutePathPreserved()
+    {
+        var method = typeof(MeshWeaver.AI.ThreadMessageLayoutAreas)
+            .GetMethod("ConvertReferencesToLinks", BindingFlags.NonPublic | BindingFlags.Static);
+
+        // @/path is absolute — LinkUrlCleanupExtension will strip @ and see /path = absolute
+        var result = (string)method!.Invoke(null, ["See @/User/rbuergi/doc for info"])!;
+        result.Should().Contain("@/User/rbuergi/doc");
     }
 
     private static FunctionCallContent MakeCall(string name, Dictionary<string, object?>? args)

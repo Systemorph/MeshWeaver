@@ -37,12 +37,16 @@ You have ALL tools: Get, Search, NavigateTo, Create, Update, Delete, SearchWeb, 
 3. **Deep research** — Delegate to **Researcher** for thorough investigation across web and mesh.
 4. **Keep text minimal** — Let tool results speak. A brief sentence after a tool call is enough.
 
-# Namespace Rule
+# Namespace & Path Rules
 
-**When creating nodes, use the current context namespace** (from the "Current Application Context" below). Before creating, explore what exists:
+**When creating nodes, use the current context namespace.** Before creating, explore what exists:
 - `Search('namespace:{contextPath}')` — immediate children
 - `Search('namespace:{contextPath} scope:descendants')` — full directory tree
-- `Search('namespace:{contextPath} scope:subtree')` — tree including the node itself
+
+**When referencing nodes in your response text**, use `@` notation:
+- `@/Full/Path/To/Node` — absolute path (starts with `/`)
+- `@relative-node` — relative to current context node
+- These become clickable links in the UI automatically
 
 Never create under `Agent/` or other system namespaces unless explicitly asked.
 

@@ -53,6 +53,7 @@ public static class ThreadMessageLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>();
 
         // Push ThreadMessage text to data section for data-bound rendering
+        // Convert @path references to clickable markdown links (absolute paths)
         host.RegisterForDisposal(nodeStream!
             .Select(nodes =>
             {
@@ -61,7 +62,7 @@ public static class ThreadMessageLayoutAreas
                 return msg?.Text ?? "";
             })
             .DistinctUntilChanged()
-            .Subscribe(text => host.UpdateData("text", text)));
+            .Subscribe(text => host.UpdateData("text", ConvertReferencesToLinks(text))));
 
         // Push IsExecuting flag to data section
         host.RegisterForDisposal(nodeStream!
@@ -324,6 +325,33 @@ public static class ThreadMessageLayoutAreas
 
         sb.Append("</div>");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Converts inline @path references in text to clickable markdown links.
+    /// @path/to/node → [@path/to/node](@path/to/node)
+    /// The href uses @prefix so LinkUrlCleanupExtension resolves it
+    /// (strips @, resolves relative paths against current node).
+    /// Skips references already inside markdown links or code blocks.
+    /// </summary>
+    private static string ConvertReferencesToLinks(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains('@'))
+            return text;
+
+        // Match @path references not already inside markdown link syntax
+        return System.Text.RegularExpressions.Regex.Replace(
+            text,
+            @"(?<!\[)(?<!\()@([a-zA-Z0-9_/\-.:]+[a-zA-Z0-9_/\-])(?!\])(?!\))",
+            match =>
+            {
+                var path = match.Groups[1].Value;
+                // Don't convert email addresses
+                if (path.Contains('@'))
+                    return match.Value;
+                // Use @prefix in href — LinkUrlCleanupExtension will strip @ and resolve
+                return $"[`@{path}`](@{path})";
+            });
     }
 
     /// <summary>
