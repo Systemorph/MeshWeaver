@@ -214,7 +214,7 @@ public class PostgreSqlSqlGenerator
     {
         var parameters = new Dictionary<string, object>();
 
-        if (string.IsNullOrEmpty(basePath))
+        if (basePath == null)
             return ("", parameters);
 
         var normalizedPath = basePath.Trim('/');

@@ -655,11 +655,11 @@ public static class MeshNodeLayoutAreas
                 var nodeTypePath = node.Path;
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
 
-                // When DefaultNamespace is empty, instances live at root paths (e.g., Organization "PartnerRe").
-                // Use nodeType: to search across all schemas instead of namespace: which only finds children.
-                var hiddenQuery = nodeTypeDefinition?.DefaultNamespace == ""
-                    ? $"nodeType:{nodeTypePath}"
-                    : $"namespace:{nodeTypePath}";
+                // Build query: always restrict to this nodeType.
+                // If DefaultNamespace is set, scope to that namespace; otherwise scope to current path descendants.
+                var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
+                    ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
+                    : $"nodeType:{nodeTypePath} namespace:{nodeTypePath} scope:descendants";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 
@@ -681,8 +681,8 @@ public static class MeshNodeLayoutAreas
                     .WithCreateHref(createHref);
             }
 
-            // Instance node catalog - excludes satellite and search-excluded types
-            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} is:main context:search";
+            // Instance node catalog
+            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath}";
             var instanceNs = node?.Namespace ?? hubPath;
 
             return Controls.MeshSearch
