@@ -78,7 +78,8 @@ public partial class MarkdownFileParser : IFileFormatParser
         }
 
         // Parse markdown and create MarkdownContent with pre-rendered HTML and code submissions
-        var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath) with
+        var fullNodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+        var markdownDocument = MarkdownContent.Parse(markdownContent, relativePath, fullNodePath) with
         {
             Authors = frontMatter?.Authors,
             Tags = frontMatter?.Tags,

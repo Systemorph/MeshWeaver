@@ -7,6 +7,21 @@ Icon: /static/DocContent/DataMesh/UnifiedPath/icon.svg
 
 Unified Path allows you to **reference** and **embed** content from anywhere in your MeshWeaver application using a simple `@` notation.
 
+# Path Resolution
+
+Paths can be **relative** or **absolute**:
+
+| Style | Syntax | Example (from `Doc/DataMesh/CRUD`) |
+|-------|--------|------------------------------------|
+| **Child** | `ChildName` | `SubPage` → `Doc/DataMesh/CRUD/SubPage` |
+| **Sibling** | `../SiblingName` | `../QuerySyntax` → `Doc/DataMesh/QuerySyntax` |
+| **Parent's sibling** | `../../Name` | `../../GUI/Editor` → `Doc/GUI/Editor` |
+| **Absolute** | `/Full/Path` | `/Doc/GUI/Editor` → `Doc/GUI/Editor` |
+
+Relative paths resolve from the **current node** (treating it as a container). Use `../` to navigate up. Absolute paths start with `/`.
+
+This applies to both `@`/`@@` references and standard markdown links `[text](path)`.
+
 # Pattern
 
 ```
@@ -60,8 +75,9 @@ These prefixes have special meaning and map to specific layout areas:
 When you use `@path` or `@@path` **without a prefix**, it refers to a **layout area** of the target node:
 
 ```
-@Doc/DataMesh/Thumbnail         --> navigates to node's Thumbnail area
-@@Doc/DataMesh/Thumbnail        --> embeds node's Thumbnail area inline
+@../Thumbnail                   --> navigates to sibling node's Thumbnail area
+@@Thumbnail                     --> embeds child's Thumbnail area inline
+@../../DataMesh/Thumbnail       --> navigate up and across to another node
 ```
 
 ## With Prefix = Specific Resource Type
@@ -95,96 +111,96 @@ This allows flexible naming of content collections to match your project structu
 
 ## 1. Inline Image (content:)
 
-**Syntax:**
+**Syntax** (relative to this node):
 ```
-@@Doc/DataMesh/UnifiedPath/content:logo.svg
+@@content:logo.svg
 ```
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/content:logo.svg
+@@content:logo.svg
 
 ---
 
 ## 2. Embedded Markdown (content:)
 
-**Syntax:**
+**Syntax** (relative to this node):
 ```
-@@Doc/DataMesh/UnifiedPath/content:sample.md
+@@content:sample.md
 ```
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/content:sample.md
+@@content:sample.md
 
 ---
 
 ## 3. Layout Area (Thumbnail)
 
-**Syntax:**
+**Syntax** (relative child):
 ```
-@@Doc/DataMesh/UnifiedPath/Thumbnail
+@@Thumbnail
 ```
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/Thumbnail
+@@Thumbnail
 
 ---
 
 ## 4. Data Entity (Self)
 
-**Syntax:**
+**Syntax** (own data):
 ```
-@@Doc/DataMesh/UnifiedPath/data:
+@@data:
 ```
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/data:
+@@data:
 
 ---
 
 ## 5. Schema (Self)
 
-**Syntax:**
+**Syntax** (own schema):
 ```
-@@Doc/DataMesh/UnifiedPath/schema:
+@@schema:
 ```
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/schema:
+@@schema:
 
 ---
 
 ## 6. Hyperlinks
 
-**Syntax:**
+**Syntax** (sibling and child references):
 ```
-@Doc/DataMesh/QuerySyntax
-@Doc/DataMesh/UnifiedPath/Syntax
+@../QuerySyntax
+@Syntax
 ```
 
 **Result:**
 
-@Doc/DataMesh/QuerySyntax
+@../QuerySyntax
 
-@Doc/DataMesh/UnifiedPath/Syntax
+@Syntax
 
 ---
 
 # Detailed Documentation
 
-@Doc/DataMesh/UnifiedPath/Syntax
+@Syntax
 
-@Doc/DataMesh/UnifiedPath/ContentPrefix
+@ContentPrefix
 
-@Doc/DataMesh/UnifiedPath/DataPrefix
+@DataPrefix
 
-@Doc/DataMesh/UnifiedPath/AreaPrefix
+@AreaPrefix
 
-@Doc/DataMesh/UnifiedPath/SchemaPrefix
+@SchemaPrefix
 
 ---
 

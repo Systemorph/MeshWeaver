@@ -66,7 +66,7 @@ Embed an SVG logo from the "content" collection:
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/content:logo.svg
+@@../content:logo.svg
 
 ## Example 2: Custom Collection Name
 
@@ -87,7 +87,7 @@ Use single `@` to create a navigation link:
 
 **Result:**
 
-@Doc/DataMesh/UnifiedPath/content:sample.md
+@../content:sample.md
 
 # Notes
 

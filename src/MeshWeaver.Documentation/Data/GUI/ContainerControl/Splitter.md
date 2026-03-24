@@ -191,7 +191,7 @@ Controls.Splitter
 
 # See Also
 
-- [Container Control](Doc/GUI/ContainerControl) - Overview of all containers
-- [Stack Control](Doc/GUI/ContainerControl/Stack) - Simple vertical/horizontal layouts
-- [Layout Grid](Doc/GUI/LayoutGrid) - Responsive grid layouts
+- [Container Control](../../ContainerControl) - Overview of all containers
+- [Stack Control](../Stack) - Simple vertical/horizontal layouts
+- [Layout Grid](../../LayoutGrid) - Responsive grid layouts
 

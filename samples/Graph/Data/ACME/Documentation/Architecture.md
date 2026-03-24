@@ -35,7 +35,7 @@ The Software sample demonstrates a modular approach where the Todo functionality
 
 # The MeshNode and Namespace Hierarchy
 
-MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](Doc/Architecture/MeshGraph).
+MeshWeaver organizes data using MeshNodes in a hierarchical namespace. For the complete architecture details, see [Mesh Graph Architecture](/Doc/Architecture/MeshGraph).
 
 ## Software Namespace Hierarchy
 
@@ -86,7 +86,7 @@ For example, the Software organization uses:
 
 ## NodeType Configuration
 
-NodeTypes define the behavior for instances. See [Mesh Graph](Doc/Architecture/MeshGraph) for NodeType configuration patterns.
+NodeTypes define the behavior for instances. See [Mesh Graph](/Doc/Architecture/MeshGraph) for NodeType configuration patterns.
 
 The Todo NodeType (`ACME/Project/Todo`) is configured with:
 
@@ -160,7 +160,7 @@ This reactive architecture ensures that all connected users see changes in real-
 
 # Message-based Communication
 
-At the core of MeshWeaver's architecture lies a fundamental principle: **every interaction is a message**. For details on message-based communication patterns, see [Message-Based Communication](Doc/Architecture/MessageBasedCommunication).
+At the core of MeshWeaver's architecture lies a fundamental principle: **every interaction is a message**. For details on message-based communication patterns, see [Message-Based Communication](/Doc/Architecture/MessageBasedCommunication).
 
 In the Software sample, messages flow through the system as follows:
 

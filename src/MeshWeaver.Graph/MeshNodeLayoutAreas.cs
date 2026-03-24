@@ -653,10 +653,13 @@ public static class MeshNodeLayoutAreas
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var hiddenQuery = $"namespace:{nodeTypePath}";
-
-                // Build create href pre-populated with type and namespace from NodeTypeDefinition
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
+
+                // When DefaultNamespace is empty, instances live at root paths (e.g., Organization "PartnerRe").
+                // Use nodeType: to search across all schemas instead of namespace: which only finds children.
+                var hiddenQuery = nodeTypeDefinition?.DefaultNamespace == ""
+                    ? $"nodeType:{nodeTypePath}"
+                    : $"namespace:{nodeTypePath}";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 

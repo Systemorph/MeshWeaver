@@ -11,7 +11,7 @@ MeshWeaver's architecture is built on message-based communication through **Mess
 
 MessageHubs can be allocated across multiple cloud environments (Azure, AWS, on-premise) and communicate via a central message bus. Each hub processes messages single-threaded through a queue, ensuring predictable execution order.
 
-@@Doc/Architecture/MessageBasedCommunication/content:message-flow.svg
+@@content:message-flow.svg
 
 # How It Works
 

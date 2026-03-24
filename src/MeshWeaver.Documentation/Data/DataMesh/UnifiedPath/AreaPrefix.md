@@ -37,7 +37,7 @@ Embed the thumbnail card of this documentation:
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/Thumbnail
+@@../Thumbnail
 
 # Example: Catalog Area
 
@@ -50,7 +50,7 @@ Embed the catalog (child nodes grid) of a documentation section:
 
 **Result:**
 
-@@Doc/DataMesh/Search
+@@../../Search
 
 # Hyperlinks to Areas
 
@@ -63,7 +63,7 @@ Single `@` creates a navigation link:
 
 **Result:**
 
-@Doc/Architecture/Overview
+@../../../Architecture/Overview
 
 # Custom Areas
 

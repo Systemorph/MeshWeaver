@@ -94,5 +94,5 @@ The `ToolbarSkin` defines:
 
 # See Also
 
-- [Container Control](Doc/GUI/ContainerControl) - Overview of all containers
-- [Stack Control](Doc/GUI/ContainerControl/Stack) - General-purpose layout container
+- [Container Control](../../ContainerControl) - Overview of all containers
+- [Stack Control](../Stack) - General-purpose layout container

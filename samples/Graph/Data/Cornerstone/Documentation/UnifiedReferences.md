@@ -11,7 +11,7 @@ Tags:
   - "References"
 ---
 
-This document demonstrates unified references in the Cornerstone sample. For the complete Unified Path syntax reference, see [Unified Path](Doc/DataMesh/UnifiedPath).
+This document demonstrates unified references in the Cornerstone sample. For the complete Unified Path syntax reference, see [Unified Path](/Doc/DataMesh/UnifiedPath).
 
 It covers namespace hierarchy, data queries, content paths, and views specific to the Cornerstone reinsurance use case.
 
@@ -58,7 +58,7 @@ For the full namespace hierarchy, see [Cornerstone Architecture](Cornerstone/Doc
 
 # Query Syntax
 
-MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](Doc/DataMesh/QuerySyntax).
+MeshWeaver uses a GitHub-style query syntax for searching nodes. For complete query syntax reference, see [Query Syntax](/Doc/DataMesh/QuerySyntax).
 
 ## Cornerstone Query Examples
 
@@ -89,7 +89,7 @@ nodeType:Cornerstone/Insured
 
 # Data References
 
-See [Data Prefix](Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
+See [Data Prefix](/Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
 ## Display Insured
 
@@ -209,7 +209,7 @@ Content collections allow file references:
 
 # View References
 
-Views are defined in `PricingViews.cs` and available for all pricings. See [Area Prefix](Doc/DataMesh/UnifiedPath/AreaPrefix) for view syntax.
+Views are defined in `PricingViews.cs` and available for all pricings. See [Area Prefix](/Doc/DataMesh/UnifiedPath/AreaPrefix) for view syntax.
 
 ## Overview - Pricing Summary
 

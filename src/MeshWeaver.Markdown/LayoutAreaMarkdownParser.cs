@@ -7,9 +7,11 @@ namespace MeshWeaver.Markdown;
 
 public class LayoutAreaMarkdownParser : BlockParser
 {
+    private readonly string? _currentNodePath;
 
-    public LayoutAreaMarkdownParser()
+    public LayoutAreaMarkdownParser(string? currentNodePath = null)
     {
+        _currentNodePath = currentNodePath;
         OpeningCharacters = ['@'];
     }
 
@@ -57,10 +59,11 @@ public class LayoutAreaMarkdownParser : BlockParser
             if (string.IsNullOrWhiteSpace(token))
                 return BlockState.None;
         }
-        else if (char.IsLetterOrDigit(nextChar) || nextChar == '/')
+        else if (char.IsLetterOrDigit(nextChar) || nextChar == '/' || nextChar == '.')
         {
             // Direct syntax without parentheses: @addressType/addressId/areaName
             // Format: addressType/addressId[/keyword[/remainingPath]]
+            // Supports relative paths (../sibling, child) and absolute (/Doc/Path)
             // Defaults to area reference if no keyword
             token = ReadDirectPath(ref line);
             if (string.IsNullOrWhiteSpace(token))
@@ -70,6 +73,9 @@ public class LayoutAreaMarkdownParser : BlockParser
         {
             return BlockState.None;
         }
+
+        // Resolve relative paths against current node
+        token = ResolveToken(token);
 
         // Try to parse as unified content reference (addressType/addressId/keyword/...)
         var block = CreateBlockFromToken(token, isInline);
@@ -84,6 +90,18 @@ public class LayoutAreaMarkdownParser : BlockParser
         var c = line.PeekChar();
         while (IgnoreChars.Contains(c))
             c = line.NextChar();
+    }
+
+    /// <summary>
+    /// Resolves a token path: strips leading '/' for absolute paths,
+    /// resolves relative paths against the current node.
+    /// </summary>
+    private string ResolveToken(string token)
+    {
+        if (token.StartsWith('/'))
+            return token.TrimStart('/');
+
+        return PathUtils.ResolveRelativePath(token, _currentNodePath);
     }
 
     private static readonly HashSet<char> IgnoreChars = [' ', '\t'];

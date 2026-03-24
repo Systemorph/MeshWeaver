@@ -393,7 +393,7 @@ sequenceDiagram
 
 # See Also
 
-- [Query Syntax](Doc/DataMesh/QuerySyntax) - Search and filter nodes
-- [Unified Path](Doc/DataMesh/UnifiedPath) - Path-based data addressing
-- [Data Binding](Doc/GUI/DataBinding) - Connect UI controls to data
-- [Editor Control](Doc/GUI/Editor) - Generate forms from records
+- [Query Syntax](../QuerySyntax) - Search and filter nodes
+- [Unified Path](../UnifiedPath) - Path-based data addressing
+- [Data Binding](../../GUI/DataBinding) - Connect UI controls to data
+- [Editor Control](../../GUI/Editor) - Generate forms from records

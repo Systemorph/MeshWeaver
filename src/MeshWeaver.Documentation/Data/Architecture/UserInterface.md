@@ -11,7 +11,7 @@ MeshWeaver generates UI where the data lives. Instead of transferring large data
 
 Consider displaying a million-row dataset as a 10x10 summary table. Rather than transferring all rows to create a 10x10 grid, we want to transfer only 100 numbers:
 
-@@Doc/Architecture/UserInterface/content:data-compression.svg
+@@content:data-compression.svg
 
 # Controls Language
 
@@ -89,7 +89,7 @@ This minimizes bandwidth for real-time updates.
 
 # Available Controls
 
-MeshWeaver provides a rich control library. See the [complete controls reference](Doc/Architecture/UserInterface/AvailableControls) for details.
+MeshWeaver provides a rich control library. See the [complete controls reference](AvailableControls) for details.
 
 **Common Controls:**
 

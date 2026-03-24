@@ -13,14 +13,14 @@ MeshWeaver provides a control-based GUI system that renders reactive user interf
 
 | I want to... | Go here |
 |--------------|---------|
-| Arrange controls on screen | [Container Controls](Doc/GUI/ContainerControl) - Stack, Tabs, Toolbar |
-| Build responsive layouts | [Layout Grid](Doc/GUI/LayoutGrid) - Adapt to phones, tablets, desktops |
-| Display data in a table | [DataGrid](Doc/GUI/DataGrid) - Sortable columns, pagination |
-| Create an editable form | [Editor](Doc/GUI/Editor) - Auto-generate forms from records |
-| Make content update automatically | [Static vs Dynamic Views](Doc/GUI/Observables) - Observables, reactivity |
-| Control how data flows | [Data Binding](Doc/GUI/DataBinding) - DataContext, UpdatePointer |
-| Customize field behavior | [Attributes](Doc/GUI/Attributes) - Validation, display options |
-| Build complex interactive dialogs | [Reactive Dialogs](Doc/GUI/ReactiveDialogs) - Subjects, streaming computation |
+| Arrange controls on screen | [Container Controls](ContainerControl) - Stack, Tabs, Toolbar |
+| Build responsive layouts | [Layout Grid](LayoutGrid) - Adapt to phones, tablets, desktops |
+| Display data in a table | [DataGrid](DataGrid) - Sortable columns, pagination |
+| Create an editable form | [Editor](Editor) - Auto-generate forms from records |
+| Make content update automatically | [Static vs Dynamic Views](Observables) - Observables, reactivity |
+| Control how data flows | [Data Binding](DataBinding) - DataContext, UpdatePointer |
+| Customize field behavior | [Attributes](Attributes) - Validation, display options |
+| Build complex interactive dialogs | [Reactive Dialogs](ReactiveDialogs) - Subjects, streaming computation |
 
 ---
 
