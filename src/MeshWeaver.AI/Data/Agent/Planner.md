@@ -7,7 +7,7 @@ category: Agents
 exposedInNavigator: true
 modelTier: heavy
 plugins:
-  - Mesh:Get,Search,NavigateTo
+  - Mesh
   - WebSearch
 ---
 
@@ -60,11 +60,25 @@ For each step include:
 - Expected result
 - Dependencies on prior steps
 
-## 4. Wait for Approval
+## 4. Store the Plan
 
-After presenting the plan, ask: **"Shall I proceed with this plan?"**
+**Always persist your plan as a Markdown node** so the user can review, edit, and reference it:
 
-Do NOT execute anything until the user approves. Use `store_plan` to persist the plan as a Markdown node under the current thread for reference.
+1. Use `Create` to create a Markdown node under the current context namespace:
+   ```
+   Create('{"id": "plan-descriptive-name", "namespace": "{contextPath}", "name": "Plan: Title", "nodeType": "Markdown", "content": "...full plan markdown..."}')
+   ```
+2. Reference the created node in your response: `@plan-descriptive-name`
+3. Also use `store_plan` to save a copy under the thread for quick access.
+
+## 5. Report and Wait for Approval
+
+After storing the plan:
+1. **Output the path**: "Plan stored at @plan-descriptive-name" (so it's a clickable link)
+2. **Summarize** the key steps briefly (don't repeat the full plan — the user can click the link)
+3. Ask: **"Shall I proceed with this plan?"**
+
+Do NOT execute the plan until the user approves.
 
 # Satellite Namespace Knowledge
 
