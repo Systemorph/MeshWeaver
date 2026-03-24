@@ -22,9 +22,8 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
 
         if (userContext is not null)
         {
-            // If the circuit already has a context for this same user, reuse it
-            // (avoids mesh lookup on every request — only needed once per circuit).
-            var existing = userService.Context ?? userService.CircuitContext;
+            // If this request already has a resolved context (same email), reuse it.
+            var existing = userService.Context;
             if (existing is not null && existing.Email == userContext.Email)
             {
                 userService.SetContext(existing);
@@ -32,8 +31,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 return;
             }
 
-            // First request for this user in this circuit — look up the mesh User node
-            // to resolve ObjectId to the user's node ID (username) and get the display name.
+            // Resolve ObjectId from mesh User node (email -> username).
             // Without this, ObjectId stays as the email (from claims), causing permission
             // lookups to fail since AccessAssignment nodes use the username, not the email.
             if (!string.IsNullOrEmpty(userContext.Email))
@@ -41,32 +39,21 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
                 var meshUser = await TryLoadMeshUserAsync(userContext.Email, hub);
                 if (meshUser is not null)
                 {
-                    logger.LogInformation("UserContext resolved: email={Email} → objectId={ObjectId} (node={NodeId})",
-                        userContext.Email, meshUser.Id, meshUser.Path);
                     userContext = userContext with
                     {
                         ObjectId = meshUser.Id,
                         Name = meshUser.Name ?? meshUser.Id
                     };
                 }
-                else
-                {
-                    logger.LogWarning("UserContext: no User node found for email={Email}, ObjectId stays as email",
-                        userContext.Email);
-                }
             }
 
-            logger.LogInformation("UserContext set: ObjectId={ObjectId}, Name={Name}, Email={Email}",
-                userContext.ObjectId, userContext.Name, userContext.Email);
-
+            // Set per-request AsyncLocal only. CircuitAccessHandler handles
+            // per-circuit persistence via CreateInboundActivityHandler.
             userService.SetContext(userContext);
-            userService.SetCircuitContext(userContext);
         }
         else
         {
-            logger.LogDebug("No authenticated user context found, clearing access context");
             userService.SetContext(null);
-            userService.SetCircuitContext(null);
         }
 
         await next(context);

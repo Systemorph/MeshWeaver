@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
@@ -709,5 +710,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
             => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
         public void SetSelectedAgent(string? agentName) { }
+        public ThreadExecutionContext? ExecutionContext => null;
+        public string? LastDelegationPath { get; set; }
+        public Action<string>? UpdateDelegationStatus { get; set; }
     }
 }

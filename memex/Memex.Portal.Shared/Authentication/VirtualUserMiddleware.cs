@@ -62,8 +62,9 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
                     IsVirtual = true,
                     ImpersonatedBy = portalIdentity
                 };
+                // Set per-request context only. CircuitAccessHandler handles
+                // per-circuit persistence via CreateInboundActivityHandler.
                 accessService.SetContext(virtualContext);
-                accessService.SetCircuitContext(virtualContext);
 
                 var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
                 var forwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();

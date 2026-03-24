@@ -488,18 +488,12 @@ public static class DataExtensions
             return request.Processed();
         }
 
-        // Persist the subscriber's identity on the hub so that sub-hubs (e.g., thread streaming)
-        // and async view execution run under the correct user context.
-        var identity = request.Message.Identity ?? request.AccessContext?.ObjectId;
-        if (!string.IsNullOrEmpty(identity))
-        {
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            accessService?.SetCircuitContext(new AccessContext { ObjectId = identity, Name = identity });
-        }
-
+        // Identity flows through message-level AccessContext (stamped by PostPipeline).
+        // No need to set circuitContext on the hub — that would contaminate the shared
+        // AsyncLocal for other operations. Sub-hubs inherit identity from messages.
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
-        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}, identity={Identity}",
-            request.Sender, hub.Address, identity);
+        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
+            request.Sender, hub.Address);
         return request.Processed();
     }
 
