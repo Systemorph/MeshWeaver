@@ -35,7 +35,7 @@ Empty path after `data:` means self-reference - shows available data collections
 
 **Result:**
 
-@@Doc/DataMesh/UnifiedPath/DataPrefix/data:
+@@data:
 
 # Example: Collection Reference
 
@@ -48,7 +48,7 @@ Reference a specific data collection:
 
 **Result:**
 
-@Doc/DataMesh/UnifiedPath/data:
+@../data:
 
 # Rendering
 

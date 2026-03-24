@@ -11,8 +11,8 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 
 | Article | Description |
 |---------|-------------|
-| [Specifying Software](Doc/Architecture/SpecifyingSoftware) | Learn how to write iterative specifications closely aligned with implementation |
-| [From Specification to Implementation](Doc/Architecture/SpecificationToImplementation) | Transform your prototypes into production-ready code |
+| [Specifying Software](SpecifyingSoftware) | Learn how to write iterative specifications closely aligned with implementation |
+| [From Specification to Implementation](SpecificationToImplementation) | Transform your prototypes into production-ready code |
 
 ---
 
@@ -33,7 +33,7 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 
 # Architecture Overview
 
-@@Doc/Architecture/content:platform-overview.svg
+@@content:platform-overview.svg
 
 # Core Concepts
 
@@ -45,7 +45,7 @@ MeshWeaver is a distributed platform for building data-driven applications with 
 - Route messages across the mesh
 - Support horizontal and vertical cloud-native scaling
 
-[Read more: Message-Based Communication](Doc/Architecture/MessageBasedCommunication)
+[Read more: Message-Based Communication](MessageBasedCommunication)
 
 ---
 
@@ -57,7 +57,7 @@ UI is generated **where data lives**:
 - Two-way data binding for real-time updates
 - Click events delivered as messages
 
-[Read more: User Interface Architecture](Doc/Architecture/UserInterface)
+[Read more: User Interface Architecture](UserInterface)
 
 ---
 
@@ -69,7 +69,7 @@ AI agents are **first-class citizens** in the mesh:
 - MeshPlugin for mesh operations
 - MCP integration for external AI services
 
-[Read more: Agentic AI Architecture](Doc/Architecture/AgenticAI)
+[Read more: Agentic AI Architecture](AgenticAI)
 
 ---
 
@@ -81,7 +81,7 @@ AI agents are **first-class citizens** in the mesh:
 - Built-in semantic versioning
 - Dynamic hub configuration
 
-[Read more: Mesh Graph Architecture](Doc/Architecture/MeshGraph)
+[Read more: Mesh Graph Architecture](MeshGraph)
 
 ---
 
@@ -92,7 +92,7 @@ Technology-specific versioning strategies:
 - SQL Server: Temporal tables
 - Manual: Path-based versioning (@path@V1, V2)
 
-[Read more: Data Versioning Strategies](Doc/Architecture/DataVersioning)
+[Read more: Data Versioning Strategies](DataVersioning)
 
 ---
 
@@ -103,7 +103,7 @@ Flexible security through `IDataValidator`:
 - Dimensional: geography, line of business
 - Operation-specific: read vs. write permissions
 
-[Read more: Access Control Architecture](Doc/Architecture/AccessControl)
+[Read more: Access Control Architecture](AccessControl)
 
 ---
 

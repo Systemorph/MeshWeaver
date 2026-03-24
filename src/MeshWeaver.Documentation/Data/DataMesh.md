@@ -253,22 +253,22 @@ Data products are **nodes in a graph** — each with a clear owner, schema, and 
 
 # How MeshWeaver Implements This
 
-- **[Node Types](Doc/DataMesh/NodeTypeConfiguration)** — Define what a data product looks like: its properties, behavior, and layout
-- **[Addressable Paths](Doc/DataMesh/UnifiedPath)** — Every product gets a permanent, unique address in the mesh
-- **[Query Language](Doc/DataMesh/QuerySyntax)** — GitHub-style search syntax to discover and filter across products
-- **[CRUD Operations](Doc/DataMesh/CRUD)** — Type-safe create, read, update, delete for any product
-- **[Data Modeling](Doc/DataMesh/DataModeling)** — C# records as the schema contract between producers and consumers
-- **[Satellite Entities](Doc/DataMesh/SatelliteEntities)** — Comments, approvals, access, and audit trails attach to any node
-- **[Interactive Markdown](Doc/DataMesh/InteractiveMarkdown)** — Embed live data and charts directly inside documentation
-- **[Collaborative Editing](Doc/DataMesh/CollaborativeEditing)** — Real-time co-editing with track changes
-- **[Data Configuration](Doc/DataMesh/DataConfiguration)** — Wire data sources and hub-to-hub synchronization
+- **[Node Types](NodeTypeConfiguration)** — Define what a data product looks like: its properties, behavior, and layout
+- **[Addressable Paths](UnifiedPath)** — Every product gets a permanent, unique address in the mesh
+- **[Query Language](QuerySyntax)** — GitHub-style search syntax to discover and filter across products
+- **[CRUD Operations](CRUD)** — Type-safe create, read, update, delete for any product
+- **[Data Modeling](DataModeling)** — C# records as the schema contract between producers and consumers
+- **[Satellite Entities](SatelliteEntities)** — Comments, approvals, access, and audit trails attach to any node
+- **[Interactive Markdown](InteractiveMarkdown)** — Embed live data and charts directly inside documentation
+- **[Collaborative Editing](CollaborativeEditing)** — Real-time co-editing with track changes
+- **[Data Configuration](DataConfiguration)** — Wire data sources and hub-to-hub synchronization
 
 ---
 
 # Start Building
 
-1. **Model** — [Data Modeling](Doc/DataMesh/DataModeling) + [Node Type Configuration](Doc/DataMesh/NodeTypeConfiguration)
-2. **Address** — [Unified Path](Doc/DataMesh/UnifiedPath)
-3. **Operate** — [CRUD](Doc/DataMesh/CRUD) + [Data Configuration](Doc/DataMesh/DataConfiguration)
-4. **Govern** — [Satellite Entities](Doc/DataMesh/SatelliteEntities)
-5. **Consume** — [Interactive Markdown](Doc/DataMesh/InteractiveMarkdown)
+1. **Model** — [Data Modeling](DataModeling) + [Node Type Configuration](NodeTypeConfiguration)
+2. **Address** — [Unified Path](UnifiedPath)
+3. **Operate** — [CRUD](CRUD) + [Data Configuration](DataConfiguration)
+4. **Govern** — [Satellite Entities](SatelliteEntities)
+5. **Consume** — [Interactive Markdown](InteractiveMarkdown)

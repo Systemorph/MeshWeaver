@@ -18,7 +18,7 @@ One of the most powerful aspects of MeshWeaver's architecture is how naturally i
 
 AI agents **remote control** MeshWeaver applications rather than being embedded within them. This ensures clean separation of concerns and allows agents to interact through the same message-based interfaces as human users.
 
-For the design philosophy and benefits of this approach, see [Agentic AI Architecture](Doc/Architecture/AgenticAI).
+For the design philosophy and benefits of this approach, see [Agentic AI Architecture](/Doc/Architecture/AgenticAI).
 
 # AI Tool Integration
 
@@ -44,7 +44,7 @@ When a user types a natural language request, the AI agent analyzes intent, dete
 
 # MeshPlugin - Universal Data Access
 
-The `MeshPlugin` provides AI agents with tools to interact with the mesh. For the complete API reference, see [MeshPlugin Tools](Doc/AI/Tools/MeshPlugin).
+The `MeshPlugin` provides AI agents with tools to interact with the mesh. For the complete API reference, see [MeshPlugin Tools](/Doc/AI/Tools/MeshPlugin).
 
 | Tool | Purpose |
 |------|---------|
@@ -183,7 +183,7 @@ The AI agent integration showcases several architectural benefits of MeshWeaver'
 
 # Multi-Agent Collaboration
 
-MeshWeaver supports multi-agent scenarios where specialized agents work together. For multi-agent collaboration patterns and agent roles, see [Agentic AI Architecture](Doc/Architecture/AgenticAI).
+MeshWeaver supports multi-agent scenarios where specialized agents work together. For multi-agent collaboration patterns and agent roles, see [Agentic AI Architecture](/Doc/Architecture/AgenticAI).
 
 ## Software Human-Agent Teams
 
@@ -197,7 +197,7 @@ In the Software sample, AI agents work alongside human team members:
 
 # Layout Area Integration
 
-Agents can display results using appropriate layout areas rather than raw data. For details on layout areas, see [Graphical User Interface](Doc/GUI).
+Agents can display results using appropriate layout areas rather than raw data. For details on layout areas, see [Graphical User Interface](/Doc/GUI).
 
 ```
 CRITICAL: When users ask to view, show, list, or display tasks:

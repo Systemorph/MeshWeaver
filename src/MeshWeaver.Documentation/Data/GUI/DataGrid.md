@@ -220,5 +220,5 @@ new DataGridControl(reportData)                         // Create grid with data
 
 # See Also
 
-- [Editor Control](Doc/GUI/Editor) - Form generation
-- [Stack Control](Doc/GUI/ContainerControl/Stack) - Layout container
+- [Editor Control](../Editor) - Form generation
+- [Stack Control](../ContainerControl/Stack) - Layout container

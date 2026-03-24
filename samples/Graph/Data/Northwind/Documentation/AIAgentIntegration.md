@@ -18,7 +18,7 @@ The Northwind sample includes a specialized AI agent for analytics queries. The 
 
 AI agents **remote control** MeshWeaver applications rather than being embedded within them. This ensures clean separation of concerns and allows agents to interact through the same message-based interfaces as human users.
 
-For the design philosophy and benefits of this approach, see [Agentic AI Architecture](Doc/Architecture/AgenticAI).
+For the design philosophy and benefits of this approach, see [Agentic AI Architecture](/Doc/Architecture/AgenticAI).
 
 # NorthwindAgent Overview
 
@@ -57,7 +57,7 @@ The agent understands the Northwind business domain:
 
 # MeshPlugin Integration
 
-The NorthwindAgent uses the `MeshPlugin` for data access. For the complete API reference, see [MeshPlugin Tools](Doc/AI/Tools/MeshPlugin).
+The NorthwindAgent uses the `MeshPlugin` for data access. For the complete API reference, see [MeshPlugin Tools](/Doc/AI/Tools/MeshPlugin).
 
 | Tool | Purpose in Northwind |
 |------|---------------------|
@@ -271,8 +271,8 @@ Users get visual output instead of raw data:
 
 For related documentation:
 
-- **[MeshPlugin Tools](Doc/AI/Tools/MeshPlugin)**: Universal data access tools
-- **[Agentic AI Architecture](Doc/Architecture/AgenticAI)**: Agent design patterns
+- **[MeshPlugin Tools](/Doc/AI/Tools/MeshPlugin)**: Universal data access tools
+- **[Agentic AI Architecture](/Doc/Architecture/AgenticAI)**: Agent design patterns
 - **[Northwind Architecture](Northwind/Documentation/Architecture)**: Data model and views
 - **[Unified References](Northwind/Documentation/UnifiedReferences)**: All addressable paths
 

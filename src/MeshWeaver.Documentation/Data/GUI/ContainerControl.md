@@ -11,12 +11,12 @@ When building a UI, you combine small pieces (buttons, labels, inputs) into larg
 
 | Container | Purpose | Use when... |
 |-----------|---------|-------------|
-| [Stack](Doc/GUI/ContainerControl/Stack) | Arrange items vertically or horizontally | Building forms, lists, button groups |
-| [Tabs](Doc/GUI/ContainerControl/Tabs) | Organize content into switchable tabs | Grouping related content, settings pages |
-| [Toolbar](Doc/GUI/ContainerControl/Toolbar) | Group action buttons | Page headers, action bars |
-| [Splitter](Doc/GUI/ContainerControl/Splitter) | Create resizable, collapsible panes | Sidebars, IDE layouts, adjustable panels |
+| [Stack](Stack) | Arrange items vertically or horizontally | Building forms, lists, button groups |
+| [Tabs](Tabs) | Organize content into switchable tabs | Grouping related content, settings pages |
+| [Toolbar](Toolbar) | Group action buttons | Page headers, action bars |
+| [Splitter](Splitter) | Create resizable, collapsible panes | Sidebars, IDE layouts, adjustable panels |
 
-For responsive grid layouts, see [Layout Grid](Doc/GUI/LayoutGrid).
+For responsive grid layouts, see [Layout Grid](../LayoutGrid).
 
 ---
 
@@ -42,7 +42,7 @@ Controls.Stack                                              // Create a containe
 | Load data before showing content | Pass an async function |
 | Access the current data store | Pass a function with store parameter |
 
-See [Static vs Dynamic Views](Doc/GUI/Observables) for details on reactive patterns.
+See [Static vs Dynamic Views](../Observables) for details on reactive patterns.
 
 ---
 
@@ -63,5 +63,5 @@ Controls.Tabs                                                               // T
 
 # See Also
 
-- [Static vs Dynamic Views](Doc/GUI/Observables) - When and how content updates
-- [Data Binding](Doc/GUI/DataBinding) - How data flows through the UI
+- [Static vs Dynamic Views](../Observables) - When and how content updates
+- [Data Binding](../DataBinding) - How data flows through the UI

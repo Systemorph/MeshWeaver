@@ -112,5 +112,5 @@ The `LayoutAreaView` component monitors the `$Menu` slot and publishes items to 
 
 # See Also
 
-- [DataBinding](Doc/GUI/DataBinding) - How data flows through controls
-- [Editor](Doc/GUI/Editor) - The editor control for form rendering
+- [DataBinding](../DataBinding) - How data flows through controls
+- [Editor](../Editor) - The editor control for form rendering

@@ -28,8 +28,8 @@ You don't need to read pages of documentation. Just **ask**. Here are some thing
 
 | | |
 |---|---|
-| [The Beginning](Doc/TheBeginning) | Roland and Stefan introduce the Mesh Bros channel and the future of data management |
-| [What is a Data Mesh](Doc/DataMesh/WhatIsADataMesh) | The Mesh Bros explain the core concepts behind a data mesh |
+| [The Beginning](/Doc/TheBeginning) | Roland and Stefan introduce the Mesh Bros channel and the future of data management |
+| [What is a Data Mesh](/Doc/DataMesh/WhatIsADataMesh) | The Mesh Bros explain the core concepts behind a data mesh |
 
 ---
 
@@ -37,19 +37,19 @@ You don't need to read pages of documentation. Just **ask**. Here are some thing
 
 ### Architecture
 Message-based communication, UI streaming, AI integration, security, and more.
-[Explore Architecture](Doc/Architecture)
+[Explore Architecture](/Doc/Architecture)
 
 ### Data Mesh
 Node types, query syntax, unified content references, interactive markdown, collaborative editing.
-[Explore Data Mesh](Doc/DataMesh)
+[Explore Data Mesh](/Doc/DataMesh)
 
 ### GUI
 Editors, data grids, data binding, observables, and layout controls.
-[Explore GUI](Doc/GUI)
+[Explore GUI](/Doc/GUI)
 
 ### AI Integration
 MeshPlugin tools, agent definitions, remote control, natural language interfaces.
-[Explore AI Integration](Doc/AI)
+[Explore AI Integration](/Doc/AI)
 
 ---
 

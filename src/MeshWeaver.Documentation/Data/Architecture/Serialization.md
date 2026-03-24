@@ -168,5 +168,5 @@ MeshWeaver supports multiple storage backends, all using the same serialization 
 
 # Related Topics
 
-- [Data Configuration](../DataConfiguration.md) - Setting up data sources
-- [Message-Based Communication](MessageBasedCommunication.md) - Hub architecture
+- [Data Configuration](../../DataMesh/DataConfiguration) - Setting up data sources
+- [Message-Based Communication](../MessageBasedCommunication) - Hub architecture

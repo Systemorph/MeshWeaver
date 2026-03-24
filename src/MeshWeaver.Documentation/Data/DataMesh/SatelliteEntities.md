@@ -29,8 +29,8 @@ Each satellite type has a reserved sub-namespace prefix:
 
 | Sub-Namespace | Node Type | Purpose |
 |---------------|-----------|---------|
-| `_Access` | AccessAssignment | Permission grants and denials (see [Access Control](Doc/Architecture/AccessControl)) |
-| `_Comment` | Comment | Document comments and replies (see [Collaborative Editing](Doc/DataMesh/CollaborativeEditing)) |
+| `_Access` | AccessAssignment | Permission grants and denials (see [Access Control](../../Architecture/AccessControl)) |
+| `_Comment` | Comment | Document comments and replies (see [Collaborative Editing](../CollaborativeEditing)) |
 | `_Tracking` | TrackedChange | Suggested edits / track changes |
 | `_Approval` | Approval | Approval workflow records |
 | `_Thread` | Thread | Chat and discussion threads |
@@ -129,7 +129,7 @@ The `MainNode` property links the satellite back to its primary entity. This is 
 
 ## Access Assignments (`_Access`)
 
-Control who can read, edit, or administer a node and its descendants. See [Access Control Architecture](Doc/Architecture/AccessControl) for the full permission model.
+Control who can read, edit, or administer a node and its descendants. See [Access Control Architecture](../../Architecture/AccessControl) for the full permission model.
 
 ```json
 {
@@ -147,7 +147,7 @@ Control who can read, edit, or administer a node and its descendants. See [Acces
 
 ## Comments (`_Comment`)
 
-Anchored to text ranges in markdown documents via inline markers. See [Collaborative Editing](Doc/DataMesh/CollaborativeEditing).
+Anchored to text ranges in markdown documents via inline markers. See [Collaborative Editing](../CollaborativeEditing).
 
 ## Tracked Changes (`_Tracking`)
 

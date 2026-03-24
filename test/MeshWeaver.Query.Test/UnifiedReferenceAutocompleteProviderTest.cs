@@ -415,8 +415,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
         var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
         contentItem.Should().NotBeNull();
-        contentItem!.InsertText.Should().Contain("@Systemorph/Marketing/content",
-            "keyword InsertText should include full address path");
+        contentItem!.InsertText.Should().Contain("@/Systemorph/Marketing/content",
+            "keyword InsertText should include absolute path with @/ prefix");
     }
 
     #endregion

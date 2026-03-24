@@ -67,7 +67,8 @@ public partial class MarkdownView
 
         if (Html == null)
         {
-            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner);
+            var currentNodePath = Stream?.Owner?.ToString();
+            var pipeline = MarkdownExtensions.CreateMarkdownPipeline(Stream?.Owner, currentNodePath);
             // Transform annotation markers (<!--comment:id-->, <!--insert:id-->, <!--delete:id-->)
             // into HTML spans before Markdig processing
             var transformedMarkdown = AnnotationMarkdownExtension.TransformAnnotations(Markdown ?? "");
