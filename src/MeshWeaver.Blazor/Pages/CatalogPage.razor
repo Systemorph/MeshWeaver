@@ -39,7 +39,14 @@
                         <div class="catalog-card-content">
                             @if (!string.IsNullOrEmpty(GetImageUrl(node)))
                             {
-                                <img src="@GetImageUrl(node)" alt="@node.Name" class="catalog-card-image" />
+                                @if (GetImageUrl(node).TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <div class="catalog-card-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)GetImageUrl(node))</div>
+                                }
+                                else
+                                {
+                                    <img src="@GetImageUrl(node)" alt="@node.Name" class="catalog-card-image" />
+                                }
                             }
                             else
                             {

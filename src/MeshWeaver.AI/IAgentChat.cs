@@ -85,4 +85,10 @@ public interface IAgentChat
     /// Set by ThreadExecution, called by delegation tools to forward sub-agent progress.
     /// </summary>
     Action<string>? UpdateDelegationStatus { get => null; set { } }
+
+    /// <summary>
+    /// Callback to forward tool call entries from sub-threads to the parent's tool call log.
+    /// Called during delegation polling when new tool calls are detected on sub-threads.
+    /// </summary>
+    Action<ToolCallEntry>? ForwardToolCall { get => null; set { } }
 }

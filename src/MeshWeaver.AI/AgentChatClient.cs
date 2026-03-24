@@ -66,6 +66,9 @@ public class AgentChatClient : IAgentChat
     /// <inheritdoc />
     public Action<string>? UpdateDelegationStatus { get; set; }
 
+    /// <inheritdoc />
+    public Action<ToolCallEntry>? ForwardToolCall { get; set; }
+
     /// <summary>Sets the execution context for delegation sub-thread creation.</summary>
     public void SetExecutionContext(ThreadExecutionContext? ctx) => ExecutionContext = ctx;
 

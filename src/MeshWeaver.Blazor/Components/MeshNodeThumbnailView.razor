@@ -5,7 +5,14 @@
     <div class="mesh-node-thumbnail-content">
         @if (!string.IsNullOrEmpty(ImageUrl))
         {
-            <img src="@ImageUrl" alt="@Title" class="mesh-node-thumbnail-image" />
+            @if (ImageUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            {
+                <div class="mesh-node-thumbnail-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)ImageUrl)</div>
+            }
+            else
+            {
+                <img src="@ImageUrl" alt="@Title" class="mesh-node-thumbnail-image" />
+            }
         }
         else
         {

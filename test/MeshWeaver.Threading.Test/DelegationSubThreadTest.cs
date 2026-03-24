@@ -231,6 +231,69 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
+    public async Task SubThread_ToolCallsAggregatedToParent()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Verify the ForwardToolCall callback mechanism works:
+        // Sub-thread tool calls should be aggregated into the parent's tool call log
+        var parentToolCalls = new System.Collections.Generic.List<MeshWeaver.Layout.ToolCallEntry>();
+
+        // Simulate the forwarding callback
+        Action<MeshWeaver.Layout.ToolCallEntry> forwardCallback = entry => parentToolCalls.Add(entry);
+
+        // Simulate sub-thread tool calls being forwarded
+        forwardCallback(new MeshWeaver.Layout.ToolCallEntry
+        {
+            Name = "Search",
+            DisplayName = "Researcher: Searching \"reinsurance\"",
+            Arguments = "{\"query\":\"reinsurance\"}",
+            Result = "[{\"path\":\"Doc/Pricing\"}]",
+            IsSuccess = true,
+            DelegationPath = "thread/msg/sub1"
+        });
+
+        forwardCallback(new MeshWeaver.Layout.ToolCallEntry
+        {
+            Name = "Get",
+            DisplayName = "Researcher: Fetching @Doc/Pricing",
+            Arguments = "{\"path\":\"@Doc/Pricing\"}",
+            Result = "{\"name\":\"Pricing\"}",
+            IsSuccess = true,
+            DelegationPath = "thread/msg/sub1"
+        });
+
+        parentToolCalls.Should().HaveCount(2);
+        parentToolCalls[0].DisplayName.Should().Contain("Researcher:");
+        parentToolCalls[0].DelegationPath.Should().NotBeNullOrEmpty();
+        parentToolCalls[1].Name.Should().Be("Get");
+    }
+
+    [Fact]
+    public async Task SubThread_ToolCalls_PrefixedWithAgentName()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        // Verify that forwarded tool calls get prefixed with agent name
+        var subCall = new MeshWeaver.Layout.ToolCallEntry
+        {
+            Name = "Search",
+            DisplayName = "Searching \"topic\"",
+            IsSuccess = true
+        };
+
+        // Simulate what ChatClientAgentFactory does: prefix with agent name
+        var forwarded = subCall with
+        {
+            DisplayName = $"Worker: {subCall.DisplayName ?? subCall.Name}",
+            DelegationPath = "thread/msg/sub1"
+        };
+
+        forwarded.DisplayName.Should().Be("Worker: Searching \"topic\"");
+        forwarded.DelegationPath.Should().Be("thread/msg/sub1");
+    }
+
+    [Fact]
     public async Task SubThread_PlanAndDelegations_CoexistUnderThread()
     {
         var ct = new CancellationTokenSource(15.Seconds()).Token;

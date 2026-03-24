@@ -263,6 +263,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
                                 var completed = false;
                                 var pollTimeout = DateTime.UtcNow.AddMinutes(5);
+                                var forwardedToolCallCount = 0; // Track how many we've already forwarded
+
                                 while (!completed && DateTime.UtcNow < pollTimeout && !cancellationToken.IsCancellationRequested)
                                 {
                                     await Task.Delay(500, cancellationToken);
@@ -277,6 +279,21 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                     {
                                         if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
                                         {
+                                            // Forward NEW tool calls from sub-thread to parent
+                                            if (tmsg.ToolCalls.Count > forwardedToolCallCount)
+                                            {
+                                                for (var i = forwardedToolCallCount; i < tmsg.ToolCalls.Count; i++)
+                                                {
+                                                    var subCall = tmsg.ToolCalls[i];
+                                                    chat.ForwardToolCall?.Invoke(subCall with
+                                                    {
+                                                        DisplayName = $"{targetId}: {subCall.DisplayName ?? subCall.Name}",
+                                                        DelegationPath = subThreadPath
+                                                    });
+                                                }
+                                                forwardedToolCallCount = tmsg.ToolCalls.Count;
+                                            }
+
                                             if (!tmsg.IsExecuting)
                                             {
                                                 completed = true;
@@ -290,7 +307,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                             }
                                             else if (!string.IsNullOrEmpty(tmsg.Text))
                                             {
-                                                // Show last ~100 chars of response text as preview
                                                 var preview = tmsg.Text.Length > 100
                                                     ? "..." + tmsg.Text[^100..]
                                                     : tmsg.Text;

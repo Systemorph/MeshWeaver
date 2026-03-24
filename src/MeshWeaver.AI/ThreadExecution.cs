@@ -259,6 +259,7 @@ public static class ThreadExecution
             string? currentStatus = null;
             var pendingCalls = new Dictionary<string, FunctionCallContent>();
             string? lastCallKey = null;
+            var lastPushedToolCallCount = 0;
 
             // Set execution context for delegation sub-thread creation
             // Capture the user's AccessContext from the delivery so it propagates through delegations
@@ -273,6 +274,7 @@ public static class ThreadExecution
                 UserAccessContext = userAccessContext
             });
             chatClient.UpdateDelegationStatus = status => { currentStatus = status; };
+            chatClient.ForwardToolCall = entry => { toolCallLog.Add(entry); };
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
 
             await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
@@ -328,12 +330,13 @@ public static class ThreadExecution
                     }
                 }
 
-                // Update execution status when it changes (throttled)
-                if (currentStatus != null && responseText.Length == 0
+                // Update execution status when status or tool calls change (throttled)
+                if ((currentStatus != null || toolCallLog.Count > lastPushedToolCallCount) && responseText.Length == 0
                     && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
                 {
-                    var status = currentStatus;
+                    var status = currentStatus ?? "";
                     var liveToolCalls = toolCallLog.ToImmutableList();
+                    lastPushedToolCallCount = liveToolCalls.Count;
                     responseStream.Update(current =>
                     {
                         if (current == null) return null;
