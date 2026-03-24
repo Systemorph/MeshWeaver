@@ -21,40 +21,57 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
-
         var streamId = this.GetPrimaryKeyString();
 
-        var address = meshHub.GetAddress(streamId);
-        var addressPath = address.ToString();
-        // Use unprotected read — the grain needs its own node to activate,
-        // and it's not the correct hub identity for security checks.
-        var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
-
-        // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
-        if (node is null)
+        try
         {
-            var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
-            meshConfig?.Nodes.TryGetValue(addressPath, out node);
+            var address = meshHub.GetAddress(streamId);
+            var addressPath = address.ToString();
+            // Use unprotected read — the grain needs its own node to activate,
+            // and it's not the correct hub identity for security checks.
+            var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
+
+            // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
+            if (node is null)
+            {
+                var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+                meshConfig?.Nodes.TryGetValue(addressPath, out node);
+            }
+
+            // Fallback to static node providers (e.g., DocumentationNodeProvider)
+            // for nodes that are never persisted but served as embedded resources.
+            node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+                .SelectMany(p => p.GetStaticNodes())
+                .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
+
+            if (node is null)
+            {
+                // This can happen when a Blazor pre-render creates a circuit that
+                // gets disposed before the grain activates, or when a stale grain
+                // reference points to a node that no longer exists.
+                logger.LogWarning(
+                    "Cannot activate grain {StreamId}: node not found at {Path}. " +
+                    "Likely a disposed pre-render circuit. Deactivating.",
+                    streamId, addressPath);
+                DeactivateOnIdle();
+                return;
+            }
+
+            // Enrich with node type info (triggers compilation if needed, sets HubConfiguration + AssemblyLocation)
+            var nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
+            if (nodeTypeService != null)
+            {
+                node = await nodeTypeService.EnrichWithNodeTypeAsync(node, cancellationToken);
+            }
+
+            Hub = await InstantiateFromHubConfiguration(address, node);
         }
-
-        // Fallback to static node providers (e.g., DocumentationNodeProvider)
-        // for nodes that are never persisted but served as embedded resources.
-        node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
-            .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
-
-        if (node is null)
-            throw new MeshException(
-                $"Cannot instantiate Node {streamId}. No {nameof(MeshNode.HubConfiguration)} is specified.");
-
-        // Enrich with node type info (triggers compilation if needed, sets HubConfiguration + AssemblyLocation)
-        var nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
-        if (nodeTypeService != null)
+        catch (Exception ex)
         {
-            node = await nodeTypeService.EnrichWithNodeTypeAsync(node, cancellationToken);
+            logger.LogWarning(ex,
+                "Grain activation failed for {StreamId}. Deactivating gracefully.", streamId);
+            DeactivateOnIdle();
         }
-
-        Hub = await InstantiateFromHubConfiguration(address, node);
     }
 
     private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
