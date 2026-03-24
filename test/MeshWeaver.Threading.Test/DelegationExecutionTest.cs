@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
@@ -76,13 +77,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         // 2. Submit a message to the parent thread (creates user + response messages)
         var parentMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(threadPath))!
-            .SelectMany(nodes => Observable.Return(nodes))
-            .Select(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
-                var msgs = (node?.Content as MeshThread)?.Messages;
-                return msgs ?? ImmutableList<string>.Empty;
-            })
+            .Select(nodes => GetMessages(nodes, threadPath))
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         var submitResponse = await client.AwaitResponse(
@@ -120,12 +115,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         //    This goes through the full ThreadExecution pipeline.
         var subMessages = client.GetWorkspace()
             .GetRemoteStream<MeshNode>(new Address(subThreadPath))!
-            .Select(new Func<MeshNode[], IReadOnlyList<string>>(nodes =>
-            {
-                var node = nodes?.FirstOrDefault(n => n.Path == subThreadPath);
-                var msgs = (node?.Content as MeshThread)?.Messages;
-                return (IReadOnlyList<string>)(msgs ?? System.Collections.Immutable.ImmutableList<string>.Empty);
-            }))
+            .Select(nodes => GetMessages(nodes, subThreadPath))
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         var subSubmitResponse = await client.AwaitResponse(
@@ -183,6 +173,12 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");
         Output.WriteLine("Full hierarchy verified: parent → message → sub-thread → sub-messages");
+    }
+
+    private static ImmutableList<string> GetMessages(IEnumerable<MeshNode> nodes, string path)
+    {
+        var node = nodes?.FirstOrDefault(n => n.Path == path);
+        return (node?.Content as MeshThread)?.Messages ?? ImmutableList<string>.Empty;
     }
 
     private async Task WaitForMessageCompleteAsync(IMessageHub client, string messagePath, CancellationToken ct)
