@@ -131,8 +131,8 @@ public static class CreateLayoutArea
         }
 
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
-            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-            : MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+            ? $"/{parentPath}"
+            : $"/{nodePath}";
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
@@ -145,7 +145,7 @@ public static class CreateLayoutArea
         };
         host.UpdateData(metadataDataId, metadataFormData);
 
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; height: 100%; display: flex; flex-direction: column;");
 
         // Header: "Create {Name}" - data-bound to name field
         stack = stack.WithView((h, _) =>
@@ -175,7 +175,7 @@ public static class CreateLayoutArea
             host.UpdateData(dataId, contentInstance);
 
             var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
-            stack = stack.WithView(editor);
+            stack = stack.WithView(Controls.Stack.WithStyle("flex: 1; min-height: 0;").WithView(editor));
 
             // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
@@ -239,16 +239,16 @@ public static class CreateLayoutArea
             var editor = new MarkdownEditorControl()
                 .WithDocumentId(nodePath)
                 .WithValue(rawContent ?? "")
-                .WithHeight("400px")
+                .WithHeight("100%")
                 .WithPlaceholder("Start writing your markdown content...")
                 .WithAutoSave(host.Hub.Address.ToString(), nodePath);
-            stack = stack.WithView(editor);
+            stack = stack.WithView(Controls.Stack.WithStyle("flex: 1; min-height: 0;").WithView(editor));
 
             // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
-                .WithStyle("margin-top: 24px; justify-content: flex-start;")
+                .WithStyle("margin-top: 12px; flex-shrink: 0; justify-content: flex-start;")
                 .WithView(Controls.Button("Cancel")
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
@@ -364,8 +364,7 @@ public static class CreateLayoutArea
                 if (task.IsCompletedSuccessfully)
                 {
                     logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
-                    var overviewUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                    ctx.NavigateTo(overviewUrl, replace: true);
+                    ctx.NavigateTo($"/{nodePath}");
                 }
                 else if (task.IsFaulted)
                 {
@@ -427,8 +426,7 @@ public static class CreateLayoutArea
                     });
 
                     // Navigate to the new node
-                    var overviewUrl = MeshNodeLayoutAreas.BuildUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
-                    ctx.NavigateTo(overviewUrl, replace: true);
+                    ctx.NavigateTo($"/{newPath}");
                 }
                 else if (task.IsFaulted)
                 {

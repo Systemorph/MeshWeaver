@@ -102,9 +102,12 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             fanOutQuery += " is:main";
 
         // Cross-schema query: single UNION ALL across all searchable schemas (PostgreSQL only).
-        // Only used for global search and activity feed — never for namespace-scoped queries
-        // (those are routed to a single partition above via routing hints or path extraction).
-        if (_crossSchemaProvider != null)
+        // Only for queries on mesh_nodes — satellite queries (source:activity, source:accessed)
+        // and satellite node types (Thread) require per-partition fan-out because the stored proc
+        // only searches mesh_nodes and filters main_node = path (excluding satellites).
+        var useCrossSchema = _crossSchemaProvider != null
+            && parsed.Source == QuerySource.Default;
+        if (useCrossSchema)
         {
             var schemas = await _crossSchemaProvider.GetSearchableSchemasAsync(ct);
             var crossParsed = _parser.Parse(fanOutQuery);
