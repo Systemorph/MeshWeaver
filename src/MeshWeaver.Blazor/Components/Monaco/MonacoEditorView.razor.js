@@ -560,7 +560,11 @@ export function registerCompletionProvider(editorId, config) {
 
             let currentItems;
 
-            if (isAsync) {
+            if (isAsync && currentState._pendingCompletionItems) {
+                // Progressive update: use pre-fetched items pushed via pushCompletionUpdate
+                currentItems = currentState._pendingCompletionItems;
+                currentState._pendingCompletionItems = null;
+            } else if (isAsync) {
                 // Async mode: fetch from server with debounce (send full query including trigger char)
                 currentItems = await debouncedFetch(fullQuery);
             } else {
@@ -597,7 +601,7 @@ export function registerCompletionProvider(editorId, config) {
                         value: item.description
                     } : undefined,
                     filterText: filterText,
-                    sortText: displayLabel.toLowerCase()  // Sort alphabetically by path
+                    sortText: item.sortKey || displayLabel.toLowerCase()  // Use sortKey if provided, else alphabetical
                 };
 
                 // Attach command to notify C# when a suggestion is accepted
@@ -663,6 +667,20 @@ export function triggerSuggest(editorId) {
         return true;
     }
     return false;
+}
+
+// Push updated completion items into the editor's pending state and re-trigger suggestions.
+// Used for progressive streaming: fast local results arrive first, remote results merge in later.
+export function pushCompletionUpdate(editorId, items) {
+    const state = editorState.get(editorId);
+    if (state) {
+        // Store updated items — the completion provider's debouncedFetch will use these on re-trigger
+        state._pendingCompletionItems = items;
+        const editorInstance = state.editorInstance;
+        if (editorInstance) {
+            editorInstance.trigger('', 'editor.action.triggerSuggest', {});
+        }
+    }
 }
 
 // Set cursor position to end of content
