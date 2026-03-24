@@ -30,6 +30,12 @@ The documentation on AI integration is accessible via src/MeshWeaver.Documentati
 
 Topics: Agentic AI, MCP authentication, MeshPlugin tools (Get, Search, Create, Update, Delete, NavigateTo)
 
+### Deployment
+
+The documentation on deployment is accessible via src/MeshWeaver.Documentation/Data/Architecture/Deployment.md
+
+Topics: Aspire CLI deployment, deployment modes (local/test/prod/monolith), secrets management, Azure Container Apps, PostgreSQL, Orleans clustering, infrastructure provisioning
+
 ### Agents
 
 Built-in agent definitions are embedded in src/MeshWeaver.AI/Data/Agent/

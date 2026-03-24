@@ -122,7 +122,8 @@
       "Bash(file:*)",
       "Bash(aspire deploy:*)",
       "Bash(az monitor:*)",
-      "mcp__aspire__select_apphost"
+      "mcp__aspire__select_apphost",
+      "Bash(git ls-remote:*)"
     ],
     "deny": []
   },

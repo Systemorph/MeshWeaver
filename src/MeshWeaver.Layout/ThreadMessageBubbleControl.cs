@@ -47,7 +47,15 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     /// </summary>
     public object? ToolCalls { get; init; }
 
+    /// <summary>Model name used for this response (e.g., "claude-sonnet-4-6").</summary>
+    public string? ModelName { get; init; }
+
+    /// <summary>Timestamp of the message.</summary>
+    public DateTime? Timestamp { get; init; }
+
     public ThreadMessageBubbleControl WithRole(string role) => this with { Role = role };
+    public ThreadMessageBubbleControl WithModelName(string? model) => this with { ModelName = model };
+    public ThreadMessageBubbleControl WithTimestamp(DateTime? ts) => this with { Timestamp = ts };
     public ThreadMessageBubbleControl WithAuthorName(string name) => this with { AuthorName = name };
     public ThreadMessageBubbleControl WithText(object? text) => this with { Text = text };
     public ThreadMessageBubbleControl WithIsExecuting(object? isExecuting) => this with { IsExecuting = isExecuting };
