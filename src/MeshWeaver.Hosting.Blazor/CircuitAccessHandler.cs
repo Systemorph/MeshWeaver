@@ -88,6 +88,9 @@ public class CircuitAccessHandler : CircuitHandler
     {
         _logger.LogDebug("Circuit closed: id={CircuitId}, user={UserId}",
             circuit.Id, _userContext?.ObjectId ?? "(anonymous)");
+        // Clear the persistent fallback to prevent stale context
+        var accessService = _hub.ServiceProvider.GetService<AccessService>();
+        accessService?.ClearPersistentCircuitContext();
         _userContext = null;
         return Task.CompletedTask;
     }
