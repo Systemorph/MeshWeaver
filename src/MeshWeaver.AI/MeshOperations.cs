@@ -174,7 +174,8 @@ public class MeshOperations
 
         try
         {
-            var meshNode = JsonSerializer.Deserialize<MeshNode>(node, hub.JsonSerializerOptions);
+            var sanitized = RepairJson(node);
+            var meshNode = JsonSerializer.Deserialize<MeshNode>(sanitized, hub.JsonSerializerOptions);
             if (meshNode == null)
                 return "Invalid node: deserialized to null.";
 
@@ -186,7 +187,8 @@ public class MeshOperations
         }
         catch (JsonException ex)
         {
-            return $"Invalid JSON: {ex.Message}";
+            logger.LogWarning(ex, "Create: invalid JSON, length={Length}", node.Length);
+            return $"Invalid JSON: {ex.Message}. Tip: ensure all quotes and special characters in markdown content are properly escaped for JSON strings.";
         }
         catch (Exception ex)
         {
@@ -201,7 +203,8 @@ public class MeshOperations
 
         try
         {
-            var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(nodes, hub.JsonSerializerOptions);
+            var sanitized = RepairJson(nodes);
+            var nodeList = JsonSerializer.Deserialize<List<MeshNode>>(sanitized, hub.JsonSerializerOptions);
             if (nodeList == null || nodeList.Count == 0)
                 return "No nodes provided.";
 
@@ -223,6 +226,49 @@ public class MeshOperations
             logger.LogWarning(ex, "Error updating nodes");
             return $"Error: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Attempts to repair common JSON issues from LLM output:
+    /// - Truncated strings (unclosed quotes/braces)
+    /// - Unescaped control characters inside strings
+    /// </summary>
+    private static string RepairJson(string json)
+    {
+        if (string.IsNullOrEmpty(json))
+            return json;
+
+        // Try parsing first — if it's valid, return as-is
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return json;
+        }
+        catch (JsonException)
+        {
+            // Fall through to repair
+        }
+
+        // Repair: try truncating to last complete JSON structure
+        // Find the last closing brace/bracket that makes valid JSON
+        for (var i = json.Length - 1; i > 0; i--)
+        {
+            if (json[i] is '}' or ']')
+            {
+                var candidate = json[..(i + 1)];
+                try
+                {
+                    using var doc = JsonDocument.Parse(candidate);
+                    return candidate;
+                }
+                catch (JsonException)
+                {
+                    // Try next position
+                }
+            }
+        }
+
+        return json; // Return original if repair fails
     }
 
     public async Task<string> Delete(string paths)

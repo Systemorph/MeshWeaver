@@ -176,10 +176,15 @@ public static class ThreadExecution
             string? lastCallKey = null;
 
             // Set execution context for delegation sub-thread creation
+            // Capture the user's AccessContext from the delivery so it propagates through delegations
+            var userAccessContext = delivery.AccessContext;
+            logger.LogInformation("[ThreadExec] ExecuteMessageAsync: user={User}, threadPath={ThreadPath}",
+                userAccessContext?.ObjectId ?? "(no-user)", threadPath);
             chatClient.SetExecutionContext(new ThreadExecutionContext
             {
                 ThreadPath = threadPath,
-                ResponseMessageId = responseMsgId
+                ResponseMessageId = responseMsgId,
+                UserAccessContext = userAccessContext
             });
             chatClient.UpdateDelegationStatus = status => { currentStatus = status; };
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
@@ -191,7 +196,13 @@ public static class ThreadExecution
                 {
                     if (content is FunctionCallContent functionCall)
                     {
-                        currentStatus = ToolStatusFormatter.Format(functionCall);
+                        // Build detailed status: formatted name + arguments
+                        var formatted = ToolStatusFormatter.Format(functionCall);
+                        var argsDetail = SerializeArgs(functionCall.Arguments);
+                        currentStatus = argsDetail != null
+                            ? $"{formatted}\n{argsDetail}"
+                            : formatted;
+
                         // Track pending call — use CallId if available, fall back to Name+counter
                         var callKey = functionCall.CallId ?? $"{functionCall.Name}_{pendingCalls.Count}";
                         pendingCalls[callKey] = functionCall;
@@ -236,6 +247,7 @@ public static class ThreadExecution
                     && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
                 {
                     var status = currentStatus;
+                    var liveToolCalls = toolCallLog.ToImmutableList();
                     responseStream.Update(current =>
                     {
                         if (current == null) return null;
@@ -252,7 +264,8 @@ public static class ThreadExecution
                                 AgentName = request.AgentName,
                                 ModelName = request.ModelName,
                                 IsExecuting = true,
-                                ExecutionStatus = status
+                                ExecutionStatus = status,
+                                ToolCalls = liveToolCalls
                             }
                         };
                         return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -387,8 +400,24 @@ public static class ThreadExecution
             return null;
         try
         {
-            var result = JsonSerializer.Serialize(args);
-            return Truncate(result);
+            // Format as readable key=value pairs instead of raw JSON
+            var parts = new List<string>();
+            foreach (var (key, value) in args)
+            {
+                var valStr = value switch
+                {
+                    null => "null",
+                    JsonElement je => je.ValueKind == JsonValueKind.String
+                        ? je.GetString() ?? ""
+                        : je.ToString(),
+                    _ => value.ToString() ?? ""
+                };
+                // Truncate long values and unescape unicode
+                if (valStr.Length > 200)
+                    valStr = valStr[..197] + "...";
+                parts.Add($"{key}: {valStr}");
+            }
+            return string.Join("\n", parts);
         }
         catch
         {

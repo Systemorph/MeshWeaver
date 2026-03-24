@@ -1,6 +1,7 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
@@ -16,6 +17,12 @@ public record ThreadExecutionContext
 
     /// <summary>Response message ID within the thread.</summary>
     public required string ResponseMessageId { get; init; }
+
+    /// <summary>
+    /// The user's AccessContext captured from the original delivery.
+    /// Used to propagate user identity through delegation chains.
+    /// </summary>
+    public AccessContext? UserAccessContext { get; init; }
 }
 
 /// <summary>

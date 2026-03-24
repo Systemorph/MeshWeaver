@@ -3,6 +3,19 @@
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant") @(isExecuting ? "thread-msg-is-executing" : "")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
+    @if (!IsUser && (!string.IsNullOrEmpty(ViewModel.ModelName) || ViewModel.Timestamp.HasValue))
+    {
+        <div class="thread-msg-meta">
+            @if (!string.IsNullOrEmpty(ViewModel.ModelName))
+            {
+                <span>@ViewModel.ModelName</span>
+            }
+            @if (ViewModel.Timestamp.HasValue)
+            {
+                <span>@ViewModel.Timestamp.Value.ToString("HH:mm:ss")</span>
+            }
+        </div>
+    }
 
     @if (ShowSpinner)
     {
@@ -12,8 +25,12 @@
                 <span class="thread-msg-dot" style="animation-delay: 0.2s;"></span>
                 <span class="thread-msg-dot" style="animation-delay: 0.4s;"></span>
             </span>
-            <span class="thread-msg-status">@(executionStatus ?? "Generating response...")</span>
+            <span class="thread-msg-status">@StatusTitle</span>
         </div>
+        @if (StatusDetail != null)
+        {
+            <pre class="thread-msg-status-detail">@StatusDetail</pre>
+        }
         <div class="thread-msg-cancel-row">
             <button class="thread-msg-cancel-btn" @onclick="OnCancelClick">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854z"/></svg>
@@ -34,9 +51,13 @@
                 <span class="thread-msg-dot-small" style="animation-delay: 0.2s;"></span>
                 <span class="thread-msg-dot-small" style="animation-delay: 0.4s;"></span>
             </span>
-            <span class="thread-msg-exec-status">@(executionStatus ?? "Processing...")</span>
+            <span class="thread-msg-exec-status">@StatusTitle</span>
             <button class="thread-msg-cancel-btn-small" @onclick="OnCancelClick">Cancel</button>
         </div>
+        @if (StatusDetail != null)
+        {
+            <pre class="thread-msg-status-detail thread-msg-status-detail-small">@StatusDetail</pre>
+        }
     }
 
     @* Collapsible tool calls — shown during execution (open) and after (collapsed) *@
@@ -100,6 +121,13 @@
     }
     .thread-msg-author-user {
         color: var(--accent-fill-rest);
+    }
+    .thread-msg-meta {
+        display: flex;
+        gap: 8px;
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        margin-bottom: 4px;
     }
 
     .thread-msg-spinner {
@@ -250,6 +278,25 @@
         overflow: auto;
         white-space: pre-wrap;
         word-break: break-all;
+    }
+
+    .thread-msg-status-detail {
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        background: var(--neutral-layer-3);
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin: 4px 0;
+        max-height: 150px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-family: monospace;
+    }
+    .thread-msg-status-detail-small {
+        font-size: 0.68rem;
+        max-height: 80px;
+        margin-top: 4px;
     }
 
     @@keyframes thread-dots-blink {

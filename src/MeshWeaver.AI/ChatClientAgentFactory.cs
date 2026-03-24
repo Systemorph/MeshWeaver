@@ -117,6 +117,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             services: null
         );
 
+        // Enable parallel tool execution — when the LLM returns multiple tool calls
+        // in a single response turn, they will be invoked concurrently
+        var functionInvoker = agent.ChatClient.GetService<Microsoft.Extensions.AI.FunctionInvokingChatClient>();
+        if (functionInvoker != null)
+            functionInvoker.AllowConcurrentInvocation = true;
+
         return agent;
     }
 
@@ -193,12 +199,14 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         };
                     }
 
-                    Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
-                        agentConfig.Id, targetId, task);
+                    var execCtx = chat.ExecutionContext;
+                    var userIdentity = execCtx?.UserAccessContext?.ObjectId ?? "(no-user)";
+                    Logger.LogInformation(
+                        "[Delegation] {Source} → {Target}, user={User}, task={Task}",
+                        agentConfig.Id, targetId, userIdentity, task.Length > 100 ? task[..97] + "..." : task);
 
                     // Create sub-thread and submit via SubmitMessageRequest (same as regular threads)
                     string? subThreadPath = null;
-                    var execCtx = chat.ExecutionContext;
                     if (execCtx != null)
                     {
                         try
@@ -230,7 +238,15 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                     AgentName = targetId,
                                     ContextPath = execCtx.ThreadPath
                                 },
-                                o => o.WithTarget(new Address(subThreadPath)),
+                                o =>
+                                {
+                                    o = o.WithTarget(new Address(subThreadPath));
+                                    // Forward the original user's AccessContext so the sub-thread
+                                    // runs under the correct user identity for permission checks
+                                    if (execCtx.UserAccessContext != null)
+                                        o = o.WithAccessContext(execCtx.UserAccessContext);
+                                    return o;
+                                },
                                 cancellationToken);
 
                             if (!submitResponse.Message.Success)
@@ -240,25 +256,43 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             }
                             else
                             {
-                                // 3. Wait for execution to complete by polling the thread messages
-                                //    The response message will have IsExecuting=false when done.
+                                // 3. Wait for execution to complete by polling the sub-thread messages.
+                                //    Forward the sub-agent's ExecutionStatus and text preview to the parent.
                                 var completed = false;
-                                var timeout = DateTime.UtcNow.AddMinutes(5);
-                                while (!completed && DateTime.UtcNow < timeout && !cancellationToken.IsCancellationRequested)
+                                var pollTimeout = DateTime.UtcNow.AddMinutes(5);
+                                while (!completed && DateTime.UtcNow < pollTimeout && !cancellationToken.IsCancellationRequested)
                                 {
-                                    await Task.Delay(1000, cancellationToken);
-                                    chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
+                                    await Task.Delay(500, cancellationToken);
 
-                                    // Check if execution completed
+                                    // Read sub-agent's current state
                                     await foreach (var node in meshService.QueryAsync<MeshNode>(
                                         $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
                                     {
-                                        if (node.Content is ThreadMessage tmsg
-                                            && tmsg.Role == "assistant"
-                                            && !tmsg.IsExecuting)
+                                        if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
                                         {
-                                            completed = true;
-                                            break;
+                                            if (!tmsg.IsExecuting)
+                                            {
+                                                completed = true;
+                                                break;
+                                            }
+
+                                            // Forward sub-agent's live status to parent bubble
+                                            if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
+                                            {
+                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {tmsg.ExecutionStatus}");
+                                            }
+                                            else if (!string.IsNullOrEmpty(tmsg.Text))
+                                            {
+                                                // Show last ~100 chars of response text as preview
+                                                var preview = tmsg.Text.Length > 100
+                                                    ? "..." + tmsg.Text[^100..]
+                                                    : tmsg.Text;
+                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {preview}");
+                                            }
+                                            else
+                                            {
+                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
+                                            }
                                         }
                                     }
                                 }
