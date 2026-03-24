@@ -34,7 +34,7 @@ public static class AccessControlPipeline
 
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("AccessControlPipeline");
+                ?.CreateLogger("MeshWeaver.AccessContext");
 
             // Hub-level permission rules (e.g., WithPublicRead) — checked before ISecurityService
             var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
