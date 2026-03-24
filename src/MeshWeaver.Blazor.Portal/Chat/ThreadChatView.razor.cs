@@ -547,6 +547,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
+    private async Task OnMessageTextChanged(string value)
+    {
+        MessageText = value;
+        await UpdateExtractedReferencesAsync();
+        StateHasChanged();
+    }
+
     private async Task OnCompletionItemAccepted(string path)
     {
         if (string.IsNullOrEmpty(path))

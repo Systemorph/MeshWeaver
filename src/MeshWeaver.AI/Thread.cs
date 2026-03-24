@@ -19,6 +19,13 @@ public record ThreadExecutionContext
     public required string ResponseMessageId { get; init; }
 
     /// <summary>
+    /// The original content node path (e.g., "PartnerRe/AiConsulting").
+    /// Propagated through all delegation levels so sub-threads always
+    /// know the root context for namespace resolution and agent initialization.
+    /// </summary>
+    public string? ContextPath { get; init; }
+
+    /// <summary>
     /// The user's AccessContext captured from the original delivery.
     /// Used to propagate user identity through delegation chains.
     /// </summary>

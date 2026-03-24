@@ -197,95 +197,133 @@ public static class ThreadMessageLayoutAreas
 
         var container = Controls.Stack
             .WithClass("thread-msg-container")
-            .WithStyle(isUser ? "align-items: flex-end;" : null)
+            .WithStyle(isUser ? "align-items: flex-end;" : "")
             .WithView(bubble);
 
-        // For assistant messages: show delegation sub-threads inline
-        // Each sub-thread's last message is rendered as a LayoutAreaControl
-        // so the sub-agent's streaming response is visible in the parent thread.
+        // For assistant messages: show delegation sub-threads with inline preview
         if (!isUser)
         {
             var messagePath = $"{threadPath}/{messageId}";
             var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
             if (meshService != null)
             {
-                // Query for sub-threads periodically (covers both during and after execution)
-                var subThreadsObs = Observable.Timer(TimeSpan.Zero, TimeSpan.FromSeconds(2))
-                    .SelectMany(_ => Observable.FromAsync(async () =>
-                    {
-                        try
+                // Poll for sub-threads and their last message's live state
+                host.RegisterForDisposal(
+                    Observable.Timer(TimeSpan.Zero, TimeSpan.FromSeconds(1))
+                        .SelectMany(_ => Observable.FromAsync(async () =>
                         {
-                            return await meshService
-                                .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
-                                .ToListAsync() as IReadOnlyList<MeshNode>;
-                        }
-                        catch { return Array.Empty<MeshNode>() as IReadOnlyList<MeshNode>; }
-                    }))
-                    .DistinctUntilChanged(subs => subs.Count);
+                            try
+                            {
+                                var subs = await meshService
+                                    .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
+                                    .ToListAsync();
+                                return await BuildDelegationHtmlAsync(subs, meshService);
+                            }
+                            catch { return ""; }
+                        }))
+                        .DistinctUntilChanged()
+                        .Subscribe(html => host.UpdateData("delegationsHtml", html)));
 
-                // For each sub-thread found, embed the last message's Overview layout area
-                host.RegisterForDisposal(subThreadsObs.Subscribe(subThreads =>
-                {
-                    if (subThreads.Count == 0)
-                    {
-                        host.UpdateData("subThreadsHtml", "");
-                        return;
-                    }
-
-                    var linksHtml = new System.Text.StringBuilder();
-                    foreach (var st in subThreads)
-                    {
-                        var name = System.Web.HttpUtility.HtmlEncode(
-                            st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
-                        var href = $"/{st.Path}/{ThreadNodeType.ThreadArea}";
-
-                        linksHtml.Append(
-                            $"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 4px 8px; " +
-                            $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none; " +
-                            $"border-left: 2px solid var(--accent-fill-rest); margin-bottom: 2px;\">" +
-                            $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>");
-                    }
-
-                    var html = $"<div style=\"margin-left: 12px; margin-bottom: 8px;\">" +
-                               $"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-bottom: 2px;\">Delegations:</div>" +
-                               $"{linksHtml}</div>";
-                    host.UpdateData("subThreadsHtml", html);
-                }));
-
-                // Embed sub-thread link HTML
                 container = container.WithView(
-                    Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("subThreadsHtml")))
-                        .WithStyle("margin-top: 4px;"));
-
-                // Embed the LAST sub-thread's response message as a live LayoutArea
-                // This shows the sub-agent's output cell streaming in real-time
-                host.RegisterForDisposal(subThreadsObs.Subscribe(subThreads =>
-                {
-                    if (subThreads.Count == 0) return;
-
-                    // Get the most recent sub-thread's last assistant message
-                    var lastSubThread = subThreads.Last();
-                    var thread = lastSubThread.Content as AI.Thread;
-                    if (thread?.Messages.Count > 0)
-                    {
-                        var lastMsgId = thread.Messages.Last();
-                        var lastMsgPath = $"{lastSubThread.Path}/{lastMsgId}";
-                        // Push the path so the embedded LayoutAreaControl can render it
-                        host.UpdateData("delegationResponsePath", lastMsgPath);
-                    }
-                }));
-
-                // Embed the sub-agent's response as a live layout area control
-                container = container.WithView(
-                    Controls.LayoutArea(
-                        new JsonPointerReference(LayoutAreaReference.GetDataPointer("delegationResponsePath")),
-                        ThreadMessageNodeType.OverviewArea)
-                    .WithStyle("margin-left: 12px; border-left: 2px solid var(--accent-fill-rest); padding-left: 8px;"));
+                    Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("delegationsHtml"))));
             }
         }
 
         container = container.WithView(actionRow);
         return container;
+    }
+
+    /// <summary>
+    /// Builds HTML for delegation sub-threads recursively: link + inline preview + nested sub-delegations.
+    /// Shows the sub-agent's execution status or last lines of response text.
+    /// Recurses up to maxDepth levels for nested delegations.
+    /// </summary>
+    private static async Task<string> BuildDelegationHtmlAsync(
+        IReadOnlyList<MeshNode> subThreads, IMeshService meshService, int depth = 0, int maxDepth = 4)
+    {
+        if (subThreads.Count == 0 || depth > maxDepth) return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<div style=\"margin: 4px 0 8px 0;\">");
+
+        foreach (var st in subThreads)
+        {
+            var name = System.Web.HttpUtility.HtmlEncode(
+                st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
+            var href = $"/{st.Path}/{ThreadNodeType.ThreadArea}";
+
+            // Header link — indent deeper levels
+            sb.Append($"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 2px 0; " +
+                       $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none;\">" +
+                       $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>");
+
+            // Get last message's live state
+            var thread = st.Content as AI.Thread;
+            if (thread?.Messages.Count > 0)
+            {
+                var lastMsgId = thread.Messages.Last();
+                var lastMsgPath = $"{st.Path}/{lastMsgId}";
+                try
+                {
+                    await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{lastMsgPath}"))
+                    {
+                        if (msgNode.Content is ThreadMessage tmsg)
+                        {
+                            // During execution: show live status/preview
+                            // After completion: collapse to just the link (no preview text)
+                            if (tmsg.IsExecuting)
+                            {
+                                string preview;
+                                if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
+                                {
+                                    preview = System.Web.HttpUtility.HtmlEncode(tmsg.ExecutionStatus);
+                                }
+                                else if (!string.IsNullOrEmpty(tmsg.Text))
+                                {
+                                    var lines = tmsg.Text.Split('\n');
+                                    var lastLines = lines.Length > 4 ? lines[^4..] : lines;
+                                    preview = System.Web.HttpUtility.HtmlEncode(
+                                        string.Join("\n", lastLines).Trim());
+                                    if (preview.Length > 300) preview = "..." + preview[^297..];
+                                }
+                                else
+                                {
+                                    preview = "Processing...";
+                                }
+
+                                sb.Append($"<div style=\"font-size: 0.72rem; color: var(--neutral-foreground-hint); " +
+                                           $"white-space: pre-wrap; padding: 2px 8px; border-left: 2px solid var(--accent-fill-rest); " +
+                                           $"margin: 2px 0 4px 12px; max-height: 80px; overflow: auto;\">{preview}</div>");
+                            }
+
+                            // Recurse: check if this message has its own sub-delegations
+                            if (depth < maxDepth)
+                            {
+                                try
+                                {
+                                    var nestedSubs = await meshService
+                                        .QueryAsync<MeshNode>($"namespace:{lastMsgPath} nodeType:{ThreadNodeType.NodeType}")
+                                        .ToListAsync();
+                                    if (nestedSubs.Count > 0)
+                                    {
+                                        var nestedHtml = await BuildDelegationHtmlAsync(nestedSubs, meshService, depth + 1, maxDepth);
+                                        if (!string.IsNullOrEmpty(nestedHtml))
+                                        {
+                                            sb.Append($"<div style=\"margin-left: 16px;\">{nestedHtml}</div>");
+                                        }
+                                    }
+                                }
+                                catch { /* ignore nested query errors */ }
+                            }
+                        }
+                    }
+                }
+                catch { /* ignore preview errors */ }
+            }
+        }
+
+        sb.Append("</div>");
+        return sb.ToString();
     }
 
     /// <summary>

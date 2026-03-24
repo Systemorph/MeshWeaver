@@ -151,6 +151,12 @@ public static class ThreadExecution
 
         try
         {
+            // Set user access context for the entire execution scope
+            // so all tool calls (Create, Update, etc.) run under the correct user identity
+            var accessService = parentHub.ServiceProvider.GetService<AccessService>();
+            if (delivery.AccessContext != null)
+                accessService?.SetContext(delivery.AccessContext);
+
             // 1. Prepare agent
             logger.LogDebug("[ThreadExec] ExecuteMessageAsync: preparing agent for {ThreadPath}, responsePath={ResponsePath}",
                 threadPath, responsePath);
@@ -164,6 +170,41 @@ public static class ThreadExecution
 
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
+
+            // Load conversation history from existing thread messages (resume scenario)
+            try
+            {
+                var meshService = parentHub.ServiceProvider.GetRequiredService<IMeshService>();
+                var threadNode = await meshService.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+                var threadContent = threadNode?.Content as AI.Thread;
+                if (threadContent?.Messages.Count > 0)
+                {
+                    var history = new List<ThreadMessage>();
+                    foreach (var msgId in threadContent.Messages)
+                    {
+                        // Skip the current input/output messages (they're being created right now)
+                        if (msgId == responseMsgId) continue;
+                        await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{threadPath}/{msgId}"))
+                        {
+                            if (msgNode.Content is ThreadMessage tmsg &&
+                                tmsg.Type != ThreadMessageType.EditingPrompt)
+                            {
+                                history.Add(tmsg);
+                            }
+                        }
+                    }
+                    if (history.Count > 0)
+                    {
+                        chatClient.SetConversationHistory(history);
+                        logger.LogInformation("[ThreadExec] Loaded {Count} history messages for {ThreadPath}",
+                            history.Count, threadPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to load conversation history for {ThreadPath}", threadPath);
+            }
 
             // 3. await streaming — update response node via the stream
             var responseText = new StringBuilder();
@@ -184,6 +225,7 @@ public static class ThreadExecution
             {
                 ThreadPath = threadPath,
                 ResponseMessageId = responseMsgId,
+                ContextPath = request.ContextPath,
                 UserAccessContext = userAccessContext
             });
             chatClient.UpdateDelegationStatus = status => { currentStatus = status; };

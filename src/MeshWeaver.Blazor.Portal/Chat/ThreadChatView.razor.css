@@ -26,6 +26,14 @@
     margin: 8px 0;
 }
 
+.input-submitting {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 40px;
+    padding: 8px 0;
+}
+
 .selector-bar {
     display: flex;
     align-items: center;

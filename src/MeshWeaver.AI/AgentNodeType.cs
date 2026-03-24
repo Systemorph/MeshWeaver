@@ -1,4 +1,5 @@
 ﻿using MeshWeaver.Graph;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,6 +23,7 @@ public static class AgentNodeType
     public static TBuilder AddAgentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         builder.AddMeshNodes(CreateMeshNode());
+        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
         builder.ConfigureServices(services =>
             services.AddSingleton<IStaticNodeProvider, BuiltInAgentProvider>());
         return builder;

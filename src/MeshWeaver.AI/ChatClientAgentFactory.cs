@@ -221,7 +221,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             {
                                 Name = task.Length > 60 ? task[..57] + "..." : task,
                                 NodeType = ThreadNodeType.NodeType,
-                                Content = new MeshThread { ParentPath = execCtx.ThreadPath }
+                                Content = new MeshThread { ParentPath = execCtx.ContextPath ?? execCtx.ThreadPath }
                             };
                             await meshService.CreateNodeAsync(subThreadNode, cancellationToken);
                             chat.LastDelegationPath = subThreadPath;
@@ -236,7 +236,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                     ThreadPath = subThreadPath,
                                     UserMessageText = task,
                                     AgentName = targetId,
-                                    ContextPath = execCtx.ThreadPath
+                                    ContextPath = execCtx.ContextPath ?? execCtx.ThreadPath
                                 },
                                 o =>
                                 {
@@ -258,11 +258,18 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             {
                                 // 3. Wait for execution to complete by polling the sub-thread messages.
                                 //    Forward the sub-agent's ExecutionStatus and text preview to the parent.
+                                // Ensure access context is set for polling queries
+                                var accessService = Hub.ServiceProvider.GetService<AccessService>();
+
                                 var completed = false;
                                 var pollTimeout = DateTime.UtcNow.AddMinutes(5);
                                 while (!completed && DateTime.UtcNow < pollTimeout && !cancellationToken.IsCancellationRequested)
                                 {
                                     await Task.Delay(500, cancellationToken);
+
+                                    // Restore user context for the query (AsyncLocal may be lost after await)
+                                    if (execCtx.UserAccessContext != null)
+                                        accessService?.SetContext(execCtx.UserAccessContext);
 
                                     // Read sub-agent's current state
                                     await foreach (var node in meshService.QueryAsync<MeshNode>(
@@ -299,6 +306,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             }
 
                             // 4. Read the result from the sub-thread's assistant message
+                            var readAccessService = Hub.ServiceProvider.GetService<AccessService>();
+                            if (execCtx.UserAccessContext != null)
+                                readAccessService?.SetContext(execCtx.UserAccessContext);
                             var resultText = "";
                             await foreach (var node in meshService.QueryAsync<MeshNode>(
                                 $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
