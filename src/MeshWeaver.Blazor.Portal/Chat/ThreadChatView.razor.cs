@@ -915,7 +915,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
         return new CompletionItem
         {
-            Label = item.Path ?? item.Label,
+            Label = item.Path ?? item.Label!,
             InsertText = item.InsertText,
             Description = item.Description ?? category,
             Path = item.Path ?? item.Label,

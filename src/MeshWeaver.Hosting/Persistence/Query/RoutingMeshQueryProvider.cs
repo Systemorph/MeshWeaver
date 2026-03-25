@@ -103,10 +103,13 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
         // Cross-schema query: single UNION ALL across all searchable schemas (PostgreSQL only).
         // Only for queries on mesh_nodes — satellite queries (source:activity, source:accessed)
-        // and satellite node types (Thread) require per-partition fan-out because the stored proc
-        // only searches mesh_nodes and filters main_node = path (excluding satellites).
+        // and satellite node types (Thread, ThreadMessage) require per-partition fan-out
+        // because the stored proc only searches mesh_nodes.
+        var satelliteNodeType = parsed.ExtractNodeType() is { } nt
+            && PartitionDefinition.NodeTypeToSuffix.ContainsKey(nt);
         var useCrossSchema = _crossSchemaProvider != null
-            && parsed.Source == QuerySource.Default;
+            && parsed.Source == QuerySource.Default
+            && !satelliteNodeType;
         if (useCrossSchema)
         {
             var schemas = await _crossSchemaProvider!.GetSearchableSchemasAsync(ct);
