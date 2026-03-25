@@ -76,8 +76,8 @@ public class StorageImporterTests : IDisposable
         todoAgentExists.Should().BeTrue("ACME/Project/TodoAgent should have been imported");
 
         // Nodes outside ACME should NOT be copied
-        var executorExists = await target.ExistsAsync("Executor", ct);
-        executorExists.Should().BeFalse("Executor is not under ACME and should not be imported");
+        var workerExists = await target.ExistsAsync("Worker", ct);
+        workerExists.Should().BeFalse("Worker is not under ACME and should not be imported");
     }
 
     [Fact]
