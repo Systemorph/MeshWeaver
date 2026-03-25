@@ -755,7 +755,9 @@ public static class NodeTypeLayoutAreas
         var qs = $"type={Uri.EscapeDataString(hubPath)}";
         if (typeDef?.DefaultNamespace != null)
             qs += $"&namespace={Uri.EscapeDataString(typeDef.DefaultNamespace)}";
-        return $"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}?{qs}";
+        if (typeDef?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
+            qs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
+        return $"/create?{qs}";
     }
 
     private static UiControl BuildInfoRow(string label, string value)

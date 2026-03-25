@@ -139,6 +139,9 @@ public class PostgreSqlSqlGenerator
             clauses.Add("n.main_node = n.path");
         }
 
+        // Only return Active nodes (state=2) — excludes Transient and Deleted
+        clauses.Add("n.state = 2");
+
         var whereClause = clauses.Count > 0
             ? "WHERE " + string.Join(" AND ", clauses)
             : "";
