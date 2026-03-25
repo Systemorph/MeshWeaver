@@ -50,10 +50,6 @@ public static class CreateLayoutArea
     {
         var currentPath = host.Hub.Address.ToString();
 
-        // Check current node state once (Take(1)) to decide which view to show.
-        // We must NOT react to every nodeStream emission, because BuildCreateEditor
-        // calls host.UpdateData which resets form data — causing the editor to lose
-        // user input and rebuild the UI on every stream emission.
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
@@ -61,41 +57,21 @@ public static class CreateLayoutArea
         {
             var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
 
-            // If current node is Transient, show Create editor (own node)
+            // If current node is Transient, confirm it (set Active) and redirect to Edit
             if (currentNode?.State == MeshNodeState.Transient)
             {
-                return (UiControl?)BuildCreateEditor(host, currentNode);
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                var activeNode = currentNode with { State = MeshNodeState.Active };
+                await nodeFactory.UpdateNodeAsync(activeNode);
+
+                var editUrl = MeshNodeLayoutAreas.BuildUrl(currentPath, MeshNodeLayoutAreas.EditArea);
+                return (UiControl?)Controls.Redirect(editUrl);
             }
 
-            // Permission gate: check Create permission on current path
-            var canCreate = await PermissionHelper.CanCreateAsync(host.Hub, currentPath);
-            if (!canCreate)
-            {
-                // Fallback: in cross-hub layout rendering, ISecurityService may not have
-                // the real user's context (ImpersonateAsHub sets hub identity instead).
-                // Check if a DI-registered INodeTypeAccessRule supports Create for this type;
-                // if so, show the form and let the backend (RlsNodeValidator) enforce actual security.
-                var accessRules = host.Hub.ServiceProvider.GetServices<INodeTypeAccessRule>();
-
-                // Match by nodeType field or by hub path (NodeType hubs have path == type name)
-                var nodeType = currentNode?.NodeType;
-                var rule = accessRules.FirstOrDefault(r =>
-                    (!string.IsNullOrEmpty(nodeType) && r.NodeType.Equals(nodeType, StringComparison.OrdinalIgnoreCase))
-                    || r.NodeType.Equals(currentPath, StringComparison.OrdinalIgnoreCase));
-
-                if (rule != null && rule.SupportedOperations.Contains(NodeOperation.Create))
-                    canCreate = true;
-            }
-            if (!canCreate)
-            {
-                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
-                    .WithView(Controls.Html(
-                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to create nodes here.</p>"));
-            }
-
-            // Show unified Create New form
-            return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
+            // Not transient — redirect to the /create Blazor page with context
+            var ns = currentNode?.Namespace ?? currentPath;
+            var createUrl = $"/create?namespace={Uri.EscapeDataString(ns)}";
+            return (UiControl?)Controls.Redirect(createUrl);
         });
     }
 
@@ -544,39 +520,15 @@ public static class CreateLayoutArea
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 5. Id field with auto-generation from Name
-        var lastAutoId = "";
-        var isAutoUpdating = false;
-        host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-            .Subscribe(data =>
-            {
-                if (isAutoUpdating || data == null) return;
-                var name = data.GetValueOrDefault("name")?.ToString() ?? "";
-                var currentId = data.GetValueOrDefault("id")?.ToString() ?? "";
-                if (string.IsNullOrWhiteSpace(name)) return;
-
-                var generatedId = GenerateIdFromName(name);
-                if (string.IsNullOrEmpty(generatedId)) return;
-
-                // Auto-update if id is empty or matches the last auto-generated value
-                if (currentId != generatedId && (string.IsNullOrEmpty(currentId) || currentId == lastAutoId))
-                {
-                    lastAutoId = generatedId;
-                    isAutoUpdating = true;
-                    var updated = new Dictionary<string, object?>(data) { ["id"] = generatedId };
-                    host.UpdateData(formId, updated);
-                    isAutoUpdating = false;
-                }
-            });
-
+        // 5. Id field (optional — auto-generated from Name at submit time if left empty)
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
         {
-            Label = "Id",
-            Placeholder = "Auto-generated from name...",
+            Label = "Id (optional)",
+            Placeholder = "Leave empty to auto-generate from name",
             Immediate = true,
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 4px;"));
-        stack = stack.WithView(Controls.Body("This will be used as the node's identifier in the path")
+        stack = stack.WithView(Controls.Body("Leave empty to auto-generate from the name (e.g. \"My Article\" → \"MyArticle\")")
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
         // 6. Type picker (or readonly label if restricted to single value)
