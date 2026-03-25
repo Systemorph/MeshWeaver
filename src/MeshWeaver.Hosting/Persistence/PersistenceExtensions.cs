@@ -1,5 +1,7 @@
 using System.Text.Json;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Activity;
+using MeshWeaver.Hosting.Completion;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -282,6 +284,11 @@ public static class PersistenceExtensions
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetRequiredService<MeshCatalog>()));
+        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
+            new ChatCompletionOrchestrator(
+                sp.GetRequiredService<IMeshService>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
     }
@@ -422,6 +429,11 @@ public static class PersistenceExtensions
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetRequiredService<MeshCatalog>()));
+        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
+            new ChatCompletionOrchestrator(
+                sp.GetRequiredService<IMeshService>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
     }
@@ -469,6 +481,11 @@ public static class PersistenceExtensions
                 sp.GetServices<IMeshQueryProvider>(),
                 sp.GetRequiredService<IMessageHub>(),
                 sp.GetRequiredService<MeshCatalog>()));
+        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
+            new ChatCompletionOrchestrator(
+                sp.GetRequiredService<IMeshService>(),
+                sp.GetRequiredService<IMessageHub>(),
+                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
     }

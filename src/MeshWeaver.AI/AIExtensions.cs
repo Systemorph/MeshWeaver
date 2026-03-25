@@ -1,5 +1,8 @@
 ﻿using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -23,10 +26,41 @@ public static class AIExtensions
                     .ConfigureDefaultNodeHub(config =>
                     {
                         config.TypeRegistry.AddAITypes();
-                        return config;
+                        return config
+                            .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent);
                     })
                 ;
         }
+    }
+
+    private static async Task<IMessageDelivery> HandleSaveContent(
+        IMessageHub hub, IMessageDelivery<Plugins.SaveContentRequest> delivery, CancellationToken ct)
+    {
+        var request = delivery.Message;
+        var fileProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
+
+        if (fileProvider == null)
+        {
+            hub.Post(new Plugins.SaveContentResponse { Success = false, Error = "Content collections not configured on this node" },
+                o => o.ResponseFor(delivery));
+            return delivery.Processed();
+        }
+
+        try
+        {
+            var stream = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(request.TextContent));
+            var result = await fileProvider.SaveFileContentAsync(request.CollectionName, request.FilePath, stream, ct);
+
+            hub.Post(new Plugins.SaveContentResponse { Success = result.Success, Error = result.Error },
+                o => o.ResponseFor(delivery));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new Plugins.SaveContentResponse { Success = false, Error = ex.Message },
+                o => o.ResponseFor(delivery));
+        }
+
+        return delivery.Processed();
     }
 
     public static ITypeRegistry AddAITypes(this ITypeRegistry typeRegistry)
@@ -40,7 +74,12 @@ public static class AIExtensions
 .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
-            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest));
+            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
+            .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
+            .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
+            .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
+            .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))
+            .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse));
 
     extension(IServiceCollection services)
     {
@@ -51,6 +90,8 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
+            services.AddOptions<ModelTierConfiguration>()
+                .BindConfiguration("ModelTier");
             return services;
         }
 

@@ -30,7 +30,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Assert
         receivedChanges.Should().HaveCount(1);
@@ -54,14 +54,14 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
         receivedChanges.Should().HaveCount(1);
 
         // Act - Add a new matching node
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
 
         // Wait for debounce and processing
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert
         receivedChanges.Should().HaveCount(2);
@@ -86,13 +86,13 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Act - Delete a node
         await NodeFactory.DeleteNodeAsync("ACME/Project1");
 
         // Wait for debounce and processing
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert
         receivedChanges.Should().HaveCount(2);
@@ -116,13 +116,13 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Act - Add a node outside the scope (different path)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("Other/Project2") with { Name = "Project 2", NodeType = "Markdown" });
 
         // Wait for debounce and processing
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert - Should still only have initial emission
         receivedChanges.Should().HaveCount(1);
@@ -144,13 +144,13 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Act - Add a node within scope but not matching filter
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Task1") with { Name = "Task 1", NodeType = "Code" });
 
         // Wait for debounce and processing
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert - Should still only have initial emission (the new node doesn't match nodeType:Markdown)
         receivedChanges.Should().HaveCount(1);
@@ -170,7 +170,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial empty emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Act - Add multiple nodes rapidly (within debounce window)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
@@ -178,7 +178,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project3") with { Name = "Project 3", NodeType = "Markdown" });
 
         // Wait for debounce and processing
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert - Changes should be batched into one Added emission
         // Should have: 1 initial (empty) + 1 added (with 3 items)
@@ -200,14 +200,14 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Act - Add nodes one at a time with delay
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1") with { Name = "Project 1", NodeType = "Markdown" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert - Versions should be incrementing
         receivedChanges.Should().HaveCountGreaterThanOrEqualTo(2);
@@ -232,14 +232,14 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
 
         // Act - Dispose subscription
         subscription.Dispose();
 
         // Add more nodes after disposal
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Assert - Should only have initial emission (no changes after disposal)
         receivedChanges.Should().HaveCount(1);
@@ -258,12 +258,12 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
         receivedChanges.Should().HaveCount(1);
 
         // Act - Modify the exact path
         await NodeFactory.UpdateNodeAsync(MeshNode.FromPath("TestOrg") with { Name = "TestOrg Updated", NodeType = "Group" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Should get updated notification
         receivedChanges.Should().HaveCount(2);
@@ -271,7 +271,7 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         // Act - Add a child (should NOT trigger notification for)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("TestOrg/Project") with { Name = "Project", NodeType = "Markdown" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Should still only have 2 notifications
         receivedChanges.Should().HaveCount(2);
@@ -292,18 +292,18 @@ public class ObservableQueryTests(ITestOutputHelper output) : MonolithMeshTestBa
             .Subscribe(change => receivedChanges.Add(change));
 
         // Wait for initial emission
-        await Task.Delay(200);
+        await Task.Delay(200, TestContext.Current.CancellationToken);
         receivedChanges.Should().HaveCount(1);
 
         // Act - Add a direct child
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project2") with { Name = "Project 2", NodeType = "Markdown" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         receivedChanges.Should().HaveCount(2);
 
         // Act - Add a grandchild (should NOT trigger notification for namespace: query)
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath("ACME/Project1/Task") with { Name = "Task", NodeType = "Code" });
-        await Task.Delay(300);
+        await Task.Delay(300, TestContext.Current.CancellationToken);
 
         // Should still only have 2 notifications
         receivedChanges.Should().HaveCount(2);

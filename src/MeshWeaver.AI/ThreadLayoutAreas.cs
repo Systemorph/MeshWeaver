@@ -152,15 +152,31 @@ public static class ThreadLayoutAreas
         }).DistinctUntilChanged();
         host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
 
-        // Header: chat icon + h1 title (matching standard MeshNodeLayoutAreas.BuildHeader pattern)
+        // Push context link HTML to data section
+        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm =>
+        {
+            if (!string.IsNullOrEmpty(vm.InitialContext))
+            {
+                var displayName = System.Web.HttpUtility.HtmlEncode(vm.InitialContextDisplayName ?? vm.InitialContext);
+                host.UpdateData("contextLink",
+                    $"<a href=\"/{vm.InitialContext}\" style=\"font-size: 0.85rem; color: var(--accent-fill-rest); " +
+                    $"text-decoration: none; display: inline-flex; align-items: center; gap: 4px;\">" +
+                    $"<span style=\"font-size: 12px;\">&larr;</span> {displayName}</a>");
+            }
+        }));
+
+        // Header: chat icon + context link + h1 title
         var header = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
             .WithWidth("100%")
-            .WithStyle("align-items: center; gap: 16px; padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
-            .WithView(Controls.Html(
-                "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: contain;\" />"))
-            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
-                .WithStyle("margin: 0; font-size: 2rem; font-weight: bold;"));
+            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
+            .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("align-items: center; gap: 16px;")
+                .WithView(Controls.Html(
+                    "<img src=\"/static/NodeTypeIcons/chat.svg\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: contain;\" />"))
+                .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("title")))
+                    .WithStyle("margin: 0; font-size: 2rem; font-weight: bold;")));
 
         // Static container — never rebuilt
         return Controls.Stack

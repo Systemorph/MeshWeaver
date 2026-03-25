@@ -81,9 +81,10 @@ else
             OnChipClick="@OnChipClicked" />
 
         @* Monaco editor for markdown input with completion *@
-        <div class="input-container" style="@(!submissionHandler.IsInputEnabled ? "opacity: 0.6;" : "")">
+        <div class="input-container" style="@(!submissionHandler.IsInputEnabled ? "display: none;" : "")">
             <MonacoEditorView @ref="monacoEditor"
-                              @bind-Value="MessageText"
+                              Value="@MessageText"
+                              ValueChanged="@OnMessageTextChanged"
                               OnSubmit="SendMessageAsync"
                               OnCompletionAccepted="OnCompletionItemAccepted"
                               IsDisabled="@(!submissionHandler.IsInputEnabled)"
@@ -93,6 +94,12 @@ else
                               CompletionProvider="@GetCompletionConfig()"
                               AsyncCompletionCallback="@GetCompletionsAsync" />
         </div>
+        @if (!submissionHandler.IsInputEnabled)
+        {
+            <div class="input-container input-submitting">
+                <FluentProgressBar />
+            </div>
+        }
 
         <!-- Selector bar (agent + model + send) — right-aligned -->
         <div class="selector-bar">

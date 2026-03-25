@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
@@ -467,10 +468,10 @@ public class MeshPluginTest : MonolithMeshTestBase
         };
         var plugin = new MeshPlugin(Mesh, mockChat);
 
-        var result = plugin.NavigateTo("@Agent/Navigator");
+        var result = plugin.NavigateTo("@Agent/Orchestrator");
 
         result.Should().Contain("Navigating to:");
-        result.Should().Contain("Agent/Navigator");
+        result.Should().Contain("Agent/Orchestrator");
         displayedControls.Should().HaveCount(1, "DisplayLayoutArea should have been called once");
     }
 
@@ -546,37 +547,37 @@ public class MeshPluginTest : MonolithMeshTestBase
     #region Write Tool Wiring
 
     [Fact]
-    public async Task WriteToolWiring_ExecutorAgent_GetsWriteTools()
+    public async Task WriteToolWiring_WorkerAgent_GetsWriteTools()
     {
-        // The Executor agent description contains "create, update, and delete"
+        // The Worker agent description contains "create, update, and delete"
         // so it should get CreateAllTools() (6 tools) rather than CreateTools() (3 tools)
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
-        var executor = agents.FirstOrDefault(a => a.Name == "Executor");
-        executor.Should().NotBeNull("Executor agent should be loaded from test data");
-        executor!.AgentConfiguration.Should().NotBeNull();
-        executor.AgentConfiguration!.Description.Should().Contain("create",
-            "Executor description should mention create to trigger write tool wiring");
+        var worker = agents.FirstOrDefault(a => a.Name == "Worker");
+        worker.Should().NotBeNull("Worker agent should be loaded from test data");
+        worker!.AgentConfiguration.Should().NotBeNull();
+        worker.AgentConfiguration!.Description.Should().Contain("create",
+            "Worker description should mention create to trigger write tool wiring");
     }
 
     [Fact]
-    public async Task WriteToolWiring_NavigatorAgent_DoesNotGetWriteTools()
+    public async Task WriteToolWiring_OrchestratorAgent_DoesNotGetWriteTools()
     {
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
-        var navigator = agents.FirstOrDefault(a => a.Name == "Navigator");
-        navigator.Should().NotBeNull("Navigator agent should be loaded from test data");
-        navigator!.AgentConfiguration.Should().NotBeNull();
-        // Navigator description says "Understands user intent, navigates the mesh, and delegates"
+        var orchestrator = agents.FirstOrDefault(a => a.Name == "Orchestrator");
+        orchestrator.Should().NotBeNull("Orchestrator agent should be loaded from test data");
+        orchestrator!.AgentConfiguration.Should().NotBeNull();
+        // Orchestrator description says "Understands user intent, navigates the mesh, and delegates"
         // which does NOT contain create/update/delete
-        navigator.AgentConfiguration!.Description.Should().NotContain("create");
-        navigator.AgentConfiguration!.Description.Should().NotContain("delete");
+        orchestrator.AgentConfiguration!.Description.Should().NotContain("create");
+        orchestrator.AgentConfiguration!.Description.Should().NotContain("delete");
     }
 
     #endregion
@@ -709,5 +710,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
             => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
         public void SetSelectedAgent(string? agentName) { }
+        public ThreadExecutionContext? ExecutionContext => null;
+        public string? LastDelegationPath { get; set; }
+        public Action<string>? UpdateDelegationStatus { get; set; }
     }
 }

@@ -6,7 +6,9 @@ using MeshWeaver.Domain;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
 
@@ -51,6 +53,7 @@ public static class ThreadMessageLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>();
 
         // Push ThreadMessage text to data section for data-bound rendering
+        // Convert @path references to clickable markdown links (absolute paths)
         host.RegisterForDisposal(nodeStream!
             .Select(nodes =>
             {
@@ -59,7 +62,7 @@ public static class ThreadMessageLayoutAreas
                 return msg?.Text ?? "";
             })
             .DistinctUntilChanged()
-            .Subscribe(text => host.UpdateData("text", text)));
+            .Subscribe(text => host.UpdateData("text", ConvertReferencesToLinks(text))));
 
         // Push IsExecuting flag to data section
         host.RegisterForDisposal(nodeStream!
@@ -82,6 +85,17 @@ public static class ThreadMessageLayoutAreas
             })
             .DistinctUntilChanged()
             .Subscribe(status => host.UpdateData("executionStatus", status)));
+
+        // Push ToolCalls to data section
+        host.RegisterForDisposal(nodeStream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var msg = node?.Content as ThreadMessage;
+                return (object)(msg?.ToolCalls ?? System.Collections.Immutable.ImmutableList<ToolCallEntry>.Empty);
+            })
+            .DistinctUntilChanged()
+            .Subscribe(calls => host.UpdateData("toolCalls", calls)));
 
         // Emit control ONCE — role/author/type are fixed, text is data-bound
         return nodeStream!
@@ -114,9 +128,12 @@ public static class ThreadMessageLayoutAreas
         var bubble = new ThreadMessageBubbleControl()
             .WithRole(msg.Role)
             .WithAuthorName(authorName)
+            .WithModelName(msg.ModelName)
+            .WithTimestamp(msg.Timestamp)
             .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")))
             .WithIsExecuting(new JsonPointerReference(LayoutAreaReference.GetDataPointer("isExecuting")))
             .WithExecutionStatus(new JsonPointerReference(LayoutAreaReference.GetDataPointer("executionStatus")))
+            .WithToolCalls(new JsonPointerReference(LayoutAreaReference.GetDataPointer("toolCalls")))
             .WithThreadPath(threadPath)
             .WithClickAction(_ =>
             {
@@ -128,8 +145,10 @@ public static class ThreadMessageLayoutAreas
             });
 
         // Action buttons — small stealth icon buttons, right-aligned
+        // Hidden during execution via CSS :has() on the parent container
         var actionRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
+            .WithClass("thread-msg-actions")
             .WithStyle("gap: 2px; justify-content: flex-end; margin-top: -4px; margin-bottom: 4px; opacity: 0.6;");
 
         if (isUser)
@@ -177,9 +196,162 @@ public static class ThreadMessageLayoutAreas
                     }, o => o.WithTarget(new Address(threadPath)));
                 }));
 
-        return Controls.Stack
-            .WithView(bubble)
-            .WithView(actionRow);
+        var container = Controls.Stack
+            .WithClass("thread-msg-container")
+            .WithStyle(isUser ? "align-items: flex-end;" : "")
+            .WithView(bubble);
+
+        // For assistant messages: show delegation sub-threads with inline preview
+        if (!isUser)
+        {
+            var messagePath = $"{threadPath}/{messageId}";
+            var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+            if (meshService != null)
+            {
+                // Poll for sub-threads and their last message's live state
+                host.RegisterForDisposal(
+                    Observable.Timer(TimeSpan.Zero, TimeSpan.FromSeconds(1))
+                        .SelectMany(_ => Observable.FromAsync(async () =>
+                        {
+                            try
+                            {
+                                var subs = await meshService
+                                    .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
+                                    .ToListAsync();
+                                return await BuildDelegationHtmlAsync(subs, meshService);
+                            }
+                            catch { return ""; }
+                        }))
+                        .DistinctUntilChanged()
+                        .Subscribe(html => host.UpdateData("delegationsHtml", html)));
+
+                container = container.WithView(
+                    Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("delegationsHtml"))));
+            }
+        }
+
+        container = container.WithView(actionRow);
+        return container;
+    }
+
+    /// <summary>
+    /// Builds HTML for delegation sub-threads recursively: link + inline preview + nested sub-delegations.
+    /// Shows the sub-agent's execution status or last lines of response text.
+    /// Recurses up to maxDepth levels for nested delegations.
+    /// </summary>
+    private static async Task<string> BuildDelegationHtmlAsync(
+        IReadOnlyList<MeshNode> subThreads, IMeshService meshService, int depth = 0, int maxDepth = 4)
+    {
+        if (subThreads.Count == 0 || depth > maxDepth) return "";
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<div style=\"margin: 4px 0 8px 0;\">");
+
+        foreach (var st in subThreads)
+        {
+            var name = System.Web.HttpUtility.HtmlEncode(
+                st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
+            var href = $"/{st.Path}/{ThreadNodeType.ThreadArea}";
+
+            // Header link — indent deeper levels
+            sb.Append($"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 2px 0; " +
+                       $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none;\">" +
+                       $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>");
+
+            // Get last message's live state
+            var thread = st.Content as AI.Thread;
+            if (thread?.Messages.Count > 0)
+            {
+                var lastMsgId = thread.Messages.Last();
+                var lastMsgPath = $"{st.Path}/{lastMsgId}";
+                try
+                {
+                    await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{lastMsgPath}"))
+                    {
+                        if (msgNode.Content is ThreadMessage tmsg)
+                        {
+                            // During execution: show live status/preview
+                            // After completion: collapse to just the link (no preview text)
+                            if (tmsg.IsExecuting)
+                            {
+                                string preview;
+                                if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
+                                {
+                                    preview = System.Web.HttpUtility.HtmlEncode(tmsg.ExecutionStatus);
+                                }
+                                else if (!string.IsNullOrEmpty(tmsg.Text))
+                                {
+                                    var lines = tmsg.Text.Split('\n');
+                                    var lastLines = lines.Length > 4 ? lines[^4..] : lines;
+                                    preview = System.Web.HttpUtility.HtmlEncode(
+                                        string.Join("\n", lastLines).Trim());
+                                    if (preview.Length > 300) preview = "..." + preview[^297..];
+                                }
+                                else
+                                {
+                                    preview = "Processing...";
+                                }
+
+                                sb.Append($"<div style=\"font-size: 0.72rem; color: var(--neutral-foreground-hint); " +
+                                           $"white-space: pre-wrap; padding: 2px 8px; border-left: 2px solid var(--accent-fill-rest); " +
+                                           $"margin: 2px 0 4px 12px; max-height: 80px; overflow: auto;\">{preview}</div>");
+                            }
+
+                            // Recurse: check if this message has its own sub-delegations
+                            if (depth < maxDepth)
+                            {
+                                try
+                                {
+                                    var nestedSubs = await meshService
+                                        .QueryAsync<MeshNode>($"namespace:{lastMsgPath} nodeType:{ThreadNodeType.NodeType}")
+                                        .ToListAsync();
+                                    if (nestedSubs.Count > 0)
+                                    {
+                                        var nestedHtml = await BuildDelegationHtmlAsync(nestedSubs, meshService, depth + 1, maxDepth);
+                                        if (!string.IsNullOrEmpty(nestedHtml))
+                                        {
+                                            sb.Append($"<div style=\"margin-left: 16px;\">{nestedHtml}</div>");
+                                        }
+                                    }
+                                }
+                                catch { /* ignore nested query errors */ }
+                            }
+                        }
+                    }
+                }
+                catch { /* ignore preview errors */ }
+            }
+        }
+
+        sb.Append("</div>");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Converts inline @path references in text to clickable markdown links.
+    /// @path/to/node → [@path/to/node](@path/to/node)
+    /// The href uses @prefix so LinkUrlCleanupExtension resolves it
+    /// (strips @, resolves relative paths against current node).
+    /// Skips references already inside markdown links or code blocks.
+    /// </summary>
+    private static string ConvertReferencesToLinks(string text)
+    {
+        if (string.IsNullOrEmpty(text) || !text.Contains('@'))
+            return text;
+
+        // Match @path references not already inside markdown link syntax
+        return System.Text.RegularExpressions.Regex.Replace(
+            text,
+            @"(?<!\[)(?<!\()@([a-zA-Z0-9_/\-.:]+[a-zA-Z0-9_/\-])(?!\])(?!\))",
+            match =>
+            {
+                var path = match.Groups[1].Value;
+                // Don't convert email addresses
+                if (path.Contains('@'))
+                    return match.Value;
+                // Use @prefix in href — LinkUrlCleanupExtension will strip @ and resolve
+                return $"[`@{path}`](@{path})";
+            });
     }
 
     /// <summary>

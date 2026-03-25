@@ -107,6 +107,17 @@ Flexible security through `IDataValidator`:
 
 ---
 
+## 7. Deployment
+
+Deploy with **.NET Aspire** to Azure Container Apps:
+- Multiple modes: `local`, `local-test`, `local-prod`, `test`, `prod`, `monolith`
+- Aspire CLI for build, push, and provisioning
+- PostgreSQL, Orleans, Blob Storage, Application Insights
+
+[Read more: Deployment](Deployment)
+
+---
+
 # Key Principles
 
 | Principle | Description |

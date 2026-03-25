@@ -52,7 +52,8 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         if (!string.IsNullOrEmpty(request.UserId))
             return request.UserId;
 
-        var userId = _accessService?.Context?.ObjectId;
+        var userId = _accessService?.Context?.ObjectId
+                     ?? _accessService?.CircuitContext?.ObjectId;
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 

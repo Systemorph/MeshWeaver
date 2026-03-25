@@ -1,8 +1,36 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
+
+/// <summary>
+/// Tracks execution context for delegation sub-thread creation.
+/// Set by ThreadExecution, consumed by delegation tools.
+/// </summary>
+public record ThreadExecutionContext
+{
+    /// <summary>Thread path where the current execution is running.</summary>
+    public required string ThreadPath { get; init; }
+
+    /// <summary>Response message ID within the thread.</summary>
+    public required string ResponseMessageId { get; init; }
+
+    /// <summary>
+    /// The original content node path (e.g., "PartnerRe/AiConsulting").
+    /// Propagated through all delegation levels so sub-threads always
+    /// know the root context for namespace resolution and agent initialization.
+    /// </summary>
+    public string? ContextPath { get; init; }
+
+    /// <summary>
+    /// The user's AccessContext captured from the original delivery.
+    /// Used to propagate user identity through delegation chains.
+    /// </summary>
+    public AccessContext? UserAccessContext { get; init; }
+}
 
 /// <summary>
 /// Defines the type of a thread message for rendering purposes.
@@ -165,4 +193,17 @@ public record ThreadMessage
     /// Updated during streaming when tool calls or delegations occur.
     /// </summary>
     public string? ExecutionStatus { get; init; }
+
+    /// <summary>
+    /// Completed tool calls from this message's execution.
+    /// Populated when execution finishes, used for post-execution inspection.
+    /// </summary>
+    public ImmutableList<ToolCallEntry> ToolCalls { get; init; } = [];
+
+    /// <summary>
+    /// MeshNode changes made during this message's execution.
+    /// Tracks path, operation (Created/Updated/Deleted), and version before/after
+    /// so the version repo can load content at each point.
+    /// </summary>
+    public ImmutableList<NodeChangeEntry> NodeChanges { get; init; } = [];
 }

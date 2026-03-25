@@ -1,7 +1,10 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -19,11 +22,53 @@ public static class ThreadExecution
 {
     /// <summary>
     /// Registers thread execution handlers on a hub configuration.
+    /// Includes a startup recovery check for stale executing cells from crashed sessions.
     /// </summary>
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
-            .WithHandler<CancelThreadStreamRequest>(HandleCancelStream);
+            .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
+            .WithInitialization(RecoverStaleExecutingCells);
+
+    /// <summary>
+    /// On hub startup, find any ThreadMessage nodes that are still marked as IsExecuting=true.
+    /// These are from crashed/restarted sessions. Mark them as cancelled so the UI shows the correct state.
+    /// </summary>
+    private static async Task RecoverStaleExecutingCells(IMessageHub hub, CancellationToken ct)
+    {
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService == null) return;
+
+        var threadPath = hub.Address.ToString();
+        try
+        {
+            await foreach (var node in meshService.QueryAsync<MeshNode>(
+                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+            {
+                if (node.Content is ThreadMessage { IsExecuting: true } tmsg)
+                {
+                    logger?.LogInformation("[ThreadExec] Recovery: marking stale executing cell {MsgId} as crashed in {ThreadPath}",
+                        tmsg.Id, threadPath);
+
+                    var recovered = node with
+                    {
+                        Content = tmsg with
+                        {
+                            IsExecuting = false,
+                            ExecutionStatus = null,
+                            Text = (tmsg.Text ?? "") + (string.IsNullOrEmpty(tmsg.Text) ? "*Interrupted — session restarted*" : "\n\n*Interrupted — session restarted*")
+                        }
+                    };
+                    await meshService.UpdateNodeAsync(recovered, ct);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "[ThreadExec] Recovery failed for {ThreadPath}", threadPath);
+        }
+    }
 
     /// <summary>
     /// Handles SubmitMessageRequest on the thread hub.
@@ -146,8 +191,18 @@ public static class ThreadExecution
         var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(responsePath), new MeshNodeReference());
 
+        // Declared outside try so catch blocks can include partial results
+        var toolCallLog = new List<ToolCallEntry>();
+        string? firstDelegationPath = null;
+
         try
         {
+            // Set user access context for the entire execution scope
+            // so all tool calls (Create, Update, etc.) run under the correct user identity
+            var accessService = parentHub.ServiceProvider.GetService<AccessService>();
+            if (delivery.AccessContext != null)
+                accessService?.SetContext(delivery.AccessContext);
+
             // 1. Prepare agent
             logger.LogDebug("[ThreadExec] ExecuteMessageAsync: preparing agent for {ThreadPath}, responsePath={ResponsePath}",
                 threadPath, responsePath);
@@ -162,11 +217,64 @@ public static class ThreadExecution
             if (request.Attachments is { Count: > 0 })
                 chatClient.SetAttachments(request.Attachments);
 
+            // Load conversation history from existing thread messages (resume scenario)
+            try
+            {
+                var meshService = parentHub.ServiceProvider.GetRequiredService<IMeshService>();
+                var threadNode = await meshService.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+                var threadContent = threadNode?.Content as AI.Thread;
+                if (threadContent?.Messages.Count > 0)
+                {
+                    var history = new List<ThreadMessage>();
+                    foreach (var msgId in threadContent.Messages)
+                    {
+                        // Skip the current input/output messages (they're being created right now)
+                        if (msgId == responseMsgId) continue;
+                        await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{threadPath}/{msgId}"))
+                        {
+                            if (msgNode.Content is ThreadMessage tmsg &&
+                                tmsg.Type != ThreadMessageType.EditingPrompt)
+                            {
+                                history.Add(tmsg);
+                            }
+                        }
+                    }
+                    if (history.Count > 0)
+                    {
+                        chatClient.SetConversationHistory(history);
+                        logger.LogInformation("[ThreadExec] Loaded {Count} history messages for {ThreadPath}",
+                            history.Count, threadPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to load conversation history for {ThreadPath}", threadPath);
+            }
+
             // 3. await streaming — update response node via the stream
             var responseText = new StringBuilder();
             var lastUpdate = DateTimeOffset.MinValue;
             var lastStatusUpdate = DateTimeOffset.MinValue;
             string? currentStatus = null;
+            var pendingCalls = new Dictionary<string, FunctionCallContent>();
+            string? lastCallKey = null;
+            var lastPushedToolCallCount = 0;
+
+            // Set execution context for delegation sub-thread creation
+            // Capture the user's AccessContext from the delivery so it propagates through delegations
+            var userAccessContext = delivery.AccessContext;
+            logger.LogInformation("[ThreadExec] ExecuteMessageAsync: user={User}, threadPath={ThreadPath}",
+                userAccessContext?.ObjectId ?? "(no-user)", threadPath);
+            chatClient.SetExecutionContext(new ThreadExecutionContext
+            {
+                ThreadPath = threadPath,
+                ResponseMessageId = responseMsgId,
+                ContextPath = request.ContextPath,
+                UserAccessContext = userAccessContext
+            });
+            chatClient.UpdateDelegationStatus = status => { currentStatus = status; };
+            chatClient.ForwardToolCall = entry => { toolCallLog.Add(entry); };
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
 
             await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
@@ -176,19 +284,59 @@ public static class ThreadExecution
                 {
                     if (content is FunctionCallContent functionCall)
                     {
-                        currentStatus = $"Calling {functionCall.Name}...";
+                        // Build detailed status: formatted name + arguments
+                        var formatted = ToolStatusFormatter.Format(functionCall);
+                        var argsDetail = SerializeArgs(functionCall.Arguments);
+                        currentStatus = argsDetail != null
+                            ? $"{formatted}\n{argsDetail}"
+                            : formatted;
+
+                        // Track pending call — use CallId if available, fall back to Name+counter
+                        var callKey = functionCall.CallId ?? $"{functionCall.Name}_{pendingCalls.Count}";
+                        pendingCalls[callKey] = functionCall;
+                        lastCallKey = callKey;
                     }
-                    else if (content is FunctionResultContent)
+                    else if (content is FunctionResultContent functionResult)
                     {
+                        // Match result to pending call — try CallId first, then last pending call
+                        var resultKey = functionResult.CallId ?? lastCallKey;
+                        FunctionCallContent? originalCall = null;
+                        if (resultKey != null)
+                            pendingCalls.Remove(resultKey, out originalCall);
+                        originalCall ??= pendingCalls.Values.LastOrDefault();
+
+                        if (originalCall != null)
+                        {
+                            string? delegationPath = null;
+                            if (originalCall.Name.StartsWith("delegate_to"))
+                            {
+                                delegationPath = chatClient.LastDelegationPath;
+                                chatClient.LastDelegationPath = null;
+                                firstDelegationPath ??= delegationPath;
+                            }
+
+                            toolCallLog.Add(new ToolCallEntry
+                            {
+                                Name = originalCall.Name,
+                                DisplayName = ToolStatusFormatter.Format(originalCall),
+                                Arguments = SerializeArgs(originalCall.Arguments),
+                                Result = Truncate(functionResult.Result?.ToString()),
+                                IsSuccess = functionResult.Result?.ToString()?.StartsWith("Error") != true,
+                                DelegationPath = delegationPath,
+                                Timestamp = DateTime.UtcNow
+                            });
+                        }
                         currentStatus = null; // Tool call completed
                     }
                 }
 
-                // Update execution status when it changes (throttled)
-                if (currentStatus != null && responseText.Length == 0
+                // Update execution status when status or tool calls change (throttled)
+                if ((currentStatus != null || toolCallLog.Count > lastPushedToolCallCount) && responseText.Length == 0
                     && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
                 {
-                    var status = currentStatus;
+                    var status = currentStatus ?? "";
+                    var liveToolCalls = toolCallLog.ToImmutableList();
+                    lastPushedToolCallCount = liveToolCalls.Count;
                     responseStream.Update(current =>
                     {
                         if (current == null) return null;
@@ -205,7 +353,8 @@ public static class ThreadExecution
                                 AgentName = request.AgentName,
                                 ModelName = request.ModelName,
                                 IsExecuting = true,
-                                ExecutionStatus = status
+                                ExecutionStatus = status,
+                                ToolCalls = liveToolCalls
                             }
                         };
                         return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -248,6 +397,7 @@ public static class ThreadExecution
 
             // 4. Final update — mark execution as complete
             var finalText = responseText.ToString();
+            var finalToolCalls = toolCallLog.ToImmutableList();
             responseStream.Update(current =>
             {
                 if (current == null) return null;
@@ -263,7 +413,9 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
                         IsExecuting = false,
-                        ExecutionStatus = null
+                        ExecutionStatus = null,
+                        ToolCalls = finalToolCalls,
+                        DelegationPath = firstDelegationPath
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -291,7 +443,9 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
                         IsExecuting = false,
-                        ExecutionStatus = null
+                        ExecutionStatus = null,
+                        ToolCalls = toolCallLog.ToImmutableList(),
+                        DelegationPath = firstDelegationPath
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -319,7 +473,9 @@ public static class ThreadExecution
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
                         IsExecuting = false,
-                        ExecutionStatus = null
+                        ExecutionStatus = null,
+                        ToolCalls = toolCallLog.ToImmutableList(),
+                        DelegationPath = firstDelegationPath
                     }
                 };
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -329,6 +485,44 @@ public static class ThreadExecution
         }
 
         return delivery.Processed();
+    }
+
+    private static string? SerializeArgs(IDictionary<string, object?>? args)
+    {
+        if (args == null || args.Count == 0)
+            return null;
+        try
+        {
+            // Format as readable key=value pairs instead of raw JSON
+            var parts = new List<string>();
+            foreach (var (key, value) in args)
+            {
+                var valStr = value switch
+                {
+                    null => "null",
+                    JsonElement je => je.ValueKind == JsonValueKind.String
+                        ? je.GetString() ?? ""
+                        : je.ToString(),
+                    _ => value.ToString() ?? ""
+                };
+                // Truncate long values and unescape unicode
+                if (valStr.Length > 200)
+                    valStr = valStr[..197] + "...";
+                parts.Add($"{key}: {valStr}");
+            }
+            return string.Join("\n", parts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? Truncate(string? value, int maxLength = 500)
+    {
+        if (value == null || value.Length <= maxLength)
+            return value;
+        return value[..(maxLength - 3)] + "...";
     }
 
     private static IMessageDelivery HandleCancelStream(

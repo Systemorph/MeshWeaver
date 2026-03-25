@@ -41,7 +41,7 @@ public class ChatAttachmentFromAutocompleteTest
     public void AgentPaths_FilteredAsCommands()
     {
         // Agent paths starting with lowercase "agent/" should be filtered (they are commands)
-        var paths = MarkdownReferenceExtractor.GetUniquePaths("use @agent/Research for this");
+        var paths = MarkdownReferenceExtractor.GetUniquePaths("use @agent/Researcher for this");
         paths.Should().BeEmpty("lowercase @agent/ is a command, not a reference");
     }
 
@@ -50,9 +50,9 @@ public class ChatAttachmentFromAutocompleteTest
     public void AgentNamespacePaths_NotFiltered()
     {
         // Agent paths starting with uppercase "Agent/" are real namespace paths
-        var paths = MarkdownReferenceExtractor.GetUniquePaths("reference @Agent/Research");
+        var paths = MarkdownReferenceExtractor.GetUniquePaths("reference @Agent/Researcher");
         paths.Should().ContainSingle()
-            .Which.Should().Be("Agent/Research");
+            .Which.Should().Be("Agent/Researcher");
     }
 
     /// <summary>Tests case-insensitive deduplication of references.</summary>

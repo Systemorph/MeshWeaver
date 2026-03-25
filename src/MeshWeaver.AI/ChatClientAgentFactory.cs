@@ -1,9 +1,14 @@
+using System.Text;
 using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MeshThread = MeshWeaver.AI.Thread;
 
 namespace MeshWeaver.AI;
 
@@ -55,6 +60,15 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
+        // Resolve model tier to concrete model name if PreferredModel isn't set
+        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
+        {
+            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
+            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
+            if (!string.IsNullOrEmpty(resolvedModel))
+                config = config with { PreferredModel = resolvedModel };
+        }
+
         var name = config.Id;
         var description = config.Description ?? string.Empty;
         var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
@@ -89,6 +103,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
         }
 
+        // Add store_plan tool to all agents
+        tools = tools.Append(PlanStorageTool.Create(Hub, chat));
+
         // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
             chatClient: chatClient,
@@ -99,6 +116,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             loggerFactory: null,
             services: null
         );
+
+        // Enable parallel tool execution — when the LLM returns multiple tool calls
+        // in a single response turn, they will be invoked concurrently
+        var functionInvoker = agent.ChatClient.GetService<Microsoft.Extensions.AI.FunctionInvokingChatClient>();
+        if (functionInvoker != null)
+            functionInvoker.AllowConcurrentInvocation = true;
 
         return agent;
     }
@@ -176,32 +199,186 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         };
                     }
 
-                    Logger.LogInformation("Executing delegation from {Source} to {Target}: {Task}",
-                        agentConfig.Id, targetId, task);
+                    var execCtx = chat.ExecutionContext;
+                    var userIdentity = execCtx?.UserAccessContext?.ObjectId ?? "(no-user)";
+                    Logger.LogInformation(
+                        "[Delegation] {Source} → {Target}, user={User}, task={Task}",
+                        agentConfig.Id, targetId, userIdentity, task.Length > 100 ? task[..97] + "..." : task);
 
-                    // Create an isolated session for the target agent
+                    // Create sub-thread and submit via SubmitMessageRequest (same as regular threads)
+                    string? subThreadPath = null;
+                    if (execCtx != null)
+                    {
+                        try
+                        {
+                            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                            var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
+                            var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
+                            subThreadPath = $"{parentMsgPath}/{subThreadId}";
+
+                            // 1. Create the sub-thread node (directly under the message, no extra _Thread)
+                            var subThreadNode = new MeshNode(subThreadId, parentMsgPath)
+                            {
+                                Name = task.Length > 60 ? task[..57] + "..." : task,
+                                NodeType = ThreadNodeType.NodeType,
+                                Content = new MeshThread { ParentPath = execCtx.ContextPath ?? execCtx.ThreadPath }
+                            };
+                            await meshService.CreateNodeAsync(subThreadNode, cancellationToken);
+                            chat.LastDelegationPath = subThreadPath;
+                            Logger.LogInformation("Created delegation sub-thread at {Path}", subThreadPath);
+
+                            // 2. Submit message to sub-thread via SubmitMessageRequest
+                            //    This goes through the full ThreadExecution pipeline:
+                            //    creates input/output cells, streams agent response, persists everything.
+                            var submitResponse = await Hub.AwaitResponse(
+                                new SubmitMessageRequest
+                                {
+                                    ThreadPath = subThreadPath,
+                                    UserMessageText = task,
+                                    AgentName = targetId,
+                                    ContextPath = execCtx.ContextPath ?? execCtx.ThreadPath
+                                },
+                                o =>
+                                {
+                                    o = o.WithTarget(new Address(subThreadPath));
+                                    // Forward the original user's AccessContext so the sub-thread
+                                    // runs under the correct user identity for permission checks
+                                    if (execCtx.UserAccessContext != null)
+                                        o = o.WithAccessContext(execCtx.UserAccessContext);
+                                    return o;
+                                },
+                                cancellationToken);
+
+                            if (!submitResponse.Message.Success)
+                            {
+                                Logger.LogWarning("Delegation submit failed for {Path}: {Error}",
+                                    subThreadPath, submitResponse.Message.Error);
+                            }
+                            else
+                            {
+                                // 3. Wait for execution to complete by polling the sub-thread messages.
+                                //    Forward the sub-agent's ExecutionStatus and text preview to the parent.
+                                // Ensure access context is set for polling queries
+                                var accessService = Hub.ServiceProvider.GetService<AccessService>();
+
+                                var completed = false;
+                                var pollTimeout = DateTime.UtcNow.AddMinutes(5);
+                                var forwardedToolCallCount = 0; // Track how many we've already forwarded
+
+                                while (!completed && DateTime.UtcNow < pollTimeout && !cancellationToken.IsCancellationRequested)
+                                {
+                                    await Task.Delay(500, cancellationToken);
+
+                                    // Restore user context for the query (AsyncLocal may be lost after await)
+                                    if (execCtx.UserAccessContext != null)
+                                        accessService?.SetContext(execCtx.UserAccessContext);
+
+                                    // Read sub-agent's current state
+                                    await foreach (var node in meshService.QueryAsync<MeshNode>(
+                                        $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                                    {
+                                        if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
+                                        {
+                                            // Forward NEW tool calls from sub-thread to parent
+                                            if (tmsg.ToolCalls.Count > forwardedToolCallCount)
+                                            {
+                                                for (var i = forwardedToolCallCount; i < tmsg.ToolCalls.Count; i++)
+                                                {
+                                                    var subCall = tmsg.ToolCalls[i];
+                                                    chat.ForwardToolCall?.Invoke(subCall with
+                                                    {
+                                                        DisplayName = $"{targetId}: {subCall.DisplayName ?? subCall.Name}",
+                                                        DelegationPath = subThreadPath
+                                                    });
+                                                }
+                                                forwardedToolCallCount = tmsg.ToolCalls.Count;
+                                            }
+
+                                            if (!tmsg.IsExecuting)
+                                            {
+                                                completed = true;
+                                                break;
+                                            }
+
+                                            // Forward sub-agent's live status to parent bubble
+                                            if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
+                                            {
+                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {tmsg.ExecutionStatus}");
+                                            }
+                                            else if (!string.IsNullOrEmpty(tmsg.Text))
+                                            {
+                                                var preview = tmsg.Text.Length > 100
+                                                    ? "..." + tmsg.Text[^100..]
+                                                    : tmsg.Text;
+                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {preview}");
+                                            }
+                                            else
+                                            {
+                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // 4. Read the result from the sub-thread's assistant message
+                            var readAccessService = Hub.ServiceProvider.GetService<AccessService>();
+                            if (execCtx.UserAccessContext != null)
+                                readAccessService?.SetContext(execCtx.UserAccessContext);
+                            var resultText = "";
+                            await foreach (var node in meshService.QueryAsync<MeshNode>(
+                                $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                            {
+                                if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
+                                {
+                                    resultText = tmsg.Text ?? "";
+                                    break;
+                                }
+                            }
+
+                            Logger.LogInformation("Delegation to {Target} completed via sub-thread, result length: {Length}",
+                                targetId, resultText.Length);
+
+                            return new DelegationResult
+                            {
+                                AgentName = targetId,
+                                Task = task,
+                                Result = resultText,
+                                Success = true,
+                                ThreadId = subThreadPath
+                            };
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogWarning(ex, "Failed delegation via sub-thread for {Target}", targetId);
+                        }
+                    }
+
+                    // Fallback: run in-memory if no execution context or sub-thread creation failed
+                    Logger.LogInformation("Delegation to {Target}: running in-memory (no sub-thread)", targetId);
                     var session = await targetAgent.CreateSessionAsync();
+                    var resultBuilder = new StringBuilder();
 
-                    // Run the target agent to completion
-                    var response = await targetAgent.RunAsync(task, session, cancellationToken: cancellationToken);
-
-                    // Extract text from the response messages
-                    var resultText = string.Join("\n", response.Messages
-                        .Where(m => m.Role == ChatRole.Assistant)
-                        .SelectMany(m => m.Contents)
-                        .OfType<TextContent>()
-                        .Select(t => t.Text)
-                        .Where(t => !string.IsNullOrEmpty(t)));
-
-                    Logger.LogInformation("Delegation to {Target} completed, result length: {Length}",
-                        targetId, resultText.Length);
+                    await foreach (var update in targetAgent.RunStreamingAsync(task, session, cancellationToken: cancellationToken))
+                    {
+                        foreach (var content in update.Contents)
+                        {
+                            if (content is FunctionCallContent subCall)
+                            {
+                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {ToolStatusFormatter.Format(subCall)}");
+                            }
+                        }
+                        if (!string.IsNullOrEmpty(update.Text))
+                            resultBuilder.Append(update.Text);
+                    }
 
                     return new DelegationResult
                     {
                         AgentName = targetId,
                         Task = task,
-                        Result = resultText,
-                        Success = true
+                        Result = resultBuilder.ToString(),
+                        Success = true,
+                        ThreadId = subThreadPath
                     };
                 },
                 Logger);
@@ -241,6 +418,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var allTools = pluginRef.Name switch
         {
             "Mesh" => (IEnumerable<AITool>)new MeshPlugin(Hub, chat).CreateAllTools(),
+            "Collaboration" => new CollaborationPlugin(Hub, chat).CreateTools(),
+            "ContentCollection" => new ContentCollectionPlugin(Hub, chat).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()
                     .FirstOrDefault(p => string.Equals(p.Name, pluginRef.Name, StringComparison.OrdinalIgnoreCase))
                     ?.CreateTools()

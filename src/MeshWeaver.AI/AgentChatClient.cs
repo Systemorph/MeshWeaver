@@ -57,6 +57,21 @@ public class AgentChatClient : IAgentChat
 
     public AgentContext? Context { get; private set; }
 
+    /// <inheritdoc />
+    public ThreadExecutionContext? ExecutionContext { get; private set; }
+
+    /// <inheritdoc />
+    public string? LastDelegationPath { get; set; }
+
+    /// <inheritdoc />
+    public Action<string>? UpdateDelegationStatus { get; set; }
+
+    /// <inheritdoc />
+    public Action<ToolCallEntry>? ForwardToolCall { get; set; }
+
+    /// <summary>Sets the execution context for delegation sub-thread creation.</summary>
+    public void SetExecutionContext(ThreadExecutionContext? ctx) => ExecutionContext = ctx;
+
     public void SetThreadId(string threadId)
     {
         if (string.IsNullOrEmpty(threadId))
@@ -211,25 +226,66 @@ public class AgentChatClient : IAgentChat
         if (!string.IsNullOrEmpty(cachedSystemPrompt))
             messageText.Append(cachedSystemPrompt);
 
+        // User identity
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        var userContext = accessService?.Context ?? accessService?.CircuitContext;
+        if (userContext != null)
+        {
+            messageText.AppendLine("# Current User");
+            messageText.AppendLine();
+            messageText.AppendLine($"- **User ID:** `{userContext.ObjectId}`");
+            if (!string.IsNullOrEmpty(userContext.Name))
+                messageText.AppendLine($"- **Name:** {userContext.Name}");
+            messageText.AppendLine($"- **User namespace:** `User/{userContext.ObjectId}`");
+            messageText.AppendLine();
+        }
+
         // Dynamic part: context (changes per navigation)
         if (Context != null)
         {
-            var contextJson = JsonSerializer.Serialize(Context, hub.JsonSerializerOptions);
+            var contextPath = Context.Path ?? Context.Address?.ToString();
             messageText.AppendLine("# Current Application Context");
             messageText.AppendLine();
-            messageText.AppendLine("The user is currently viewing the following page/entity in the application:");
+
+            // Show the current node
+            if (Context.Node != null)
+            {
+                messageText.AppendLine($"**Current node:** `{Context.Node.Path}` (type: {Context.Node.NodeType}, name: {Context.Node.Name})");
+            }
+            else if (!string.IsNullOrEmpty(contextPath))
+            {
+                messageText.AppendLine($"**Current path:** `{contextPath}`");
+            }
             messageText.AppendLine();
-            messageText.AppendLine("```json");
-            messageText.AppendLine(contextJson);
-            messageText.AppendLine("```");
-            messageText.AppendLine();
-            messageText.AppendLine("Key information:");
-            messageText.AppendLine($"- Address Type: {Context.Address?.Type ?? "N/A"}");
-            messageText.AppendLine($"- Address ID: {Context.Address?.Id ?? "N/A"}");
-            messageText.AppendLine($"- Layout Area: {Context.LayoutArea?.Area ?? "N/A"}");
-            messageText.AppendLine($"- Layout ID: {Context.LayoutArea?.Id ?? "N/A"}");
-            messageText.AppendLine();
-            messageText.AppendLine("Use this context information when answering the user's questions or performing actions.");
+
+            // Show nearby nodes so the agent understands the structure
+            if (!string.IsNullOrEmpty(contextPath))
+            {
+                try
+                {
+                    var nearby = new List<string>();
+                    var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    await foreach (var node in meshQuery.QueryAsync<MeshNode>(
+                        $"namespace:{contextPath} select:name,nodeType,icon"))
+                    {
+                        nearby.Add($"- `{node.Path}` ({node.NodeType}): {node.Name}");
+                        if (nearby.Count >= 15) break;
+                    }
+                    if (nearby.Count > 0)
+                    {
+                        messageText.AppendLine("**Children of current node:**");
+                        foreach (var line in nearby)
+                            messageText.AppendLine(line);
+                        messageText.AppendLine();
+                    }
+                }
+                catch { /* ignore context loading errors */ }
+            }
+
+            messageText.AppendLine("When creating nodes, first explore the structure to find the best place:");
+            messageText.AppendLine("- `Search('namespace:{path} scope:descendants')` to see the full tree");
+            messageText.AppendLine("- Create under the current node or an appropriate sub-node");
+            messageText.AppendLine("- If no suitable sub-node exists, create one first, then put content inside it");
             messageText.AppendLine();
         }
 
@@ -508,6 +564,12 @@ public class AgentChatClient : IAgentChat
                     {
                         logger.LogInformation("Agent {AgentName} received result from tool: {CallId}",
                             currentAgentName, functionResult.CallId);
+
+                        // Yield the result so ThreadExecution can track completed tool calls
+                        yield return new ChatResponseUpdate(ChatRole.Assistant, [content])
+                        {
+                            AuthorName = currentAgentName ?? "Assistant"
+                        };
                     }
                 }
             }

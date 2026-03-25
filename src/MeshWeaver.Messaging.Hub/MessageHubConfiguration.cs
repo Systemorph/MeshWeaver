@@ -202,7 +202,7 @@ public record MessageHubConfiguration
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
-        var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PostPipeline");
+        var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
         return syncPipeline.AddPipeline((d, next) =>
         {
             // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
@@ -210,7 +210,7 @@ public record MessageHubConfiguration
                 return next(d);
 
             // Context = per-request AsyncLocal (delivery pipeline).
-            // CircuitContext = persistent Blazor session context (for component-initiated posts).
+            // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler).
             var context = userService?.Context ?? userService?.CircuitContext;
             if (context is not null)
                 d = d.SetAccessContext(context);
@@ -224,19 +224,13 @@ public record MessageHubConfiguration
                     Name = hubAddress.ToString()
                 });
             }
-            var msgType = d.Message?.GetType().Name ?? "(null)";
-            var resolvedUser = d.AccessContext?.ObjectId ?? "(no-context)";
-            var asyncLocal = userService?.Context?.ObjectId ?? "(null)";
-            var circuit = userService?.CircuitContext?.ObjectId ?? "(null)";
-            // Use Warning for identity-sensitive messages so they're visible in production
-            if (resolvedUser == "(no-context)" || msgType.Contains("Submit", StringComparison.Ordinal))
-                logger?.LogWarning(
-                    "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
-                    syncPipeline.Hub.Address, msgType, resolvedUser, asyncLocal, circuit);
-            else
-                logger?.LogDebug(
-                    "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
-                    syncPipeline.Hub.Address, msgType, resolvedUser, asyncLocal, circuit);
+            logger?.LogDebug(
+                "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
+                syncPipeline.Hub.Address,
+                d.Message?.GetType().Name ?? "(null)",
+                d.AccessContext?.ObjectId ?? "(no-context)",
+                userService?.Context?.ObjectId ?? "(null)",
+                userService?.CircuitContext?.ObjectId ?? "(null)");
             return next(d);
         });
     }
@@ -278,7 +272,7 @@ public record MessageHubConfiguration
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
-        var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DeliveryPipeline");
+        var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
             var accessContext = d.AccessContext;

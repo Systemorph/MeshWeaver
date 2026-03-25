@@ -63,6 +63,13 @@ public class CompletionItem
     /// Optional icon URL for custom icons.
     /// </summary>
     public string? IconUrl { get; init; }
+
+    /// <summary>
+    /// Sort key for controlling order in the Monaco widget.
+    /// Lower values sort first. Format: "0001_label" for high priority, "9999_label" for low.
+    /// When null, Monaco uses the label for sorting.
+    /// </summary>
+    public string? SortKey { get; init; }
 }
 
 /// <summary>

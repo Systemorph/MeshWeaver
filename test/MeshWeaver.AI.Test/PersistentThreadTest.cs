@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Messaging;
@@ -202,6 +203,9 @@ public class PersistentThreadTest
         public void SetThreadId(string threadId) { }
         // SetPersistentThreadId uses default interface member (no-op)
         public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl) { }
+        public ThreadExecutionContext? ExecutionContext => null;
+        public string? LastDelegationPath { get; set; }
+        public Action<string>? UpdateDelegationStatus { get; set; }
     }
 
     [Fact]

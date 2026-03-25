@@ -41,10 +41,25 @@ public record ThreadMessageBubbleControl() : UiControl<ThreadMessageBubbleContro
     /// </summary>
     public string? ThreadPath { get; init; }
 
+    /// <summary>
+    /// Data-bound list of completed tool calls for post-execution inspection.
+    /// Rendered as collapsible entries in the Blazor view.
+    /// </summary>
+    public object? ToolCalls { get; init; }
+
+    /// <summary>Model name used for this response (e.g., "claude-sonnet-4-6").</summary>
+    public string? ModelName { get; init; }
+
+    /// <summary>Timestamp of the message.</summary>
+    public DateTime? Timestamp { get; init; }
+
     public ThreadMessageBubbleControl WithRole(string role) => this with { Role = role };
+    public ThreadMessageBubbleControl WithModelName(string? model) => this with { ModelName = model };
+    public ThreadMessageBubbleControl WithTimestamp(DateTime? ts) => this with { Timestamp = ts };
     public ThreadMessageBubbleControl WithAuthorName(string name) => this with { AuthorName = name };
     public ThreadMessageBubbleControl WithText(object? text) => this with { Text = text };
     public ThreadMessageBubbleControl WithIsExecuting(object? isExecuting) => this with { IsExecuting = isExecuting };
     public ThreadMessageBubbleControl WithExecutionStatus(object? status) => this with { ExecutionStatus = status };
     public ThreadMessageBubbleControl WithThreadPath(string? path) => this with { ThreadPath = path };
+    public ThreadMessageBubbleControl WithToolCalls(object? toolCalls) => this with { ToolCalls = toolCalls };
 }

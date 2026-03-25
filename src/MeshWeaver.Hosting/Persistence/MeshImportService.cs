@@ -222,7 +222,7 @@ public class MeshImportService : IMeshImportService
         // Normalize all paths to use forward slashes (Windows FS adapter may use backslashes)
         return nodes.Select(n => n with
         {
-            Id = n.Id?.Replace('\\', '/'),
+            Id = n.Id.Replace('\\', '/'),
             Namespace = n.Namespace?.Replace('\\', '/')
         }).ToList();
     }

@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
@@ -27,6 +28,8 @@ public static class BlazorHostingExtensions
                 .AddScoped<PortalApplication>()
                 .AddScoped<INavigationService, NavigationService>()
                 .AddScoped<IMenuItemsProvider, MenuItemsProvider>()
+                .AddScoped<CircuitAccessHandler>()
+                .AddScoped<CircuitHandler>(sp => sp.GetRequiredService<CircuitAccessHandler>())
                 .AddMeshMcp()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
