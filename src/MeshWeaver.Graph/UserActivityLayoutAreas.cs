@@ -325,7 +325,7 @@ public static class UserActivityLayoutAreas
             "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">My Items</div>"));
 
         section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{nodePath} scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)

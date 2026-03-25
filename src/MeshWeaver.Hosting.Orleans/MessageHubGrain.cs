@@ -22,56 +22,43 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
         var streamId = this.GetPrimaryKeyString();
+        var address = meshHub.GetAddress(streamId);
+        var addressPath = address.ToString();
 
-        try
+        // Use unprotected read — the grain needs its own node to activate,
+        // and it's not the correct hub identity for security checks.
+        var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
+
+        // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
+        if (node is null)
         {
-            var address = meshHub.GetAddress(streamId);
-            var addressPath = address.ToString();
-            // Use unprotected read — the grain needs its own node to activate,
-            // and it's not the correct hub identity for security checks.
-            var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
-
-            // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
-            if (node is null)
-            {
-                var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
-                meshConfig?.Nodes.TryGetValue(addressPath, out node);
-            }
-
-            // Fallback to static node providers (e.g., DocumentationNodeProvider)
-            // for nodes that are never persisted but served as embedded resources.
-            node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
-                .SelectMany(p => p.GetStaticNodes())
-                .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
-
-            if (node is null)
-            {
-                // This can happen when a Blazor pre-render creates a circuit that
-                // gets disposed before the grain activates, or when a stale grain
-                // reference points to a node that no longer exists.
-                logger.LogWarning(
-                    "Cannot activate grain {StreamId}: node not found at {Path}. " +
-                    "Likely a disposed pre-render circuit. Deactivating.",
-                    streamId, addressPath);
-                DeactivateOnIdle();
-                return;
-            }
-
-            // Enrich with node type info (triggers compilation if needed, sets HubConfiguration + AssemblyLocation)
-            var nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
-            if (nodeTypeService != null)
-            {
-                node = await nodeTypeService.EnrichWithNodeTypeAsync(node, cancellationToken);
-            }
-
-            Hub = await InstantiateFromHubConfiguration(address, node);
+            var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+            meshConfig?.Nodes.TryGetValue(addressPath, out node);
         }
-        catch (Exception ex)
+
+        // Fallback to static node providers (e.g., DocumentationNodeProvider)
+        // for nodes that are never persisted but served as embedded resources.
+        node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+            .SelectMany(p => p.GetStaticNodes())
+            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
+
+        if (node is null)
         {
-            logger.LogWarning(ex,
-                "Grain activation failed for {StreamId}. Deactivating gracefully.", streamId);
-            DeactivateOnIdle();
+            // Throw so Orleans immediately rejects the message without forwarding attempts.
+            // Using DeactivateOnIdle() here would leave a zombie activation that triggers
+            // forwarding loops (ForwardCount=2 → OrleansMessageRejectionException).
+            throw new InvalidOperationException(
+                $"Cannot activate grain {streamId}: node not found at {addressPath}.");
         }
+
+        // Enrich with node type info (triggers compilation if needed, sets HubConfiguration + AssemblyLocation)
+        var nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
+        if (nodeTypeService != null)
+        {
+            node = await nodeTypeService.EnrichWithNodeTypeAsync(node, cancellationToken);
+        }
+
+        Hub = await InstantiateFromHubConfiguration(address, node);
     }
 
     private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
@@ -139,7 +126,7 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         // Log identity chain for debugging — Warning level for identity-sensitive messages
         if (string.IsNullOrEmpty(userId) || msgType.Contains("Submit", StringComparison.Ordinal))
-            logger.LogWarning(
+            logger.LogDebug(
                 "GrainDeliver: grain={Grain}, message={MessageType}, requestContextUserId={RequestContextUser}, deliveryUser={DeliveryUser}, finalUser={FinalUser}",
                 this.GetPrimaryKeyString(), msgType, userId ?? "(null)", deliveryUser ?? "(null)",
                 delivery.AccessContext?.ObjectId ?? "(null)");

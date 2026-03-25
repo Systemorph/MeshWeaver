@@ -37,7 +37,8 @@ public static class MeshNodeExtensions
         var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
         if (dataSource == null)
             throw new InvalidOperationException("No data source registered for MeshNode");
-        var dsStream = dataSource.GetStreamForPartition(null);
+        var dsStream = dataSource.GetStreamForPartition(null)
+            ?? throw new InvalidOperationException("No stream for MeshNode partition");
 
         dsStream.Update(state =>
         {
@@ -49,10 +50,10 @@ public static class MeshNodeExtensions
 
             var nodeId = nodePath is null ? null : nodePath.Contains('/') ? nodePath[(nodePath.LastIndexOf('/') + 1)..] : nodePath;
             var current = (nodeId is null ?
-                collection.Instances.Values.FirstOrDefault() : collection?.Instances.GetValueOrDefault(nodeId)) as MeshNode;
+                collection.Instances.Values.FirstOrDefault() : collection.Instances.GetValueOrDefault(nodeId)) as MeshNode;
             if (current == null)
                 throw new InvalidOperationException(
-                    $"MeshNode '{nodePath}' (id='{nodeId}') not found in stream. Available: [{string.Join(", ", collection?.Instances.Keys.Select(k => k.ToString()) ?? [])}]");
+                    $"MeshNode '{nodePath}' (id='{nodeId}') not found in stream. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
 
             var updated = update(current);
             if (string.IsNullOrEmpty(updated.Id))
@@ -103,7 +104,8 @@ public static class MeshNodeExtensions
         var dataSource = workspace.DataContext.GetDataSourceForType(typeof(MeshNode));
         if (dataSource == null)
             throw new InvalidOperationException("No data source registered for MeshNode");
-        var dsStream = dataSource.GetStreamForPartition(null);
+        var dsStream = dataSource.GetStreamForPartition(null)
+            ?? throw new InvalidOperationException("No stream for MeshNode partition");
 
         dsStream.Update(state =>
         {

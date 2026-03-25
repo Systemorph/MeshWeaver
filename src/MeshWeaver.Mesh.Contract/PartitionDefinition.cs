@@ -97,9 +97,10 @@ public record PartitionDefinition
 
     /// <summary>
     /// Standard mapping from nodeType to satellite path suffix.
-    /// Used to resolve the table when the query has nodeType but no path.
+    /// Used to resolve the table when the query has nodeType but no path,
+    /// and by routing to determine if a nodeType lives in a satellite table.
     /// </summary>
-    private static readonly Dictionary<string, string> NodeTypeToSuffix = new(StringComparer.OrdinalIgnoreCase)
+    public static readonly Dictionary<string, string> NodeTypeToSuffix = new(StringComparer.OrdinalIgnoreCase)
     {
         ["Thread"] = "_Thread",
         ["ThreadMessage"] = "_ThreadMessage",
