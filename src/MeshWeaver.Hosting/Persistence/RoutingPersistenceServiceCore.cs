@@ -168,8 +168,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     /// <summary>
     /// Resolves the partition key for a given path.
-    /// Root-level nodes (no '/' in path, e.g. "roland_Access") that don't match
-    /// a known partition are routed to "Admin" to prevent rogue schema creation.
+    /// Only returns keys for known/registered partitions — never returns
+    /// an unknown segment that would trigger rogue schema creation.
     /// </summary>
     private string? ResolvePartitionKey(string? path)
     {
@@ -184,12 +184,11 @@ internal class RoutingPersistenceServiceCore : IStorageService
         if (_basePathToPartition.TryGetValue(firstSegment, out var mapped))
             return mapped;
 
-        // Root-level node (path has no '/') that doesn't match any partition → route to Admin
-        if (path != null && !path.Contains('/') && _stores.ContainsKey("Admin"))
+        // Unknown segment → route to Admin (prevents rogue schema creation)
+        if (_stores.ContainsKey("Admin"))
             return "Admin";
 
-        // Multi-segment path with unknown first segment → auto-provision as before
-        return firstSegment;
+        return null;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -285,7 +284,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield break;
         }
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var child in core.GetChildrenAsync(parentPath, options))
             yield return child;
     }
@@ -297,7 +297,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
         var segment = PathPartition.GetFirstSegment(parentPath);
         if (segment == null) yield break;
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var child in core.GetAllChildrenAsync(parentPath, options))
             yield return child;
     }
@@ -323,7 +324,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield break;
         }
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var desc in core.GetDescendantsAsync(parentPath, options))
             yield return desc;
     }
@@ -348,7 +350,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield break;
         }
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var desc in core.GetAllDescendantsAsync(parentPath, options))
             yield return desc;
     }
@@ -356,7 +359,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var segment = ResolvePartitionKey(node.Path)
-            ?? throw new ArgumentException("Cannot save node with empty path");
+            ?? throw new ArgumentException($"Cannot save node: no partition found for path '{node.Path}'");
 
         var store = await GetOrCreateStoreAsync(segment, ct);
         var result = await store.SaveNodeAsync(node, options, ct);
@@ -410,10 +413,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var sourceSegment = PathPartition.GetFirstSegment(sourcePath)
-            ?? throw new ArgumentException("Source path cannot be empty");
-        var targetSegment = PathPartition.GetFirstSegment(targetPath)
-            ?? throw new ArgumentException("Target path cannot be empty");
+        var sourceSegment = ResolvePartitionKey(sourcePath)
+            ?? throw new ArgumentException($"No partition found for source path '{sourcePath}'");
+        var targetSegment = ResolvePartitionKey(targetPath)
+            ?? throw new ArgumentException($"No partition found for target path '{targetPath}'");
 
         if (string.Equals(sourceSegment, targetSegment, StringComparison.OrdinalIgnoreCase))
         {
@@ -469,7 +472,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield break;
         }
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var node in core.SearchAsync(parentPath, query, options))
             yield return node;
     }
@@ -515,10 +519,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task<Comment> AddCommentAsync(Comment comment, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var segment = PathPartition.GetFirstSegment(comment.PrimaryNodePath)
-            ?? throw new ArgumentException("Comment must have a primary node path");
+        var store = TryGetStore(comment.PrimaryNodePath)
+            ?? throw new ArgumentException($"No partition found for comment path '{comment.PrimaryNodePath}'");
 
-        var store = await GetOrCreateStoreAsync(segment, ct);
         return await store.AddCommentAsync(comment, options, ct);
     }
 
@@ -558,10 +561,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task SavePartitionObjectsAsync(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options, CancellationToken ct = default)
     {
-        var segment = PathPartition.GetFirstSegment(nodePath)
-            ?? throw new ArgumentException("Node path cannot be empty for partition storage");
+        var store = TryGetStore(nodePath)
+            ?? throw new ArgumentException($"No partition found for path '{nodePath}'");
 
-        var store = await GetOrCreateStoreAsync(segment, ct);
         await store.SavePartitionObjectsAsync(nodePath, subPath, objects, options, ct);
     }
 
@@ -609,7 +611,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield break;
         }
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var child in core.GetChildrenSecureAsync(parentPath, userId, options))
             yield return child;
     }
@@ -636,7 +639,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
             yield break;
         }
 
-        var core = await GetOrCreateStoreAsync(segment, default);
+        var core = TryGetStore(parentPath);
+        if (core == null) yield break;
         await foreach (var desc in core.GetDescendantsSecureAsync(parentPath, userId, options))
             yield return desc;
     }

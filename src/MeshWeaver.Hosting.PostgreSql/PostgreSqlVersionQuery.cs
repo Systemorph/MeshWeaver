@@ -15,12 +15,12 @@ public class PostgreSqlVersionQuery : IVersionQuery
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _historyTable;
 
-    public PostgreSqlVersionQuery(NpgsqlDataSource dataSource, string? versionsSchema = null)
+    public PostgreSqlVersionQuery(NpgsqlDataSource dataSource, string? schema = null)
     {
         _dataSource = dataSource;
-        _historyTable = string.IsNullOrEmpty(versionsSchema)
+        _historyTable = string.IsNullOrEmpty(schema)
             ? "\"mesh_node_history\""
-            : $"\"{versionsSchema}\".\"mesh_node_history\"";
+            : $"\"{schema}\".\"mesh_node_history\"";
     }
 
     private static (string Namespace, string Id) SplitPath(string path)
@@ -95,6 +95,40 @@ public class PostgreSqlVersionQuery : IVersionQuery
             return null;
 
         return ReadMeshNode(reader, options);
+    }
+
+    public async Task WriteVersionAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
+    {
+        var ns = node.Namespace ?? "";
+        var contentJson = node.Content != null
+            ? JsonSerializer.Serialize(node.Content, node.Content.GetType(), options)
+            : null;
+
+        await using var cmd = _dataSource.CreateCommand(
+            $"""
+            INSERT INTO {_historyTable} (
+                namespace, id, name, node_type, description, category, icon,
+                display_order, last_modified, version, state, content, desired_id, main_node
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)
+            ON CONFLICT (namespace, id, version) DO NOTHING
+            """);
+        cmd.Parameters.AddWithValue(ns);
+        cmd.Parameters.AddWithValue(node.Id);
+        cmd.Parameters.AddWithValue((object?)node.Name ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)node.NodeType ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(DBNull.Value); // description
+        cmd.Parameters.AddWithValue((object?)node.Category ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)node.Icon ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)node.Order ?? DBNull.Value);
+        cmd.Parameters.AddWithValue(node.LastModified.UtcDateTime);
+        cmd.Parameters.AddWithValue(node.Version);
+        cmd.Parameters.AddWithValue((short)node.State);
+        cmd.Parameters.AddWithValue((object?)contentJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)node.DesiredId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue((object?)node.MainNode ?? DBNull.Value);
+
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     private static MeshNode ReadMeshNode(NpgsqlDataReader reader, JsonSerializerOptions options)
