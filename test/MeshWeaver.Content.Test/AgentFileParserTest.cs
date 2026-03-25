@@ -58,19 +58,19 @@ public class AgentFileParserTest
         var content = """
             ---
             nodeType: Agent
-            name: Navigator
+            name: Orchestrator
             delegations:
               - agentPath: Planner
                 instructions: Handle planning tasks
-              - agentPath: Executor
+              - agentPath: Worker
                 instructions: Execute actions
             ---
 
-            You are Navigator.
+            You are Orchestrator.
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Navigator.md", content, "Navigator.md");
+        var node = await _parser.ParseAsync("/Orchestrator.md", content, "Orchestrator.md");
 
         // Assert
         node.Should().NotBeNull();
@@ -78,7 +78,7 @@ public class AgentFileParserTest
         agentConfig.Delegations.Should().HaveCount(2);
         agentConfig.Delegations![0].AgentPath.Should().Be("Planner");
         agentConfig.Delegations[0].Instructions.Should().Be("Handle planning tasks");
-        agentConfig.Delegations[1].AgentPath.Should().Be("Executor");
+        agentConfig.Delegations[1].AgentPath.Should().Be("Worker");
         agentConfig.Delegations[1].Instructions.Should().Be("Execute actions");
     }
 
@@ -196,33 +196,33 @@ public class AgentFileParserTest
         var content = """
             ---
             nodeType: Agent
-            name: Navigator
+            name: Orchestrator
             delegations:
-              - agentPath: Research
+              - agentPath: Researcher
                 instructions: Look up information
             handoffs:
               - agentPath: Planner
                 instructions: Handle planning tasks
-              - agentPath: Executor
+              - agentPath: Worker
                 instructions: Execute actions directly
             ---
 
-            You are Navigator.
+            You are Orchestrator.
             """;
 
         // Act
-        var node = await _parser.ParseAsync("/Navigator.md", content, "Navigator.md");
+        var node = await _parser.ParseAsync("/Orchestrator.md", content, "Orchestrator.md");
 
         // Assert
         node.Should().NotBeNull();
         var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Delegations.Should().HaveCount(1);
-        agentConfig.Delegations![0].AgentPath.Should().Be("Research");
+        agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
 
         agentConfig.Handoffs.Should().HaveCount(2);
         agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
         agentConfig.Handoffs[0].Instructions.Should().Be("Handle planning tasks");
-        agentConfig.Handoffs[1].AgentPath.Should().Be("Executor");
+        agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute actions directly");
     }
 
@@ -235,7 +235,7 @@ public class AgentFileParserTest
             nodeType: Agent
             name: Planner
             handoffs:
-              - agentPath: Executor
+              - agentPath: Worker
                 instructions: Execute the planned tasks
             ---
 
@@ -250,7 +250,7 @@ public class AgentFileParserTest
         var agentConfig = node!.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Delegations.Should().BeNull();
         agentConfig.Handoffs.Should().HaveCount(1);
-        agentConfig.Handoffs![0].AgentPath.Should().Be("Executor");
+        agentConfig.Handoffs![0].AgentPath.Should().Be("Worker");
     }
 
     #endregion
@@ -301,20 +301,20 @@ public class AgentFileParserTest
         // Arrange
         var agentConfig = new AgentConfiguration
         {
-            Id = "Navigator",
-            DisplayName = "Navigator",
+            Id = "Orchestrator",
+            DisplayName = "Orchestrator",
             Instructions = "Navigate requests.",
             Delegations =
             [
                 new AgentDelegation { AgentPath = "Planner", Instructions = "Plan tasks" },
-                new AgentDelegation { AgentPath = "Executor", Instructions = "Execute tasks" }
+                new AgentDelegation { AgentPath = "Worker", Instructions = "Execute tasks" }
             ]
         };
 
-        var node = new MeshNode("Navigator")
+        var node = new MeshNode("Orchestrator")
         {
             NodeType = "Agent",
-            Name = "Navigator",
+            Name = "Orchestrator",
             Content = agentConfig
         };
 
@@ -325,7 +325,7 @@ public class AgentFileParserTest
         result.Should().Contain("delegations:");
         result.Should().Contain("agentPath: Planner");
         result.Should().Contain("instructions: Plan tasks");
-        result.Should().Contain("agentPath: Executor");
+        result.Should().Contain("agentPath: Worker");
         result.Should().Contain("instructions: Execute tasks");
     }
 
@@ -335,24 +335,24 @@ public class AgentFileParserTest
         // Arrange
         var agentConfig = new AgentConfiguration
         {
-            Id = "Navigator",
-            DisplayName = "Navigator",
+            Id = "Orchestrator",
+            DisplayName = "Orchestrator",
             Instructions = "Navigate requests.",
             Delegations =
             [
-                new AgentDelegation { AgentPath = "Research", Instructions = "Look up info" }
+                new AgentDelegation { AgentPath = "Researcher", Instructions = "Look up info" }
             ],
             Handoffs =
             [
                 new AgentHandoff { AgentPath = "Planner", Instructions = "Plan tasks" },
-                new AgentHandoff { AgentPath = "Executor", Instructions = "Execute tasks" }
+                new AgentHandoff { AgentPath = "Worker", Instructions = "Execute tasks" }
             ]
         };
 
-        var node = new MeshNode("Navigator")
+        var node = new MeshNode("Orchestrator")
         {
             NodeType = "Agent",
-            Name = "Navigator",
+            Name = "Orchestrator",
             Content = agentConfig
         };
 
@@ -361,11 +361,11 @@ public class AgentFileParserTest
 
         // Assert
         result.Should().Contain("delegations:");
-        result.Should().Contain("agentPath: Research");
+        result.Should().Contain("agentPath: Researcher");
         result.Should().Contain("handoffs:");
         result.Should().Contain("agentPath: Planner");
         result.Should().Contain("instructions: Plan tasks");
-        result.Should().Contain("agentPath: Executor");
+        result.Should().Contain("agentPath: Worker");
         result.Should().Contain("instructions: Execute tasks");
     }
 
@@ -376,38 +376,38 @@ public class AgentFileParserTest
         var originalContent = """
             ---
             nodeType: Agent
-            name: Navigator
+            name: Orchestrator
             description: Routes requests
             delegations:
-              - agentPath: Research
+              - agentPath: Researcher
                 instructions: Look up info
             handoffs:
               - agentPath: Planner
                 instructions: Plan tasks
-              - agentPath: Executor
+              - agentPath: Worker
                 instructions: Execute tasks
             ---
 
-            You are Navigator.
+            You are Orchestrator.
             """;
 
         // Act - Parse then serialize
-        var node = await _parser.ParseAsync("/Navigator.md", originalContent, "Navigator.md");
+        var node = await _parser.ParseAsync("/Orchestrator.md", originalContent, "Orchestrator.md");
         var serialized = await _parser.SerializeAsync(node!);
 
         // Re-parse to verify
-        var reparsed = await _parser.ParseAsync("/Navigator.md", serialized, "Navigator.md");
+        var reparsed = await _parser.ParseAsync("/Orchestrator.md", serialized, "Orchestrator.md");
 
         // Assert
         reparsed.Should().NotBeNull();
         var agentConfig = reparsed!.Content.Should().BeOfType<AgentConfiguration>().Subject;
         agentConfig.Delegations.Should().HaveCount(1);
-        agentConfig.Delegations![0].AgentPath.Should().Be("Research");
+        agentConfig.Delegations![0].AgentPath.Should().Be("Researcher");
 
         agentConfig.Handoffs.Should().HaveCount(2);
         agentConfig.Handoffs![0].AgentPath.Should().Be("Planner");
         agentConfig.Handoffs[0].Instructions.Should().Be("Plan tasks");
-        agentConfig.Handoffs[1].AgentPath.Should().Be("Executor");
+        agentConfig.Handoffs[1].AgentPath.Should().Be("Worker");
         agentConfig.Handoffs[1].Instructions.Should().Be("Execute tasks");
     }
 

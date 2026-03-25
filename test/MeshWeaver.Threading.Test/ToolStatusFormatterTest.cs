@@ -63,15 +63,15 @@ public class ToolStatusFormatterTest
     [Fact]
     public void DelegateToSpecific_ExtractsNameFromFunctionName()
     {
-        var call = MakeCall("delegate_to_Navigator", null);
-        ToolStatusFormatter.Format(call).Should().Be("Delegating to Navigator...");
+        var call = MakeCall("delegate_to_Orchestrator", null);
+        ToolStatusFormatter.Format(call).Should().Be("Delegating to Orchestrator...");
     }
 
     [Fact]
     public void HandoffToAgent_FormatsWithAgentName()
     {
-        var call = MakeCall("handoff_to_agent", new() { ["agentName"] = "Executor" });
-        ToolStatusFormatter.Format(call).Should().Be("Handing off to Executor...");
+        var call = MakeCall("handoff_to_agent", new() { ["agentName"] = "Worker" });
+        ToolStatusFormatter.Format(call).Should().Be("Handing off to Worker...");
     }
 
     [Fact]

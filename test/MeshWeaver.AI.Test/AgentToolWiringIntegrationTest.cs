@@ -57,17 +57,17 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that Navigator agent gets read-only mesh tools (Get, Search, NavigateTo)
+    /// Verifies that Orchestrator agent gets read-only mesh tools (Get, Search, NavigateTo)
     /// but NOT write tools (Create, Update, Delete).
     /// </summary>
     [Fact]
-    public async Task NavigatorAgent_ShouldGetReadOnlyMeshTools()
+    public async Task OrchestratorAgent_ShouldGetReadOnlyMeshTools()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
-        chatClient.SetSelectedAgent("Navigator");
+        chatClient.SetSelectedAgent("Orchestrator");
 
         // Send a message to trigger agent creation and tool wiring
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
@@ -78,28 +78,28 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         lastOptions.Should().NotBeNull("ChatOptions should have been captured");
         var toolNames = lastOptions!.Tools?.OfType<AIFunction>().Select(t => t.Name).ToList() ?? [];
 
-        Output.WriteLine($"Navigator tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
+        Output.WriteLine($"Orchestrator tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
 
-        toolNames.Should().Contain("Get", "Navigator should have Get tool");
-        toolNames.Should().Contain("Search", "Navigator should have Search tool");
-        toolNames.Should().Contain("NavigateTo", "Navigator should have NavigateTo tool");
-        toolNames.Should().NotContain("Create", "Navigator should NOT have Create (read-only agent)");
-        toolNames.Should().NotContain("Update", "Navigator should NOT have Update (read-only agent)");
-        toolNames.Should().NotContain("Delete", "Navigator should NOT have Delete (read-only agent)");
+        toolNames.Should().Contain("Get", "Orchestrator should have Get tool");
+        toolNames.Should().Contain("Search", "Orchestrator should have Search tool");
+        toolNames.Should().Contain("NavigateTo", "Orchestrator should have NavigateTo tool");
+        toolNames.Should().NotContain("Create", "Orchestrator should NOT have Create (read-only agent)");
+        toolNames.Should().NotContain("Update", "Orchestrator should NOT have Update (read-only agent)");
+        toolNames.Should().NotContain("Delete", "Orchestrator should NOT have Delete (read-only agent)");
     }
 
     /// <summary>
-    /// Verifies that Executor agent gets ALL mesh tools including write operations
+    /// Verifies that Worker agent gets ALL mesh tools including write operations
     /// because its description contains "create, update, and delete".
     /// </summary>
     [Fact]
-    public async Task ExecutorAgent_ShouldGetAllMeshToolsIncludingWrite()
+    public async Task WorkerAgent_ShouldGetAllMeshToolsIncludingWrite()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
-        chatClient.SetSelectedAgent("Executor");
+        chatClient.SetSelectedAgent("Worker");
 
         // Send a message to trigger agent creation and tool wiring
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };
@@ -110,18 +110,18 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
         lastOptions.Should().NotBeNull("ChatOptions should have been captured");
         var toolNames = lastOptions!.Tools?.OfType<AIFunction>().Select(t => t.Name).ToList() ?? [];
 
-        Output.WriteLine($"Executor tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
+        Output.WriteLine($"Worker tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
 
-        toolNames.Should().Contain("Get", "Executor should have Get tool");
-        toolNames.Should().Contain("Search", "Executor should have Search tool");
-        toolNames.Should().Contain("Create", "Executor should have Create (write agent)");
-        toolNames.Should().Contain("Update", "Executor should have Update (write agent)");
-        toolNames.Should().Contain("Delete", "Executor should have Delete (write agent)");
+        toolNames.Should().Contain("Get", "Worker should have Get tool");
+        toolNames.Should().Contain("Search", "Worker should have Search tool");
+        toolNames.Should().Contain("Create", "Worker should have Create (write agent)");
+        toolNames.Should().Contain("Update", "Worker should have Update (write agent)");
+        toolNames.Should().Contain("Delete", "Worker should have Delete (write agent)");
     }
 
     /// <summary>
     /// Verifies that agent instructions contain expanded @@ references.
-    /// The Navigator.md contains @@Agent/ToolsReference
+    /// The Orchestrator.md contains @@Agent/ToolsReference
     /// which should be expanded to include the full tool documentation.
     /// </summary>
     [Fact]
@@ -131,7 +131,7 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
-        chatClient.SetSelectedAgent("Navigator");
+        chatClient.SetSelectedAgent("Orchestrator");
 
         // Send a message to trigger agent creation
         var messages = new List<ChatMessage> { new(ChatRole.User, "Hello") };

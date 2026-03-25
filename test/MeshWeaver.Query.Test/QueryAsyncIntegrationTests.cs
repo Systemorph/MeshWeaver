@@ -295,7 +295,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
     public async Task QueryAsync_ScopeHierarchy_FindsBothAncestorAndDescendantAgents()
     {
         var p = P();
-        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Navigator") with { Name = "Navigator", NodeType = "Agent" });
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Orchestrator") with { Name = "Orchestrator", NodeType = "Agent" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME") with { Name = "ACME Organization", NodeType = "Group" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/ACMEAgent") with { Name = "ACME Agent", NodeType = "Agent" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ACME/Project") with { Name = "Project", NodeType = "Markdown" });
@@ -305,7 +305,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         var agentNames = agentResults.Cast<MeshNode>().Select(n => n.Name).ToList();
 
         agentNames.Should().Contain("Project Task Agent");
-        agentNames.Should().Contain("Navigator");
+        agentNames.Should().Contain("Orchestrator");
     }
 
     [Fact]

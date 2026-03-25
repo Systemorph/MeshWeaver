@@ -246,9 +246,9 @@ public class HandoffTest
     [Fact]
     public void HandoffRequest_RecordProperties_AreCorrect()
     {
-        var request = new HandoffRequest("Navigator", "Planner", "Plan this complex task");
+        var request = new HandoffRequest("Orchestrator", "Planner", "Plan this complex task");
 
-        request.SourceAgentName.Should().Be("Navigator");
+        request.SourceAgentName.Should().Be("Orchestrator");
         request.TargetAgentName.Should().Be("Planner");
         request.Message.Should().Be("Plan this complex task");
     }
@@ -259,9 +259,9 @@ public class HandoffTest
     [Fact]
     public void ChatHandoffContent_Properties_AreCorrect()
     {
-        var content = new ChatHandoffContent("Navigator", "Planner", "Take over planning");
+        var content = new ChatHandoffContent("Orchestrator", "Planner", "Take over planning");
 
-        content.SourceAgent.Should().Be("Navigator");
+        content.SourceAgent.Should().Be("Orchestrator");
         content.TargetAgent.Should().Be("Planner");
         content.HandoffMessage.Should().Be("Take over planning");
     }
@@ -278,7 +278,7 @@ public class HandoffTest
             Handoffs =
             [
                 new AgentHandoff { AgentPath = "Agent/Planner", Instructions = "Complex planning" },
-                new AgentHandoff { AgentPath = "Agent/Executor", Instructions = "Task execution" }
+                new AgentHandoff { AgentPath = "Agent/Worker", Instructions = "Task execution" }
             ]
         };
 
@@ -292,7 +292,7 @@ public class HandoffTest
         aiFunction.Should().NotBeNull();
         aiFunction!.Name.Should().Be("handoff_to_agent");
         aiFunction.Description.Should().Contain("Agent/Planner");
-        aiFunction.Description.Should().Contain("Agent/Executor");
+        aiFunction.Description.Should().Contain("Agent/Worker");
         aiFunction.Description.Should().Contain("Complex planning");
         aiFunction.Description.Should().Contain("Task execution");
     }
@@ -305,10 +305,10 @@ public class HandoffTest
     {
         var config = new AgentConfiguration
         {
-            Id = "Navigator",
+            Id = "Orchestrator",
             Delegations =
             [
-                new AgentDelegation { AgentPath = "Agent/Research", Instructions = "Lookup info" }
+                new AgentDelegation { AgentPath = "Agent/Researcher", Instructions = "Lookup info" }
             ],
             Handoffs =
             [
@@ -317,7 +317,7 @@ public class HandoffTest
         };
 
         config.Delegations.Should().HaveCount(1);
-        config.Delegations![0].AgentPath.Should().Be("Agent/Research");
+        config.Delegations![0].AgentPath.Should().Be("Agent/Researcher");
 
         config.Handoffs.Should().HaveCount(1);
         config.Handoffs![0].AgentPath.Should().Be("Agent/Planner");
