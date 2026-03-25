@@ -282,8 +282,7 @@ public static class PersistenceExtensions
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetRequiredService<IMessageHub>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
@@ -427,8 +426,7 @@ public static class PersistenceExtensions
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetRequiredService<IMessageHub>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),
@@ -479,8 +477,7 @@ public static class PersistenceExtensions
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
-                sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetRequiredService<IMessageHub>()));
         services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
             new ChatCompletionOrchestrator(
                 sp.GetRequiredService<IMeshService>(),

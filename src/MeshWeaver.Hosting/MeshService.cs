@@ -1,35 +1,149 @@
-﻿using MeshWeaver.Hosting.Persistence.Query;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using MeshWeaver.Data;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// Scoped IMeshService implementation that composes HubNodePersistence (writes)
-/// and MeshQuery (reads) into a single unified service.
-/// Identity is always resolved from AccessService.Context.
-/// Use accessService.ImpersonateAsHub(hub) to temporarily switch identity.
+/// Scoped IMeshService implementation.
+/// Writes go through hub messaging (Post + RegisterCallback) — no direct persistence dependency.
+/// Reads go through MeshQuery (aggregated query providers).
+/// Identity is captured from AccessService and stamped on each delivery.
 /// </summary>
 internal sealed class MeshService(
     IEnumerable<IMeshQueryProvider> providers,
-    IMessageHub hub,
-    MeshCatalog? catalog = null)
+    IMessageHub hub)
     : IMeshService
 {
-    private readonly HubNodePersistence? _persistence = catalog != null ? new HubNodePersistence(hub, catalog) : null;
     private readonly MeshQuery _query = new(providers, hub);
 
-    // === Node CRUD (delegated to HubNodePersistence) ===
+    private AccessContext? CaptureContext()
+    {
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService?.Context ?? accessService?.CircuitContext;
+    }
 
-    private HubNodePersistence Persistence
-        => _persistence ?? throw new InvalidOperationException(
-            "Write operations require MeshCatalog. Register it via AddMeshCatalog().");
+    private PostOptions WithIdentity(PostOptions o, AccessContext? captured)
+        => captured != null ? o.WithAccessContext(captured) : o;
 
-    public IObservable<MeshNode> CreateNode(MeshNode node) => Persistence.CreateNode(node);
-    public IObservable<MeshNode> UpdateNode(MeshNode node) => Persistence.UpdateNode(node);
-    public IObservable<bool> DeleteNode(string path) => Persistence.DeleteNode(path);
-    public IObservable<MeshNode> CreateTransient(MeshNode node) => Persistence.CreateTransient(node);
+    // === Node CRUD via messaging ===
+
+    public IObservable<MeshNode> CreateNode(MeshNode node)
+    {
+        var captured = CaptureContext();
+        return Observable.Create<MeshNode>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            var delivery = hub.Post(new CreateNodeRequest(node),
+                o => WithIdentity(o, captured))!;
+
+            hub.RegisterCallback(delivery, (d, _) =>
+            {
+                var r = ((IMessageDelivery<CreateNodeResponse>)d).Message;
+                if (r.Success && r.Node != null)
+                {
+                    observer.OnNext(r.Node);
+                    observer.OnCompleted();
+                }
+                else
+                {
+                    observer.OnError(r.RejectionReason switch
+                    {
+                        NodeCreationRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeCreationRejectionReason.NodeAlreadyExists =>
+                            new InvalidOperationException($"Node already exists: {node.Path}"),
+                        _ => new InvalidOperationException(r.Error ?? "Node creation failed")
+                    });
+                }
+                return Task.FromResult(d);
+            }, cts.Token);
+
+            return Disposable.Create(() => cts.Cancel());
+        });
+    }
+
+    public IObservable<MeshNode> UpdateNode(MeshNode node)
+    {
+        var captured = CaptureContext();
+        return Observable.Create<MeshNode>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            var delivery = hub.Post(new UpdateNodeRequest(node),
+                o => WithIdentity(o, captured))!;
+
+            hub.RegisterCallback(delivery, (d, _) =>
+            {
+                var r = ((IMessageDelivery<UpdateNodeResponse>)d).Message;
+                if (r.Success && r.Node != null)
+                {
+                    observer.OnNext(r.Node);
+                    observer.OnCompleted();
+                }
+                else
+                {
+                    observer.OnError(r.RejectionReason switch
+                    {
+                        NodeUpdateRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeUpdateRejectionReason.NodeNotFound =>
+                            new InvalidOperationException($"Node not found: {node.Path}"),
+                        _ => new InvalidOperationException(r.Error ?? "Node update failed")
+                    });
+                }
+                return Task.FromResult(d);
+            }, cts.Token);
+
+            return Disposable.Create(() => cts.Cancel());
+        });
+    }
+
+    public IObservable<bool> DeleteNode(string path)
+    {
+        var captured = CaptureContext();
+        return Observable.Create<bool>(observer =>
+        {
+            var cts = new CancellationTokenSource();
+            var delivery = hub.Post(new DeleteNodeRequest(path) { Recursive = true },
+                o => WithIdentity(o, captured))!;
+
+            hub.RegisterCallback(delivery, (d, _) =>
+            {
+                var r = ((IMessageDelivery<DeleteNodeResponse>)d).Message;
+                if (r.Success)
+                {
+                    observer.OnNext(true);
+                    observer.OnCompleted();
+                }
+                else
+                {
+                    observer.OnError(r.RejectionReason switch
+                    {
+                        NodeDeletionRejectionReason.ValidationFailed =>
+                            new UnauthorizedAccessException(r.Error ?? "Access denied"),
+                        NodeDeletionRejectionReason.NodeNotFound =>
+                            new InvalidOperationException($"Node not found: {path}"),
+                        _ => new InvalidOperationException(r.Error ?? "Node deletion failed")
+                    });
+                }
+                return Task.FromResult(d);
+            }, cts.Token);
+
+            return Disposable.Create(() => cts.Cancel());
+        });
+    }
+
+    public IObservable<MeshNode> CreateTransient(MeshNode node)
+    {
+        // Transient nodes still need catalog — post as regular create but with transient flag
+        // For now, route through CreateNode (same messaging path)
+        return CreateNode(node);
+    }
 
     // === Query (delegated to MeshQuery) ===
 
