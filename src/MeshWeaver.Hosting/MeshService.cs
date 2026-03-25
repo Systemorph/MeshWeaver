@@ -22,14 +22,23 @@ internal sealed class MeshService(
 {
     private readonly MeshQuery _query = new(providers, hub);
 
+    /// <summary>
+    /// The mesh hub address where CRUD handlers (CreateNode, UpdateNode, DeleteNode) are registered.
+    /// Resolved from MeshCatalog if available, otherwise falls back to the root hub.
+    /// </summary>
+    private Address MeshAddress => hub.ServiceProvider.GetService<MeshCatalog>()?.MeshAddress ?? hub.Address;
+
     private AccessContext? CaptureContext()
     {
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         return accessService?.Context ?? accessService?.CircuitContext;
     }
 
-    private PostOptions WithIdentity(PostOptions o, AccessContext? captured)
-        => captured != null ? o.WithAccessContext(captured) : o;
+    private PostOptions ConfigurePost(PostOptions o, AccessContext? captured)
+    {
+        o = o.WithTarget(MeshAddress);
+        return captured != null ? o.WithAccessContext(captured) : o;
+    }
 
     // === Node CRUD via messaging ===
 
@@ -40,7 +49,7 @@ internal sealed class MeshService(
         {
             var cts = new CancellationTokenSource();
             var delivery = hub.Post(new CreateNodeRequest(node),
-                o => WithIdentity(o, captured))!;
+                o => ConfigurePost(o, captured))!;
 
             hub.RegisterCallback(delivery, (d, _) =>
             {
@@ -75,7 +84,7 @@ internal sealed class MeshService(
         {
             var cts = new CancellationTokenSource();
             var delivery = hub.Post(new UpdateNodeRequest(node),
-                o => WithIdentity(o, captured))!;
+                o => ConfigurePost(o, captured))!;
 
             hub.RegisterCallback(delivery, (d, _) =>
             {
@@ -110,7 +119,7 @@ internal sealed class MeshService(
         {
             var cts = new CancellationTokenSource();
             var delivery = hub.Post(new DeleteNodeRequest(path) { Recursive = true },
-                o => WithIdentity(o, captured))!;
+                o => ConfigurePost(o, captured))!;
 
             hub.RegisterCallback(delivery, (d, _) =>
             {
@@ -140,9 +149,17 @@ internal sealed class MeshService(
 
     public IObservable<MeshNode> CreateTransient(MeshNode node)
     {
-        // Transient nodes still need catalog — post as regular create but with transient flag
-        // For now, route through CreateNode (same messaging path)
-        return CreateNode(node);
+        var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+        if (persistence == null)
+            return CreateNode(node);
+
+        return Observable.FromAsync(async ct =>
+        {
+            // Persist directly with Transient state — bypasses the CreateNodeRequest handler
+            // which would force Active state.
+            var transientNode = node with { State = MeshNodeState.Transient };
+            return await persistence.SaveNodeAsync(transientNode, ct);
+        });
     }
 
     // === Query (delegated to MeshQuery) ===

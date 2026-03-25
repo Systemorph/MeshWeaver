@@ -41,9 +41,9 @@ internal class InMemoryMeshQuery(
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
     {
-        // If request has explicit UserId, use it
-        if (!string.IsNullOrEmpty(request.UserId))
-            return request.UserId;
+        // If request has explicit UserId set (including empty for anonymous), use it
+        if (request.UserId != null)
+            return string.IsNullOrEmpty(request.UserId) ? WellKnownUsers.Anonymous : request.UserId;
 
         // Get from access context, falling back to circuit context
         var userId = accessService?.Context?.ObjectId
