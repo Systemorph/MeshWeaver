@@ -51,12 +51,14 @@ Never create under `Agent/` or other system namespaces unless explicitly asked.
 
 ## Updating Nodes
 
-1. **Retrieve current state**: `Get('@target-node')` — ALWAYS do this first
-2. **Modify** the returned JSON — change only needed fields
-3. **Update**: `Update('[{...modified MeshNode...}]')` — pass as JSON array
+**CRITICAL: Get → Modify → Update. Never skip Get. Never use Create to update.**
+
+1. **Get the full node**: `Get('@target-node')` — returns complete MeshNode JSON with ALL fields
+2. **Modify** the returned JSON — change ONLY the fields you need. Keep everything else intact.
+3. **Update**: `Update('[{...full modified MeshNode...}]')` — pass the COMPLETE node as JSON array
 4. **Verify**: `Get('@target-node')` to confirm
 
-**Important**: Always Get before Update. The entire node is replaced, not merged.
+**WARNING**: The entire node is REPLACED, not merged. If you skip Get and construct a node from scratch, you will DELETE all existing fields (content, icon, category, etc.) that you didn't include. Always start from the Get result.
 
 ## Deleting Nodes
 

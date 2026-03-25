@@ -739,7 +739,7 @@ public static class MeshNodeLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread")
+                .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread sort:lastModified-desc")
                 .WithNamespace(hubPath)
                 .WithRenderMode(MeshSearchRenderMode.Flat));
     }

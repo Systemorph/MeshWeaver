@@ -437,15 +437,18 @@ public static class AccessAssignmentLayoutAreas
         var formId = $"add_role_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["selectedRole"] = "" });
 
-        var rolesAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.Roles))!
-            .GetCustomAttributes(typeof(MeshNodeCollectionAttribute), false)
-            .OfType<MeshNodeCollectionAttribute>().First();
-        var queries = MeshNodeCollectionAttribute.ResolveQueries(rolesAttr.Queries, nodePath, nodePath);
+        // Query roles from the Role namespace (where built-in roles live)
+        // and from ancestors of the current node (for custom partition-level roles)
+        var roleQueries = new[]
+        {
+            "namespace:Role nodeType:Role",
+            $"namespace:{nodePath.Split("/_Access")[0]} nodeType:Role scope:subtree"
+        };
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
             .WithView(new MeshNodePickerControl(new JsonPointerReference("selectedRole"))
             {
-                Queries = queries,
+                Queries = roleQueries,
                 Label = "Role",
                 Required = true,
                 DataContext = LayoutAreaReference.GetDataPointer(formId)
@@ -492,11 +495,13 @@ public static class AccessAssignmentLayoutAreas
         var formId = $"change_subject_{Guid.NewGuid().AsString()}";
         ctx.Host.UpdateData(formId, new Dictionary<string, object?> { ["accessObject"] = "" });
 
-        // Resolve queries for AccessObject from [MeshNode] attribute
-        var meshNodeAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.AccessObject))!
-            .GetCustomAttributes(typeof(MeshNodeAttribute), false)
-            .OfType<MeshNodeAttribute>().First();
-        var subjectQueries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodePath, nodePath);
+        // Default to User namespace for subject picker (most common case)
+        var subjectQueries = new[]
+        {
+            "namespace:User nodeType:User",
+            "namespace:VUser nodeType:VUser",
+            "nodeType:Group"
+        };
 
         var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
             .WithView(new MeshNodePickerControl(new JsonPointerReference("accessObject"))
