@@ -359,6 +359,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var segment = ResolvePartitionKey(node.Path)
+            ?? PathPartition.GetFirstSegment(node.Path)
             ?? throw new ArgumentException($"Cannot save node: no partition found for path '{node.Path}'");
 
         var store = await GetOrCreateStoreAsync(segment, ct);
@@ -414,8 +415,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
     public async Task<MeshNode> MoveNodeAsync(string sourcePath, string targetPath, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var sourceSegment = ResolvePartitionKey(sourcePath)
+            ?? PathPartition.GetFirstSegment(sourcePath)
             ?? throw new ArgumentException($"No partition found for source path '{sourcePath}'");
         var targetSegment = ResolvePartitionKey(targetPath)
+            ?? PathPartition.GetFirstSegment(targetPath)
             ?? throw new ArgumentException($"No partition found for target path '{targetPath}'");
 
         if (string.Equals(sourceSegment, targetSegment, StringComparison.OrdinalIgnoreCase))

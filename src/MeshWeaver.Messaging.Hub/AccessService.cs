@@ -72,13 +72,12 @@ public class AccessService
     {
         var prev = circuitContext.Value?.ObjectId;
         circuitContext.Value = accessContext;
-        // When setting a non-null context, also store as persistent fallback.
+        // Sync the persistent fallback so SetCircuitContext(null) truly clears identity.
         // This ensures test code (SetCircuitContext in InitializeAsync) persists
         // across async context boundaries where AsyncLocal doesn't flow.
         // In production Blazor, CircuitAccessHandler always sets the AsyncLocal
         // per inbound activity, so the persistent fallback is never reached.
-        if (accessContext != null)
-            persistentCircuitContext = accessContext;
+        persistentCircuitContext = accessContext;
         if (prev != accessContext?.ObjectId)
             _logger?.LogDebug("SetCircuitContext: {Previous} -> {Current}", prev ?? "(null)", accessContext?.ObjectId ?? "(null)");
     }
