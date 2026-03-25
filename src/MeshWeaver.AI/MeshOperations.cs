@@ -182,6 +182,9 @@ public class MeshOperations
             if (string.IsNullOrWhiteSpace(meshNode.Name))
                 return "Error: 'name' property is required. Provide a human-readable display name.";
 
+            if (meshNode.Id.Contains('/'))
+                return $"Error: 'id' must not contain slashes. Got '{meshNode.Id}'. Use 'namespace' for the parent path and 'id' for just the node name.";
+
             var created = await mesh.CreateNodeAsync(meshNode);
             return $"Created: {created.Path}";
         }

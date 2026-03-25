@@ -41,13 +41,21 @@ Never create under `Agent/` or other system namespaces unless explicitly asked.
 
 1. **Discover the schema**: `Get('@target-namespace/schema:')` to see required fields
 2. **Construct the MeshNode JSON** with required properties:
-   - `id` — unique identifier within namespace
-   - `namespace` — parent path
-   - `name` — human-readable display name (ALWAYS required)
+   - `id` — simple slug identifier, **NO slashes** (e.g., "PricingTool", "Q1-Report")
+   - `namespace` — full parent path (e.g., "ACME", "User/rbuergi"). This is where the node lives.
+   - `name` — descriptive human-readable title (ALWAYS required). Make it clear and meaningful.
    - `nodeType` — must match an existing NodeType
+   - `icon` — inline SVG icon (start with `<svg`). Always create a unique, visually appealing SVG that represents the content.
    - `content` — type-specific data matching the schema
-3. **Create**: `Create('{"id": "...", "namespace": "...", "name": "...", "nodeType": "...", "content": {...}}')`
+3. **Create**: `Create('{"id": "...", "namespace": "...", "name": "...", "nodeType": "...", "icon": "<svg ...>...</svg>", "content": {...}}')`
 4. **Verify**: `Get('@namespace/id')` to confirm creation
+
+**CRITICAL — id vs namespace:**
+- `id` = simple slug, NO slashes: `"PricingTool"`, `"my-report"`, `"Q1Analysis"`
+- `namespace` = full parent path WITH slashes: `"User/rbuergi"`, `"ACME/Projects"`
+- The path is derived as `{namespace}/{id}`. Wrong id = corrupt data.
+- **Wrong**: `id: "User/rbuergi/PricingTool"` — this is a PATH, not an id!
+- **Right**: `id: "PricingTool", namespace: "User/rbuergi"`
 
 ## Updating Nodes
 
