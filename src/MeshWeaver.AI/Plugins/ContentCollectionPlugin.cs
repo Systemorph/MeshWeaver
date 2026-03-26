@@ -12,7 +12,10 @@ namespace MeshWeaver.AI.Plugins;
 /// to a node's content collection. Routes through the node hub which has
 /// the IFileContentProvider registered.
 /// </summary>
-public class ContentCollectionPlugin(IMessageHub hub, IAgentChat _) : IAgentPlugin
+
+#pragma warning disable CS9113 // Parameter 'chat' is unread — required by plugin DI convention
+public class ContentCollectionPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugin
+#pragma warning restore CS9113
 {
     public string Name => "ContentCollection";
 

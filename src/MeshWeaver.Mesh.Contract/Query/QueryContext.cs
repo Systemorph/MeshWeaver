@@ -24,6 +24,9 @@ public class QueryContext : IDisposable
         return newCts.Token;
     }
 
+    /// <summary>
+    /// Cancels any in-flight query and releases the current cancellation token source.
+    /// </summary>
     public void Dispose()
     {
         var cts = Interlocked.Exchange(ref _currentCts, null);

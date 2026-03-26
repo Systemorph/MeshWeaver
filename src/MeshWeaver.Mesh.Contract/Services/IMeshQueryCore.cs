@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace MeshWeaver.Mesh.Services;
@@ -17,5 +16,5 @@ public interface IMeshQueryCore
     IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default);
+        CancellationToken ct = default);
 }

@@ -8,22 +8,37 @@ namespace MeshWeaver.Mesh.Services;
 /// </summary>
 public static class MeshServiceExtensions
 {
+    /// <summary>
+    /// Creates a node asynchronously via the mesh service.
+    /// </summary>
     public static Task<MeshNode> CreateNodeAsync(
         this IMeshService service, MeshNode node, CancellationToken ct = default)
         => ToTask(service.CreateNode(node), ct);
 
+    /// <summary>
+    /// Updates a node asynchronously via the mesh service.
+    /// </summary>
     public static Task<MeshNode> UpdateNodeAsync(
         this IMeshService service, MeshNode node, CancellationToken ct = default)
         => ToTask(service.UpdateNode(node), ct);
 
+    /// <summary>
+    /// Deletes a node asynchronously via the mesh service.
+    /// </summary>
     public static Task DeleteNodeAsync(
         this IMeshService service, string path, CancellationToken ct = default)
         => ToTask<bool>(service.DeleteNode(path), ct);
 
+    /// <summary>
+    /// Creates a transient node asynchronously via the mesh service.
+    /// </summary>
     public static Task<MeshNode> CreateTransientAsync(
         this IMeshService service, MeshNode node, CancellationToken ct = default)
         => ToTask(service.CreateTransient(node), ct);
 
+    /// <summary>
+    /// Converts an observable to a task that completes with the first emitted value.
+    /// </summary>
     public static Task<T> ToTask<T>(IObservable<T> observable, CancellationToken ct = default)
     {
         var tcs = new TaskCompletionSource<T>();

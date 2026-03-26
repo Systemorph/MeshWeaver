@@ -39,9 +39,9 @@
                         <div class="catalog-card-content">
                             @if (!string.IsNullOrEmpty(GetImageUrl(node)))
                             {
-                                @if (GetImageUrl(node).TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                                @if (GetImageUrl(node)!.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    <div class="catalog-card-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)GetImageUrl(node))</div>
+                                    <div class="catalog-card-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)GetImageUrl(node)!)</div>
                                 }
                                 else
                                 {

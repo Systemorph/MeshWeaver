@@ -33,6 +33,11 @@ public record MeshSearchControl()
     : UiControl<MeshSearchControl>(ModuleSetup.ModuleName, ModuleSetup.ApiVersion)
 {
     /// <summary>
+    /// Section title displayed inline with the search bar and create button.
+    /// </summary>
+    public object? Title { get; init; }
+
+    /// <summary>
     /// The hidden query part that is always applied (e.g., namespace:X scope:descendants).
     /// Not shown to the user but combined with VisibleQuery for search.
     /// </summary>
@@ -164,6 +169,7 @@ public record MeshSearchControl()
     public object? ClickMessageAddress { get; init; }
 
     // Basic fluent methods
+    public MeshSearchControl WithTitle(string title) => this with { Title = title };
     public MeshSearchControl WithClickMessageAddress(object address) => this with { ClickMessageAddress = address };
     public MeshSearchControl WithHiddenQuery(string query) => this with { HiddenQuery = query };
     public MeshSearchControl WithVisibleQuery(string query) => this with { VisibleQuery = query };

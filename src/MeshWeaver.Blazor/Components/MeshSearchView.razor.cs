@@ -66,6 +66,7 @@ public partial class MeshSearchView : IDisposable
     public string? SelectedPath { get; set; }
 
     // Basic properties
+    private string? BoundTitle => ViewModel?.Title?.ToString();
     private string BoundHiddenQuery => _overriddenHiddenQuery ?? ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";

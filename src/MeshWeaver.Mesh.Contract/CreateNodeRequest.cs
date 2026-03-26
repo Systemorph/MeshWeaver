@@ -257,6 +257,7 @@ public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<M
 /// </summary>
 public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
 {
+    /// <inheritdoc />
     public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
         IMessageDelivery delivery, string hubPath)
     {
@@ -356,6 +357,7 @@ public class CreateNodePermissionAttribute() : RequiresPermissionAttribute(Permi
             _ => Permission.Create
         };
 
+    /// <inheritdoc />
     public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
         IMessageDelivery delivery, string hubPath)
     {

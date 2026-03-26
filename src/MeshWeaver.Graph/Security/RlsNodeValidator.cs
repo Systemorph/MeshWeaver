@@ -125,32 +125,23 @@ public class RlsNodeValidator : INodeValidator
             ? context.Node.GetParentPath() ?? context.Node.Path
             : context.Node.Path;
 
+        // Always use explicit userId for permission checks to avoid admin context leaking.
+        // When userId is null (anonymous), use WellKnownUsers.Anonymous.
+        var effectiveUserId = userId ?? WellKnownUsers.Anonymous;
+
         // Check permission - for Comment permission, also accept Update (Edit implies Comment)
         bool hasPermission;
         if (requiredPermission == Permission.Comment)
         {
-            Permission effectivePermissions;
-            if (!string.IsNullOrEmpty(userId))
-                effectivePermissions = await _securityService.GetEffectivePermissionsAsync(pathToCheck, userId, ct);
-            else
-                effectivePermissions = await _securityService.GetEffectivePermissionsAsync(pathToCheck, ct);
-
+            var effectivePermissions = await _securityService.GetEffectivePermissionsAsync(pathToCheck, effectiveUserId, ct);
             hasPermission = effectivePermissions.HasFlag(Permission.Comment)
                          || effectivePermissions.HasFlag(Permission.Update);
         }
-        else if (!string.IsNullOrEmpty(userId))
-        {
-            hasPermission = await _securityService.HasPermissionAsync(
-                pathToCheck,
-                userId,
-                requiredPermission,
-                ct);
-        }
         else
         {
-            // Fallback to context-based check for Read operations
             hasPermission = await _securityService.HasPermissionAsync(
                 pathToCheck,
+                effectiveUserId,
                 requiredPermission,
                 ct);
         }

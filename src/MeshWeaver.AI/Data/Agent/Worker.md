@@ -41,22 +41,32 @@ Never create under `Agent/` or other system namespaces unless explicitly asked.
 
 1. **Discover the schema**: `Get('@target-namespace/schema:')` to see required fields
 2. **Construct the MeshNode JSON** with required properties:
-   - `id` — unique identifier within namespace
-   - `namespace` — parent path
-   - `name` — human-readable display name (ALWAYS required)
+   - `id` — simple slug identifier, **NO slashes** (e.g., "PricingTool", "Q1-Report")
+   - `namespace` — full parent path (e.g., "ACME", "User/rbuergi"). This is where the node lives.
+   - `name` — descriptive human-readable title (ALWAYS required). Make it clear and meaningful.
    - `nodeType` — must match an existing NodeType
+   - `icon` — inline SVG icon (start with `<svg`). Always create a unique, visually appealing SVG that represents the content.
    - `content` — type-specific data matching the schema
-3. **Create**: `Create('{"id": "...", "namespace": "...", "name": "...", "nodeType": "...", "content": {...}}')`
+3. **Create**: `Create('{"id": "...", "namespace": "...", "name": "...", "nodeType": "...", "icon": "<svg ...>...</svg>", "content": {...}}')`
 4. **Verify**: `Get('@namespace/id')` to confirm creation
+
+**CRITICAL — id vs namespace:**
+- `id` = simple slug, NO slashes: `"PricingTool"`, `"my-report"`, `"Q1Analysis"`
+- `namespace` = full parent path WITH slashes: `"User/rbuergi"`, `"ACME/Projects"`
+- The path is derived as `{namespace}/{id}`. Wrong id = corrupt data.
+- **Wrong**: `id: "User/rbuergi/PricingTool"` — this is a PATH, not an id!
+- **Right**: `id: "PricingTool", namespace: "User/rbuergi"`
 
 ## Updating Nodes
 
-1. **Retrieve current state**: `Get('@target-node')` — ALWAYS do this first
-2. **Modify** the returned JSON — change only needed fields
-3. **Update**: `Update('[{...modified MeshNode...}]')` — pass as JSON array
+**CRITICAL: Get → Modify → Update. Never skip Get. Never use Create to update.**
+
+1. **Get the full node**: `Get('@target-node')` — returns complete MeshNode JSON with ALL fields
+2. **Modify** the returned JSON — change ONLY the fields you need. Keep everything else intact.
+3. **Update**: `Update('[{...full modified MeshNode...}]')` — pass the COMPLETE node as JSON array
 4. **Verify**: `Get('@target-node')` to confirm
 
-**Important**: Always Get before Update. The entire node is replaced, not merged.
+**WARNING**: The entire node is REPLACED, not merged. If you skip Get and construct a node from scratch, you will DELETE all existing fields (content, icon, category, etc.) that you didn't include. Always start from the Get result.
 
 ## Deleting Nodes
 

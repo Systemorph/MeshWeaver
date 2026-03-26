@@ -669,7 +669,7 @@ public static class MeshNodeLayoutAreas
                 if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
                     createQs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
 
-                var createHref = $"/{createNs}/{CreateNodeArea}?{createQs}";
+                var createHref = $"/create?{createQs}";
 
                 return (UiControl?)Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
@@ -692,7 +692,7 @@ public static class MeshNodeLayoutAreas
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3)
-                .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
+                .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
         });
     }
 
@@ -739,7 +739,7 @@ public static class MeshNodeLayoutAreas
                     .WithIconStart(FluentIcons.Add())
                     .WithNavigateToHref(createUrl)))
             .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread")
+                .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread sort:lastModified-desc")
                 .WithNamespace(hubPath)
                 .WithRenderMode(MeshSearchRenderMode.Flat));
     }

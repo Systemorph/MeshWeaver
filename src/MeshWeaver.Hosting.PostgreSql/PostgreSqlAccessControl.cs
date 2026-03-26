@@ -195,13 +195,14 @@ public class PostgreSqlAccessControl
         var mainNode = string.IsNullOrEmpty(ns) ? "_Policy" : $"{ns}/_Policy";
         await using var cmd = _dataSource.CreateCommand(
             $"""
-            INSERT INTO {mnTable} (namespace, id, name, node_type, content, main_node)
-            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, $2)
+            INSERT INTO {mnTable} (namespace, id, name, node_type, content, main_node, state)
+            VALUES ($1, '_Policy', 'Access Policy', 'PartitionAccessPolicy', {jsonBuild}, $2, 2)
             ON CONFLICT (namespace, id) DO UPDATE
             SET content = {jsonBuild},
                 node_type = 'PartitionAccessPolicy',
                 name = 'Access Policy',
-                main_node = EXCLUDED.main_node
+                main_node = EXCLUDED.main_node,
+                state = 2
             """);
         cmd.Parameters.AddWithValue(ns);
         cmd.Parameters.AddWithValue(mainNode);

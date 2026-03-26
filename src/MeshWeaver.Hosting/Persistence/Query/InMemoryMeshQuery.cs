@@ -41,9 +41,9 @@ internal class InMemoryMeshQuery(
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
     {
-        // If request has explicit UserId, use it
-        if (!string.IsNullOrEmpty(request.UserId))
-            return request.UserId;
+        // If request has explicit UserId set (including empty for anonymous), use it
+        if (request.UserId != null)
+            return string.IsNullOrEmpty(request.UserId) ? WellKnownUsers.Anonymous : request.UserId;
 
         // Get from access context, falling back to circuit context
         var userId = accessService?.Context?.ObjectId
@@ -60,23 +60,13 @@ internal class InMemoryMeshQuery(
         JsonSerializerOptions options,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        await foreach (var item in QueryInternalAsync(request, options, skipAccessControl: true, ct))
+        await foreach (var item in QueryCoreAsync(request, options, ct))
             yield return item;
     }
 
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        await foreach (var item in QueryInternalAsync(request, options, skipAccessControl: false, ct))
-            yield return item;
-    }
-
-    private async IAsyncEnumerable<object> QueryInternalAsync(
-        MeshQueryRequest request,
-        JsonSerializerOptions options,
-        bool skipAccessControl,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var parsedQuery = _parser.Parse(request.Query);
@@ -122,24 +112,21 @@ internal class InMemoryMeshQuery(
             if (!seen.Add(node))
                 continue;
 
-            // Apply access control filtering (skipped for core/infrastructure queries).
-            if (!skipAccessControl)
+            // Always apply access control filtering on the public query path.
+            if (node is MeshNode meshNode)
             {
-                if (node is MeshNode meshNode)
+                if (!await ValidateReadAsync(meshNode, userId, ct))
+                    continue;
+            }
+            else if (securityService != null)
+            {
+                var itemPath = GetItemPath(node);
+                if (!string.IsNullOrEmpty(itemPath))
                 {
-                    if (!await ValidateReadAsync(meshNode, userId, ct))
+                    var permissions = await securityService.GetEffectivePermissionsAsync(
+                        itemPath, userId, ct);
+                    if (!permissions.HasFlag(Permission.Read))
                         continue;
-                }
-                else if (securityService != null)
-                {
-                    var itemPath = GetItemPath(node);
-                    if (!string.IsNullOrEmpty(itemPath))
-                    {
-                        var permissions = await securityService.GetEffectivePermissionsAsync(
-                            itemPath, userId, ct);
-                        if (!permissions.HasFlag(Permission.Read))
-                            continue;
-                    }
                 }
             }
 
@@ -182,6 +169,85 @@ internal class InMemoryMeshQuery(
                 skipped++;
                 continue;
             }
+
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                : node;
+
+            yielded++;
+            if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0
+                && yielded >= parsedQuery.Limit.Value)
+                yield break;
+        }
+    }
+
+    /// <summary>
+    /// Core query without access control — used by IMeshQueryCore for infrastructure.
+    /// Shares parsing/sorting/paging logic with QueryAsync but skips all AC checks.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryCoreAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var parsedQuery = _parser.Parse(request.Query);
+        if (request.Limit.HasValue)
+            parsedQuery = parsedQuery with { Limit = request.Limit };
+        if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
+            parsedQuery = parsedQuery with { IsMain = true };
+
+        var effectivePath = parsedQuery.Path;
+        var effectiveScope = parsedQuery.Scope;
+        if (string.IsNullOrEmpty(effectivePath))
+        {
+            if (!string.IsNullOrEmpty(request.DefaultPath))
+                effectivePath = request.DefaultPath;
+            if (parsedQuery.Scope == QueryScope.Exact)
+                effectiveScope = QueryScope.Children;
+        }
+
+        var basePath = NormalizePath(effectivePath);
+        var userId = GetEffectiveUserId(request);
+        var context = request.Context ?? parsedQuery.Context;
+
+        var matched = new List<object>();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        await foreach (var node in FindMatchingNodesAsync(
+            parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
+        {
+            if (seen.Add(node))
+                matched.Add(node);
+        }
+
+        if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
+        {
+            var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await foreach (var actNode in persistence.GetAllDescendantsAsync(basePath, options)
+                .WithCancellation(ct))
+            {
+                if (actNode.NodeType == ActivityNodeType.NodeType
+                    && !string.IsNullOrEmpty(actNode.MainNode))
+                    activityMainPaths.Add(actNode.MainNode);
+            }
+            matched = matched
+                .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
+                .ToList();
+        }
+
+        IEnumerable<object> sorted = matched;
+        if (parsedQuery.OrderBy != null)
+        {
+            sorted = parsedQuery.OrderBy.Descending
+                ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
+                : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
+        }
+
+        int skipped = 0, yielded = 0;
+        foreach (var node in sorted)
+        {
+            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
+            { skipped++; continue; }
 
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)

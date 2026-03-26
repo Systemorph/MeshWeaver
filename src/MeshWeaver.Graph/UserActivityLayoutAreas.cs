@@ -146,31 +146,29 @@ public static class UserActivityLayoutAreas
             .WithStyle("padding: 0 24px; flex: 1; min-height: 0; overflow-y: auto; " + ThinScrollbar);
 
         // Recent activity by this user
-        content = content.WithView(Controls.Stack.WithStyle("margin-top: 24px;")
-            .WithView(Controls.Html(
-                "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recent Activity</div>"))
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"source:activity namespace:{nodePath} scope:subtree is:main sort:LastModified-desc")
-                .WithShowSearchBox(false)
-                .WithShowEmptyMessage(true)
-                .WithRenderMode(MeshSearchRenderMode.Flat)
-                .WithCollapsibleSections(false)
-                .WithSectionCounts(false)
-                .WithMaxColumns(2)
-                .WithItemLimit(8)));
+        content = content.WithView(Controls.MeshSearch
+            .WithTitle("Recent Activity")
+            .WithHiddenQuery($"source:activity namespace:{nodePath} scope:subtree is:main sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(4)
+            .WithGridBreakpoints(12, 6, 3, 3)
+            .WithItemLimit(8));
 
         // Visible child nodes — security service automatically filters to viewer-visible nodes
-        content = content.WithView(Controls.Stack.WithStyle("margin-top: 24px;")
-            .WithView(Controls.Html(
-                "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Items</div>"))
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
-                .WithShowSearchBox(false)
-                .WithShowEmptyMessage(true)
-                .WithRenderMode(MeshSearchRenderMode.Grouped)
-                .WithSectionCounts(true)
-                .WithItemLimit(20)
-                .WithCollapsibleSections(true)));
+        content = content.WithView(Controls.MeshSearch
+            .WithTitle("Items")
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithSectionCounts(true)
+            .WithItemLimit(20)
+            .WithMaxColumns(4)
+            .WithGridBreakpoints(12, 6, 3, 3)
+            .WithCollapsibleSections(true));
 
         profile = profile.WithView(content);
         return profile;
@@ -202,23 +200,19 @@ public static class UserActivityLayoutAreas
     {
         var section = Controls.Stack;
 
-        section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Activity Feed</div>"));
-
         // Pinned documentation card
         section = section.WithView(BuildDocumentationCard());
 
-        // Activity feed — 2 items per row, ~4 rows visible, scrollable
-        section = section.WithView(Controls.Stack
-            .WithStyle("max-height: 480px; overflow-y: auto;")
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery("source:activity scope:subtree is:main sort:LastModified-desc")
-                .WithShowSearchBox(false)
-                .WithRenderMode(MeshSearchRenderMode.Flat)
-                .WithCollapsibleSections(false)
-                .WithSectionCounts(false)
-                .WithMaxColumns(2)
-                .WithItemLimit(8)));
+        // Activity feed
+        section = section.WithView(Controls.MeshSearch
+            .WithTitle("Activity Feed")
+            .WithHiddenQuery("source:activity scope:subtree is:main sort:LastModified-desc")
+            .WithShowSearchBox(false)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(2)
+            .WithItemLimit(8));
 
         return section;
     }
@@ -266,28 +260,17 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static UiControl BuildRecentActivity(string nodePath)
     {
-        var section = Controls.Stack.WithWidth("100%");
-
-        section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Recently Viewed</div>"));
-
-        // Recently viewed — 1 item per row (full width for readability), ~4 rows, scrollable
-        // Exclude the user's own node from results (we're already on their page)
-        section = section.WithView(Controls.Stack
-            .WithWidth("100%")
-            .WithStyle("max-height: 400px; overflow-y: auto;")
-            .WithView(Controls.MeshSearch
-                .WithHiddenQuery($"source:accessed scope:subtree is:main sort:LastModified-desc -path:{nodePath}")
-                .WithShowSearchBox(false)
-                .WithShowEmptyMessage(true)
-                .WithRenderMode(MeshSearchRenderMode.Flat)
-                .WithCollapsibleSections(false)
-                .WithSectionCounts(false)
-                .WithMaxColumns(1)
-                .WithGridBreakpoints(12, 12, 12, 12)
-                .WithItemLimit(4)));
-
-        return section;
+        return Controls.MeshSearch
+            .WithTitle("Recently Viewed")
+            .WithHiddenQuery($"source:accessed scope:subtree is:main sort:LastModified-desc -path:{nodePath}")
+            .WithShowSearchBox(false)
+            .WithShowEmptyMessage(true)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCollapsibleSections(false)
+            .WithSectionCounts(false)
+            .WithMaxColumns(1)
+            .WithGridBreakpoints(12, 12, 12, 12)
+            .WithItemLimit(4);
     }
 
     /// <summary>
@@ -296,22 +279,17 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static UiControl BuildLatestThreads(string nodePath, string nodeOwnerId)
     {
-        var section = Controls.Stack.WithStyle("margin-top: 16px;");
-
-        section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">Latest Threads</div>"));
-
-        section = section.WithView(Controls.MeshSearch
+        return Controls.MeshSearch
+            .WithTitle("Latest Threads")
             .WithHiddenQuery($"nodeType:Thread content.createdBy:{nodeOwnerId} scope:descendants sort:LastModified-desc")
-            .WithShowSearchBox(false)
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
-            .WithItemLimit(6)
+            .WithItemLimit(8)
+            .WithMaxColumns(4)
+            .WithGridBreakpoints(12, 6, 3, 3)
             .WithCreateNodeType("Thread")
-            .WithCreateNamespace(nodePath));
-
-        return section;
+            .WithCreateNamespace(nodePath);
     }
 
     /// <summary>
@@ -319,22 +297,17 @@ public static class UserActivityLayoutAreas
     /// </summary>
     private static UiControl BuildChildren(string nodePath)
     {
-        var section = Controls.Stack.WithStyle("margin-top: 24px;");
-
-        section = section.WithView(Controls.Html(
-            "<div style=\"font-size: 1.05rem; font-weight: 600; padding-bottom: 12px;\">My Items</div>"));
-
-        section = section.WithView(Controls.MeshSearch
-            .WithHiddenQuery($"namespace:{nodePath} scope:descendants sort:LastModified-desc")
-            .WithShowSearchBox(false)
+        return Controls.MeshSearch
+            .WithTitle("My Items")
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSectionCounts(true)
             .WithItemLimit(10)
+            .WithMaxColumns(4)
+            .WithGridBreakpoints(12, 6, 3, 3)
             .WithCollapsibleSections(true)
-            .WithCreateHref($"/{nodePath}/{MeshNodeLayoutAreas.CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}"));
-
-        return section;
+            .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
     }
 
     private static UiControl BuildNotifications(string _, string userId)

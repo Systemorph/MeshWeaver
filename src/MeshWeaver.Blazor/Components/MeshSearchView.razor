@@ -5,29 +5,36 @@
 @using Microsoft.FluentUI.AspNetCore.Components
 
 <div class="mesh-search-container">
-    @if (BoundShowSearchBox)
+    @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton)
     {
         <div class="mesh-search-box">
             <div class="mesh-search-box-inner">
-                <div class="mesh-search-box-input">
-                    <MonacoEditorView @ref="monacoEditor"
-                                      Value="@_currentValue"
-                                      ValueChanged="@OnValueChanged"
-                                      OnSubmit="HandleSearch"
-                                      Placeholder="@BoundPlaceholder"
-                                      Height="38px"
-                                      MaxHeight="38px"
-                                      ShowBorder="true"
-                                      CodeEditMode="false"
-                                      AsyncCompletionCallback="@GetCompletionsAsync" />
-                </div>
-                <button type="button" class="mesh-search-button" @onclick="HandleSearch">
-                    Search
-                </button>
-                <button type="button" class="mesh-search-options-button" @onclick="ToggleSearchOptions"
-                        title="Search options">
-                    <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
-                </button>
+                @if (!string.IsNullOrEmpty(BoundTitle))
+                {
+                    <div class="mesh-search-title">@BoundTitle</div>
+                }
+                @if (BoundShowSearchBox)
+                {
+                    <div class="mesh-search-box-input">
+                        <MonacoEditorView @ref="monacoEditor"
+                                          Value="@_currentValue"
+                                          ValueChanged="@OnValueChanged"
+                                          OnSubmit="HandleSearch"
+                                          Placeholder="@BoundPlaceholder"
+                                          Height="38px"
+                                          MaxHeight="38px"
+                                          ShowBorder="true"
+                                          CodeEditMode="false"
+                                          AsyncCompletionCallback="@GetCompletionsAsync" />
+                    </div>
+                    <button type="button" class="mesh-search-button" @onclick="HandleSearch">
+                        Search
+                    </button>
+                    <button type="button" class="mesh-search-options-button" @onclick="ToggleSearchOptions"
+                            title="Search options">
+                        <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
+                    </button>
+                }
                 @if (ShowCreateButton)
                 {
                     <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
@@ -35,17 +42,6 @@
                         +
                     </button>
                 }
-            </div>
-        </div>
-    }
-    else if (!string.IsNullOrEmpty(BoundCreateNodeType))
-    {
-        <div class="mesh-search-box">
-            <div class="mesh-search-box-inner" style="justify-content: flex-end;">
-                <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
-                        title="Create new">
-                    +
-                </button>
             </div>
         </div>
     }

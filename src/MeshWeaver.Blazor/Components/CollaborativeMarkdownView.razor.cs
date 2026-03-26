@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using Markdig;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
@@ -9,6 +8,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using System.Reactive.Linq;
@@ -45,7 +45,7 @@ public partial class CollaborativeMarkdownView
     private bool commentSelectionInitialized;
 
     // Parsed data
-    private string RenderedHtml = "";
+    private string? _processedHtml;
     private List<ParsedAnnotation> Annotations = new();
 
     // Comment data cache (markerId -> Comment), populated by mesh query subscription
@@ -182,13 +182,6 @@ public partial class CollaborativeMarkdownView
             await jsModule.InvokeVoidAsync("positionCards");
         }
 
-        if (jsModule != null && !string.IsNullOrEmpty(RenderedHtml))
-        {
-            await jsModule.InvokeVoidAsync("highlightCodeBlocks", contentRef);
-            await jsModule.InvokeVoidAsync("renderMermaidDiagrams", contentRef);
-            await jsModule.InvokeVoidAsync("renderMathBlocks", contentRef);
-        }
-
         // Enable comment-from-selection when user has comment permission
         if (jsModule != null && BoundCanComment && !commentSelectionInitialized)
         {
@@ -202,7 +195,7 @@ public partial class CollaborativeMarkdownView
     {
         if (string.IsNullOrEmpty(RawContent))
         {
-            RenderedHtml = "";
+            _processedHtml = "";
             Annotations = new();
             return;
         }
@@ -219,7 +212,22 @@ public partial class CollaborativeMarkdownView
         };
 
         // Render markdown to HTML with annotation spans
-        RenderedHtml = RenderMarkdown(content);
+        _processedHtml = RenderMarkdown(content);
+    }
+
+    /// <summary>
+    /// Renders the processed HTML using the shared MarkdownHtmlRenderer,
+    /// which dispatches to Blazor components for UCR links, layout areas,
+    /// code blocks, mermaid diagrams, math blocks, and SVG.
+    /// </summary>
+    private void RenderContentHtml(RenderTreeBuilder builder)
+    {
+        if (string.IsNullOrEmpty(_processedHtml))
+            return;
+
+        var renderer = new MarkdownHtmlRenderer(Mode, Stream);
+        renderer.ShowReferencesSection = true;
+        renderer.RenderHtml(builder, _processedHtml);
     }
 
     private string RenderMarkdown(string content)

@@ -408,14 +408,14 @@ public class QueryEvaluator
     /// <param name="results">The results to order</param>
     /// <param name="orderBy">The ordering clause (null means no ordering)</param>
     /// <returns>Ordered results</returns>
-    public IEnumerable<T> OrderResults<T>(IEnumerable<T> results, OrderByClause? orderBy) where T : notnull
+    public IEnumerable<T> OrderResults<T>(IEnumerable<T> results, OrderByClause? orderBy)
     {
         if (orderBy == null)
             return results;
 
         return orderBy.Descending
-            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x, orderBy.Property)))
-            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x, orderBy.Property)));
+            ? results.OrderByDescending(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)))
+            : results.OrderBy(x => GetComparableValue(GetPropertyValue(x!, orderBy.Property)));
     }
 
     /// <summary>

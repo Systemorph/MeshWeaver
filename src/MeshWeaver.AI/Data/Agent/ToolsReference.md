@@ -215,16 +215,20 @@ Creates a new node in the mesh. The node is validated before being persisted.
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `id` | string | Yes | Local identifier within namespace (e.g., "NewOrg", "Task1") |
-| `namespace` | string | For nested nodes | Parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
-| `name` | string | Yes | Human-readable display name |
+| `id` | string | Yes | Simple slug identifier — **no slashes** (e.g., "NewOrg", "Task1") |
+| `namespace` | string | For nested nodes | Full parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
+| `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
 | `nodeType` | string | Yes | Type category (must match an existing NodeType) |
 | `category` | string | No | Grouping category |
-| `icon` | string | No | Icon URL or identifier |
+| `icon` | string | No | Inline SVG icon (start with `<svg`) — always create a unique, visually appealing SVG for the node |
 | `order` | int | No | Sort order (lower values appear first) |
 | `content` | object | Depends on type | Type-specific data model content |
 
 The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-level nodes).
+
+**Critical: `id` must be a simple slug — NO slashes.** Use `namespace` for hierarchy.
+- Correct: `"id": "PricingTool", "namespace": "User/rbuergi"`
+- **Wrong**: `"id": "User/rbuergi/PricingTool", "namespace": ""`
 
 ### Discovering Content Schemas
 

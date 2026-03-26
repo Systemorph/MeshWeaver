@@ -100,6 +100,9 @@ public class MeshQuery(
         {
             await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, limit, ct))
             {
+                // Skip satellite nodes — they have /_Prefix/ segments in their path
+                if (IsSatellitePath(suggestion.Path))
+                    continue;
                 if (seen.TryAdd(suggestion.Path, 0))
                     all.Add(suggestion);
             }
@@ -131,6 +134,9 @@ public class MeshQuery(
         {
             await foreach (var suggestion in provider.AutocompleteAsync(basePath, prefix, Options, mode, limit, contextPath, context, ct))
             {
+                // Skip satellite nodes — they have /_Prefix/ segments in their path
+                if (IsSatellitePath(suggestion.Path))
+                    continue;
                 if (seen.TryAdd(suggestion.Path, 0))
                     all.Add(suggestion);
             }
@@ -152,6 +158,24 @@ public class MeshQuery(
         {
             yield return suggestion;
         }
+    }
+
+    /// <summary>
+    /// Checks if a path is a satellite node path (contains /_Prefix/ segments).
+    /// Satellite prefixes start with underscore: _Thread, _Comment, _Activity, _Access, etc.
+    /// </summary>
+    private static bool IsSatellitePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        // Check for /_X segments where X starts with uppercase (satellite convention)
+        var idx = 0;
+        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
+        {
+            idx += 2; // skip "/_"
+            if (idx < path.Length && char.IsUpper(path[idx]))
+                return true;
+        }
+        return false;
     }
 
     public IObservable<QueryResultChange<T>> ObserveQuery<T>(MeshQueryRequest request)

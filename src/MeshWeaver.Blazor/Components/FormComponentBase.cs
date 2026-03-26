@@ -97,7 +97,9 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
                         return;
 
                     lastSyncedValue = x;
-                    hasPendingLocalChanges = false;
+                    // Keep hasPendingLocalChanges=true — only cleared when the echo
+                    // of this sync arrives (in ShouldApplyExternalUpdate). This prevents
+                    // stale echoes from older syncs from overwriting the current value.
                     UpdatePointer(ConvertToData(x)!, DataPointer);
                 }
             })
@@ -130,14 +132,19 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     /// <summary>
     /// Determines whether an external update (from stream) should be applied.
     /// Returns false if the update is an echo of our own sync or if we have pending local changes.
+    /// When the echo of our last sync arrives, clears the pending flag so subsequent
+    /// genuine external updates can be applied.
     /// </summary>
     private bool ShouldApplyExternalUpdate(TValue? value)
     {
-        // Don't apply if it's an echo of what we last synced
+        // Echo of what we last synced — don't apply (duplicate) but confirm the sync
         if (EqualityComparer<TValue>.Default.Equals(value, lastSyncedValue))
+        {
+            hasPendingLocalChanges = false;
             return false;
+        }
 
-        // Don't apply if we have pending local changes
+        // Still waiting for our sync echo — reject stale external values
         if (hasPendingLocalChanges)
             return false;
 

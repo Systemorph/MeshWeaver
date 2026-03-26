@@ -89,16 +89,24 @@ A MeshNode has these key properties:
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `id` | string | Yes | Local identifier within namespace (e.g., "NewOrg", "Task1") |
-| `namespace` | string | For nested nodes | Parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
-| `name` | string | Yes | Human-readable display name |
-| `nodeType` | string | Yes | Type category (must match an existing NodeType, e.g., "Organization", "Todo") |
+| `id` | string | Yes | Simple identifier — **no slashes** (e.g., "NewOrg", "Task1") |
+| `namespace` | string | For nested nodes | Full parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
+| `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
+| `nodeType` | string | Yes | Type category (must match an existing NodeType, e.g., "Organization", "Markdown") |
 | `category` | string | No | Grouping category (overrides NodeType for display) |
-| `icon` | string | No | Icon URL or identifier |
+| `icon` | string | No | Inline SVG icon (start with `<svg`) — always create a unique, visually appealing SVG icon for the node |
 | `order` | int | No | Sort order (lower values appear first) |
 | `content` | object | Depends on type | Type-specific data model content. Schema depends on NodeType. |
 
 The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-level nodes).
+
+### Critical Rules
+
+- **`id` must be a simple slug — NO slashes.** Use only letters, numbers, and hyphens.
+  - Correct: `"id": "PricingTool", "namespace": "User/rbuergi"`
+  - **Wrong**: `"id": "User/rbuergi/PricingTool", "namespace": ""`
+- **`name` must be a clear, descriptive title** — not just the first few words of content. Think of it as a document title.
+- **`icon` should be an inline SVG** — create a small, clean SVG icon that visually represents the node's purpose. Start with `<svg` and it renders directly. Use a simple 24x24 viewBox with clean shapes and colors that match the content theme.
 
 ### Discovering Content Schemas
 

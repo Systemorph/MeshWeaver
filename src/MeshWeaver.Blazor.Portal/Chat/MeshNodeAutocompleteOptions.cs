@@ -22,6 +22,12 @@ public class MeshNodeAutocompleteOptions
     public string? FilterByCreatableType { get; set; }
 
     /// <summary>
+    /// When set, uses QueryAsync with these queries instead of AutocompleteAsync.
+    /// Queries are executed in parallel and results merged. User search text is appended.
+    /// </summary>
+    public string[]? Queries { get; set; }
+
+    /// <summary>
     /// Placeholder text for the search input.
     /// </summary>
     public string Placeholder { get; set; } = "Select namespace...";

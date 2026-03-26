@@ -1,5 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Schema;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -182,6 +185,17 @@ public class MeshOperations
             if (string.IsNullOrWhiteSpace(meshNode.Name))
                 return "Error: 'name' property is required. Provide a human-readable display name.";
 
+            if (meshNode.Id.Contains('/'))
+                return $"Error: 'id' must not contain slashes. Got '{meshNode.Id}'. Use 'namespace' for the parent path and 'id' for just the node name.";
+
+            // Validate content against schema if both nodeType and content are provided
+            if (!string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null)
+            {
+                var validationError = await ValidateContentAgainstSchemaAsync(meshNode);
+                if (validationError != null)
+                    return validationError;
+            }
+
             var created = await mesh.CreateNodeAsync(meshNode);
             return $"Created: {created.Path}";
         }
@@ -299,6 +313,66 @@ public class MeshOperations
         {
             logger.LogWarning(ex, "Error deleting nodes");
             return $"Error: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Validates node content against the content type for its NodeType.
+    /// Creates a temporary hub with the NodeType's configuration to find the
+    /// registered content type, then attempts to deserialize the content into that type.
+    /// Returns an error message if invalid, or null if valid/no schema available.
+    /// </summary>
+    internal Task<string?> ValidateContentAgainstSchemaAsync(MeshNode meshNode)
+    {
+        try
+        {
+            var nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
+            if (nodeTypeService == null)
+                return Task.FromResult<string?>(null);
+
+            var hubConfig = nodeTypeService.GetCachedHubConfiguration(meshNode.NodeType!);
+            if (hubConfig == null)
+                return Task.FromResult<string?>(null);
+
+            // Create a temporary hub with the NodeType's config to access its type registry
+            var tempAddress = new Address($"_schema_validation/{Guid.NewGuid():N}");
+            var tempHub = hub.GetHostedHub(tempAddress, hubConfig);
+            if (tempHub == null)
+                return Task.FromResult<string?>(null);
+
+            try
+            {
+                // Find the content type from the hub's type registry
+                var typeRegistry = tempHub.ServiceProvider.GetService<ITypeRegistry>();
+                if (typeRegistry == null || !typeRegistry.TryGetType(meshNode.NodeType!, out var typeDefinition))
+                    return Task.FromResult<string?>(null);
+
+                var contentType = typeDefinition!.Type;
+
+                // Serialize content to JSON and try to deserialize into the target type
+                var contentJson = JsonSerializer.Serialize(meshNode.Content, hub.JsonSerializerOptions);
+                try
+                {
+                    var deserialized = JsonSerializer.Deserialize(contentJson, contentType, hub.JsonSerializerOptions);
+                    if (deserialized == null)
+                        return Task.FromResult<string?>($"Error: Content is null after deserialization for NodeType '{meshNode.NodeType}'.");
+
+                    return Task.FromResult<string?>(null); // Valid
+                }
+                catch (JsonException ex)
+                {
+                    return Task.FromResult<string?>($"Error: Content does not match the schema for NodeType '{meshNode.NodeType}'. {ex.Message}");
+                }
+            }
+            finally
+            {
+                tempHub.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Schema validation skipped for NodeType {NodeType}", meshNode.NodeType);
+            return Task.FromResult<string?>(null);
         }
     }
 }

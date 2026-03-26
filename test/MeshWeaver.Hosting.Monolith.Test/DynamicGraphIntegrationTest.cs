@@ -552,9 +552,10 @@ public class DynamicGraphIntegrationTest : MonolithMeshTestBase
         var hasSearchStructure = json.Contains("Search") && json.Contains("MeshSearchControl");
         hasSearchStructure.Should().BeTrue($"Search should have MeshSearchControl. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
 
-        // The MeshSearchControl should have the correct namespace and scope
-        var hasCorrectQuery = json.Contains("namespace:Organization");
-        hasCorrectQuery.Should().BeTrue($"Search should have namespace filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
+        // The MeshSearchControl should have the correct nodeType filter and namespace scope
+        // Organization has DefaultNamespace="" (root-level), so query is "nodeType:Organization namespace:"
+        var hasCorrectQuery = json.Contains("nodeType:Organization") && json.Contains("namespace:");
+        hasCorrectQuery.Should().BeTrue($"Search should have nodeType and namespace filter in query. JSON: {json.Substring(0, Math.Min(1000, json.Length))}");
     }
 
     /// <summary>
@@ -1000,6 +1001,26 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             o => o.WithTarget(new Address(ProjectNodeTypePath)),
             TestContext.Current.CancellationToken);
         response.Should().NotBeNull();
+    }
+
+    [Fact(Timeout = 20000)]
+    public async Task CreateNode_PreservesName()
+    {
+        var name = "My Test Article";
+        var nodePath = $"{TestPartition}/name-preservation-test";
+
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(nodePath) with
+        {
+            Name = name,
+            NodeType = "Markdown"
+        });
+
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+
+        node.Should().NotBeNull("node should exist after creation");
+        node!.Name.Should().Be(name, "Name should be preserved through CreateNodeAsync");
+        node.State.Should().Be(MeshNodeState.Active);
     }
 }
 
