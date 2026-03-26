@@ -42,6 +42,7 @@ public static class ThreadLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
+                .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
@@ -187,6 +188,46 @@ public static class ThreadLayoutAreas
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
                 .WithStyle("flex: 1; overflow: hidden;"));
+    }
+
+    /// <summary>
+    /// Renders just the ThreadChatControl without the full-page header.
+    /// Used by the side panel — the title is pushed to the data section
+    /// so the side panel header can display it.
+    /// </summary>
+    public static UiControl? ThreadChatView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream<MeshNode>();
+
+        var vmStream = stream!.Select(nodes =>
+        {
+            var node = nodes!.First(n => n.Path == hubPath);
+            var threadContent = node?.Content as MeshThread;
+            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? threadContent.ParentPath : hubPath;
+            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
+                ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
+            return new ThreadViewModel
+            {
+                Messages = threadContent?.Messages ?? [],
+                ThreadPath = hubPath,
+                InitialContext = contextPath,
+                InitialContextDisplayName = contextDisplayName
+            };
+        });
+        host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
+
+        // Push title to data section so the side panel header can read it
+        var titleStream = stream!.Select(nodes =>
+        {
+            var node = nodes!.First(n => n.Path == hubPath);
+            return GetThreadTitle(node);
+        }).DistinctUntilChanged();
+        host.RegisterForDisposal(titleStream.Subscribe(title => host.UpdateData("title", title)));
+
+        return new ThreadChatControl()
+            .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)));
     }
 
     /// <summary>

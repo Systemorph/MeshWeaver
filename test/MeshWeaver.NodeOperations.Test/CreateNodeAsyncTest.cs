@@ -17,6 +17,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
+using MeshWeaver.Documentation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -37,13 +38,6 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
 
     private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
 
-    public override async ValueTask InitializeAsync()
-    {
-        await base.InitializeAsync();
-        // Pre-warm filesystem partition discovery so it doesn't eat into test timeouts
-        await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver").FirstOrDefaultAsync();
-    }
-
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
@@ -62,6 +56,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddMeshWeaverDocs()
+            .AddDocumentation()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -80,7 +75,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
     public async Task CreateNodeAsync_ShouldPersistCommentNode()
     {
         // Arrange
-        var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var parentPath = "Doc/DataMesh/CollaborativeEditing";
         var commentId = Guid.NewGuid().AsString();
         var commentPath = $"{parentPath}/{commentId}";
 
@@ -96,7 +91,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             Status = CommentStatus.Active
         };
 
-        var node = new MeshNode(commentPath)
+        var node = new MeshNode(commentId, parentPath)
         {
             Name = $"Comment by TestUser",
             NodeType = CommentNodeType.NodeType,
@@ -134,7 +129,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
     public async Task CreateNodeAsync_ReplyNode_ShouldLinkToParent()
     {
         // Arrange
-        var parentPath = "MeshWeaver/Documentation/DataMesh/CollaborativeEditing";
+        var parentPath = "Doc/DataMesh/CollaborativeEditing";
 
         // Create parent comment
         var parentCommentId = Guid.NewGuid().AsString();
@@ -148,7 +143,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             CreatedAt = DateTimeOffset.UtcNow,
             Status = CommentStatus.Active
         };
-        var parentNode = new MeshNode(parentCommentPath)
+        var parentNode = new MeshNode(parentCommentId, parentPath)
         {
             Name = "Comment by Alice",
             NodeType = CommentNodeType.NodeType,
@@ -168,7 +163,7 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
             CreatedAt = DateTimeOffset.UtcNow,
             Status = CommentStatus.Active
         };
-        var replyNode = new MeshNode(replyPath)
+        var replyNode = new MeshNode(replyId, parentCommentPath)
         {
             Name = "Comment by Bob",
             NodeType = CommentNodeType.NodeType,

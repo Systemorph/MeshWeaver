@@ -4,7 +4,7 @@
 @using MeshWeaver.Mesh
 @using MeshWeaver.Mesh.Services
 
-<ChatSidePanel OnCloseRequested="@OnCloseRequested">
+<ChatSidePanel OnCloseRequested="@OnCloseRequested" Title="@SidePanelTitle">
     <ToolbarContent>
         <FluentButton BackgroundColor="transparent" OnClick="OnNewChat" Title="New Chat">
             <FluentIcon Value="@(new Icons.Regular.Size20.Add())" Color="Color.Neutral" />

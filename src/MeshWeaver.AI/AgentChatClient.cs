@@ -251,6 +251,7 @@ public class AgentChatClient : IAgentChat
             if (Context.Node != null)
             {
                 messageText.AppendLine($"**Current node:** `{Context.Node.Path}` (type: {Context.Node.NodeType}, name: {Context.Node.Name})");
+                messageText.AppendLine("This node already exists. To modify it, use Get then Update — do NOT Create it again.");
             }
             else if (!string.IsNullOrEmpty(contextPath))
             {
