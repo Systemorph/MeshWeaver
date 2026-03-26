@@ -643,14 +643,6 @@ public class QueryParserTests
     }
 
     [Fact]
-    public void Parse_ScopeSelf_SetsScopeExact()
-    {
-        var result = _parser.Parse("scope:self");
-
-        result.Scope.Should().Be(QueryScope.Exact);
-    }
-
-    [Fact]
     public void Parse_ScopeMyselfAndAncestors_SetsAncestorsAndSelf()
     {
         // myselfAndAncestors should be an alias for ancestorsAndSelf

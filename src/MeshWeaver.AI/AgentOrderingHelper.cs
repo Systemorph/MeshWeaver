@@ -91,7 +91,7 @@ public static class AgentOrderingHelper
 
         try
         {
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}"))
             {
                 if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
                 {
