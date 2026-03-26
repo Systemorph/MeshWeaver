@@ -392,7 +392,6 @@ public partial class QueryParser
                         "ancestorsandself" => QueryScope.AncestorsAndSelf,
                         "selfandancestors" => QueryScope.AncestorsAndSelf,
                         "myselfandancestors" => QueryScope.AncestorsAndSelf, // legacy alias
-                        "self" => QueryScope.Exact,
                         _ => QueryScope.Exact
                     };
                     continue;

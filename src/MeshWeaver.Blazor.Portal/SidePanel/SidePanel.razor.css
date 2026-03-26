@@ -67,7 +67,7 @@
     max-width: 100%;
     position: relative;
     min-height: 0;
-    overflow: visible;
+    overflow: hidden;
 }
 
 .side-panel-history-fullscreen {

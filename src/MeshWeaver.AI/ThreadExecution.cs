@@ -211,6 +211,22 @@ public static class ThreadExecution
             await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
             logger.LogDebug("[ThreadExec] ExecuteMessageAsync: agent initialized for {ThreadPath}", threadPath);
 
+            // Set application context so the agent knows which node it's working on.
+            // This populates the "Current Application Context" section in the system prompt,
+            // which is critical for sub-threads created via delegation.
+            if (!string.IsNullOrEmpty(request.ContextPath))
+            {
+                var meshService2 = parentHub.ServiceProvider.GetRequiredService<IMeshService>();
+                var contextNode = await meshService2.QueryAsync<MeshNode>(
+                    $"path:{request.ContextPath}").FirstOrDefaultAsync(ct);
+                chatClient.SetContext(new AgentContext
+                {
+                    Address = new Address(request.ContextPath),
+                    Context = request.ContextPath,
+                    Node = contextNode
+                });
+            }
+
             if (!string.IsNullOrEmpty(request.AgentName))
                 chatClient.SetSelectedAgent(request.AgentName);
 

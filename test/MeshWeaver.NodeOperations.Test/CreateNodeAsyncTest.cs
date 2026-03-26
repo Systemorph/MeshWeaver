@@ -37,6 +37,13 @@ public class CreateNodeAsyncTest(ITestOutputHelper output) : MonolithMeshTestBas
 
     private CancellationToken TestTimeout => new CancellationTokenSource(30.Seconds()).Token;
 
+    public override async ValueTask InitializeAsync()
+    {
+        await base.InitializeAsync();
+        // Pre-warm filesystem partition discovery so it doesn't eat into test timeouts
+        await MeshQuery.QueryAsync<MeshNode>("path:MeshWeaver").FirstOrDefaultAsync();
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         var graphPath = TestPaths.SamplesGraph;
