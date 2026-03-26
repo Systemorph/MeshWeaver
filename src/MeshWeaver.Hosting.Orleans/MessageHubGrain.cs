@@ -138,11 +138,26 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
+        var grainId = this.GetPrimaryKeyString();
+        logger.LogInformation("Grain {GrainId} deactivating: reason={Reason}", grainId, reason.ReasonCode);
 
         if (Hub != null)
         {
-            Hub.Dispose();
-            await Hub.Disposal!;
+            try
+            {
+                Hub.Dispose();
+                // Wait for disposal (includes async flush of pending saves)
+                var disposalTask = Hub.Disposal!;
+                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+                if (completed != disposalTask)
+                    logger.LogWarning("Grain {GrainId}: hub disposal timed out after 10s — pending saves may be lost!", grainId);
+                else
+                    logger.LogInformation("Grain {GrainId}: hub disposal completed", grainId);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Grain {GrainId}: hub disposal failed — pending saves may be lost!", grainId);
+            }
         }
         Hub = null;
         if (loadContext != null)
