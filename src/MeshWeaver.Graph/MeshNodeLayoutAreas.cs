@@ -87,7 +87,6 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithNodeOperationHandlers()
             .AddDefaultMeshMenu()
             .AddDefaultSettingsMenuItems()
             .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
