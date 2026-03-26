@@ -274,9 +274,15 @@ public static class MeshNodeLayoutAreas
                 iconControl = Controls.Html(
                     $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>");
             }
-            else
+            else if (MeshNodeImageHelper.IsFluentIconName(iconValue))
             {
                 iconControl = Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);");
+            }
+            else
+            {
+                // Emoji or other text — render as-is
+                iconControl = Controls.Html(
+                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
             }
 
             if (canEdit)
