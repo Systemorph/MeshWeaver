@@ -1002,6 +1002,26 @@ public class SamplesGraphDataTest : MonolithMeshTestBase
             TestContext.Current.CancellationToken);
         response.Should().NotBeNull();
     }
+
+    [Fact(Timeout = 20000)]
+    public async Task CreateNode_PreservesName()
+    {
+        var name = "My Test Article";
+        var nodePath = $"{TestPartition}/name-preservation-test";
+
+        await NodeFactory.CreateNodeAsync(MeshNode.FromPath(nodePath) with
+        {
+            Name = name,
+            NodeType = "Markdown"
+        });
+
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}", ct: TestContext.Current.CancellationToken)
+            .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+
+        node.Should().NotBeNull("node should exist after creation");
+        node!.Name.Should().Be(name, "Name should be preserved through CreateNodeAsync");
+        node.State.Should().Be(MeshNodeState.Active);
+    }
 }
 
 [CollectionDefinition("SamplesGraphData", DisableParallelization = true)]
