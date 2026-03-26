@@ -16,8 +16,17 @@
 
 .thread-chat-messages {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 16px;
+}
+
+/* Footer: progress + input pinned at bottom */
+.thread-chat-footer {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
 }
 
 .thread-chat-input-area {
@@ -27,7 +36,7 @@
     border-radius: 8px;
     background: var(--neutral-layer-card-container);
     overflow: visible;
-    min-width: 320px;
+    min-width: 0;
 }
 
 .input-container {

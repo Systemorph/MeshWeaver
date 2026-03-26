@@ -533,18 +533,18 @@ public static class ThreadMessageLayoutAreas
             ? $"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(message.ModelName)}</div>"
             : "";
 
-        // Show progress indicator when response text is empty (agent is generating)
+        // Show animated dots when response text is empty (agent is generating)
+        // Progress status is shown separately above the chat input
         UiControl contentView;
         if (string.IsNullOrEmpty(message.Text))
         {
             contentView = Controls.Html(
                 "<div style=\"display: flex; align-items: center; gap: 8px; padding: 8px 0;\">" +
                 "<span style=\"display: inline-flex; gap: 4px;\">" +
-                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0s;\"></span>" +
-                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.2s;\"></span>" +
-                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.4s;\"></span>" +
+                "<span style=\"width: 5px; height: 5px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0s;\"></span>" +
+                "<span style=\"width: 5px; height: 5px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.2s;\"></span>" +
+                "<span style=\"width: 5px; height: 5px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.4s;\"></span>" +
                 "</span>" +
-                "<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Generating response...</span>" +
                 "</div>" +
                 "<style>@keyframes agent-dots-blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }</style>");
         }

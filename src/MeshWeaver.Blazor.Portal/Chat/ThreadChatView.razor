@@ -58,36 +58,36 @@ else
         </div>
     }
 
-    <!-- Progress bar between messages and input -->
-    @if (!submissionHandler.IsInputEnabled || isCancelling)
-    {
-        <div class="chat-progress-bar">
-            <FluentProgressRing Style="width: 18px; height: 18px;" />
-            <span class="chat-progress-text">
-                @if (isCancelling)
+    <!-- Footer: progress + input — pinned at bottom, never scrolls -->
+    <div class="thread-chat-footer">
+        @if (!submissionHandler.IsInputEnabled || isCancelling)
+        {
+            <div class="chat-progress-bar">
+                <FluentProgressRing Style="width: 18px; height: 18px;" />
+                <span class="chat-progress-text">
+                    @if (isCancelling)
+                    {
+                        @:Cancelling...
+                    }
+                    else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
+                    {
+                        @:Sending...
+                    }
+                    else
+                    {
+                        @:Generating response...
+                    }
+                </span>
+                @if (!isCancelling && !submissionHandler.IsInputEnabled)
                 {
-                    @:Cancelling...
+                    <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
+                    </FluentButton>
                 }
-                else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
-                {
-                    @:Sending...
-                }
-                else
-                {
-                    @:Generating response...
-                }
-            </span>
-            @if (!isCancelling && !submissionHandler.IsInputEnabled)
-            {
-                <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
-                    <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
-                </FluentButton>
-            }
-        </div>
-    }
+            </div>
+        }
 
-    <!-- Input area with reference chips -->
-    <div class="thread-chat-input-area">
+        <div class="thread-chat-input-area">
         <!-- Attachment chip collection -->
         <ReferenceChipCollection
             Attachments="@attachments"
@@ -164,6 +164,7 @@ else
                 </FluentButton>
             }
         </div>
+    </div>
     </div>
 }
 </div>

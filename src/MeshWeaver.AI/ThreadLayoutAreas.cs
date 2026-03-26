@@ -170,7 +170,7 @@ public static class ThreadLayoutAreas
         var header = Controls.Stack
             .WithClass("thread-full-header")
             .WithWidth("100%")
-            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
+            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
             .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)

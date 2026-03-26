@@ -41,11 +41,14 @@ public static class ThreadExecution
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService == null) return;
 
-        var threadPath = hub.Address.ToString();
+        var threadPath = hub.Address.Path;
         try
         {
+            // Use scope:descendants to find stale executing cells in sub-threads too,
+            // not just direct children. Sub-thread delegations can leave deeply nested
+            // messages stuck as IsExecuting=true after a crash.
             await foreach (var node in meshService.QueryAsync<MeshNode>(
-                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                $"path:{threadPath} scope:descendants nodeType:{ThreadMessageNodeType.NodeType}"))
             {
                 if (node.Content is ThreadMessage { IsExecuting: true } tmsg)
                 {

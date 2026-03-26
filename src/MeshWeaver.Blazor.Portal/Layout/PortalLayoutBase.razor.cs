@@ -208,6 +208,18 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
             await ResolveSidePanelContentAsync();
             await SaveSidePanelStateAsync();
             StateHasChanged();
+
+            // When panel becomes visible, trigger window resize so Monaco editors
+            // inside re-layout and re-activate keybindings (e.g., Alt+Enter)
+            if (SidePanelState.IsVisible)
+            {
+                await Task.Delay(50); // Let render complete
+                try
+                {
+                    await JSRuntime.InvokeVoidAsync("eval", "window.dispatchEvent(new Event('resize'))");
+                }
+                catch (Exception) when (true) { /* ignore JS errors */ }
+            }
         });
     }
 
