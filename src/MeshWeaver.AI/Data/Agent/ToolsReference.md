@@ -8,6 +8,10 @@ MeshPlugin provides tools for interacting with the mesh data graph. All paths su
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
+**LINKS**: Always output **absolute paths** starting with `@/` followed by the main partition and full path. Never use relative references.
+- Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`, `@/Doc/Architecture`
+- **Wrong**: `my-doc`, `../Projects/my-doc`, `Projects/my-doc`
+
 ## Get
 
 Retrieves a node from the mesh. Returns JSON.

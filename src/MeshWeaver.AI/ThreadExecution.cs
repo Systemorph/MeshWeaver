@@ -44,33 +44,49 @@ public static class ThreadExecution
         var threadPath = hub.Address.Path;
         try
         {
-            // Use scope:descendants to find stale executing cells in sub-threads too,
-            // not just direct children. Sub-thread delegations can leave deeply nested
-            // messages stuck as IsExecuting=true after a crash.
-            await foreach (var node in meshService.QueryAsync<MeshNode>(
-                $"path:{threadPath} scope:descendants nodeType:{ThreadMessageNodeType.NodeType}"))
-            {
-                if (node.Content is ThreadMessage { IsExecuting: true } tmsg)
-                {
-                    logger?.LogInformation("[ThreadExec] Recovery: marking stale executing cell {MsgId} as crashed in {ThreadPath}",
-                        tmsg.Id, threadPath);
+            // Recover stale executing cells in this thread's direct children
+            await RecoverNamespaceAsync(meshService, threadPath, logger, ct);
 
-                    var recovered = node with
-                    {
-                        Content = tmsg with
-                        {
-                            IsExecuting = false,
-                            ExecutionStatus = null,
-                            Text = (tmsg.Text ?? "") + (string.IsNullOrEmpty(tmsg.Text) ? "*Interrupted — session restarted*" : "\n\n*Interrupted — session restarted*")
-                        }
-                    };
-                    await meshService.UpdateNodeAsync(recovered, ct);
+            // Also recover in sub-threads: scan message nodes for Thread children
+            await foreach (var msgNode in meshService.QueryAsync<MeshNode>(
+                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+            {
+                // Check sub-threads under each message
+                await foreach (var subThread in meshService.QueryAsync<MeshNode>(
+                    $"namespace:{msgNode.Path} nodeType:{ThreadNodeType.NodeType}"))
+                {
+                    await RecoverNamespaceAsync(meshService, subThread.Path, logger, ct);
                 }
             }
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "[ThreadExec] Recovery failed for {ThreadPath}", threadPath);
+        }
+    }
+
+    private static async Task RecoverNamespaceAsync(
+        IMeshService meshService, string namespacePath, ILogger? logger, CancellationToken ct)
+    {
+        await foreach (var node in meshService.QueryAsync<MeshNode>(
+            $"namespace:{namespacePath} nodeType:{ThreadMessageNodeType.NodeType}"))
+        {
+            if (node.Content is ThreadMessage { IsExecuting: true } tmsg)
+            {
+                logger?.LogInformation("[ThreadExec] Recovery: marking stale executing cell {MsgId} as crashed in {Path}",
+                    tmsg.Id, namespacePath);
+
+                var recovered = node with
+                {
+                    Content = tmsg with
+                    {
+                        IsExecuting = false,
+                        ExecutionStatus = null,
+                        Text = (tmsg.Text ?? "") + (string.IsNullOrEmpty(tmsg.Text) ? "*Interrupted — session restarted*" : "\n\n*Interrupted — session restarted*")
+                    }
+                };
+                await meshService.UpdateNodeAsync(recovered, ct);
+            }
         }
     }
 

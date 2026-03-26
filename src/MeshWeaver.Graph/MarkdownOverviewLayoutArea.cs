@@ -43,8 +43,12 @@ public static class MarkdownOverviewLayoutArea
         // Read-only markdown content
         container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment, canEdit));
 
-        // Standard children section
-        container = container.WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false));
+        // Standard children section — separated from main content
+        container = container.WithView(
+            Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                .WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false)));
 
         // Approvals section (only if enabled and approvals exist)
         if (host.Hub.Configuration.HasApprovals())
