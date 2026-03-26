@@ -52,7 +52,7 @@ public static class MeshDataSourceExtensions
                     .WithDataSource(_ => dataSource)
                     .WithDefaultDataReference(workspace =>
                     {
-                        var hubPath = workspace.Hub.Address.ToString();
+                        var hubPath = workspace.Hub.Address.Path;
                         return workspace.GetStream<MeshNode>()
                             ?.Select(nodes => (object?)nodes?.FirstOrDefault(n => n.Path == hubPath))
                             ?? Observable.Return<object?>(null);

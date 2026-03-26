@@ -3,10 +3,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
+using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.NodeOperations.Test;
@@ -140,5 +142,45 @@ public class DeletionTests(ITestOutputHelper output) : MonolithMeshTestBase(outp
         var result = await MeshQuery.QueryAsync<MeshNode>("path:del5/target")
             .FirstOrDefaultAsync(TestTimeout);
         result.Should().BeNull("node should be deleted");
+    }
+
+    /// <summary>
+    /// Reproduces the production delete flow where DeleteLayoutArea calls
+    /// IMeshService.DeleteNodeAsync from the NODE's hub, not the mesh hub.
+    /// In production, DeleteLayoutArea does:
+    ///   var nodeFactory = host.Hub.ServiceProvider.GetRequiredService&lt;IMeshService&gt;();
+    ///   await nodeFactory.DeleteNodeAsync(nodePath);
+    /// </summary>
+    [Fact]
+    public async Task Delete_FromNodeHub_Succeeds()
+    {
+        // Arrange — create a node and get its hub via the routing service
+        var nodePath = $"{TestPartition}/del6target";
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("del6target", TestPartition) { Name = "Target", NodeType = "Markdown" });
+
+        // Get the node's hosted hub by routing a message to it (creates the hub on demand)
+        var nodeAddress = new Address(nodePath);
+        var client = GetClient();
+        var delivery = client.Post(
+            new Data.DataChangeRequest(),
+            o => o.WithTarget(nodeAddress));
+
+        // Small delay for hub creation to complete
+        await Task.Delay(500);
+
+        var nodeHub = Mesh.GetHostedHub(nodeAddress, HostedHubCreation.Never);
+        nodeHub.Should().NotBeNull("node hub should exist after message delivery");
+
+        // Resolve IMeshService from the NODE's hub (reproducing DeleteLayoutArea pattern)
+        var nodeService = nodeHub!.ServiceProvider.GetRequiredService<IMeshService>();
+
+        // Act — delete from the node's hub (same as DeleteLayoutArea does)
+        await nodeService.DeleteNodeAsync(nodePath);
+
+        // Assert — node should be deleted
+        var result = await MeshQuery.QueryAsync<MeshNode>($"path:{nodePath}")
+            .FirstOrDefaultAsync(TestTimeout);
+        result.Should().BeNull("deletion from node hub should work");
     }
 }

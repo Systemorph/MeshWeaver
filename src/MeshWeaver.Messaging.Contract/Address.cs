@@ -38,6 +38,12 @@ public sealed record Address
 
     public string[] Segments { get; init; }
 
+    /// <summary>
+    /// Returns the path (segments joined with "/") without host information.
+    /// Use this instead of ToString() when you need the node path for persistence or display.
+    /// </summary>
+    public string Path => string.Join("/", Segments);
+
     public override string ToString() => Host is null
         ? string.Join("/", Segments)
         : string.Join("/", Segments) + '~' + Host;

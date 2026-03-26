@@ -43,7 +43,7 @@ internal sealed class MeshCatalog(
 
     public async Task<MeshNode?> GetNodeAsync(Address address)
     {
-        var addressKey = address.ToString();
+        var addressKey = address.Path;
 
         // Check cache first
         if (cache.TryGetValue(addressKey, out var ret))
@@ -63,12 +63,12 @@ internal sealed class MeshCatalog(
         }
 
         // Try loading from persistence
-        var persistenceNode = await Persistence.GetNodeAsync(address.ToString());
+        var persistenceNode = await Persistence.GetNodeAsync(addressKey);
 
         // Fallback to static node providers (e.g., DocumentationNodeProvider, BuiltInAgentProvider)
         persistenceNode ??= staticNodeProviders
             .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, address.ToString(), StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => string.Equals(n.Path, addressKey, StringComparison.OrdinalIgnoreCase));
 
         if (persistenceNode != null)
         {
