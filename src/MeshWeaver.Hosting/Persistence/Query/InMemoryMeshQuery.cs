@@ -122,15 +122,11 @@ internal class InMemoryMeshQuery(
             if (!seen.Add(node))
                 continue;
 
-            // Apply access control and state filtering (skipped for core/infrastructure queries).
+            // Apply access control filtering (skipped for core/infrastructure queries).
             if (!skipAccessControl)
             {
-                // Filter out non-Active nodes (Transient, Deleted, etc.)
                 if (node is MeshNode meshNode)
                 {
-                    if (meshNode.State != MeshNodeState.Active)
-                        continue;
-
                     if (!await ValidateReadAsync(meshNode, userId, ct))
                         continue;
                 }
