@@ -96,8 +96,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Delete
-        tools.Should().HaveCount(6);
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete
+        tools.Should().HaveCount(7);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
@@ -105,6 +105,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("NavigateTo");
         toolNames.Should().Contain("Create");
         toolNames.Should().Contain("Update");
+        toolNames.Should().Contain("Patch");
         toolNames.Should().Contain("Delete");
     }
 
@@ -339,7 +340,8 @@ public class MeshPluginTest : MonolithMeshTestBase
                 id = uniqueId,
                 @namespace = "ACME",
                 name = "Updated Name",
-                nodeType = "Markdown"
+                nodeType = "Markdown",
+                content = new { text = "updated" }
             }
         });
 
@@ -523,7 +525,8 @@ public class MeshPluginTest : MonolithMeshTestBase
                 id = uniqueId,
                 @namespace = "ACME",
                 name = "Updated CRUD Test Node",
-                nodeType = "Markdown"
+                nodeType = "Markdown",
+                content = new { text = "updated" }
             }
         });
         var updateResult = await plugin.Update(updateJson);
@@ -549,8 +552,8 @@ public class MeshPluginTest : MonolithMeshTestBase
     [Fact]
     public async Task WriteToolWiring_WorkerAgent_GetsWriteTools()
     {
-        // The Worker agent description contains "create, update, and delete"
-        // so it should get CreateAllTools() (6 tools) rather than CreateTools() (3 tools)
+        // The Worker agent uses explicit Plugins (Mesh, WebSearch, etc.)
+        // which gives it all tools including write operations
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
@@ -559,8 +562,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var worker = agents.FirstOrDefault(a => a.Name == "Worker");
         worker.Should().NotBeNull("Worker agent should be loaded from test data");
         worker!.AgentConfiguration.Should().NotBeNull();
-        worker.AgentConfiguration!.Description.Should().Contain("create",
-            "Worker description should mention create to trigger write tool wiring");
+        worker.AgentConfiguration!.Plugins.Should().NotBeNullOrEmpty(
+            "Worker should have explicit plugins configured for write tool access");
     }
 
     [Fact]
