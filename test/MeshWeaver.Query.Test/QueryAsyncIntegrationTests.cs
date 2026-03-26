@@ -250,7 +250,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/Project/TodoAgent") with { Name = "Project Task Agent", NodeType = "Agent" });
         await NodeFactory.CreateNodeAsync(MeshNode.FromPath($"{p}/ProductLaunch") with { Name = "MeshFlow Product Launch", NodeType = $"{p}/Project" });
 
-        var nodeResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/ProductLaunch scope:self")).ToListAsync();
+        var nodeResults = await MeshQuery.QueryAsync(MeshQueryRequest.FromQuery($"path:{p}/ProductLaunch")).ToListAsync();
         nodeResults.Should().HaveCount(1);
         var productLaunchNode = nodeResults.First() as MeshNode;
         productLaunchNode!.NodeType.Should().Be($"{p}/Project");
@@ -384,7 +384,7 @@ public class QueryAsyncIntegrationTests(ITestOutputHelper output) : MonolithMesh
             Content = new { name = "Roland Buergi", email = "roland@example.com", role = "Admin" }
         });
 
-        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{p}/Roland scope:self").FirstOrDefaultAsync();
+        var node = await MeshQuery.QueryAsync<MeshNode>($"path:{p}/Roland").FirstOrDefaultAsync();
 
         node.Should().NotBeNull();
         node!.NodeType.Should().Be("Markdown");

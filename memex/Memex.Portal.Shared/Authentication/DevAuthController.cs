@@ -27,7 +27,7 @@ public class DevAuthController : ControllerBase
     public async Task<IActionResult> Login([FromForm] string personId, [FromForm] string? returnUrl)
     {
         // Fetch the person node via IMeshService (bypasses security)
-        var node = await _meshQuery.QueryAsync<MeshNode>($"path:User/{personId} scope:self").FirstOrDefaultAsync();
+        var node = await _meshQuery.QueryAsync<MeshNode>($"path:User/{personId}").FirstOrDefaultAsync();
         if (node?.NodeType != "User" || node.Content == null)
         {
             return BadRequest("Person not found");
