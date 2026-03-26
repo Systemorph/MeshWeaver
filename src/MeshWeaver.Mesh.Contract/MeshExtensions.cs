@@ -129,9 +129,8 @@ public static class MeshExtensions
                         await persistence.SaveNodeAsync(confirmedNode, ct);
                     }
 
-                    // Update workspace stream via DataChangeRequest so GetDataRequest returns updated state
-                    // Post the change to ourselves to update the workspace
-                    hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(hub.Address));
+                    // Update workspace stream via DataChangeRequest — target the node's hub so subscribed views refresh
+                    hub.Post(DataChangeRequest.Update([confirmedNode]), o => o.WithTarget(new Address(confirmedNode.Path)));
 
                     // Run post-creation handlers (e.g. grant creator Admin role)
                     await RunPostCreationHandlersAsync(hub, confirmedNode, createRequest.CreatedBy, logger, ct);
@@ -487,7 +486,7 @@ public static class MeshExtensions
                     if (persistence != null)
                     {
                         var saved = await persistence.SaveNodeAsync(additional with { State = MeshNodeState.Active }, ct);
-                        hub.Post(DataChangeRequest.Update([saved]), o => o.WithTarget(hub.Address));
+                        hub.Post(DataChangeRequest.Update([saved]), o => o.WithTarget(new Address(saved.Path)));
                         logger.LogInformation("Post-creation handler created additional node at {Path}", saved.Path);
                     }
                 }
@@ -637,11 +636,11 @@ public static class MeshExtensions
                 }
             }
 
-            // 6. Update workspace stream via DataChangeRequest (fire-and-forget, non-blocking)
+            // 6. Update workspace stream via DataChangeRequest — target the node's hub so subscribed views refresh
             //    Do NOT await — posting to the same hub inside a handler would deadlock.
-            var changeDelivery = hub.Post(
+            hub.Post(
                 DataChangeRequest.Update([nodeToSave]),
-                o => o.WithTarget(hub.Address));
+                o => o.WithTarget(new Address(nodeToSave.Path)));
 
             // 7. Return success response immediately after persistence
             hub.Post(UpdateNodeResponse.Ok(nodeToSave), o => o.ResponseFor(request));

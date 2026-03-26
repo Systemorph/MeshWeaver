@@ -713,6 +713,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
+            .WithTitle("Associated")
             .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)

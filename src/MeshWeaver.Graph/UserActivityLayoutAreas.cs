@@ -186,7 +186,8 @@ public static class UserActivityLayoutAreas
         var chatControl = new ThreadChatControl()
             .WithInitialContext(nodePath)
             .WithInitialContextDisplayName("Home")
-            .WithHideEmptyState();
+            .WithHideEmptyState()
+            .WithStyle("width: 100%;");
 
         section = section.WithView(chatControl);
         return section;
@@ -281,7 +282,7 @@ public static class UserActivityLayoutAreas
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            .WithHiddenQuery($"nodeType:Thread content.createdBy:{nodeOwnerId} scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread sort:LastModified-desc")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
@@ -302,6 +303,7 @@ public static class UserActivityLayoutAreas
             .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
+            .WithSortBy("LastModified", ascending: false)
             .WithSectionCounts(true)
             .WithItemLimit(10)
             .WithMaxColumns(4)
