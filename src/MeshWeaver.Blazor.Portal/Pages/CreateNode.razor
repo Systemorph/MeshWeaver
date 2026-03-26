@@ -15,9 +15,9 @@
 
 <div class="create-page" style="padding: 24px; max-width: 600px; margin: 0 auto; width: 100%;">
     <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
-        <FluentButton Appearance="Appearance.Stealth" OnClick="GoBack">
+        <a href="@BackHref" style="display: flex; align-items: center; text-decoration: none; color: var(--neutral-foreground-rest); padding: 4px;">
             <FluentIcon Value="@(new Icons.Regular.Size20.ArrowLeft())" />
-        </FluentButton>
+        </a>
         <h1 style="margin: 0;">Create New</h1>
     </div>
 
@@ -35,6 +35,7 @@
                                  Label="Name *"
                                  Placeholder="Enter a name..."
                                  Immediate="true"
+                                 AutoComplete="off"
                                  Style="width: 100%;" />
             </div>
 
@@ -44,6 +45,7 @@
                                  Label="Id"
                                  Placeholder="Auto-generated from name..."
                                  Immediate="true"
+                                 AutoComplete="off"
                                  Style="width: 100%;" />
                 <div style="font-size: 12px; color: var(--neutral-foreground-hint); margin-top: 4px;">
                     @if (!string.IsNullOrEmpty(EffectiveId))
@@ -93,9 +95,9 @@
                     }
                     Create
                 </FluentButton>
-                <FluentButton Appearance="Appearance.Neutral" OnClick="GoBack">
+                <FluentAnchor Appearance="Appearance.Neutral" Href="@BackHref">
                     Cancel
-                </FluentButton>
+                </FluentAnchor>
             </div>
 
             @if (!string.IsNullOrEmpty(errorMessage))
@@ -274,10 +276,13 @@
         }
     }
 
-    private void GoBack()
+    private string BackHref
     {
-        var backPath = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace;
-        NavigationService.NavigateTo(!string.IsNullOrEmpty(backPath) ? $"/{backPath}" : "/");
+        get
+        {
+            var backPath = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace;
+            return !string.IsNullOrEmpty(backPath) ? $"/{backPath}" : "/";
+        }
     }
 
     private async Task CreateNodeAsync()
