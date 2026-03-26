@@ -66,11 +66,11 @@ public class AgentSelectionTest
             Content = todoAgentConfig
         };
 
-        // Mock: Query for current node to get NodeType
+        // Mock: Query for current node to get NodeType (no nodeType: filter in query)
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    !r.Query.Contains("scope:") &&
+                    !r.Query.Contains("nodeType:") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
@@ -80,7 +80,6 @@ public class AgentSelectionTest
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{nodeTypePath}") &&
                     r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:hierarchy") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(todoAgentNode));
@@ -90,7 +89,6 @@ public class AgentSelectionTest
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
                     r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:selfAndAncestors") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>());
@@ -145,21 +143,20 @@ public class AgentSelectionTest
             Content = orchestratorConfig
         };
 
-        // Mock: Query for current node
+        // Mock: Query for current node (no nodeType: filter in query)
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    !r.Query.Contains("scope:") &&
+                    !r.Query.Contains("nodeType:") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
-        // Mock: Query for agents in context path namespace returns Navigator
+        // Mock: Query for agents in context path namespace returns Orchestrator
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
                     r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:selfAndAncestors") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(orchestratorNode));

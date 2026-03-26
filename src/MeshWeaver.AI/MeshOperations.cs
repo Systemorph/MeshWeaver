@@ -227,12 +227,9 @@ public class MeshOperations
             {
                 // Reject partial nodes — Update does full replacement.
                 // Use Patch for partial changes instead.
-                if (string.IsNullOrEmpty(meshNode.NodeType) || meshNode.Content == null)
+                if (string.IsNullOrEmpty(meshNode.NodeType))
                 {
-                    var missing = new List<string>();
-                    if (string.IsNullOrEmpty(meshNode.NodeType)) missing.Add("nodeType");
-                    if (meshNode.Content == null) missing.Add("content");
-                    results.Add($"Error: node at {meshNode.Path} is missing {string.Join(", ", missing)}. " +
+                    results.Add($"Error: node at {meshNode.Path} is missing nodeType. " +
                                 "Update requires the complete node (from Get). Use Patch for partial updates.");
                     continue;
                 }
