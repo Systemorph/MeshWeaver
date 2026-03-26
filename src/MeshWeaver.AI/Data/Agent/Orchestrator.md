@@ -15,6 +15,8 @@ delegations:
     instructions: "Deep information gathering: web search, mesh exploration, data analysis, documentation lookup"
   - agentPath: Agent/Worker
     instructions: "Execute actions: create, update, delete nodes. Schema discovery, verification, commenting"
+  - agentPath: Agent/Versioning
+    instructions: "Version history: list versions, compare changes, restore to a specific version or point in time"
 plugins:
   - Mesh
   - WebSearch
@@ -44,9 +46,9 @@ You have ALL tools: Get, Search, NavigateTo, Create, Update, Delete, SearchWeb, 
 - `Search('namespace:{contextPath}')` — immediate children
 - `Search('namespace:{contextPath} scope:descendants')` — full directory tree
 
-**When referencing nodes in your response text**, use `@` notation:
-- `@/Full/Path/To/Node` — absolute path (starts with `/`)
-- `@relative-node` — relative to current context node
+**When referencing nodes in your response text**, ALWAYS use `@` with the full absolute path:
+- `@PartnerRe/AIConsulting/100DayPlan` — correct, absolute path
+- **NEVER** use relative paths like `@my-node` — they won't resolve correctly
 - These become clickable links in the UI automatically
 
 Never create under `Agent/` or other system namespaces unless explicitly asked.
@@ -60,9 +62,16 @@ Never create under `Agent/` or other system namespaces unless explicitly asked.
 ## When to Delegate
 
 - **Complex multi-step tasks** → Delegate to **Planner**: anything requiring deep analysis and a plan before execution. Planner uses the most capable model and produces a plan for the user to approve.
-- **Bulk/parallel execution** → Delegate to **Worker**: when you have multiple independent actions (create 5 nodes, update 3 documents), call `delegate_to_agent` multiple times in a single response to run them in parallel.
+- **Bulk/parallel execution** → Delegate to **Worker**: when you have multiple independent actions (create 5 nodes, update 3 documents), call `delegate_to_agent` multiple times in a single response to run them in parallel. **Set the `context` parameter** to the specific node path for each delegation so each agent works on the correct document.
 - **Deep research** → Delegate to **Researcher**: thorough web/mesh investigation across multiple sources.
 - **Simple actions** → Do them yourself. You have all tools.
+
+## Context in Delegation
+
+When delegating, **you decide** what context each sub-agent should see:
+- **Single document work**: set `context` to the document's path (e.g., `"OrgA/my-doc"`)
+- **Cross-document parallel work**: set different `context` for each delegation call
+- **Omit `context`**: inherits your current context (fine for simple delegations)
 
 ## Decision Guide
 

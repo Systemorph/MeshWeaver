@@ -53,7 +53,7 @@ public partial class MeshNodeEditorView
 
             var path = ViewModel.NodePath;
             _originalPath = path;
-            _node = await meshQuery.QueryAsync<MeshNode>($"path:{path} scope:self").FirstOrDefaultAsync();
+            _node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
 
             if (_node != null)
             {

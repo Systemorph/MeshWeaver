@@ -29,6 +29,12 @@ public static class ThreadNodeType
     public const string ThreadArea = "Thread";
 
     /// <summary>
+    /// Layout area for just the chat control (messages + input), without the header.
+    /// Used by the side panel to avoid rendering the full-page header.
+    /// </summary>
+    public const string ThreadChatArea = "ThreadChat";
+
+    /// <summary>
     /// Layout area for delegation sub-thread history.
     /// </summary>
     public const string HistoryArea = "History";

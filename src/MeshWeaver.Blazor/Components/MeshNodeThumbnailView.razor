@@ -9,6 +9,10 @@
             {
                 <div class="mesh-node-thumbnail-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)ImageUrl)</div>
             }
+            else if (!ImageUrl.Contains('/') && !ImageUrl.StartsWith("data:"))
+            {
+                <div class="mesh-node-thumbnail-placeholder" style="background: transparent; font-size: 32px;">@ImageUrl</div>
+            }
             else
             {
                 <img src="@ImageUrl" alt="@Title" class="mesh-node-thumbnail-image" />

@@ -5,6 +5,7 @@ using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.AI;
@@ -210,6 +211,22 @@ public static class ThreadExecution
             chatClient.SetThreadId(threadPath);
             await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
             logger.LogDebug("[ThreadExec] ExecuteMessageAsync: agent initialized for {ThreadPath}", threadPath);
+
+            // Set application context so the agent knows which node it's working on.
+            // This populates the "Current Application Context" section in the system prompt,
+            // which is critical for sub-threads created via delegation.
+            if (!string.IsNullOrEmpty(request.ContextPath))
+            {
+                var meshService2 = parentHub.ServiceProvider.GetRequiredService<IMeshService>();
+                var contextNode = await meshService2.QueryAsync<MeshNode>(
+                    $"path:{request.ContextPath}").FirstOrDefaultAsync(ct);
+                chatClient.SetContext(new AgentContext
+                {
+                    Address = new Address(request.ContextPath),
+                    Context = request.ContextPath,
+                    Node = contextNode
+                });
+            }
 
             if (!string.IsNullOrEmpty(request.AgentName))
                 chatClient.SetSelectedAgent(request.AgentName);
@@ -528,8 +545,77 @@ public static class ThreadExecution
     private static IMessageDelivery HandleCancelStream(
         IMessageHub hub, IMessageDelivery<CancelThreadStreamRequest> delivery)
     {
-        var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
-        execHub?.CancelCurrentExecution();
+        var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
+        var threadPath = hub.Address.Path;
+
+        // 1. Propagate cancellation to sub-threads first.
+        //    Sub-threads are Thread nodes nested under this thread's message nodes.
+        //    Pattern: {threadPath}/{msgId}/{subThreadId}
+        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService != null)
+        {
+            hub.InvokeAsync(async ct =>
+            {
+                try
+                {
+                    // Find executing sub-thread messages (assistant responses still running)
+                    await foreach (var node in meshService.QueryAsync<MeshNode>(
+                        $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                    {
+                        if (node.Content is ThreadMessage { IsExecuting: true, DelegationPath: { Length: > 0 } delegationPath })
+                        {
+                            logger?.LogInformation("[ThreadExec] Propagating cancel to sub-thread {SubThread}", delegationPath);
+                            hub.Post(new CancelThreadStreamRequest { ThreadPath = delegationPath },
+                                o => o.WithTarget(new Address(delegationPath)));
+                        }
+                    }
+
+                    // Also check for sub-threads that are direct children (Thread nodes under message nodes)
+                    await foreach (var msgNode in meshService.QueryAsync<MeshNode>(
+                        $"namespace:{threadPath}"))
+                    {
+                        var msgPath = msgNode.Path;
+                        await foreach (var subNode in meshService.QueryAsync<MeshNode>(
+                            $"namespace:{msgPath} nodeType:{ThreadNodeType.NodeType}"))
+                        {
+                            // Found a sub-thread — send cancel
+                            logger?.LogInformation("[ThreadExec] Propagating cancel to child thread {SubThread}", subNode.Path);
+                            hub.Post(new CancelThreadStreamRequest { ThreadPath = subNode.Path },
+                                o => o.WithTarget(new Address(subNode.Path)));
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "[ThreadExec] Error propagating cancellation for {ThreadPath}", threadPath);
+                }
+
+                // 2. Small delay to let sub-thread cancellation propagate
+                await Task.Delay(100, ct);
+
+                // 3. Cancel own execution
+                var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
+                if (execHub != null)
+                {
+                    logger?.LogInformation("[ThreadExec] Cancelling own execution for {ThreadPath}", threadPath);
+                    execHub.CancelCurrentExecution();
+                }
+            }, ex =>
+            {
+                logger?.LogWarning(ex, "[ThreadExec] Error during cancel for {ThreadPath}", threadPath);
+                // Still cancel own execution even if sub-thread cancel failed
+                var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
+                execHub?.CancelCurrentExecution();
+                return Task.CompletedTask;
+            });
+        }
+        else
+        {
+            // No mesh service — just cancel own execution
+            var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
+            execHub?.CancelCurrentExecution();
+        }
+
         return delivery.Processed();
     }
 }

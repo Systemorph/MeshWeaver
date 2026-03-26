@@ -8,7 +8,7 @@
 @using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
 @inject NavigationManager NavigationManager
 
-<div class="thread-chat-container">
+<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")">
 @if (viewMode == ChatViewMode.ResumeThreads)
 {
     <div class="thread-resume-view">
@@ -18,19 +18,12 @@
             </FluentButton>
             <span style="font-weight: 600;">Threads</span>
         </div>
-        @if (!string.IsNullOrEmpty(resumeNodeAddress))
-        {
-            <div class="resume-threads-catalog">
-                <LayoutAreaView ViewModel="@resumeThreadsCatalog" Stream="@resumeThreadsStream" Area="resume-threads" />
-            </div>
-        }
-        else
-        {
-            <div class="empty-thread-message">
-                <FluentIcon Value="@(new Icons.Regular.Size48.ChatEmpty())" Color="Color.Neutral" />
-                <p>Navigate to a node to see its threads</p>
-            </div>
-        }
+        <div class="resume-threads-list">
+            <MeshSearchView ViewModel="@GetResumeSearchControl()"
+                            OnNodeSelected="@OnSelectThread"
+                            SelectedPath="@threadPath"
+                            Area="resume-threads" />
+        </div>
     </div>
 }
 else
@@ -38,7 +31,7 @@ else
     <!-- Message history display (hidden in compact/dashboard mode) -->
     @if (!ViewModel.HideEmptyState)
     {
-        <div class="thread-chat-messages">
+        <div class="thread-chat-messages" @ref="messagesContainer">
             @if (ThreadMessages.Count > 0)
             {
                 @foreach (var msgId in ThreadMessages)
@@ -62,12 +55,33 @@ else
                     <p class="hint">Use @("@") references to include context from other nodes</p>
                 </div>
             }
-            @if (!submissionHandler.IsInputEnabled)
+        </div>
+    }
+
+    <!-- Progress bar between messages and input -->
+    @if (!submissionHandler.IsInputEnabled || isCancelling)
+    {
+        <div class="chat-progress-bar">
+            <FluentProgressRing Style="width: 18px; height: 18px;" />
+            <span class="chat-progress-text">
+                @if (isCancelling)
+                {
+                    @:Cancelling...
+                }
+                else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
+                {
+                    @:Sending...
+                }
+                else
+                {
+                    @:Generating response...
+                }
+            </span>
+            @if (!isCancelling && !submissionHandler.IsInputEnabled)
             {
-                <div class="awaiting-response">
-                    <FluentProgressRing Style="width: 20px; height: 20px;" />
-                    <span>@(submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting ? "Sending..." : "Generating response...")</span>
-                </div>
+                <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
+                    <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
+                </FluentButton>
             }
         </div>
     }
@@ -94,13 +108,6 @@ else
                               CompletionProvider="@GetCompletionConfig()"
                               AsyncCompletionCallback="@GetCompletionsAsync" />
         </div>
-        @if (!submissionHandler.IsInputEnabled)
-        {
-            <div class="input-container input-submitting">
-                <FluentProgressRing />
-            </div>
-        }
-
         <!-- Selector bar (agent + model + send) — right-aligned -->
         <div class="selector-bar">
             <SimpleDropdown TOption="AgentDisplayInfo"

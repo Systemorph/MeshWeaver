@@ -67,6 +67,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         base.OnInitialized();
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
+        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
         _menuSubscription = MenuItemsProvider.MenuItems.Subscribe(items =>
         {
             _menuItems = items;
@@ -152,16 +153,44 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 dotNetRef = DotNetObjectReference.Create(this);
                 await jsModule!.InvokeVoidAsync("initialize", dotNetRef);
 
-                // Apply persisted size if available
-                if (SidePanelState.IsVisible && (SidePanelState.Width.HasValue || SidePanelState.Height.HasValue))
-                {
-                    await ApplyPersistedSizeAsync();
-                }
+                // Restore side panel state from localStorage
+                await RestoreSidePanelStateAsync();
             }
             catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
             {
                 // Circuit disconnected during initialization
             }
+        }
+    }
+
+    private async Task RestoreSidePanelStateAsync()
+    {
+        try
+        {
+            var saved = await jsModule!.InvokeAsync<SidePanelState?>("loadSidePanelState");
+            if (saved != null)
+            {
+                SidePanelState.State = saved;
+                await ResolveSidePanelContentAsync();
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected
+        }
+    }
+
+    private async Task SaveSidePanelStateAsync()
+    {
+        try
+        {
+            await EnsureJsModuleAsync();
+            await jsModule!.InvokeVoidAsync("saveSidePanelState", SidePanelState.State);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected
         }
     }
 
@@ -177,8 +206,16 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         InvokeAsync(async () =>
         {
             await ResolveSidePanelContentAsync();
+            await SaveSidePanelStateAsync();
             StateHasChanged();
         });
+    }
+
+    private void OnNavigationContextChanged(NavigationContext? _)
+    {
+        // Context changed (user navigated) — invalidate cached side panel control
+        // so next render picks up the new context path
+        InvokeAsync(StateHasChanged);
     }
 
     protected override void OnParametersSet()
@@ -328,6 +365,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
         NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
+        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
         _menuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();

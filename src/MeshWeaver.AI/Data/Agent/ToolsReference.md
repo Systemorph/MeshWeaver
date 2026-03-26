@@ -277,6 +277,28 @@ Updates one or more existing nodes in the mesh. The entire MeshNode is replaced,
 Update('[{"id": "ExistingPage", "namespace": "MyOrg", "name": "Renamed Page", "nodeType": "Markdown"}]')
 ```
 
+## Patch
+
+Partial update of a single node. Only the specified fields are changed; all other fields are preserved. **Preferred over Update for simple changes** like setting an icon, renaming, or updating content — no need to Get the full node first.
+
+### Parameters
+
+- `path` (string, required) — Path to the node (e.g., `@User/rbuergi/my-node`)
+- `fields` (string, required) — JSON object with only the fields to change
+
+### Examples
+
+```
+Patch('@User/rbuergi/my-node', '{"icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"#2e6da4\"/></svg>"}')
+Patch('@MyOrg/MyPage', '{"name": "Renamed Page"}')
+Patch('@MyOrg/MyPage', '{"content": {"text": "Updated markdown content"}}')
+```
+
+### When to use Patch vs Update
+
+- **Patch**: Simple field changes (icon, name, category, content). No Get needed.
+- **Update**: Complex changes to multiple fields, or when you need full control. Always Get first.
+
 ## Delete
 
 Deletes one or more nodes by their paths.

@@ -27,6 +27,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     private bool showThreadList;
     private bool positionMenuVisible;
     private string? selectedThreadPath;
+    private string? selectedThreadName;
 
     // Thread list
     private List<MeshNode> threadList = [];
@@ -56,11 +57,11 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     }
 
     /// <summary>
-    /// LayoutAreaControl pointing to the thread hub's Thread area.
+    /// LayoutAreaControl pointing to the thread hub's ThreadChat area (no header).
     /// LayoutAreaView handles stream, data binding, and cleanup automatically.
     /// </summary>
     private LayoutAreaControl GetThreadLayoutArea()
-        => new LayoutAreaControl(selectedThreadPath!, new LayoutAreaReference(ThreadNodeType.ThreadArea));
+        => new LayoutAreaControl(selectedThreadPath!, new LayoutAreaReference(ThreadNodeType.ThreadChatArea));
 
     /// <summary>
     /// For new chats when no thread exists yet.
@@ -73,9 +74,12 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
             .WithInitialContextDisplayName(context?.Node?.Name ?? context?.Node?.Id ?? string.Empty);
     }
 
+    private string SidePanelTitle => selectedThreadName ?? "New Chat";
+
     private void SelectThread(MeshNode thread)
     {
         selectedThreadPath = thread.Path;
+        selectedThreadName = thread.Name;
         SidePanelState.SetContentPath(thread.Path);
         showThreadList = false;
         StateHasChanged();
@@ -84,6 +88,7 @@ public partial class ThreadSidePanelContent : ComponentBase, IDisposable
     private void OnNewChat()
     {
         selectedThreadPath = null;
+        selectedThreadName = null;
         SidePanelState.SetContentPath(null);
         showThreadList = false;
         StateHasChanged();

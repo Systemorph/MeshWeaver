@@ -497,5 +497,7 @@ await using (var saveVersion = dataSource.CreateCommand("""
 logger.LogInformation("Database migration completed. Version: {Version}", currentVersion);
 
 // Signal completion to Aspire (health check passes, then process exits cleanly)
-await host.StartAsync();
-await host.StopAsync();
+using var shutdownCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+await host.StartAsync(shutdownCts.Token);
+await host.StopAsync(shutdownCts.Token);
+Environment.Exit(0);

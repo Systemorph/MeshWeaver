@@ -29,8 +29,16 @@
                          @onmousedown="() => NavigateToSuggestion(suggestion)"
                          @onmousedown:preventDefault>
                         <div class="search-dropdown-icon">
-                            @{ var iconUrl = MeshWeaver.Graph.MeshNodeImageHelper.GetIconAsImageUrl(suggestion.Icon); }
-                            @if (iconUrl != null)
+                            @{ var iconUrl = MeshWeaver.Graph.MeshNodeImageHelper.GetIconForRendering(suggestion.Icon); }
+                            @if (iconUrl != null && iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <div style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">@((MarkupString)iconUrl)</div>
+                            }
+                            else if (iconUrl != null && !iconUrl.Contains('/') && !iconUrl.StartsWith("data:"))
+                            {
+                                <span style="font-size: 1.4em;">@iconUrl</span>
+                            }
+                            else if (iconUrl != null)
                             {
                                 <img src="@iconUrl" alt="" />
                             }

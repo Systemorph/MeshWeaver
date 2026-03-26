@@ -32,10 +32,16 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
         => ops.Create(node);
 
-    [Description("Updates existing nodes in the mesh. Pass a JSON array of MeshNode objects.")]
+    [Description("Full replacement update of existing nodes. Pass a JSON array of complete MeshNode objects (from Get). WARNING: all fields are replaced — missing fields become null.")]
     public Task<string> Update(
-        [Description("JSON array of MeshNode objects with updated fields")] string nodes)
+        [Description("JSON array of complete MeshNode objects")] string nodes)
         => ops.Update(nodes);
+
+    [Description("Partial update of a single node. Only the specified fields are changed; all other fields are preserved. Use this for simple changes like updating icon, name, or content without needing to Get the full node first.")]
+    public Task<string> Patch(
+        [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
+        [Description("JSON object with only the fields to update (e.g., {\"icon\": \"<svg>...</svg>\"} or {\"name\": \"New Name\", \"content\": {...}})")] string fields)
+        => ops.Patch(path, fields);
 
     [Description("Deletes nodes from the mesh by path.")]
     public Task<string> Delete(
@@ -81,6 +87,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
             AIFunctionFactory.Create(NavigateTo),
             AIFunctionFactory.Create(Create),
             AIFunctionFactory.Create(Update),
+            AIFunctionFactory.Create(Patch),
             AIFunctionFactory.Create(Delete),
         ];
     }

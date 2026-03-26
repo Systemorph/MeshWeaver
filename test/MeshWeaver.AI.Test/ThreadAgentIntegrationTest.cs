@@ -170,7 +170,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
         {
             contextNode = node;
             break;
@@ -271,7 +271,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
         {
             contextNode = node;
             break;
@@ -342,7 +342,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
         {
             contextNode = node;
             break;

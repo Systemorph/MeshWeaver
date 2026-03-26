@@ -184,7 +184,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
                 agentConfig,
                 hierarchyAgents,
-                executeAsync: async (agentName, task, cancellationToken) =>
+                executeAsync: async (agentName, task, context, cancellationToken) =>
                 {
                     // Resolve the target agent by name (strip path prefix if present)
                     var targetId = agentName.Split('/').Last();
@@ -221,7 +221,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             {
                                 Name = task.Length > 60 ? task[..57] + "..." : task,
                                 NodeType = ThreadNodeType.NodeType,
-                                Content = new MeshThread { ParentPath = execCtx.ContextPath ?? execCtx.ThreadPath }
+                                Content = new MeshThread { ParentPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath }
                             };
                             await meshService.CreateNodeAsync(subThreadNode, cancellationToken);
                             chat.LastDelegationPath = subThreadPath;
@@ -236,7 +236,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                     ThreadPath = subThreadPath,
                                     UserMessageText = task,
                                     AgentName = targetId,
-                                    ContextPath = execCtx.ContextPath ?? execCtx.ThreadPath
+                                    ContextPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath
                                 },
                                 o =>
                                 {
@@ -418,6 +418,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var allTools = pluginRef.Name switch
         {
             "Mesh" => (IEnumerable<AITool>)new MeshPlugin(Hub, chat).CreateAllTools(),
+            "Version" => new VersionPlugin(Hub).CreateTools(),
             "Collaboration" => new CollaborationPlugin(Hub, chat).CreateTools(),
             "ContentCollection" => new ContentCollectionPlugin(Hub, chat).CreateTools(),
             _ => Hub.ServiceProvider.GetServices<IAgentPlugin>()

@@ -77,7 +77,8 @@
 
     /* body-content is now inside the first splitter pane, not direct child of layout */
     ::deep .body-content {
-        overflow: auto; /* Allow scrolling of page content */
+        overflow: overlay; /* Scrollbar overlays content, doesn't take space */
+        overflow: auto; /* Fallback for browsers that don't support overlay */
         display: flex;
         flex-direction: column;
         min-height: 0; /* Allow flex shrinking */
@@ -85,6 +86,26 @@
         width: 100%;
         position: relative;
         z-index: 1;
+    }
+
+    /* Thin auto-hiding scrollbar inside splitter panes */
+    ::deep .body-content::-webkit-scrollbar {
+        width: 6px;
+        background: transparent;
+    }
+
+    ::deep .body-content::-webkit-scrollbar-thumb {
+        border-radius: 6px;
+        background-color: rgba(128, 128, 128, 0.2);
+    }
+
+    ::deep .body-content:hover::-webkit-scrollbar-thumb {
+        background-color: rgba(128, 128, 128, 0.4);
+    }
+
+    ::deep .body-content {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(128, 128, 128, 0.2) transparent;
     }
 
     ::deep.layout>.messagebar-container {
@@ -339,56 +360,24 @@
 
 /* Desktop layout - Side panel with FluentMultiSplitter */
 @media (min-width: 768px) {
-    .main-with-panel {
-        grid-area: main;
-        display: flex;
-        flex-direction: column;
-        height: 100%;
-        width: 100%;
-        min-width: 0;
-        min-height: 0;
-        overflow: hidden;
-    }
-
-    .body-content-splitter {
-        height: 100%;
-        width: 100%;
-        overflow: auto;
-    }
-
-    /* Main content pane inside splitter */
-    .main-content-pane {
-        height: 100%;
-        width: 100%;
-        overflow: auto;
-        padding: 16px;
-        box-sizing: border-box;
-        min-width: 0; /* Allow shrinking below content size when splitter resizes */
-    }
-
     /* Style the splitter panes */
-    ::deep .main-with-panel fluent-multi-splitter {
-        height: 100%;
-        width: 100%;
-    }
-
-    ::deep .main-with-panel fluent-multi-splitter-pane {
+    ::deep .body-splitter fluent-multi-splitter-pane {
         overflow: hidden;
         display: flex;
         flex-direction: column;
     }
 
     /* Ensure pane content wrapper fills the pane and can shrink */
-    ::deep .main-with-panel fluent-multi-splitter-pane > div {
+    ::deep .body-splitter fluent-multi-splitter-pane > div {
         width: 100%;
         height: 100%;
-        min-width: 0; /* Allow shrinking below content size */
+        min-width: 0;
         display: flex;
         flex-direction: column;
     }
 
     /* Ensure side panel content fills the pane */
-    ::deep .main-with-panel .side-panel-wrapper {
+    ::deep .body-splitter .side-panel-wrapper {
         width: 100%;
         height: 100%;
         flex: 1;
@@ -400,6 +389,30 @@
     ::deep .search-container {
         display: none;
     }
+}
+
+/* Subtle splitter bar — thin line, visible on hover */
+::deep .body-splitter .fluent-multi-splitter-bar {
+    background: transparent !important;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+}
+
+::deep .body-splitter .fluent-multi-splitter-bar:hover {
+    opacity: 0.8;
+}
+
+/* Hide splitter bar and second pane when panel is collapsed */
+::deep .body-splitter.panel-collapsed .fluent-multi-splitter-bar {
+    display: none !important;
+}
+
+::deep .body-splitter.panel-collapsed fluent-multi-splitter-pane:last-of-type {
+    display: none !important;
+}
+
+::deep .body-splitter.panel-collapsed fluent-multi-splitter-pane:first-of-type {
+    flex: 1 1 100% !important;
 }
 
 /* Mobile layout - Side panel as full-screen overlay */

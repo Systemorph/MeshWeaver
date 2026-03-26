@@ -67,7 +67,12 @@
     max-width: 100%;
     position: relative;
     min-height: 0;
-    overflow: visible;
+    overflow: hidden;
+}
+
+/* Hide the thread full-page header when rendered inside the side panel */
+::deep .thread-full-header {
+    display: none !important;
 }
 
 .side-panel-history-fullscreen {

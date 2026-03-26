@@ -197,7 +197,7 @@ public class DelegationTest
         var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentAConfig,
             [agentAConfig, agentBConfig],
-            executeAsync: async (agentName, task, ct) =>
+            executeAsync: async (agentName, task, context, ct) =>
             {
                 capturedAgentName = agentName;
                 capturedTask = task;
@@ -318,7 +318,7 @@ public class DelegationTest
         var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentAConfig,
             [agentAConfig, agentBConfig],
-            executeAsync: async (agentName, task, ct) =>
+            executeAsync: async (agentName, task, context, ct) =>
             {
                 var targetId = agentName.Split('/').Last();
                 var targetAgent = allAgents[targetId];
@@ -407,7 +407,7 @@ public class DelegationTest
         var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
             agentAConfig,
             [agentAConfig],
-            executeAsync: async (agentName, task, ct) =>
+            executeAsync: async (agentName, task, context, ct) =>
             {
                 delegationExecuted = true;
                 var targetId = agentName.Split('/').Last();

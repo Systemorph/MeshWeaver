@@ -248,6 +248,26 @@ export function applySidePanelSize(width, height) {
     // Size is now managed by FluentSplitter, this is a no-op
 }
 
+const SIDE_PANEL_KEY = 'meshweaver-side-panel-state';
+
+export function saveSidePanelState(state) {
+    try {
+        localStorage.setItem(SIDE_PANEL_KEY, JSON.stringify(state));
+    } catch (e) {
+        console.error('Failed to save side panel state:', e);
+    }
+}
+
+export function loadSidePanelState() {
+    try {
+        const json = localStorage.getItem(SIDE_PANEL_KEY);
+        return json ? JSON.parse(json) : null;
+    } catch (e) {
+        console.error('Failed to load side panel state:', e);
+        return null;
+    }
+}
+
 // =============================================================================
 // Markdown Theme (github-markdown CSS switching)
 // =============================================================================

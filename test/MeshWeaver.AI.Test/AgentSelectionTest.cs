@@ -70,7 +70,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("scope:self") &&
+                    !r.Query.Contains("scope:") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
@@ -149,7 +149,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("scope:self") &&
+                    !r.Query.Contains("scope:") &&
                     r.Query.Contains("$type:MeshNode")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));

@@ -6,6 +6,7 @@
     <FluentDesignTheme @ref="theme"
                        @bind-Mode="@ThemeMode"
                        @bind-OfficeColor="@OfficeColor"
+                       CustomColor="@CustomHexColor"
                        Direction="@Direction"
                        StorageName="theme" />
 
@@ -16,12 +17,13 @@
                       Items="@AllModes"
                       @bind-SelectedOption="@ThemeMode" />
 
-        <FluentSelect Label="Color"
-                      Style="margin-bottom: 30px;"
+        <FluentSelect Label="Preset Color"
+                      Style="margin-bottom: 16px;"
                       Width="100%"
                       Items="@(OfficeColorUtilities.AllColors.Cast<OfficeColor?>())"
                       Height="200px"
-                      @bind-SelectedOption="@OfficeColor">
+                      SelectedOption="@OfficeColor"
+                      SelectedOptionChanged="@((OfficeColor? c) => OnOfficeColorChanged(c))">
             <OptionTemplate>
                 <FluentStack>
                     <FluentIcon Value="@(new Icons.Filled.Size20.RectangleLandscape())"
@@ -31,6 +33,12 @@
                 </FluentStack>
             </OptionTemplate>
         </FluentSelect>
+
+        <FluentTextField Label="Custom Color (hex)"
+                         Style="margin-bottom: 30px;"
+                         Placeholder="#0F6CBD"
+                         Value="@customColorInput"
+                         ValueChanged="@OnCustomColorChanged" />
 
         <FluentSwitch Label="Direction"
                       Style="margin-bottom: 30px;"
@@ -61,9 +69,11 @@
     private string? status;
     private bool ltr = true;
     private FluentDesignTheme? theme;
+    private string? customColorInput;
 
     private DesignThemeModes ThemeMode { get; set; }
     private OfficeColor? OfficeColor { get; set; }
+    private string? CustomHexColor { get; set; }
     private LocalizationDirection? Direction { get; set; }
 
     private static IEnumerable<DesignThemeModes> AllModes => Enum.GetValues<DesignThemeModes>();
@@ -73,6 +83,27 @@
         if (firstRender)
         {
             ltr = !Direction.HasValue || Direction.Value == LocalizationDirection.LeftToRight;
+        }
+    }
+
+    private void OnOfficeColorChanged(OfficeColor? color)
+    {
+        OfficeColor = color;
+        CustomHexColor = null;
+        customColorInput = null;
+    }
+
+    private void OnCustomColorChanged(string? value)
+    {
+        customColorInput = value;
+        if (!string.IsNullOrWhiteSpace(value) && value.StartsWith('#') && (value.Length == 4 || value.Length == 7))
+        {
+            CustomHexColor = value;
+            OfficeColor = null;
+        }
+        else if (string.IsNullOrWhiteSpace(value))
+        {
+            CustomHexColor = null;
         }
     }
 
@@ -86,6 +117,8 @@
     {
         theme?.ClearLocalStorageAsync();
         OfficeColor = OfficeColorUtilities.GetRandom();
+        CustomHexColor = null;
+        customColorInput = null;
         ThemeMode = DesignThemeModes.System;
         status = "Settings reset!";
         return Task.CompletedTask;

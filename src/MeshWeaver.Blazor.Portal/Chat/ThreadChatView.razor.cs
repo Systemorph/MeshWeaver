@@ -13,6 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -71,10 +72,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
                 {
                     submissionHandler.OnResponseAppeared();
+                    isCancelling = false;
                 }
-                // Force re-render — DataBind's RequestStateChange may not trigger
-                // if the setter is called from a non-UI synchronization context
-                InvokeAsync(StateHasChanged);
+                // Force re-render and auto-scroll to bottom
+                InvokeAsync(async () =>
+                {
+                    StateHasChanged();
+                    await Task.Yield(); // Let render complete
+                    await ScrollToBottomAsync();
+                });
             }
         }
     }
@@ -83,8 +89,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     // Input state
     private MonacoEditorView? monacoEditor;
+    private ElementReference messagesContainer;
     private string? MessageText;
     private bool isCreatingThread;
+    private bool isCancelling;
+    private CancellationTokenSource? _submissionCts;
     private readonly ChatSubmissionHandler submissionHandler = new();
 
     // Unified attachments (context + @references)
@@ -95,9 +104,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private ChatViewMode viewMode = ChatViewMode.Chat;
 
     // Resume threads state
-    private string? resumeNodeAddress;
-    private LayoutAreaControl? resumeThreadsCatalog;
-    private ISynchronizationStream<JsonElement>? resumeThreadsStream;
+    private MeshSearchControl? resumeSearchControl;
 
     // Agent/model selection
     private AgentDisplayInfo? selectedAgentInfo;
@@ -528,6 +535,37 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
+    private async Task ScrollToBottomAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("eval",
+                "document.querySelector('.thread-chat-messages')?.scrollTo({top: 999999, behavior: 'smooth'})");
+        }
+        catch (Exception) when (!_isDisposed)
+        {
+            // Ignore JS interop failures
+        }
+    }
+
+    private void CancelSubmission()
+    {
+        if (submissionHandler.IsInputEnabled || isCancelling)
+            return;
+
+        isCancelling = true;
+        StateHasChanged();
+
+        // Cancel any in-flight submission token
+        _submissionCts?.Cancel();
+
+        // Force release the handler — the progress bar stays visible
+        // with "Cancelling..." text until the response appears or times out
+        submissionHandler.ForceRelease();
+        isCancelling = false;
+        StateHasChanged();
+    }
+
     /// <summary>
     /// Checks if the navigation context has changed since the last message and updates the context attachment if needed.
     /// </summary>
@@ -741,41 +779,35 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     private Task SwitchToResumeModeAsync()
     {
-        // Get current node address from NavigationService
-        resumeNodeAddress = NavigationService.CurrentNamespace;
-        if (string.IsNullOrEmpty(resumeNodeAddress))
+        var ns = NavigationService.CurrentNamespace;
+        if (string.IsNullOrEmpty(ns))
         {
             var accessService = Hub.ServiceProvider.GetService<AccessService>();
             var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-            resumeNodeAddress = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : null;
+            ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : null;
         }
 
-        if (!string.IsNullOrEmpty(resumeNodeAddress))
-        {
-            // Create a LayoutAreaControl for the Threads area of the current node
-            resumeThreadsCatalog = new LayoutAreaControl(
-                resumeNodeAddress,
-                new LayoutAreaReference(MeshNodeLayoutAreas.ThreadsArea))
-                .WithShowProgress(true);
+        var hiddenQuery = string.IsNullOrEmpty(ns)
+            ? "nodeType:Thread sort:LastModified-desc"
+            : $"nodeType:Thread namespace:{ns}/_Thread sort:LastModified-desc";
 
-            // Create a stream to the node's Threads layout area
-            resumeThreadsStream?.Dispose();
-            var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
-            resumeThreadsStream = workspace?.GetRemoteStream<JsonElement, LayoutAreaReference>(
-                new Address(resumeNodeAddress),
-                new LayoutAreaReference(MeshNodeLayoutAreas.ThreadsArea));
-        }
+        resumeSearchControl = Controls.MeshSearch
+            .WithHiddenQuery(hiddenQuery)
+            .WithPlaceholder("Search threads...")
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithGridBreakpoints(xs: 12, sm: 12, md: 12, lg: 12)
+            .WithDisableNavigation();
 
         viewMode = ChatViewMode.ResumeThreads;
         StateHasChanged();
         return Task.CompletedTask;
     }
 
+    private MeshSearchControl? GetResumeSearchControl() => resumeSearchControl;
+
     private void SwitchToChatMode()
     {
         viewMode = ChatViewMode.Chat;
-        resumeThreadsStream?.Dispose();
-        resumeThreadsStream = null;
         StateHasChanged();
     }
 
@@ -971,7 +1003,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
-            resumeThreadsStream?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;
