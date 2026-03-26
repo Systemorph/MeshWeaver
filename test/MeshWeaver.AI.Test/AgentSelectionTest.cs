@@ -67,11 +67,11 @@ public class AgentSelectionTest
         };
 
         // Mock: Query for current node to get NodeType (no nodeType: filter in query)
+        // Note: QueryAsync<MeshNode> does NOT add $type:MeshNode (it's the base type)
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    !r.Query.Contains("nodeType:") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    !r.Query.Contains("nodeType:")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
@@ -79,8 +79,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{nodeTypePath}") &&
-                    r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    r.Query.Contains("nodeType:Agent")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(todoAgentNode));
 
@@ -88,8 +87,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    r.Query.Contains("nodeType:Agent")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>());
 
@@ -144,11 +142,11 @@ public class AgentSelectionTest
         };
 
         // Mock: Query for current node (no nodeType: filter in query)
+        // Note: QueryAsync<MeshNode> does NOT add $type:MeshNode (it's the base type)
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    !r.Query.Contains("nodeType:") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    !r.Query.Contains("nodeType:")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
@@ -156,8 +154,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    r.Query.Contains("nodeType:Agent")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(orchestratorNode));
 
