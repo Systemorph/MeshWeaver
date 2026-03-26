@@ -29,8 +29,8 @@ public class ContentReferenceIntegrityTest
     private static readonly HashSet<string> KnownNodeTypeIcons = new(StringComparer.OrdinalIgnoreCase)
     {
         "bot.svg", "building.svg", "chat.svg", "code.svg", "comment.svg", "document.svg",
-        "message.svg", "people.svg", "person.svg", "rocket.svg", "shield.svg",
-        "shopping-bag.svg", "truck.svg"
+        "feature.svg", "message.svg", "people.svg", "person.svg", "release.svg",
+        "rocket.svg", "shield.svg", "shopping-bag.svg", "truck.svg"
     };
 
     #region Markdown Thumbnails

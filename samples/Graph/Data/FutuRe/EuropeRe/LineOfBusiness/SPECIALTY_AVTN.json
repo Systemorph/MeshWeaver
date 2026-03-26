@@ -2,7 +2,7 @@
   "id": "SPECIALTY_AVTN",
   "namespace": "FutuRe/EuropeRe/LineOfBusiness",
   "name": "Specialty & Aviation",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/EuropeRe/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Combined specialty lines and aviation risks for European and global programs",
   "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",

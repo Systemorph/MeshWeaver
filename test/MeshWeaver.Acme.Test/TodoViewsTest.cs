@@ -365,12 +365,10 @@ public class TodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBase(outp
             .FirstAsync(x => x is not null);
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Create form should render when type parameter is specified");
+        control.Should().NotBeNull("Create area should render when type parameter is specified");
 
-        // The Create form should be a StackControl containing form fields
-        var stack = control.Should().BeOfType<StackControl>().Subject;
-        stack.Areas.Should().NotBeEmpty("Create form should have child areas (form fields)");
-
-        Output.WriteLine($"Create form has {stack.Areas.Count()} areas");
+        // The Create area on a parent node now returns a RedirectControl to /create page
+        control.Should().BeOfType<RedirectControl>(
+            "Create area on parent node should redirect to /create Blazor page");
     }
 }

@@ -600,7 +600,7 @@ public static class MeshExtensions
             }
 
             // 3. Run validators (global + NodeType-specific)
-            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, updateRequest, ct);
+            var validationError = await RunUpdateValidatorsAsync(hub, catalog, existingNode, updatedNode, updateRequest, request.AccessContext, ct);
             if (validationError != null)
             {
                 logger.LogWarning("Validator rejected node update at {Path}: {Error}",
@@ -676,8 +676,11 @@ public static class MeshExtensions
         MeshNode existingNode,
         MeshNode updatedNode,
         UpdateNodeRequest request,
+        AccessContext? deliveryAccessContext,
         CancellationToken ct)
     {
+        // Prefer the delivery's AccessContext (stamped by HubNodePersistence at post time)
+        // over the AsyncLocal, which may be null on background threads.
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var context = new NodeValidationContext
         {
@@ -685,7 +688,7 @@ public static class MeshExtensions
             Node = updatedNode,
             ExistingNode = existingNode,
             Request = request,
-            AccessContext = accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = deliveryAccessContext ?? accessService?.Context ?? accessService?.CircuitContext
         };
 
         // Run unified validators from DI

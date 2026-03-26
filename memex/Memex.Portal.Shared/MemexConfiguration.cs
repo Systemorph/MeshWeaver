@@ -107,6 +107,10 @@ public static class MemexConfiguration
         services.AddWebSearchPlugin(config =>
             builder.Configuration.GetSection("WebSearch").Bind(config));
 
+        // Configure GitHub plugin for issue management
+        services.AddGitHubPlugin(config =>
+            builder.Configuration.GetSection("GitHub").Bind(config));
+
         // Configure GoogleMaps
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));
 
@@ -411,7 +415,8 @@ public static class MemexConfiguration
 
         // Use HTTPS redirection only for non-MCP paths (MCP needs HTTP for Claude Code)
         app.UseWhen(
-            context => !context.Request.Path.StartsWithSegments("/mcp"),
+            context => !context.Request.Path.StartsWithSegments("/mcp")
+                     && !context.Request.Path.StartsWithSegments("/webhooks"),
             appBuilder => appBuilder.UseHttpsRedirection()
         );
         app.MapStaticAssets();

@@ -57,11 +57,11 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that Orchestrator agent gets read-only mesh tools (Get, Search, NavigateTo)
-    /// but NOT write tools (Create, Update, Delete).
+    /// Verifies that Orchestrator agent gets ALL mesh tools including write operations.
+    /// The Orchestrator uses explicit plugins: [Mesh] which provides all tools via CreateAllTools().
     /// </summary>
     [Fact]
-    public async Task OrchestratorAgent_ShouldGetReadOnlyMeshTools()
+    public async Task OrchestratorAgent_ShouldGetAllMeshTools()
     {
         var capturingClient = Mesh.ServiceProvider.GetRequiredService<CapturingChatClient>();
 
@@ -80,12 +80,13 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"Orchestrator tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
 
+        // Orchestrator has explicit plugins: [Mesh] which gives all tools
         toolNames.Should().Contain("Get", "Orchestrator should have Get tool");
         toolNames.Should().Contain("Search", "Orchestrator should have Search tool");
         toolNames.Should().Contain("NavigateTo", "Orchestrator should have NavigateTo tool");
-        toolNames.Should().NotContain("Create", "Orchestrator should NOT have Create (read-only agent)");
-        toolNames.Should().NotContain("Update", "Orchestrator should NOT have Update (read-only agent)");
-        toolNames.Should().NotContain("Delete", "Orchestrator should NOT have Delete (read-only agent)");
+        toolNames.Should().Contain("Create", "Orchestrator should have Create (full-access agent)");
+        toolNames.Should().Contain("Update", "Orchestrator should have Update (full-access agent)");
+        toolNames.Should().Contain("Delete", "Orchestrator should have Delete (full-access agent)");
     }
 
     /// <summary>

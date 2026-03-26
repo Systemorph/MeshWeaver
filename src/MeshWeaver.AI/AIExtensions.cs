@@ -2,6 +2,7 @@
 using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -118,6 +119,22 @@ public static class AIExtensions
 
             services.AddHttpClient<WebSearchPlugin>();
             services.AddSingleton<IAgentPlugin, WebSearchPlugin>();
+            return services;
+        }
+
+        /// <summary>
+        /// Registers the GitHub plugin, making CreateIssue, GetIssue, ListIssues, and UpdateIssue tools
+        /// available to agents that declare "GitHub" in their plugins frontmatter.
+        /// </summary>
+        public IServiceCollection AddGitHubPlugin(Action<GitHubConfiguration>? configure = null)
+        {
+            if (configure != null)
+                services.Configure(configure);
+            else
+                services.AddOptions<GitHubConfiguration>();
+
+            services.AddHttpClient<GitHubPlugin>();
+            services.AddSingleton<IAgentPlugin, GitHubPlugin>();
             return services;
         }
     }

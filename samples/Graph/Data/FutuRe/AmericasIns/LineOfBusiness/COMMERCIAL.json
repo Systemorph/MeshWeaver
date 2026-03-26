@@ -2,7 +2,7 @@
   "id": "COMMERCIAL",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Commercial Lines",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Multi-peril commercial package policies covering property, liability, and inland marine risks for businesses",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

@@ -145,6 +145,7 @@ public static class MeshNodeLayoutAreas
                 return (UiControl?)BuildAccessDenied(hubPath);
 
             var canEdit = permissions.HasFlag(Permission.Update);
+
             return (UiControl?)host.BuildDetailsContent(node, null, canEdit);
         });
     }

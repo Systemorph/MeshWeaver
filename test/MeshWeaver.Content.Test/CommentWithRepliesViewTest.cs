@@ -277,7 +277,8 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
         Output.WriteLine($"Reply: Id={replyNode.Id}, Path={replyNode.Path}, Author={replyComment!.Author}");
 
         // Load children of c1 via subtree query
-        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} scope:subtree").ToListAsync();
+        // nodeType:Comment is needed so HasConditions=true, which includes satellite descendants
+        var children = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path} nodeType:Comment scope:subtree").ToListAsync();
         foreach (var child in children)
         {
             Output.WriteLine($"Subtree: Id={child.Id}, Path={child.Path}, NodeType={child.NodeType}");

@@ -96,8 +96,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Delete
-        tools.Should().HaveCount(6);
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete
+        tools.Should().HaveCount(7);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
@@ -105,6 +105,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("NavigateTo");
         toolNames.Should().Contain("Create");
         toolNames.Should().Contain("Update");
+        toolNames.Should().Contain("Patch");
         toolNames.Should().Contain("Delete");
     }
 
@@ -331,17 +332,20 @@ public class MeshPluginTest : MonolithMeshTestBase
         });
         await plugin.Create(createJson);
 
-        // Now update it
-        var updateJson = JsonSerializer.Serialize(new object[]
+        // Get the node first (as the Update contract requires the complete node)
+        var getBeforeUpdate = await plugin.Get($"@ACME/{uniqueId}");
+        var nodeFromGet = JsonSerializer.Deserialize<JsonElement>(getBeforeUpdate);
+
+        // Now update it with the complete node (including content from Get)
+        var updateNode = new Dictionary<string, object>
         {
-            new
-            {
-                id = uniqueId,
-                @namespace = "ACME",
-                name = "Updated Name",
-                nodeType = "Markdown"
-            }
-        });
+            ["id"] = uniqueId,
+            ["namespace"] = "ACME",
+            ["name"] = "Updated Name",
+            ["nodeType"] = "Markdown",
+            ["content"] = nodeFromGet.TryGetProperty("content", out var content) ? content : new { }
+        };
+        var updateJson = JsonSerializer.Serialize(new[] { updateNode });
 
         var result = await plugin.Update(updateJson);
 
@@ -515,17 +519,17 @@ public class MeshPluginTest : MonolithMeshTestBase
         getResult.Should().NotStartWith("Not found");
         getResult.Should().Contain("CRUD Test Node");
 
-        // 3. Update (Get -> modify -> Update pattern)
-        var updateJson = JsonSerializer.Serialize(new object[]
+        // 3. Update (Get -> modify -> Update pattern, must include content)
+        var nodeFromGet = JsonSerializer.Deserialize<JsonElement>(getResult);
+        var updateNode = new Dictionary<string, object>
         {
-            new
-            {
-                id = uniqueId,
-                @namespace = "ACME",
-                name = "Updated CRUD Test Node",
-                nodeType = "Markdown"
-            }
-        });
+            ["id"] = uniqueId,
+            ["namespace"] = "ACME",
+            ["name"] = "Updated CRUD Test Node",
+            ["nodeType"] = "Markdown",
+            ["content"] = nodeFromGet.TryGetProperty("content", out var content) ? content : new { }
+        };
+        var updateJson = JsonSerializer.Serialize(new[] { updateNode });
         var updateResult = await plugin.Update(updateJson);
         updateResult.Should().Contain("Updated:");
 
@@ -549,8 +553,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     [Fact]
     public async Task WriteToolWiring_WorkerAgent_GetsWriteTools()
     {
-        // The Worker agent description contains "create, update, and delete"
-        // so it should get CreateAllTools() (6 tools) rather than CreateTools() (3 tools)
+        // The Worker agent uses explicit plugins: [Mesh] which provides all tools via CreateAllTools()
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
@@ -559,8 +562,9 @@ public class MeshPluginTest : MonolithMeshTestBase
         var worker = agents.FirstOrDefault(a => a.Name == "Worker");
         worker.Should().NotBeNull("Worker agent should be loaded from test data");
         worker!.AgentConfiguration.Should().NotBeNull();
-        worker.AgentConfiguration!.Description.Should().Contain("create",
-            "Worker description should mention create to trigger write tool wiring");
+        // Worker description mentions CRUD operations
+        worker.AgentConfiguration!.Description.Should().Contain("CRUD",
+            "Worker description should mention CRUD operations");
     }
 
     [Fact]

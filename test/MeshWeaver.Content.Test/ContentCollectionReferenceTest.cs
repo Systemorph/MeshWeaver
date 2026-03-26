@@ -67,6 +67,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
             .AddUserData()
             .AddMeshWeaverDocs()
             .AddDoc()
+            .AddAcme()
+            .AddCornerstone()
+            .AddSystemorph()
             .AddDocumentation()
             .ConfigureServices(services =>
             {

@@ -2,7 +2,7 @@
   "id": "LIFE_ANN",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Life & Annuity",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Individual and group life insurance, annuities, and retirement products for the Americas market",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",

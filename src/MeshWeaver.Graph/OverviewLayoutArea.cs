@@ -30,8 +30,22 @@ public static class OverviewLayoutArea
         if (instance == null)
             return Controls.Stack;
 
-        if (instance is JsonElement je)
+        // Resolve ContentType from MeshDataSource (same as CreateLayoutArea)
+        var workspace = host.Workspace;
+        var meshDataSource = workspace.DataContext.DataSources
+            .OfType<MeshDataSource>()
+            .FirstOrDefault(ds => ds.ContentType != null);
+
+        if (meshDataSource != null)
+        {
+            var resolved = meshDataSource.CreateContentInstance(node);
+            if (resolved != null)
+                instance = resolved;
+        }
+        else if (instance is JsonElement je)
+        {
             instance = JsonSerializer.Deserialize<object>(je.GetRawText(), host.Hub.JsonSerializerOptions)!;
+        }
 
         var contentType = instance.GetType();
 

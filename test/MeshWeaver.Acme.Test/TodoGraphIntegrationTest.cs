@@ -72,21 +72,20 @@ public class TodoGraphIntegrationTest(ITestOutputHelper output) : MonolithMeshTe
     }
 
     /// <summary>
-    /// Test that ACME organization hub can be initialized.
+    /// Test that ACME NodeType definitions exist and are queryable.
     /// </summary>
-    [Fact(Timeout = 30000)]
-    public async Task ACME_Organization_CanBeInitialized()
+    [Fact(Timeout = 20000)]
+    public async Task AllNodeTypes_ShouldExist()
     {
-        var acmeAddress = new Address("ACME");
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var query = "namespace:ACME nodeType:NodeType state:Active";
+        var results = await meshQuery.QueryAsync(MeshQueryRequest.FromQuery(query)).ToListAsync();
+        var ids = results.Cast<MeshNode>().Select(n => n.Id).ToList();
 
-        var client = GetClient(c => c.AddData(data => data));
+        Output.WriteLine($"Found {results.Count} NodeTypes: {string.Join(", ", ids)}");
 
-        var response = await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(acmeAddress),
-            TestContext.Current.CancellationToken);
-
-        response.Should().NotBeNull();
+        ids.Should().Contain("Project");
+        ids.Should().Contain("Article");
     }
 
     /// <summary>

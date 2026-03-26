@@ -2,7 +2,7 @@
   "id": "HOMEOWNERS",
   "namespace": "FutuRe/AmericasIns/LineOfBusiness",
   "name": "Homeowners",
-  "nodeType": "FutuRe/LineOfBusiness",
+  "nodeType": "FutuRe/AmericasIns/LineOfBusiness",
   "category": "Lines of Business",
   "description": "Residential property insurance covering homes, condos, and personal property in the Americas",
   "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
