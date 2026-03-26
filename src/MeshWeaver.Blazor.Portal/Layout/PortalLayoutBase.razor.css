@@ -77,7 +77,8 @@
 
     /* body-content is now inside the first splitter pane, not direct child of layout */
     ::deep .body-content {
-        overflow: auto; /* Allow scrolling of page content */
+        overflow: overlay; /* Scrollbar overlays content, doesn't take space */
+        overflow: auto; /* Fallback for browsers that don't support overlay */
         display: flex;
         flex-direction: column;
         min-height: 0; /* Allow flex shrinking */
@@ -85,6 +86,26 @@
         width: 100%;
         position: relative;
         z-index: 1;
+    }
+
+    /* Thin auto-hiding scrollbar inside splitter panes */
+    ::deep .body-content::-webkit-scrollbar {
+        width: 6px;
+        background: transparent;
+    }
+
+    ::deep .body-content::-webkit-scrollbar-thumb {
+        border-radius: 6px;
+        background-color: rgba(128, 128, 128, 0.2);
+    }
+
+    ::deep .body-content:hover::-webkit-scrollbar-thumb {
+        background-color: rgba(128, 128, 128, 0.4);
+    }
+
+    ::deep .body-content {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(128, 128, 128, 0.2) transparent;
     }
 
     ::deep.layout>.messagebar-container {
@@ -368,6 +389,17 @@
     ::deep .search-container {
         display: none;
     }
+}
+
+/* Subtle splitter bar — thin line, visible on hover */
+::deep .body-splitter .fluent-multi-splitter-bar {
+    background: transparent !important;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+}
+
+::deep .body-splitter .fluent-multi-splitter-bar:hover {
+    opacity: 0.8;
 }
 
 /* Hide splitter bar and second pane when panel is collapsed */

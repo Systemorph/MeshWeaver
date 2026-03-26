@@ -88,17 +88,23 @@
     <FluentKeyCodeProvider />
 
     @* Main content area — splitter always rendered to preserve side panel component state.
-       CSS class panel-collapsed hides the second pane and bar when closed. *@
+       When closed, inline styles collapse the second pane to zero. *@
     <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
                          Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
-                         Class="@($"body-splitter{(IsSidePanelVisible ? "" : " panel-collapsed")}")">
-        <FluentMultiSplitterPane Size="@MainPaneSize" Min="100px" Collapsible="false">
+                         Class="body-splitter"
+                         BarSize="@(IsSidePanelVisible ? "3" : "0")">
+        <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? MainPaneSize : "100%")" Min="100px" Collapsible="false">
             <div class="body-content">
                 <FluentToastProvider MaxToastCount="3" Timeout="5000" />
                 @Body
             </div>
         </FluentMultiSplitterPane>
-        <FluentMultiSplitterPane Size="@SidePanelPaneSize" Min="250px" Max="85%" Collapsible="false" Resizable="true">
+        <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? SidePanelPaneSize : "0")"
+                                  Min="@(IsSidePanelVisible ? "250px" : "0")"
+                                  Max="@(IsSidePanelVisible ? "85%" : "0")"
+                                  Collapsible="false"
+                                  Resizable="@IsSidePanelVisible"
+                                  Style="@(IsSidePanelVisible ? "" : "display:none")">
             <div class="side-panel-wrapper">
                 <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
                     <ChildContent>

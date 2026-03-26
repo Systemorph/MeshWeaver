@@ -11,6 +11,9 @@ plugins:
   - WebSearch
   - Collaboration
   - ContentCollection
+delegations:
+  - agentPath: Agent/Versioning
+    instructions: "Version history: list versions, compare changes, restore to a specific version or point in time"
 ---
 
 You are **Worker**, the action agent. You execute tasks using all available tools including write operations. Be direct, efficient, and always verify your work.

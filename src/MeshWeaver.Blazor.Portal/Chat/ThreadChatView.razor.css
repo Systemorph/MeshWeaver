@@ -6,6 +6,14 @@
     overflow: hidden;
 }
 
+/* Dashboard compact mode — flow normally instead of absolute positioning */
+.thread-chat-container.compact-mode {
+    position: static;
+    inset: unset;
+    overflow: visible;
+    width: 100%;
+}
+
 .thread-chat-messages {
     flex: 1;
     overflow-y: auto;
@@ -26,13 +34,6 @@
     margin: 8px 0;
 }
 
-.input-submitting {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 40px;
-    padding: 8px 0;
-}
 
 .selector-bar {
     display: flex;
@@ -112,13 +113,21 @@
     50% { opacity: 0.15; }
 }
 
-.awaiting-response {
+/* Progress bar between messages and input */
+.chat-progress-bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 16px;
+    padding: 6px 16px;
+    flex-shrink: 0;
     color: var(--neutral-foreground-hint);
     font-size: 0.85rem;
+    border-top: 1px solid var(--neutral-stroke-divider);
+    background: var(--neutral-layer-2);
+}
+
+.chat-progress-text {
+    white-space: nowrap;
 }
 
 .selector-agent, .selector-model {
@@ -165,8 +174,38 @@
     flex-shrink: 0;
 }
 
-.resume-threads-catalog {
+.resume-threads-list {
     flex: 1;
     overflow-y: auto;
-    padding: 12px;
+    padding: 4px;
+}
+
+.resume-thread-item {
+    padding: 10px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.15s;
+}
+
+.resume-thread-item:hover {
+    background-color: var(--neutral-fill-secondary-hover);
+}
+
+.resume-thread-item-active {
+    background-color: var(--neutral-fill-secondary-rest);
+    border-left: 3px solid var(--accent-fill-rest);
+}
+
+.resume-thread-name {
+    font-weight: 500;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.resume-thread-date {
+    font-size: 0.75rem;
+    color: var(--neutral-foreground-hint);
+    margin-top: 2px;
 }

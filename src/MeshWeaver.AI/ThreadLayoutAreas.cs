@@ -166,8 +166,9 @@ public static class ThreadLayoutAreas
             }
         }));
 
-        // Header: chat icon + context link + h1 title
+        // Header: chat icon + context link + h1 title (hidden in side panel via CSS)
         var header = Controls.Stack
+            .WithClass("thread-full-header")
             .WithWidth("100%")
             .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
             .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
