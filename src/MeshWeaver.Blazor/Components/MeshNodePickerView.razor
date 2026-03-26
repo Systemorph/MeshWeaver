@@ -100,7 +100,7 @@
             if (json.TryGetProperty("logo", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
             if (json.TryGetProperty("Logo", out var L) && L.ValueKind == System.Text.Json.JsonValueKind.String) return L.GetString();
         }
-        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
+        return MeshNodeImageHelper.GetIconForRendering(node.Icon);
     }
 
     private RenderFragment RenderAvatar(MeshNode node, string initial)
@@ -108,6 +108,10 @@
         var imageUrl = GetImageUrl(node);
         if (!string.IsNullOrEmpty(imageUrl))
         {
+            if (imageUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                return @<div class="mesh-node-picker-avatar" style="background: transparent; font-size: 20px; padding: 2px;">@((MarkupString)imageUrl)</div>;
+            if (!imageUrl.Contains('/') && !imageUrl.StartsWith("data:"))
+                return @<div class="mesh-node-picker-avatar" style="background: transparent; font-size: 24px;">@imageUrl</div>;
             if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
                 return @<div style="--icon-url: url('@imageUrl')" class="mesh-node-picker-avatar-icon"></div>;
             return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-picker-avatar-img" />;

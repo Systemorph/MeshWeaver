@@ -225,6 +225,18 @@ public class MeshOperations
             var results = new List<string>();
             foreach (var meshNode in nodeList)
             {
+                // Reject partial nodes — Update does full replacement.
+                // Use Patch for partial changes instead.
+                if (string.IsNullOrEmpty(meshNode.NodeType) || meshNode.Content == null)
+                {
+                    var missing = new List<string>();
+                    if (string.IsNullOrEmpty(meshNode.NodeType)) missing.Add("nodeType");
+                    if (meshNode.Content == null) missing.Add("content");
+                    results.Add($"Error: node at {meshNode.Path} is missing {string.Join(", ", missing)}. " +
+                                "Update requires the complete node (from Get). Use Patch for partial updates.");
+                    continue;
+                }
+
                 var updated = await mesh.UpdateNodeAsync(meshNode);
                 results.Add($"Updated: {updated.Path}");
             }
@@ -238,6 +250,50 @@ public class MeshOperations
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Error updating nodes");
+            return $"Error: {ex.Message}";
+        }
+    }
+
+    public async Task<string> Patch(string path, string fields)
+    {
+        logger.LogInformation("Patch called for path={Path}", path);
+
+        try
+        {
+            var resolvedPath = ResolvePath(path);
+            var existing = await mesh.QueryAsync<MeshNode>($"path:{resolvedPath}").FirstOrDefaultAsync();
+            if (existing == null)
+                return $"Error: node not found at {resolvedPath}";
+
+            var sanitized = RepairJson(fields);
+            var jsonObj = JsonNode.Parse(sanitized) as JsonObject;
+            if (jsonObj == null)
+                return "Error: fields must be a JSON object";
+
+            // Deserialize to get typed values using the hub's serializer options
+            var partial = jsonObj.Deserialize<MeshNode>(hub.JsonSerializerOptions)
+                ?? new MeshNode(existing.Id, existing.Namespace);
+
+            var merged = existing with
+            {
+                Name = jsonObj.ContainsKey("name") ? partial.Name : existing.Name,
+                Icon = jsonObj.ContainsKey("icon") ? partial.Icon : existing.Icon,
+                Category = jsonObj.ContainsKey("category") ? partial.Category : existing.Category,
+                Order = jsonObj.ContainsKey("order") ? partial.Order : existing.Order,
+                Content = jsonObj.ContainsKey("content") ? partial.Content : existing.Content,
+                PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
+            };
+
+            var updated = await mesh.UpdateNodeAsync(merged);
+            return $"Patched: {updated.Path}";
+        }
+        catch (JsonException ex)
+        {
+            return $"Invalid JSON: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Error patching node at {Path}", path);
             return $"Error: {ex.Message}";
         }
     }

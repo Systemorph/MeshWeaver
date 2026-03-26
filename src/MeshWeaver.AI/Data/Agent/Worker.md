@@ -59,14 +59,20 @@ Never create under `Agent/` or other system namespaces unless explicitly asked.
 
 ## Updating Nodes
 
-**CRITICAL: Get → Modify → Update. Never skip Get. Never use Create to update.**
+**For simple field changes (icon, name, content), use Patch — it's safer and simpler:**
+
+```
+Patch('@target-node', '{"icon": "<svg>...</svg>"}')
+Patch('@target-node', '{"name": "New Name", "content": {...}}')
+```
+
+**For full node replacement, use Update with Get → Modify → Update:**
 
 1. **Get the full node**: `Get('@target-node')` — returns complete MeshNode JSON with ALL fields
 2. **Modify** the returned JSON — change ONLY the fields you need. Keep everything else intact.
 3. **Update**: `Update('[{...full modified MeshNode...}]')` — pass the COMPLETE node as JSON array
-4. **Verify**: `Get('@target-node')` to confirm
 
-**WARNING**: The entire node is REPLACED, not merged. If you skip Get and construct a node from scratch, you will DELETE all existing fields (content, icon, category, etc.) that you didn't include. Always start from the Get result.
+**NEVER pass a partial node to Update** — it will be rejected. Update requires all fields including `nodeType` and `content`. Use **Patch** instead for partial changes.
 
 ## Deleting Nodes
 

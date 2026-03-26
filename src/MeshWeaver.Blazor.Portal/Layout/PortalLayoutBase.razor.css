@@ -402,6 +402,16 @@
     }
 }
 
+/* Hide splitter bar and second pane when panel is collapsed */
+::deep .body-splitter.panel-collapsed .fluent-multi-splitter-bar {
+    display: none !important;
+}
+
+::deep .body-splitter.panel-collapsed fluent-multi-splitter-pane:last-of-type {
+    display: none !important;
+    overflow: hidden !important;
+}
+
 /* Mobile layout - Side panel as full-screen overlay */
 @media (max-width: 767px) {
     .side-panel-overlay {

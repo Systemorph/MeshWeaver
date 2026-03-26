@@ -87,48 +87,42 @@
     <FluentToastProvider MaxToastCount="10" />
     <FluentKeyCodeProvider />
 
-    @* Main content area with splitter at top level (in grid-area: main).
-       @Body goes in first pane with body-content class. Side panel is in second pane. *@
-    @if (IsSidePanelVisible)
-    {
-        <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
-                             Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
-                             Class="body-splitter">
-            <FluentMultiSplitterPane Size="@MainPaneSize" Min="100px" Collapsible="false">
-                <div class="body-content">
-                    <FluentToastProvider MaxToastCount="3" Timeout="5000" />
-                    @Body
-                </div>
-            </FluentMultiSplitterPane>
-            <FluentMultiSplitterPane Size="@SidePanelPaneSize" Min="250px" Max="85%" Collapsible="false" Resizable="true">
-                <div class="side-panel-wrapper">
-                    <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
-                        <ChildContent>
-                            @if (sidePanelViewModel != null)
-                            {
-                                @* Resolved content — render via LayoutAreaView (same as main page) *@
-                                <LayoutAreaView @key="@SidePanelState.ContentPath"
-                                                ViewModel="@sidePanelViewModel"
-                                                Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
-                            }
-                            else
-                            {
-                                @* New chat — no thread yet *@
-                                <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
-                            }
-                        </ChildContent>
-                    </SidePanel>
-                </div>
-            </FluentMultiSplitterPane>
-        </FluentMultiSplitter>
-    }
-    else
-    {
-        <div class="body-content" style="grid-area: main;">
-            <FluentToastProvider MaxToastCount="3" Timeout="5000" />
-            @Body
-        </div>
-    }
+    @* Main content area — splitter always rendered to preserve side panel component state.
+       When collapsed, side panel pane has zero size and hidden content. *@
+    <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
+                         Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
+                         Class="@($"body-splitter {(IsSidePanelVisible ? "" : "panel-collapsed")}")">
+        <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? MainPaneSize : "100%")" Min="100px" Collapsible="false">
+            <div class="body-content">
+                <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+                @Body
+            </div>
+        </FluentMultiSplitterPane>
+        <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? SidePanelPaneSize : "0")"
+                                  Min="@(IsSidePanelVisible ? "250px" : "0")"
+                                  Max="@(IsSidePanelVisible ? "85%" : "0")"
+                                  Collapsible="false"
+                                  Resizable="@IsSidePanelVisible">
+            <div class="side-panel-wrapper" style="@(IsSidePanelVisible ? "" : "display:none")">
+                <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
+                    <ChildContent>
+                        @if (sidePanelViewModel != null)
+                        {
+                            @* Resolved content — render via LayoutAreaView (same as main page) *@
+                            <LayoutAreaView @key="@SidePanelState.ContentPath"
+                                            ViewModel="@sidePanelViewModel"
+                                            Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
+                        }
+                        else
+                        {
+                            @* New chat — no thread yet *@
+                            <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                        }
+                    </ChildContent>
+                </SidePanel>
+            </div>
+        </FluentMultiSplitterPane>
+    </FluentMultiSplitter>
 
     <div id="blazor-error-ui">
         An unhandled error has occurred.
