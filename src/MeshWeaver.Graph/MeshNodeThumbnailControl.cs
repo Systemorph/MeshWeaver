@@ -124,7 +124,7 @@ public record MeshNodeThumbnailControl(
                 return $"/static/storage/content/{ns}/{thumbnail}";
         }
 
-        // Fall back to node.Icon (URLs, inline SVG, emojis — excludes legacy Fluent icon names)
-        return MeshNodeImageHelper.GetIconForRendering(node.Icon);
+        // Fall back to node.Icon — resolves content: references, URLs, inline SVG, emojis
+        return MeshNodeImageHelper.ResolveNodeIcon(node);
     }
 }

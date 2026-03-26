@@ -253,7 +253,7 @@ public static class MeshNodeLayoutAreas
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
-        var iconValue = node?.Icon;
+        var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
 
         // Build title with icon
         var titleContent = Controls.Stack
