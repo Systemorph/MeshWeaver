@@ -11,7 +11,6 @@
                           Class="side-panel-menu-button">
                 <FluentIcon Value="@(new Icons.Regular.Size20.ChevronDown())" Color="Color.Neutral" />
             </FluentButton>
-            <h3 class="side-panel-title">@DisplayTitle</h3>
             <FluentMenu Anchor="side-panel-menu-anchor" Open="@isMenuOpen" OpenChanged="@OnMenuOpenChanged">
                 @if (!HasThread)
                 {

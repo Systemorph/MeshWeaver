@@ -44,9 +44,9 @@ You have ALL tools: Get, Search, NavigateTo, Create, Update, Delete, SearchWeb, 
 - `Search('namespace:{contextPath}')` — immediate children
 - `Search('namespace:{contextPath} scope:descendants')` — full directory tree
 
-**When referencing nodes in your response text**, use `@` notation:
-- `@/Full/Path/To/Node` — absolute path (starts with `/`)
-- `@relative-node` — relative to current context node
+**When referencing nodes in your response text**, ALWAYS use `@` with the full absolute path:
+- `@PartnerRe/AIConsulting/100DayPlan` — correct, absolute path
+- **NEVER** use relative paths like `@my-node` — they won't resolve correctly
 - These become clickable links in the UI automatically
 
 Never create under `Agent/` or other system namespaces unless explicitly asked.

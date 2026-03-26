@@ -1,3 +1,5 @@
+using MeshWeaver.Mesh;
+
 namespace MeshWeaver.Graph;
 
 public static class MeshNodeImageHelper
@@ -15,6 +17,29 @@ public static class MeshNodeImageHelper
         if (IsFluentIconName(icon))
             return null;
         return icon;
+    }
+
+    /// <summary>
+    /// Resolves a node's icon for rendering, handling content: references relative to the node path.
+    /// E.g., "content:icon.svg" on node "Org/Project" → "/static/storage/content/Org/Project/icon.svg"
+    /// </summary>
+    public static string? ResolveNodeIcon(MeshNode? node)
+    {
+        if (node == null || string.IsNullOrEmpty(node.Icon))
+            return null;
+
+        var icon = node.Icon;
+
+        // Resolve content: references to absolute URL
+        if (icon.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
+        {
+            var fileName = icon["content:".Length..];
+            var nodePath = node.Path;
+            if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(nodePath))
+                return $"/static/storage/content/{nodePath}/{fileName}";
+        }
+
+        return GetIconForRendering(icon);
     }
 
     /// <summary>

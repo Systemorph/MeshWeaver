@@ -105,6 +105,6 @@
             if (json.TryGetProperty("logo", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
             if (json.TryGetProperty("Logo", out var L) && L.ValueKind == System.Text.Json.JsonValueKind.String) return L.GetString();
         }
-        return MeshNodeImageHelper.GetIconForRendering(node.Icon);
+        return MeshNodeImageHelper.ResolveNodeIcon(node);
     }
 }
