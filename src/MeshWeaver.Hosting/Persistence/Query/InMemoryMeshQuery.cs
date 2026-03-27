@@ -94,7 +94,10 @@ internal class InMemoryMeshQuery(
             }
             if (parsedQuery.Scope == QueryScope.Exact)
             {
-                effectiveScope = QueryScope.Children;
+                // When the query has conditions (e.g., nodeType:Thread), use Subtree
+                // so satellite nodes nested under _Thread/, _Comment/ etc. are found.
+                // Without conditions, Children is sufficient for general browsing.
+                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
             }
         }
 
@@ -203,7 +206,7 @@ internal class InMemoryMeshQuery(
             if (!string.IsNullOrEmpty(request.DefaultPath))
                 effectivePath = request.DefaultPath;
             if (parsedQuery.Scope == QueryScope.Exact)
-                effectiveScope = QueryScope.Children;
+                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
         }
 
         var basePath = NormalizePath(effectivePath);
@@ -327,12 +330,15 @@ internal class InMemoryMeshQuery(
 
         // Descendants scope
         // When the query has conditions (e.g., nodeType:Thread), use GetAllDescendantsAsync
-        // to include satellite nodes. Otherwise use GetDescendantsSecureAsync (excludes satellites).
+        // to include satellite nodes. Also use GetAllDescendantsAsync when the base path
+        // itself is within a satellite partition (e.g., querying subtree of a comment node).
+        // Otherwise use GetDescendantsSecureAsync (excludes satellites from general browsing).
         if (effectiveScope == QueryScope.Descendants
             || effectiveScope == QueryScope.Hierarchy
             || effectiveScope == QueryScope.Subtree)
         {
-            var source = parsedQuery.HasConditions
+            var includeSatellites = parsedQuery.HasConditions || IsSatellitePath(basePath);
+            var source = includeSatellites
                 ? persistence.GetAllDescendantsAsync(basePath, options)
                 : persistence.GetDescendantsSecureAsync(basePath, userId, options);
 
@@ -643,7 +649,7 @@ internal class InMemoryMeshQuery(
                 effectivePath = request.DefaultPath ?? "";
                 if (parsedQuery.Scope == QueryScope.Exact)
                 {
-                    effectiveScope = QueryScope.Children;
+                    effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
                 }
             }
             var normalizedBasePath = NormalizePath(effectivePath);
@@ -875,5 +881,24 @@ internal class InMemoryMeshQuery(
     {
         if (query.IsMain != true) return false;
         return node.MainNode != node.Path;
+    }
+
+    /// <summary>
+    /// Checks if a path is within a satellite partition (contains /_X/ segments
+    /// where X starts with uppercase, e.g., /_Comment/, /_Thread/).
+    /// When the base path is within a satellite partition, descendant queries
+    /// should include satellite nodes (use GetAllDescendantsAsync).
+    /// </summary>
+    private static bool IsSatellitePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var idx = 0;
+        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
+        {
+            idx += 2; // skip "/_"
+            if (idx < path.Length && char.IsUpper(path[idx]))
+                return true;
+        }
+        return false;
     }
 }

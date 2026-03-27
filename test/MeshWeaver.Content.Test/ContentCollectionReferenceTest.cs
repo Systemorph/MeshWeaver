@@ -64,6 +64,9 @@ public class ContentCollectionReferenceTest(ITestOutputHelper output) : Monolith
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
+            .AddAcme()
+            .AddCornerstone()
+            .AddSystemorph()
             .AddUserData()
             .AddMeshWeaverDocs()
             .AddDoc()

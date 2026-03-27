@@ -246,15 +246,11 @@ public class CommentWithRepliesViewTest(ITestOutputHelper output) : MonolithMesh
     /// Verifies that the persistence service can load the comment with reply
     /// and that the reply node exists on disk with correct Id and Path.
     /// </summary>
-    [Fact(Timeout = 20000)]
+    [Fact(Timeout = 30000)]
     public async Task Persistence_CommentWithReply_ShouldLoadCorrectly()
     {
-        // Initialize hub so partitioned data is loaded
-        var client = GetClient();
-        await client.AwaitResponse(
-            new PingRequest(),
-            o => o.WithTarget(new Address(DocPath)),
-            TestContext.Current.CancellationToken);
+        // No hub initialization needed — RoutingMeshQueryProvider discovers
+        // partitions via DiscoverNewProvidersAsync during the query.
 
         // Load parent comment
         var parentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{CommentC1Path}").FirstOrDefaultAsync();

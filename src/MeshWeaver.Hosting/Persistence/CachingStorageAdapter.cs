@@ -134,6 +134,8 @@ public class CachingStorageAdapter : IStorageAdapter
             return null;
 
         // Derive namespace and id from path
+        // Capture the original computed path before adjustments so we can detect stale MainNode
+        var originalPath = node.Path;
         var lastSlash = normalizedPath.LastIndexOf('/');
         if (lastSlash > 0)
         {
@@ -147,6 +149,18 @@ public class CachingStorageAdapter : IStorageAdapter
         else if (node.Id != normalizedPath)
         {
             node = node with { Id = normalizedPath };
+        }
+
+        // Fix stale MainNode after Namespace/Id adjustment.
+        // When mainNode is not in the JSON, the record constructor sets it to the
+        // original computed Path (e.g., just "c1" when Namespace was empty).
+        // After Namespace is corrected, MainNode must be recalculated.
+        // Only fix when MainNode matches the pre-adjustment default — preserve
+        // explicitly-set satellite MainNode values (which would be full paths).
+        if (node.MainNode != node.Path && node.MainNode == originalPath)
+        {
+            var mainNodePath = ExtractMainNodePath(node.Path);
+            node = node with { MainNode = mainNodePath };
         }
 
         if (node.LastModified == default)
@@ -504,6 +518,24 @@ public class CachingStorageAdapter : IStorageAdapter
     private static bool IsCodeSubNamespace(string? name) =>
         string.Equals(name, "_Source", StringComparison.OrdinalIgnoreCase)
         || string.Equals(name, "_Test", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Extracts the main/primary node path from a potentially satellite path.
+    /// Satellite paths contain segments starting with underscore + uppercase (e.g., /_Comment/, /_Thread/).
+    /// For "Doc/DataMesh/CollaborativeEditing/_Comment/c1" returns "Doc/DataMesh/CollaborativeEditing".
+    /// For non-satellite paths, returns the path itself.
+    /// </summary>
+    internal static string ExtractMainNodePath(string path)
+    {
+        var segments = path.Split('/');
+        for (int i = 0; i < segments.Length; i++)
+        {
+            var seg = segments[i];
+            if (seg.Length >= 2 && seg[0] == '_' && char.IsUpper(seg[1]))
+                return i == 0 ? path : string.Join("/", segments.Take(i));
+        }
+        return path;
+    }
 
     #endregion
 }

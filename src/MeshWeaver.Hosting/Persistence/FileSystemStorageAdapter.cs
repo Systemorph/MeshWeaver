@@ -78,6 +78,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
         // Always derive namespace and id from file path (file path is source of truth).
         // This corrects nodes whose JSON "id" was incorrectly saved as the full path.
         // Path "User/Alice" means namespace="User", id="Alice"
+        // Capture the original computed path before adjustments so we can detect stale MainNode
+        var originalPath = node.Path;
         var normalizedPath = path.Trim('/');
         var lastSlash = normalizedPath.LastIndexOf('/');
         if (lastSlash > 0)
@@ -92,6 +94,13 @@ public class FileSystemStorageAdapter : IStorageAdapter
         else if (node.Id != normalizedPath)
         {
             node = node with { Id = normalizedPath };
+        }
+
+        // Fix stale MainNode after Namespace/Id adjustment (same logic as CachingStorageAdapter).
+        if (node.MainNode != node.Path && node.MainNode == originalPath)
+        {
+            var mainNodePath = CachingStorageAdapter.ExtractMainNodePath(node.Path);
+            node = node with { MainNode = mainNodePath };
         }
 
         // Use file system last modified time if not specified
