@@ -56,7 +56,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         await svc.AddUserRoleAsync("LocalUser", "Viewer", "ACME/Project", "system", TestTimeout);
 
         var permissions = await svc.GetEffectivePermissionsAsync("ACME/Project", "LocalUser", TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute);
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
     [Fact(Timeout = 20000)]
@@ -78,7 +78,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // LocalViewer should have viewer permissions at Software/Project
         var localPerms = await svc.GetEffectivePermissionsAsync("ACME/Project", "LocalViewer", TestTimeout);
-        localPerms.Should().Be(Permission.Read | Permission.Execute);
+        localPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
     #endregion
@@ -138,7 +138,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
         var permProject = await svc.GetEffectivePermissionsAsync("Org/Team/Project", "OverrideUser", TestTimeout);
 
         permTeam.Should().Be(Permission.None, "deny at Org/Team should block inherited grant");
-        permProject.Should().Be(Permission.Read | Permission.Execute, "grant at child should override deny at parent");
+        permProject.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "grant at child should override deny at parent");
     }
 
     [Fact(Timeout = 20000)]
@@ -229,7 +229,7 @@ public class AccessAssignmentTests(ITestOutputHelper output) : MonolithMeshTestB
 
         // InheritedUser should have Viewer on NS/Child (inherited)
         var inheritedPerms = await svc.GetEffectivePermissionsAsync("NS/Child", "InheritedUser", TestTimeout);
-        inheritedPerms.Should().Be(Permission.Read | Permission.Execute);
+        inheritedPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
 
         // LocalUser should have Editor on NS/Child (local)
         var localPerms = await svc.GetEffectivePermissionsAsync("NS/Child", "LocalUser", TestTimeout);

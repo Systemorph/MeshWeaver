@@ -46,7 +46,7 @@ public class ApiTokenServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         node.Should().NotBeNull();
         node.NodeType.Should().Be("ApiToken");
-        node.Namespace.Should().Be("ApiToken");
+        node.Namespace.Should().Be("User/user1/ApiToken");
 
         var apiToken = node.Content as ApiToken;
         apiToken.Should().NotBeNull();

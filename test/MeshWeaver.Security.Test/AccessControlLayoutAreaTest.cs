@@ -181,7 +181,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         rootPerms.Should().Be(Permission.All, "RootUser with Admin at Org should have all permissions on deeply nested path");
         divPerms.Should().HaveFlag(Permission.Update, "DivUser with Editor at Org/Division should have update on deeply nested path");
-        deepPerms.Should().Be(Permission.Read | Permission.Execute, "DeepUser with Viewer at exact path should have read + execute permissions");
+        deepPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "DeepUser with Viewer at exact path should have read + execute + api permissions");
     }
 
     [Fact(Timeout = 20000)]
@@ -203,7 +203,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         globalPerms.Should().Be(Permission.All, "GlobalAdmin with global Admin role should have all permissions");
         orgPerms.Should().HaveFlag(Permission.Update, "OrgEditor with Editor at MyOrg should have update on nested path");
-        projectPerms.Should().Be(Permission.Read | Permission.Execute, "ProjectViewer with Viewer at exact path should have read + execute");
+        projectPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "ProjectViewer with Viewer at exact path should have read + execute + api");
 
         Output.WriteLine($"GlobalAdmin permissions at {nestedPath}: {globalPerms}");
         Output.WriteLine($"OrgEditor permissions at {nestedPath}: {orgPerms}");

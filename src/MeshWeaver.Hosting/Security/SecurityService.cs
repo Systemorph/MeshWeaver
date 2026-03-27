@@ -271,6 +271,13 @@ internal class SecurityService : ISecurityService
         // Apply the permission cap as final mask from PartitionAccessPolicy nodes
         effectivePermissions &= permissionCap;
 
+        // When accessing via API token, require Api permission — otherwise deny all.
+        // Since all built-in roles include Api by default, this is transparent unless
+        // an admin explicitly denies Api on a namespace to block programmatic access.
+        var currentContext = _accessService.Context ?? _accessService.CircuitContext;
+        if (currentContext?.IsApiToken == true && !effectivePermissions.HasFlag(Permission.Api))
+            effectivePermissions = Permission.None;
+
         _logger.LogTrace("User {UserId} has permissions {Permissions} on node {NodePath} (cap: {Cap})",
             userId, effectivePermissions, nodePath, permissionCap);
 
