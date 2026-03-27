@@ -270,6 +270,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? parentPath,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
 
         if (segment == null)
@@ -294,6 +295,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? parentPath,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
         if (segment == null) yield break;
 
@@ -307,6 +309,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? parentPath,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
 
         if (segment == null)
@@ -334,6 +337,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? parentPath,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
 
         if (segment == null)
@@ -462,6 +466,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string query,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
 
         if (segment == null)
@@ -590,6 +595,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     public async Task<MeshNode?> GetNodeSecureAsync(string path, string? userId, JsonSerializerOptions options, CancellationToken ct = default)
     {
+        await EnsureInitializedAsync(ct);
         var store = TryGetStore(path);
         if (store == null) return null;
         return await store.GetNodeSecureAsync(path, userId, options, ct);
@@ -600,6 +606,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? userId,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
 
         if (segment == null)
@@ -625,6 +632,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
         string? userId,
         JsonSerializerOptions options)
     {
+        await EnsureInitializedAsync();
         var segment = PathPartition.GetFirstSegment(parentPath);
 
         if (segment == null)
