@@ -185,8 +185,7 @@ public class MeshOperations
             if (string.IsNullOrWhiteSpace(meshNode.Name))
                 return "Error: 'name' property is required. Provide a human-readable display name.";
 
-            if (meshNode.Id.Contains('/'))
-                return $"Error: 'id' must not contain slashes. Got '{meshNode.Id}'. Use 'namespace' for the parent path and 'id' for just the node name.";
+            meshNode = SanitizeNodeId(meshNode);
 
             // Validate content against schema if both nodeType and content are provided
             if (!string.IsNullOrEmpty(meshNode.NodeType) && meshNode.Content != null)
@@ -223,8 +222,10 @@ public class MeshOperations
                 return "No nodes provided.";
 
             var results = new List<string>();
-            foreach (var meshNode in nodeList)
+            foreach (var rawNode in nodeList)
             {
+                var meshNode = SanitizeNodeId(rawNode);
+
                 // Reject partial nodes — Update does full replacement.
                 // Use Patch for partial changes instead.
                 if (string.IsNullOrEmpty(meshNode.NodeType))
