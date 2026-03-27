@@ -236,6 +236,20 @@ When asked to create a node type:
 6. **Upload CSV files** to the content collection if needed
 7. **Verify** by getting the created nodes
 
+# Business Rules & Calculations
+
+For domain-specific logic (financial models, reinsurance cession, risk analysis, etc.), follow the three-layer pattern:
+
+1. **Data Model** — records for domain types, imported from CSV via `FromCsv<T>("file.csv")` in `.AddData()`
+2. **Business Rules** — pure C# calculation engines with no framework dependencies
+3. **Layout Areas** — reactive charts with `Chart.Create(DataSet.Bar(...))`, filter toolbars via `host.Toolbar(model, id)`, and `host.GetDataStream<T>(id).Select(...)` for reactive updates
+
+See the full walkthrough with a reinsurance cession example: [Business Rules & Calculations](@@Doc/Architecture/BusinessRules)
+
+For a production implementation, see:
+- [CededCashflows.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs) — cession calculation engine
+- [DistributionLayoutArea.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance.Pricing/LayoutAreas/DistributionLayoutArea.cs) — PDF/CDF charts with filter toolbars
+
 # Tools
 
 Use the standard Mesh tools (Get, Search, Create, Update, Delete) to manage nodes.

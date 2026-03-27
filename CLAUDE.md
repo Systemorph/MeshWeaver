@@ -10,7 +10,7 @@ Documentation is embedded in `src/MeshWeaver.Documentation/` and served under th
 
 The documentation on the architecture is accessible via src/MeshWeaver.Documentation/Data/Architecture/
 
-Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence
+Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence, Business rules & calculations
 
 ### DataMesh
 

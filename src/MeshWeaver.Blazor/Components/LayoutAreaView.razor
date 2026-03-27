@@ -1,7 +1,7 @@
 @using MeshWeaver.Layout
 @inherits BlazorView<LayoutAreaControl, LayoutAreaView>
 
-<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading") @(Top ? "layout-area-top" : "")" style="@Style">
+<div class="layout-area-container @(IsContentLoaded ? "content-loaded" : "content-loading")" style="@Style">
     <NamedAreaView Stream="@AreaStream" ViewModel="@NamedArea" Area="@NamedArea.GetArea()" Top="@Top" />
 </div>
 
