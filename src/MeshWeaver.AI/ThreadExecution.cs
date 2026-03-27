@@ -167,13 +167,14 @@ public static class ThreadExecution
                     };
                 });
 
-                // 3) Start execution on hosted hub
+                // 3) Start execution on hosted hub — forward user's AccessContext
                 var executionHub = hub.GetHostedHub(
                     new Address($"{hub.Address}/_Exec"),
                     config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
                     HostedHubCreation.Always);
 
-                executionHub!.Post(request with { ResponsePath = responsePath });
+                executionHub!.Post(request with { ResponsePath = responsePath },
+                    o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
 
                 // 4) Response — nodes created successfully
                 hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));

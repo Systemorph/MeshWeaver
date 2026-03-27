@@ -5,3 +5,12 @@
 .layout-area-container {
     width: 100%;
 }
+
+/* Top-level layout area fills the body-content flex container,
+   allowing child views (e.g., thread chat) to use flex-based height. */
+.layout-area-container.layout-area-top {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}

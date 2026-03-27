@@ -183,12 +183,11 @@ public static class ThreadLayoutAreas
         // Static container — never rebuilt
         return Controls.Stack
             .WithWidth("100%")
-            .WithHeight("100%")
-            .WithStyle("display: flex; flex-direction: column;")
+            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
             .WithView(header)
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
-                .WithStyle("flex: 1; overflow: hidden;"));
+                .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
     }
 
     /// <summary>

@@ -8,7 +8,7 @@
 @using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
 @inject NavigationManager NavigationManager
 
-<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")">
+<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")" style="@Style">
 @if (viewMode == ChatViewMode.ResumeThreads)
 {
     <div class="thread-resume-view">

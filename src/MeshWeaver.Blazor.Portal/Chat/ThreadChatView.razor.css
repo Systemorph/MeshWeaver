@@ -1,8 +1,8 @@
 .thread-chat-container {
     display: flex;
     flex-direction: column;
-    position: absolute;
-    inset: 0;
+    flex: 1;
+    min-height: 0;
     overflow: hidden;
 }
 

@@ -300,7 +300,7 @@ public static class UserActivityLayoutAreas
     {
         return Controls.MeshSearch
             .WithTitle("My Items")
-            .WithHiddenQuery($"namespace:{nodePath} is:main context:search scope:descendants sort:LastModified-desc")
+            .WithHiddenQuery($"namespace:{nodePath} is:main context:search sort:LastModified-desc")
             .WithShowEmptyMessage(true)
             .WithRenderMode(MeshSearchRenderMode.Grouped)
             .WithSortBy("LastModified", ascending: false)
