@@ -485,13 +485,23 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
-        return builder
-            .UseMonolithMesh()
-            .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
-            .AddMeshWeaverDocs()
-            .AddAcme()
-            .AddDoc()
-            .AddRowLevelSecurity();
+        return ConfigureMeshBase(builder);
+    }
+
+    /// <summary>
+    /// Pre-seed granular access rights instead of PublicAdminAccess.
+    /// Uses AddUserRoleAsync to create the same role assignments that would exist
+    /// in sample Graph data _Access directories.
+    /// </summary>
+    protected override async Task SetupAccessRightsAsync()
+    {
+        var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        // Roland: global Admin
+        await securityService.AddUserRoleAsync("Roland", "Admin", null, "system", TestTimeout);
+        // Alice: Editor on ACME
+        await securityService.AddUserRoleAsync("Alice", "Editor", "ACME", "system", TestTimeout);
+        // Public: Viewer on MeshWeaver
+        await securityService.AddUserRoleAsync("Public", "Viewer", "MeshWeaver", "system", TestTimeout);
     }
 
     [Fact(Timeout = 20000)]
