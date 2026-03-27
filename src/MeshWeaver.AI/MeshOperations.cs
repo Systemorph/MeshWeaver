@@ -297,6 +297,30 @@ public class MeshOperations
     }
 
     /// <summary>
+    /// Sanitizes a MeshNode's Id: if the Id contains slashes, splits it into proper Id + Namespace.
+    /// This prevents duplicate rows in the DB (the DB has a CHECK constraint blocking slashes in id).
+    /// </summary>
+    private MeshNode SanitizeNodeId(MeshNode node)
+    {
+        if (!node.Id.Contains('/'))
+            return node;
+
+        // Split full path into namespace + id
+        var lastSlash = node.Id.LastIndexOf('/');
+        var ns = node.Id[..lastSlash];
+        var id = node.Id[(lastSlash + 1)..];
+
+        // If the node already has a namespace, prepend it
+        if (!string.IsNullOrEmpty(node.Namespace))
+            ns = $"{node.Namespace}/{ns}";
+
+        logger.LogWarning("SanitizeNodeId: Fixed slash in id. Was id='{OldId}', now id='{NewId}' namespace='{Namespace}'",
+            node.Id, id, ns);
+
+        return node with { Id = id, Namespace = ns };
+    }
+
+    /// <summary>
     /// Attempts to repair common JSON issues from LLM output:
     /// - Truncated strings (unclosed quotes/braces)
     /// - Unescaped control characters inside strings

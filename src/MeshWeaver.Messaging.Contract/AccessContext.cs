@@ -15,4 +15,10 @@ public record AccessContext
     /// impersonated user's own permissions are insufficient.
     /// </summary>
     public string? ImpersonatedBy { get; init; }
+
+    /// <summary>
+    /// When true, this context was established via an API token (Bearer authentication).
+    /// The Api permission flag is required for operations in this context.
+    /// </summary>
+    public bool IsApiToken { get; init; }
 }

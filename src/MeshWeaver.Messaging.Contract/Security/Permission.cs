@@ -48,7 +48,13 @@ public enum Permission
     Thread = 64,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread).
+    /// Permission to access nodes via API tokens (MCP / programmatic access).
+    /// Included in all built-in roles by default.
     /// </summary>
-    All = Read | Create | Update | Delete | Comment | Execute | Thread
+    Api = 128,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api
 }
