@@ -209,6 +209,19 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
         // 3. Load partition metadata from Admin/Partition namespace
         await LoadPartitionMetadataAsync(ct);
+
+        // 4. Ensure static partition definitions (from AddMeshNodes / IStaticNodeProvider)
+        //    are also in the routing map — LoadPartitionMetadataAsync only reads from
+        //    persisted Admin store, missing config-only partitions like "Doc".
+        foreach (var def in defaultPartitions)
+        {
+            if (!string.IsNullOrEmpty(def.Namespace) && !_basePathToPartition.ContainsKey(def.Namespace))
+            {
+                var storeKey = _stores.ContainsKey(def.Namespace) ? def.Namespace
+                    : "Admin";
+                _basePathToPartition[def.Namespace] = storeKey;
+            }
+        }
     }
 
     /// <summary>

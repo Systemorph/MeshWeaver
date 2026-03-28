@@ -127,13 +127,12 @@ public partial class MigrationUtility
         var result = new MigrationResult { SourceFile = jsonFile };
 
         // Parse the CodeConfiguration
+        string outputFileName;
         CodeConfiguration? config;
         try
         {
-            // The JSON has $type discriminator, so we need to handle it
             var doc = JsonDocument.Parse(json);
             var code = doc.RootElement.GetProperty("code").GetString();
-            var displayName = doc.RootElement.TryGetProperty("displayName", out var dn) ? dn.GetString() : null;
 
             if (string.IsNullOrEmpty(code))
             {
@@ -142,19 +141,13 @@ public partial class MigrationUtility
                 return result;
             }
 
-            // Extract the primary type name for the filename
-            var typeName = ExtractPrimaryTypeName(code);
-            if (string.IsNullOrEmpty(typeName))
-            {
-                // Fall back to original filename without extension
-                typeName = Path.GetFileNameWithoutExtension(jsonFile);
-            }
+            var typeName = ExtractPrimaryTypeName(code)
+                ?? Path.GetFileNameWithoutExtension(jsonFile);
 
+            outputFileName = typeName + ".cs";
             config = new CodeConfiguration
             {
-                Id = typeName,
                 Code = code,
-                DisplayName = displayName,
                 Language = "csharp"
             };
         }
@@ -165,9 +158,7 @@ public partial class MigrationUtility
             return result;
         }
 
-        // Determine output file name
         var directory = Path.GetDirectoryName(jsonFile)!;
-        var outputFileName = config.Id + ".cs";
         var outputPath = Path.Combine(directory, outputFileName);
 
         result.TargetFile = outputPath;

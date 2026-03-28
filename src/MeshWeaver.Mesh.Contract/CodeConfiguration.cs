@@ -1,20 +1,12 @@
-using System.ComponentModel.DataAnnotations;
-
 namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Represents a code configuration with C# source code for dynamic compilation.
-/// Stored in the Code sub-partition of NodeType hubs.
-/// Registered with collection name "Code" in the workspace.
+/// Stored as MeshNode.Content in the _Source sub-partition of NodeType hubs.
+/// Identity (Id) and display name (Name) live on the parent MeshNode.
 /// </summary>
 public record CodeConfiguration
 {
-    /// <summary>
-    /// Unique identifier for this code file.
-    /// </summary>
-    [Key]
-    public string Id { get; init; } = Guid.NewGuid().ToString("N");
-
     /// <summary>
     /// The C# source code content.
     /// </summary>
@@ -25,9 +17,4 @@ public record CodeConfiguration
     /// Defaults to "csharp".
     /// </summary>
     public string Language { get; init; } = "csharp";
-
-    /// <summary>
-    /// Optional display name for the file in UI.
-    /// </summary>
-    public string? DisplayName { get; init; }
 }

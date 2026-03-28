@@ -34,15 +34,10 @@ public partial class CSharpFileParser : IFileFormatParser
         var metadata = ExtractMetadata(content);
         var codeWithoutMetadata = RemoveMetadataBlock(content);
 
-        // Extract primary type name if Id not specified
-        var id = metadata.GetValueOrDefault("Id") ?? ExtractPrimaryTypeName(content) ?? Path.GetFileNameWithoutExtension(filePath);
-
         var config = new CodeConfiguration
         {
-            Id = id,
             Code = codeWithoutMetadata.Trim(),
-            Language = "csharp",
-            DisplayName = metadata.GetValueOrDefault("DisplayName")
+            Language = "csharp"
         };
 
         return Task.FromResult<CodeConfiguration?>(config);
@@ -59,19 +54,20 @@ public partial class CSharpFileParser : IFileFormatParser
 
         var codeConfig = new CodeConfiguration
         {
-            Id = metadata.GetValueOrDefault("Id") ?? ExtractPrimaryTypeName(content) ?? id,
             Code = codeWithoutMetadata.Trim(),
-            Language = "csharp",
-            DisplayName = metadata.GetValueOrDefault("DisplayName")
+            Language = "csharp"
         };
+
+        var displayName = metadata.GetValueOrDefault("DisplayName");
+        var nodeId = metadata.GetValueOrDefault("Id") ?? ExtractPrimaryTypeName(content) ?? id;
 
         var fileInfo = new FileInfo(filePath);
         var lastModified = new DateTimeOffset(fileInfo.LastWriteTimeUtc, TimeSpan.Zero);
 
-        var node = new MeshNode(id, ns)
+        var node = new MeshNode(nodeId, ns)
         {
             NodeType = "Code",
-            Name = codeConfig.DisplayName ?? codeConfig.Id,
+            Name = displayName ?? nodeId,
             LastModified = lastModified,
             Content = codeConfig
         };
@@ -95,18 +91,7 @@ public partial class CSharpFileParser : IFileFormatParser
         var sb = new StringBuilder();
 
         // Write metadata block if there's meaningful metadata
-        var hasMetadata = !string.IsNullOrEmpty(config.DisplayName);
-
-        if (hasMetadata)
-        {
-            sb.AppendLine("// <meshweaver>");
-            if (!string.IsNullOrEmpty(config.Id))
-                sb.AppendLine($"// Id: {config.Id}");
-            if (!string.IsNullOrEmpty(config.DisplayName))
-                sb.AppendLine($"// DisplayName: {config.DisplayName}");
-            sb.AppendLine("// </meshweaver>");
-            sb.AppendLine();
-        }
+        // No metadata block needed — Id and DisplayName come from the MeshNode wrapper
 
         // Append the code
         if (!string.IsNullOrEmpty(config.Code))
@@ -148,7 +133,7 @@ public partial class CSharpFileParser : IFileFormatParser
         return result.TrimStart('\r', '\n');
     }
 
-    private static string? ExtractPrimaryTypeName(string content)
+    internal static string? ExtractPrimaryTypeName(string content)
     {
         var match = TypeNameRegex().Match(content);
         return match.Success ? match.Groups[1].Value : null;

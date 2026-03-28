@@ -82,7 +82,6 @@ public class CompilationErrorTest(ITestOutputHelper output) : MonolithMeshTestBa
             Name = "Broken Code",
             Content = new CodeConfiguration
             {
-                Id = "BrokenCode",
                 Code = @"
 public record BrokenType
 {

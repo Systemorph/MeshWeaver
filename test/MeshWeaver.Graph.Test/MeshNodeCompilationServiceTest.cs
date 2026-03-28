@@ -110,10 +110,10 @@ public class MeshNodeCompilationServiceTest : IDisposable
         if (codeFile != null)
         {
             // Code is stored as a child MeshNode under the Code path
-            var codeNode = new MeshNode(codeFile.Id ?? "code", $"type/{nodeType}/_Source")
+            var codeNode = new MeshNode("code", $"type/{nodeType}/_Source")
             {
                 NodeType = "Code",
-                Name = codeFile.DisplayName ?? codeFile.Id ?? "Code",
+                Name = "Code",
                 Content = codeFile
             };
             await persistence.SaveNodeAsync(codeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
@@ -469,15 +469,13 @@ public record RecordType
             Name = "Organization Data Model",
             Content = new CodeConfiguration
             {
-                Id = "Organization",
                 Code = @"
 public record Organization
 {
     [System.ComponentModel.DataAnnotations.Key]
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
-}",
-                DisplayName = "Organization Data Model"
+}"
             }
         };
         await persistence.SaveNodeAsync(codeNode, SetupJsonOptions, TestContext.Current.CancellationToken);
@@ -515,7 +513,6 @@ public record Organization
             Name = "Project Data Model",
             Content = new CodeConfiguration
             {
-                Id = "ProjectDataModel",
                 Code = @"
 public record Project
 {
@@ -535,7 +532,6 @@ public record Project
             Name = "Project Status Enum",
             Content = new CodeConfiguration
             {
-                Id = "ProjectStatus",
                 Code = @"
 public enum ProjectStatus
 {
@@ -576,7 +572,6 @@ public enum ProjectStatus
         };
         await SetupNodeType(persistence, "Task", definition, new CodeConfiguration
         {
-            Id = "TaskItem",
             Code = @"
 public record TaskItem
 {
@@ -638,7 +633,6 @@ public record TaskItem
         };
         await SetupNodeType(persistence, "Contact", definition, new CodeConfiguration
         {
-            Id = "Contact",
             Code = @"
 public record Contact
 {

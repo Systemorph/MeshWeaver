@@ -1,314 +1,256 @@
 ---
 Name: Business Rules & Calculations
 Category: Architecture
-Description: Implementing domain logic with data import, business rules, and interactive chart layout areas
-Icon: Calculator
+Description: Implementing domain logic with data import, cession calculations, and interactive chart layout areas
+Icon: /static/DocContent/Architecture/BusinessRules/icon.svg
 ---
 
-MeshWeaver supports building domain-specific business logic with data import from CSV/Excel, calculation engines, and interactive chart layout areas. This guide walks through a reinsurance cession example — the same pattern applies to any domain.
+MeshWeaver supports building domain-specific business logic with data import, calculation engines, and interactive chart layout areas. This guide walks through a **reinsurance cession example** — the same pattern applies to any domain.
+
+The complete example is the @Cession node type with source files, sample data, and a layout area with charts:
+
+@@Cession/MotorXL
+
+For the full production implementation, see the MeshWeaver.Reinsurance repository.
 
 # Overview
 
 The pattern has three layers:
 
-1. **Data Model** — define domain types and import data (CSV, Excel, API)
-2. **Business Rules** — pure C# logic operating on the data model
-3. **Layout Areas** — reactive UI with charts, filters, and data grids
+1. **Domain Model** — immutable records for cashflows, contracts, and results
+2. **Business Rules** — pure C# operations (cession into layer, proportional split)
+3. **Layout Areas** — reactive charts with filters bound to the calculation output
 
-# Example: Reinsurance Claims Cession
+# Example: Reinsurance Excess-of-Loss Cession
 
-## 1. Data Model
+## 1. Domain Model
 
-Define your domain types as simple records:
+Cashflows are simple records with an amount. A reinsurance layer defines the attachment point and limit:
 
 ```csharp
-// Claims data — imported from CSV
-public record Claim(
-    string ClaimId,
-    string LineOfBusiness,
-    double GrossAmount,
-    double PaidAmount
-);
+/// <summary>
+/// A single claim cashflow with gross amount.
+/// </summary>
+public record Cashflow(string ClaimId, string LineOfBusiness, double GrossAmount);
 
-// Reinsurance contract structure
-public record ReinsuranceSection(
+/// <summary>
+/// Excess-of-Loss layer: cedes the portion of each claim between
+/// AttachmentPoint and AttachmentPoint + Limit.
+/// </summary>
+public record ExcessOfLossLayer(
     string Id,
     string Name,
-    string CoverType,        // "Proportional" or "ExcessOfLoss"
-    double Cession,           // e.g., 0.7 for 70% quota share
-    double AttachmentPoint,   // XL: deductible per claim
-    double Limit,             // XL: max recovery per claim
-    double? AggregateLimit    // Optional annual aggregate limit
+    double AttachmentPoint,
+    double Limit
 );
 
-// Cession result per claim
-public record CededClaim(
+/// <summary>
+/// Result of applying a layer to a cashflow.
+/// </summary>
+public record CededCashflow(
     string ClaimId,
-    string SectionId,
+    string LayerId,
     double GrossAmount,
     double CededAmount,
     double RetainedAmount
 );
 ```
 
-## 2. Import Data with AddData
+## 2. Business Rules — Cession into Layer
 
-Register your data types and import from CSV in the hub configuration:
-
-```csharp
-public static MessageHubConfiguration AddReinsuranceHub(
-    this MessageHubConfiguration config)
-{
-    return config
-        .AddData(data => data
-            .FromCsv<Claim>("claims.csv")          // Load claims from CSV
-            .FromCsv<ReinsuranceSection>("sections.csv")
-        )
-        .WithHandler<ComputeCessionRequest>(HandleComputeCession);
-}
-```
-
-CSV files are placed in the node's content collection and parsed automatically. The data is available via `workspace.GetStream<Claim>()`.
-
-## 3. Business Rules — Cession Calculation
-
-Business rules are pure C# — no framework dependencies. This is the core domain logic:
+The core operation is a pure function. No framework dependencies:
 
 ```csharp
 public static class CessionEngine
 {
     /// <summary>
-    /// Calculates ceded amounts for all claims under a reinsurance section.
-    /// Supports proportional (quota share) and non-proportional (excess of loss) covers.
+    /// Applies an Excess-of-Loss layer to a set of cashflows.
+    /// Formula per claim: Ceded = min(Limit, max(0, Gross - AttachmentPoint))
     /// </summary>
-    public static IReadOnlyList<CededClaim> ComputeCession(
-        IReadOnlyList<Claim> claims,
-        ReinsuranceSection section)
+    public static IReadOnlyList<CededCashflow> CedeIntoLayer(
+        IEnumerable<Cashflow> cashflows,
+        ExcessOfLossLayer layer)
     {
-        return claims.Select(claim =>
+        return cashflows.Select(cf =>
         {
-            var ceded = section.CoverType switch
-            {
-                "Proportional" => ComputeProportionalCession(claim, section),
-                "ExcessOfLoss" => ComputeExcessOfLossCession(claim, section),
-                _ => 0.0
-            };
-
-            return new CededClaim(
-                claim.ClaimId,
-                section.Id,
-                claim.GrossAmount,
-                CededAmount: ceded,
-                RetainedAmount: claim.GrossAmount - ceded
-            );
+            var ceded = Math.Min(layer.Limit,
+                                 Math.Max(0, cf.GrossAmount - layer.AttachmentPoint));
+            return new CededCashflow(
+                cf.ClaimId, layer.Id,
+                cf.GrossAmount, ceded,
+                cf.GrossAmount - ceded);
         }).ToList();
     }
 
     /// <summary>
-    /// Proportional (Quota Share): cede a fixed percentage of each claim.
-    /// If a claims limit is set, cap the ceded amount.
+    /// Computes summary statistics for a set of ceded cashflows.
     /// </summary>
-    private static double ComputeProportionalCession(
-        Claim claim, ReinsuranceSection section)
+    public static CessionSummary Summarize(IReadOnlyList<CededCashflow> results)
     {
-        var ceded = claim.GrossAmount * section.Cession;
-        if (section.Limit > 0)
-            ceded = Math.Min(ceded, section.Limit);
-        return ceded;
-    }
-
-    /// <summary>
-    /// Non-Proportional (Excess of Loss): cede the amount above the attachment point,
-    /// up to the layer limit. Formula: min(Limit, max(0, Gross - AttachmentPoint))
-    /// </summary>
-    private static double ComputeExcessOfLossCession(
-        Claim claim, ReinsuranceSection section)
-    {
-        return Math.Min(
-            section.Limit,
-            Math.Max(0, claim.GrossAmount - section.AttachmentPoint)
+        var totalGross = results.Sum(r => r.GrossAmount);
+        var totalCeded = results.Sum(r => r.CededAmount);
+        return new CessionSummary(
+            ClaimCount: results.Count,
+            TotalGross: totalGross,
+            TotalCeded: totalCeded,
+            TotalRetained: totalGross - totalCeded,
+            CessionRatio: totalGross > 0 ? totalCeded / totalGross : 0
         );
     }
-
-    /// <summary>
-    /// Apply an annual aggregate limit: cap total ceded across all claims.
-    /// </summary>
-    public static IReadOnlyList<CededClaim> ApplyAggregateLimit(
-        IReadOnlyList<CededClaim> cededClaims, double aggregateLimit)
-    {
-        var running = 0.0;
-        return cededClaims.Select(c =>
-        {
-            var available = Math.Max(0, aggregateLimit - running);
-            var capped = Math.Min(c.CededAmount, available);
-            running += capped;
-            return c with
-            {
-                CededAmount = capped,
-                RetainedAmount = c.GrossAmount - capped
-            };
-        }).ToList();
-    }
 }
+
+public record CessionSummary(
+    int ClaimCount,
+    double TotalGross,
+    double TotalCeded,
+    double TotalRetained,
+    double CessionRatio
+);
 ```
 
-For a production implementation with time series and data cubes, see [CededCashflows.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs).
+## 3. Layout Area — Ceded Distribution Chart
 
-## 4. Layout Area — Interactive Charts
-
-Layout areas render reactive UI with charts and filters. This example shows a PDF/CDF distribution chart with dropdown filters:
+Layout areas are reactive: they subscribe to workspace data and re-render when filters change.
 
 ```csharp
-public static class CessionLayoutArea
+using MeshWeaver.Charting;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+
+public static class CessionResultsArea
 {
-    /// <summary>
-    /// Registers the cession results layout area on the hub.
-    /// </summary>
     public static LayoutDefinition AddCessionResults(this LayoutDefinition layout)
         => layout.WithView(nameof(CessionResults), CessionResults);
 
-    /// <summary>
-    /// Reactive layout area: loads claims + sections from workspace,
-    /// computes cession, and renders charts with filters.
-    /// </summary>
     public static IObservable<UiControl> CessionResults(
         LayoutAreaHost host, RenderingContext ctx)
     {
-        // Get reactive data streams — UI updates automatically when data changes
-        var claimsStream = host.Workspace.GetStream<Claim>();
-        var sectionsStream = host.Workspace.GetStream<ReinsuranceSection>();
+        return host.Workspace.GetStream<Cashflow>()
+            .CombineLatest(
+                host.Workspace.GetStream<ExcessOfLossLayer>(),
+                (cashflows, layers) =>
+                {
+                    var layer = layers?.FirstOrDefault();
+                    if (cashflows == null || layer == null)
+                        return Controls.Markdown("Loading...");
 
-        return claimsStream.CombineLatest(sectionsStream, (claims, sections) =>
-        {
-            if (claims == null || sections == null)
-                return Controls.Markdown("Loading data...");
-
-            return BuildDashboard(host, claims.ToList(), sections.ToList());
-        });
+                    var results = CessionEngine.CedeIntoLayer(cashflows, layer);
+                    var summary = CessionEngine.Summarize(results);
+                    return BuildView(host, results, summary, layer);
+                });
     }
 
-    private static UiControl BuildDashboard(
+    private static UiControl BuildView(
         LayoutAreaHost host,
-        List<Claim> claims,
-        List<ReinsuranceSection> sections)
+        IReadOnlyList<CededCashflow> results,
+        CessionSummary summary,
+        ExcessOfLossLayer layer)
     {
-        // Compute cession for each section
-        var allResults = sections
-            .SelectMany(s => CessionEngine.ComputeCession(claims, s))
-            .ToList();
+        // Summary statistics card
+        var stats = Controls.Markdown(
+            $"**Layer:** {layer.Name} (xs {layer.AttachmentPoint:N0} / {layer.Limit:N0})  \n" +
+            $"**Claims:** {summary.ClaimCount} | " +
+            $"**Gross:** {summary.TotalGross:N0} | " +
+            $"**Ceded:** {summary.TotalCeded:N0} | " +
+            $"**Retained:** {summary.TotalRetained:N0} | " +
+            $"**Ratio:** {summary.CessionRatio:P1}");
 
-        // Setup filter model with section dropdown
-        var sectionOptions = sections
-            .Select(s => new Option<string>(s.Id, s.Name))
-            .ToList();
-        host.UpdateData("SectionOptions", sectionOptions);
+        // Histogram of ceded amounts
+        var ceded = results.Select(r => r.CededAmount).OrderBy(x => x).ToArray();
+        var nonZero = ceded.Where(x => x > 0).ToArray();
 
-        var filterModel = new CessionFilterModel
-        {
-            SectionId = sections.FirstOrDefault()?.Id
-        };
-        host.UpdateData("CessionFilter", filterModel);
+        if (nonZero.Length == 0)
+            return Controls.Stack
+                .WithView(stats)
+                .WithView(Controls.Markdown("No claims penetrate this layer."));
 
-        // Build UI: title + filter toolbar + reactive chart
-        return Controls.Stack
-            .WithView(Controls.Title("Cession Analysis", 3))
-            .WithView(host.Toolbar(filterModel, "CessionFilter"))
-            .WithView(host.GetDataStream<CessionFilterModel>("CessionFilter")
-                .Select(filter => BuildChart(allResults, filter, sections)));
-    }
-
-    private static UiControl BuildChart(
-        List<CededClaim> results,
-        CessionFilterModel filter,
-        List<ReinsuranceSection> sections)
-    {
-        var filtered = results
-            .Where(r => r.SectionId == filter.SectionId)
-            .OrderBy(r => r.CededAmount)
-            .ToList();
-
-        if (!filtered.Any())
-            return Controls.Markdown("No results for selected section.");
-
-        var section = sections.First(s => s.Id == filter.SectionId);
-
-        // Build histogram of ceded amounts
-        var values = filtered.Select(r => r.CededAmount).ToArray();
-        var nBins = 50;
-        var min = values.Min();
-        var max = values.Max();
+        var nBins = Math.Min(50, nonZero.Length);
+        var min = nonZero.Min();
+        var max = nonZero.Max();
         var binWidth = (max - min) / nBins;
         var histogram = new double[nBins];
-
-        foreach (var v in values)
+        foreach (var v in nonZero)
         {
             var bin = Math.Min((int)((v - min) / binWidth), nBins - 1);
-            histogram[bin] += 1.0 / values.Length;
+            histogram[bin]++;
         }
-
         var labels = Enumerable.Range(0, nBins)
             .Select(i => (min + (i + 0.5) * binWidth).ToString("N0"));
 
-        // Summary statistics
-        var stats = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithView(Controls.Markdown(
-                $"**Total Claims:** {filtered.Count}  \n" +
-                $"**Total Gross:** {filtered.Sum(r => r.GrossAmount):N0}  \n" +
-                $"**Total Ceded:** {filtered.Sum(r => r.CededAmount):N0}  \n" +
-                $"**Cession Ratio:** {filtered.Sum(r => r.CededAmount) / filtered.Sum(r => r.GrossAmount):P1}"));
-
-        // Chart
         var chart = Chart.Create(DataSet.Bar(histogram))
             .WithLabels(labels)
-            .WithTitle($"Ceded Distribution — {section.Name}")
+            .WithTitle($"Ceded Distribution — {layer.Name}")
             .ToControl()
             .WithStyle("width: 100%; height: 400px;");
 
         return Controls.Stack
+            .WithView(Controls.Title("Cession Results", 3))
             .WithView(stats)
             .WithView(chart);
-    }
-
-    /// <summary>
-    /// Filter model bound to the toolbar dropdowns.
-    /// </summary>
-    public record CessionFilterModel
-    {
-        [Dimension<string>(Options = "SectionOptions")]
-        public string SectionId { get; init; }
     }
 }
 ```
 
-For a production implementation with CDF/PDF toggle, multi-dimensional filters, and tree-based structure navigation, see [DistributionLayoutArea.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance.Pricing/LayoutAreas/DistributionLayoutArea.cs).
+## 4. Wire It Together
 
-## 5. Wire It All Together
-
-Register everything in the hub configuration:
+Register domain types, data, and layout in the hub configuration:
 
 ```csharp
-public static MessageHubConfiguration AddReinsuranceHub(
+public static MessageHubConfiguration AddReinsuranceExample(
     this MessageHubConfiguration config)
 {
     return config
         .AddData(data => data
-            .FromCsv<Claim>("claims.csv")
-            .FromCsv<ReinsuranceSection>("sections.csv")
-        )
+            .AddSource(source => source
+                .WithType<Cashflow>(t => t.WithInitialData(SampleData.Claims))
+                .WithType<ExcessOfLossLayer>(t => t.WithInitialData([SampleData.Layer]))
+            ))
         .AddLayout(layout => layout
+            .WithDefaultArea(nameof(CessionResultsArea.CessionResults))
             .AddCessionResults()
         );
 }
 ```
 
+## 5. Sample Data
+
+```csharp
+public static class SampleData
+{
+    public static readonly ExcessOfLossLayer Layer = new(
+        Id: "XL1",
+        Name: "Motor XL 500k xs 200k",
+        AttachmentPoint: 200_000,
+        Limit: 500_000
+    );
+
+    public static readonly Cashflow[] Claims =
+    [
+        new("C001", "Motor", 150_000),   // Below attachment — fully retained
+        new("C002", "Motor", 350_000),   // Partially ceded: 150k ceded
+        new("C003", "Motor", 800_000),   // Hits limit: 500k ceded
+        new("C004", "Motor", 50_000),    // Below attachment
+        new("C005", "Motor", 1_200_000), // Hits limit: 500k ceded
+        new("C006", "Motor", 250_000),   // Partially ceded: 50k
+        new("C007", "Motor", 400_000),   // Partially ceded: 200k
+        new("C008", "Motor", 180_000),   // Below attachment
+        new("C009", "Motor", 700_000),   // Hits limit: 500k ceded
+        new("C010", "Motor", 300_000),   // Partially ceded: 100k
+    ];
+}
+```
+
 # Key Patterns
 
-| Pattern | Description |
+| Pattern | When to Use |
 |---------|-------------|
-| **Data Import** | `.AddData(data => data.FromCsv<T>("file.csv"))` loads typed data from content collections |
-| **Reactive Streams** | `host.Workspace.GetStream<T>()` returns `IObservable` — UI updates automatically |
-| **Pure Business Logic** | Calculation engines are plain C# with no framework coupling |
-| **Filter Toolbar** | `host.Toolbar(model, dataId)` + `host.GetDataStream<T>(dataId)` for reactive filtering |
-| **Charts** | `Chart.Create(DataSet.Bar(...)).WithLabels(...).ToControl()` for histograms, scatter, line |
-| **Layout Composition** | `Controls.Stack.WithView(...)` composes UI hierarchically |
+| **Immutable Records** | All domain types — enables safe reactive pipelines |
+| **Pure Functions** | Business logic with no side effects — easy to test |
+| **`IObservable<UiControl>`** | Layout areas re-render when data changes |
+| **`Chart.Create(DataSet.Bar(...))`** | Histograms, scatter plots, line charts |
+| **`host.Workspace.GetStream<T>()`** | Subscribe to typed data collections |
+| **`.CombineLatest()`** | Merge multiple data streams for computed views |
+
+For the full production implementation with Monte Carlo simulation, time series, proportional/non-proportional covers, and aggregate layers, see:
+- `src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs` — cession calculation engine with proportional, non-proportional, and aggregate covers
+- `src/MeshWeaver.Reinsurance.Pricing/LayoutAreas/DistributionLayoutArea.cs` — PDF/CDF charts with filter toolbars

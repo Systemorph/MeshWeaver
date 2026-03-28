@@ -316,7 +316,7 @@ public static class NodeTypeLayoutAreas
                 var codeConfig = codeNode.Content as CodeConfiguration;
                 var codeHref = new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(codeNode.Path);
                 codeGroup = codeGroup.WithView(
-                    new NavLinkControl(codeNode.Name ?? codeConfig?.DisplayName ?? codeNode.Id, CustomIcons.CSharp(), codeHref)
+                    new NavLinkControl(codeNode.Name ?? codeNode.Id, CustomIcons.CSharp(), codeHref)
                 );
             }
         }

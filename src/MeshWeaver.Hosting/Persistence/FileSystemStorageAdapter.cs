@@ -573,10 +573,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
 
     private static string GetCodeConfigurationFileName(CodeConfiguration config)
     {
-        // Use Id as the filename, sanitized for file system
-        var id = config.Id;
-        if (string.IsNullOrEmpty(id))
-            id = "code";
+        // Derive filename from primary type name in code, or fall back to "code"
+        var id = CSharpFileParser.ExtractPrimaryTypeName(config.Code ?? "") ?? "code";
 
         // Remove invalid characters
         var invalidChars = Path.GetInvalidFileNameChars();

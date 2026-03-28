@@ -481,7 +481,7 @@ public class MarkdownNodeIntegrationTest(ITestOutputHelper output) : MonolithMes
 
         children.Should().NotBeEmpty("MeshWeaver should have children");
         // MeshWeaver has Documentation and Platform as direct children
-        children.Should().Contain(n => n.Path == "MeshWeaver/Documentation");
+        children.Should().Contain(n => n.Path == "MeshWeaver/Platform");
     }
 
     /// <summary>
