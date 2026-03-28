@@ -736,9 +736,8 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         var csPath = Path.Combine(_testDirectory, "Type", "Test", "_Source", "MyClass.cs");
         File.Exists(csPath).Should().BeTrue();
         var content = await File.ReadAllTextAsync(csPath);
-        content.Should().Contain("// <meshweaver>");
-        content.Should().Contain("// DisplayName: My Class");
         content.Should().Contain("public class MyClass { }");
+        content.Should().NotContain("// <meshweaver>", because: "metadata is now on the MeshNode wrapper, not in the .cs file");
     }
 
     [Fact]

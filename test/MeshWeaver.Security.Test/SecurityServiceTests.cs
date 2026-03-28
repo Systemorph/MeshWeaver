@@ -803,7 +803,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("Doc/GettingStarted", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Doc namespace has a static read-only policy");
+        permissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api, "Doc namespace allows read + comment + thread but not create/update/delete");
     }
 
     [Fact(Timeout = 20000)]
@@ -815,7 +815,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Editor", "Doc", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("Doc/AI/AgenticAI", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Doc namespace has a static read-only policy");
+        permissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api, "Doc namespace allows read + comment + thread but not create/update/delete");
     }
 
     [Fact(Timeout = 20000)]
@@ -864,6 +864,6 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
 
         // The policy is at "Doc" namespace — nodes AT "Doc" should also be capped
         var permissions = await securityService.GetEffectivePermissionsAsync("Doc", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Doc root itself should be capped to Read + Execute + Api");
+        permissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api, "Doc root itself should be capped to Read + Comment + Execute + Thread + Api");
     }
 }
