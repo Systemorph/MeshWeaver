@@ -29,17 +29,9 @@ public class MeshQuery(
         MeshQueryRequest request,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-
-        // Always delegate to providers. source:activity implies nodeType:Activity;
-        // source:accessed JOINs with UserActivity MeshNodes for last-access ordering.
-        // Providers that don't support these sources return normal results.
         var seen = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-
-        // Parse query once to extract select: projection (applied uniformly after dedup)
         var parsedQuery = new QueryParser().Parse(request.Query);
-
         var channel = Channel.CreateUnbounded<object>();
-
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<MeshQuery>();
 
         _ = FanOutProvidersAsync();
@@ -49,25 +41,20 @@ public class MeshQuery(
             {
                 try
                 {
-                    var count = 0;
                     await foreach (var item in provider.QueryAsync(request, Options, ct))
                     {
                         if (item is MeshNode node && !seen.TryAdd(node.Path, 0))
-                            continue; // deduplicate by path
+                            continue;
 
-                        count++;
                         var result = parsedQuery.Select != null && item is MeshNode
                             ? ParsedQuery.ProjectToSelect(item, parsedQuery.Select)
                             : item;
                         await channel.Writer.WriteAsync(result, ct);
                     }
-                    if (count > 0 || logger?.IsEnabled(LogLevel.Debug) == true)
-                        logger?.LogDebug("MeshQuery: {Provider} returned {Count} items for '{Query}'",
-                            provider.GetType().Name, count, request.Query);
                 }
                 catch (OperationCanceledException)
                 {
-                    logger?.LogDebug("MeshQuery: {Provider} cancelled for '{Query}'",
+                    logger?.LogTrace("MeshQuery: {Provider} cancelled for '{Query}'",
                         provider.GetType().Name, request.Query);
                 }
                 catch (Exception ex)
@@ -79,10 +66,6 @@ public class MeshQuery(
             channel.Writer.Complete();
         }
 
-        // Use CancellationToken.None — the channel completes when all producers finish.
-        // Passing `ct` here would throw OperationCanceledException immediately if the
-        // request was cancelled (e.g., user typing fast in search bar), even though
-        // partial results may already be in the channel.
         await foreach (var item in channel.Reader.ReadAllAsync(CancellationToken.None))
             yield return item;
     }
