@@ -314,7 +314,14 @@ public partial class CollaborativeMarkdownView
         if (string.IsNullOrEmpty(BoundHubAddress))
             return false;
 
-        var nodeUpdate = new MeshNode(BoundNodePath ?? "")
+        // Split path into Id + Namespace so the workspace matches the existing node by key (Id).
+        var path = BoundNodePath ?? "";
+        var lastSlash = path.LastIndexOf('/');
+        var (id, ns) = lastSlash > 0
+            ? (path[(lastSlash + 1)..], path[..lastSlash])
+            : (path, (string?)null);
+
+        var nodeUpdate = new MeshNode(id, ns)
         {
             NodeType = "Markdown",
             Content = new MarkdownContent { Content = newContent }

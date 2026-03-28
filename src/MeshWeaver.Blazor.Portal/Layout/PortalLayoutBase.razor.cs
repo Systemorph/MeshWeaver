@@ -1,9 +1,9 @@
 ﻿using MeshWeaver.AI;
-using MeshWeaver.Data;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -218,7 +218,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 {
                     await JSRuntime.InvokeVoidAsync("eval", "window.dispatchEvent(new Event('resize'))");
                 }
-                catch (Exception) when (true) { /* ignore JS errors */ }
+                catch (Exception) { /* ignore JS errors */ }
             }
         });
     }
@@ -304,7 +304,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Side panel content state
-    private string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+    private readonly string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;

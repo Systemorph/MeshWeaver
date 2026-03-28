@@ -32,10 +32,10 @@
     else
     {
         <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
-            Orientation="Orientation.Vertical" Style="min-height: 100vh; min-height: 100dvh;">
+            Orientation="Orientation.Vertical" Style="@(Top ? "min-height: 100vh; min-height: 100dvh;" : "padding: 12px 0;")">
             @if (!string.IsNullOrEmpty(ProgressMessage))
             {
-                <h3>@ProgressMessage</h3>
+                <span style="@(Top ? "font-size: 1.17em; font-weight: bold;" : "font-size: 0.85em; color: var(--neutral-foreground-hint, #666);")">@ProgressMessage</span>
             }
             @if (SpinnerType == SpinnerType.Dots)
             {

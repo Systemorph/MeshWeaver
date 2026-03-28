@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Yaml;
 using Markdig.Syntax;
@@ -70,7 +72,7 @@ public class DocumentationNodeProvider : IStaticNodeProvider
         var nodes = new List<MeshNode>();
 
         foreach (var resourceName in assembly.GetManifestResourceNames()
-                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .Where(n => n.StartsWith(prefix))
                      .Order())
         {
             using var stream = assembly.GetManifestResourceStream(resourceName);
@@ -80,7 +82,15 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             var content = reader.ReadToEnd();
 
             var relativePath = ResourceNameToPath(resourceName, prefix);
-            var node = ParseMarkdownNode(content, relativePath);
+
+            MeshNode? node;
+            if (resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                node = ParseJsonNode(content, relativePath);
+            else if (resourceName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                node = ParseCodeNode(content, relativePath);
+            else
+                node = ParseMarkdownNode(content, relativePath);
+
             if (node != null)
                 nodes.Add(node);
         }
@@ -135,6 +145,44 @@ public class DocumentationNodeProvider : IStaticNodeProvider
         };
     }
 
+    private static MeshNode? ParseJsonNode(string content, string relativePath)
+    {
+        try
+        {
+            var node = JsonSerializer.Deserialize<MeshNode>(content);
+            if (node == null) return null;
+
+            // Ensure namespace is under Doc/ root
+            var (id, ns) = DeriveIdAndNamespace(relativePath);
+            if (string.IsNullOrEmpty(node.Namespace))
+                node = node with { Namespace = ns };
+
+            return node;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static MeshNode? ParseCodeNode(string content, string relativePath)
+    {
+        var (id, ns) = DeriveIdAndNamespace(relativePath);
+
+        // Extract display name from meshweaver header comment if present
+        string? displayName = null;
+        var headerMatch = Regex.Match(content, @"//\s*DisplayName:\s*(.+)", RegexOptions.IgnoreCase);
+        if (headerMatch.Success)
+            displayName = headerMatch.Groups[1].Value.Trim();
+
+        return new MeshNode(id, ns)
+        {
+            Name = displayName ?? id,
+            NodeType = "Code",
+            Content = new CodeConfiguration { Code = content }
+        };
+    }
+
     /// <summary>
     /// Converts embedded resource name back to file path relative to Data/.
     /// E.g. "MeshWeaver.Documentation.Data.AI.AgenticAI.md" → "AI/AgenticAI.md"
@@ -154,9 +202,10 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 
     private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath)
     {
-        var pathWithoutExt = relativePath;
-        if (pathWithoutExt.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-            pathWithoutExt = pathWithoutExt[..^3];
+        // Strip any file extension (.md, .json, .cs)
+        var pathWithoutExt = Path.GetFileNameWithoutExtension(relativePath);
+        var dir = Path.GetDirectoryName(relativePath)?.Replace('\\', '/');
+        pathWithoutExt = string.IsNullOrEmpty(dir) ? pathWithoutExt : $"{dir}/{pathWithoutExt}";
 
         pathWithoutExt = pathWithoutExt.Trim('/').Replace('\\', '/');
 

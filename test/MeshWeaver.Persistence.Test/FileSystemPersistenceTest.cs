@@ -688,7 +688,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         objects.Should().HaveCount(1);
         objects[0].Should().BeOfType<CodeConfiguration>();
         var config = (CodeConfiguration)objects[0];
-        config.Id.Should().Be("Person");
         config.Code.Should().Contain("public record Person");
     }
 
@@ -717,8 +716,6 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Assert
         objects.Should().HaveCount(1);
         var config = (CodeConfiguration)objects[0];
-        config.Id.Should().Be("Organization");
-        config.DisplayName.Should().Be("Organization Data Model");
         config.Code.Should().Contain("public record Organization");
         config.Code.Should().NotContain("<meshweaver>"); // Metadata should be stripped
     }
@@ -729,9 +726,7 @@ public class FileSystemPersistenceTest(ITestOutputHelper output) : MonolithMeshT
         // Arrange
         var codeConfig = new CodeConfiguration
         {
-            Id = "MyClass",
-            Code = "public class MyClass { }",
-            DisplayName = "My Class"
+            Code = "public class MyClass { }"
         };
 
         // Act

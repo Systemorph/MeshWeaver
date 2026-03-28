@@ -61,7 +61,7 @@
     gap: 8px;
     padding-top: 8px;
     overflow: hidden;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     min-width: 0;
 }
 

@@ -4,7 +4,11 @@
 
 @if (IsLoading)
 {
-    <div class="layout-area-loading" style="padding: 8px; color: #666;">Loading @Path...</div>
+    <div class="skeleton-placeholder">
+        <div class="skeleton-line" style="width: 35%;"></div>
+        <div class="skeleton-line" style="width: 80%;"></div>
+        <div class="skeleton-line" style="width: 55%;"></div>
+    </div>
 }
 else if (ErrorMessage != null)
 {
@@ -22,6 +26,8 @@ else
 @code {
     [Parameter]
     public string? Path { get; set; }
+
+    private string ShortName => Path?.Contains('/') == true ? Path[(Path.LastIndexOf('/') + 1)..] : Path ?? "";
 
     private bool IsLoading { get; set; } = true;
     private string? ErrorMessage { get; set; }
@@ -58,7 +64,7 @@ else
                 )
                 {
                     ShowProgress = true,
-                    ProgressMessage = $"Loading {Path}..."
+                    SpinnerType = Layout.SpinnerType.Skeleton
                 };
             }
             else
