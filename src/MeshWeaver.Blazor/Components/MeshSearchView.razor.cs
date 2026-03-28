@@ -464,7 +464,14 @@ public partial class MeshSearchView : IDisposable
     private List<MeshNode> ApplySorting(List<MeshNode> nodes, SortConfig? sorting)
     {
         if (sorting == null || string.IsNullOrEmpty(sorting.SortByProperty))
+        {
+            // If the query already has a sort: directive, preserve the query order
+            // (e.g. source:accessed sort:LastModified-desc should keep access-time order).
+            var query = BuildFullQuery();
+            if (query.Contains("sort:", StringComparison.OrdinalIgnoreCase))
+                return nodes;
             return nodes.OrderBy(n => n.Order).ThenBy(n => n.Name).ToList();
+        }
 
         var sorted = sorting.Ascending
             ? nodes.OrderBy(n => GetSortValue(n, sorting.SortByProperty))

@@ -222,6 +222,22 @@ internal class RoutingPersistenceServiceCore : IStorageService
                 _basePathToPartition[def.Namespace] = storeKey;
             }
         }
+
+        // 5. Seed static nodes into their partition stores so normal lookups find them.
+        //    This avoids needing fallback code in GetNodeAsync/GetChildrenAsync.
+        var options = new JsonSerializerOptions();
+        foreach (var node in _staticNodeProviders.SelectMany(p => p.GetStaticNodes()))
+        {
+            if (string.IsNullOrEmpty(node.Path)) continue;
+            var storeKey = ResolvePartitionKey(node.Path);
+            if (storeKey != null && _stores.TryGetValue(storeKey, out var store))
+            {
+                // Only seed if not already persisted (don't overwrite user edits)
+                var existing = await store.GetNodeAsync(node.Path, options, ct);
+                if (existing == null)
+                    await store.SaveNodeAsync(node, options, ct);
+            }
+        }
     }
 
     /// <summary>

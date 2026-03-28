@@ -90,10 +90,21 @@ internal sealed class SearchHub
 
             if (string.IsNullOrEmpty(req.Input))
             {
-                await foreach (var s in meshService.AutocompleteAsync(
-                    "", "", AutocompleteMode.RelevanceFirst, req.MaxResults,
-                    req.ContextPath, context: "search", ct))
-                    await pending.Writer.WriteAsync(s, ct);
+                // Empty input: show recently accessed items ordered by last access time
+                var query = $"source:accessed scope:descendants is:main sort:LastModified-desc context:search limit:{req.MaxResults}";
+                await foreach (var obj in meshService.QueryAsync(
+                    new MeshQueryRequest { Query = query }, ct))
+                {
+                    if (obj is MeshNode n)
+                    {
+                        await pending.Writer.WriteAsync(new QuerySuggestion(
+                            n.Path ?? "",
+                            n.Name ?? n.Id ?? "",
+                            n.NodeType,
+                            0,
+                            n.Icon), ct);
+                    }
+                }
             }
             else if (req.Input.StartsWith('@'))
             {
