@@ -29,13 +29,17 @@ public static class ThreadExecution
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
             .WithHandler<CancelThreadStreamRequest>(HandleCancelStream)
-            .WithInitialization(RecoverStaleExecutingCells);
+            .WithInitialization(RecoverStaleExecutingThread);
 
     /// <summary>
     /// On hub startup, find any ThreadMessage nodes that are still marked as IsExecuting=true.
     /// These are from crashed/restarted sessions. Mark them as cancelled so the UI shows the correct state.
     /// </summary>
-    private static async Task RecoverStaleExecutingCells(IMessageHub hub, CancellationToken ct)
+    /// <summary>
+    /// On hub startup, check if this Thread was left in IsExecuting=true state (crashed/restarted).
+    /// Clear the execution state so the UI doesn't show a stale spinner.
+    /// </summary>
+    private static async Task RecoverStaleExecutingThread(IMessageHub hub, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
@@ -44,49 +48,30 @@ public static class ThreadExecution
         var threadPath = hub.Address.Path;
         try
         {
-            // Recover stale executing cells in this thread's direct children
-            await RecoverNamespaceAsync(meshService, threadPath, logger, ct);
+            var threadNode = await meshService.QueryAsync<MeshNode>($"path:{threadPath}", ct: ct)
+                .FirstOrDefaultAsync(ct);
 
-            // Also recover in sub-threads: scan message nodes for Thread children
-            await foreach (var msgNode in meshService.QueryAsync<MeshNode>(
-                $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+            if (threadNode?.Content is Thread { IsExecuting: true } thread)
             {
-                // Check sub-threads under each message
-                await foreach (var subThread in meshService.QueryAsync<MeshNode>(
-                    $"namespace:{msgNode.Path} nodeType:{ThreadNodeType.NodeType}"))
+                logger?.LogInformation("[ThreadExec] Recovery: clearing stale execution on thread {ThreadPath}", threadPath);
+
+                var recovered = threadNode with
                 {
-                    await RecoverNamespaceAsync(meshService, subThread.Path, logger, ct);
-                }
+                    Content = thread with
+                    {
+                        IsExecuting = false,
+                        ExecutionStatus = null,
+                        ActiveMessageId = null,
+                        TokensUsed = 0,
+                        ExecutionStartedAt = null
+                    }
+                };
+                await meshService.UpdateNodeAsync(recovered, ct);
             }
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "[ThreadExec] Recovery failed for {ThreadPath}", threadPath);
-        }
-    }
-
-    private static async Task RecoverNamespaceAsync(
-        IMeshService meshService, string namespacePath, ILogger? logger, CancellationToken ct)
-    {
-        await foreach (var node in meshService.QueryAsync<MeshNode>(
-            $"namespace:{namespacePath} nodeType:{ThreadMessageNodeType.NodeType}"))
-        {
-            if (node.Content is ThreadMessage { IsExecuting: true } tmsg)
-            {
-                logger?.LogInformation("[ThreadExec] Recovery: marking stale executing cell {MsgId} as crashed in {Path}",
-                    tmsg.Id, namespacePath);
-
-                var recovered = node with
-                {
-                    Content = tmsg with
-                    {
-                        IsExecuting = false,
-                        ExecutionStatus = null,
-                        Text = (tmsg.Text ?? "") + (string.IsNullOrEmpty(tmsg.Text) ? "*Interrupted — session restarted*" : "\n\n*Interrupted — session restarted*")
-                    }
-                };
-                await meshService.UpdateNodeAsync(recovered, ct);
-            }
         }
     }
 
@@ -144,8 +129,7 @@ public static class ThreadExecution
                 Timestamp = DateTime.UtcNow,
                 Type = ThreadMessageType.AgentResponse,
                 AgentName = request.AgentName,
-                ModelName = request.ModelName,
-                IsExecuting = true
+                ModelName = request.ModelName
             }
         });
 
@@ -154,7 +138,7 @@ public static class ThreadExecution
             {
                 logger?.LogInformation("HandleSubmitMessage: cells created for {ThreadPath}", threadPath);
 
-                // 2) Update Thread.Messages via workspace
+                // 2) Update Thread: add message IDs and set execution state
                 threadWorkspace.UpdateMeshNode(node =>
                 {
                     var thread = node.Content as MeshThread ?? new MeshThread();
@@ -162,7 +146,12 @@ public static class ThreadExecution
                     {
                         Content = thread with
                         {
-                            Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                            Messages = thread.Messages.AddRange([userMsgId, responseMsgId]),
+                            IsExecuting = true,
+                            ActiveMessageId = responseMsgId,
+                            ExecutionStatus = null,
+                            TokensUsed = 0,
+                            ExecutionStartedAt = DateTime.UtcNow
                         }
                     };
                 });
@@ -211,6 +200,17 @@ public static class ThreadExecution
         // Get remote stream ONCE for the response node — declared outside try for catch access
         var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(responsePath), new MeshNodeReference());
+
+        // Helper: update Thread execution state on the parent hub's workspace
+        var threadWorkspace = parentHub.GetWorkspace();
+        void UpdateThreadExecution(Func<MeshThread, MeshThread> mutate)
+        {
+            threadWorkspace.UpdateMeshNode(node =>
+            {
+                var thread = node.Content as MeshThread ?? new MeshThread();
+                return node with { Content = mutate(thread) };
+            });
+        }
 
         // Declared outside try so catch blocks can include partial results
         var toolCallLog = new List<ToolCallEntry>();
@@ -389,8 +389,6 @@ public static class ThreadExecution
                                 Type = ThreadMessageType.AgentResponse,
                                 AgentName = request.AgentName,
                                 ModelName = request.ModelName,
-                                IsExecuting = true,
-                                ExecutionStatus = status,
                                 ToolCalls = liveToolCalls
                             }
                         };
@@ -398,6 +396,8 @@ public static class ThreadExecution
                             responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                             [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
                     });
+                    // Update Thread execution status
+                    UpdateThreadExecution(t => t with { ExecutionStatus = status });
                     lastStatusUpdate = DateTimeOffset.UtcNow;
                 }
 
@@ -419,8 +419,7 @@ public static class ThreadExecution
                                     Role = "assistant",
                                     Text = text,
                                     Timestamp = DateTime.UtcNow,
-                                    Type = ThreadMessageType.AgentResponse,
-                                    IsExecuting = true
+                                    Type = ThreadMessageType.AgentResponse
                                 }
                             };
                             return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
@@ -449,8 +448,6 @@ public static class ThreadExecution
                         Type = ThreadMessageType.AgentResponse,
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
-                        IsExecuting = false,
-                        ExecutionStatus = null,
                         ToolCalls = finalToolCalls,
                         DelegationPath = firstDelegationPath
                     }
@@ -458,6 +455,12 @@ public static class ThreadExecution
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
                     responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                     [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
+
+            // Clear Thread execution state
+            UpdateThreadExecution(t => t with
+            {
+                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null
             });
         }
         catch (OperationCanceledException)
@@ -479,8 +482,6 @@ public static class ThreadExecution
                         Type = ThreadMessageType.AgentResponse,
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
-                        IsExecuting = false,
-                        ExecutionStatus = null,
                         ToolCalls = toolCallLog.ToImmutableList(),
                         DelegationPath = firstDelegationPath
                     }
@@ -488,6 +489,11 @@ public static class ThreadExecution
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
                     responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                     [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
+
+            UpdateThreadExecution(t => t with
+            {
+                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null
             });
         }
         catch (Exception ex)
@@ -509,8 +515,6 @@ public static class ThreadExecution
                         Type = ThreadMessageType.AgentResponse,
                         AgentName = request.AgentName,
                         ModelName = request.ModelName,
-                        IsExecuting = false,
-                        ExecutionStatus = null,
                         ToolCalls = toolCallLog.ToImmutableList(),
                         DelegationPath = firstDelegationPath
                     }
@@ -518,6 +522,11 @@ public static class ThreadExecution
                 return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
                     responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                     [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+            });
+
+            UpdateThreadExecution(t => t with
+            {
+                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null
             });
         }
 
@@ -568,9 +577,7 @@ public static class ThreadExecution
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
         var threadPath = hub.Address.Path;
 
-        // 1. Propagate cancellation to sub-threads first.
-        //    Sub-threads are Thread nodes nested under this thread's message nodes.
-        //    Pattern: {threadPath}/{msgId}/{subThreadId}
+        // Bottom-up cancellation: cancel sub-threads first (via request/response), then own execution.
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService != null)
         {
@@ -578,30 +585,34 @@ public static class ThreadExecution
             {
                 try
                 {
-                    // Find executing sub-thread messages (assistant responses still running)
-                    await foreach (var node in meshService.QueryAsync<MeshNode>(
-                        $"namespace:{threadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                    // Find active sub-threads via Thread.ActiveMessageId → DelegationPath
+                    var threadNode = await meshService.QueryAsync<MeshNode>($"path:{threadPath}", ct: ct)
+                        .FirstOrDefaultAsync(ct);
+                    var thread = threadNode?.Content as MeshThread;
+
+                    if (thread is { IsExecuting: true, ActiveMessageId: { } activeMsgId })
                     {
-                        if (node.Content is ThreadMessage { IsExecuting: true, DelegationPath: { Length: > 0 } delegationPath })
+                        var activeMsgPath = $"{threadPath}/{activeMsgId}";
+                        var activeMsg = await meshService.QueryAsync<MeshNode>($"path:{activeMsgPath}", ct: ct)
+                            .FirstOrDefaultAsync(ct);
+
+                        if (activeMsg?.Content is ThreadMessage { DelegationPath: { Length: > 0 } delegationPath })
                         {
                             logger?.LogInformation("[ThreadExec] Propagating cancel to sub-thread {SubThread}", delegationPath);
-                            hub.Post(new CancelThreadStreamRequest { ThreadPath = delegationPath },
+                            var cancelDelivery = hub.Post(new CancelThreadStreamRequest { ThreadPath = delegationPath },
                                 o => o.WithTarget(new Address(delegationPath)));
-                        }
-                    }
-
-                    // Also check for sub-threads that are direct children (Thread nodes under message nodes)
-                    await foreach (var msgNode in meshService.QueryAsync<MeshNode>(
-                        $"namespace:{threadPath}"))
-                    {
-                        var msgPath = msgNode.Path;
-                        await foreach (var subNode in meshService.QueryAsync<MeshNode>(
-                            $"namespace:{msgPath} nodeType:{ThreadNodeType.NodeType}"))
-                        {
-                            // Found a sub-thread — send cancel
-                            logger?.LogInformation("[ThreadExec] Propagating cancel to child thread {SubThread}", subNode.Path);
-                            hub.Post(new CancelThreadStreamRequest { ThreadPath = subNode.Path },
-                                o => o.WithTarget(new Address(subNode.Path)));
+                            if (cancelDelivery != null)
+                            {
+                                try
+                                {
+                                    await hub.RegisterCallback(cancelDelivery, (d, _) => Task.FromResult(d), ct)
+                                        .WaitAsync(TimeSpan.FromSeconds(10), ct);
+                                }
+                                catch (TimeoutException)
+                                {
+                                    logger?.LogWarning("[ThreadExec] Sub-thread cancel timed out for {SubThread}", delegationPath);
+                                }
+                            }
                         }
                     }
                 }
@@ -610,10 +621,7 @@ public static class ThreadExecution
                     logger?.LogWarning(ex, "[ThreadExec] Error propagating cancellation for {ThreadPath}", threadPath);
                 }
 
-                // 2. Small delay to let sub-thread cancellation propagate
-                await Task.Delay(100, ct);
-
-                // 3. Cancel own execution
+                // Cancel own execution (after sub-threads confirmed)
                 var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
                 if (execHub != null)
                 {
@@ -623,7 +631,6 @@ public static class ThreadExecution
             }, ex =>
             {
                 logger?.LogWarning(ex, "[ThreadExec] Error during cancel for {ThreadPath}", threadPath);
-                // Still cancel own execution even if sub-thread cancel failed
                 var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
                 execHub?.CancelCurrentExecution();
                 return Task.CompletedTask;
@@ -635,6 +642,10 @@ public static class ThreadExecution
             var execHub = hub.GetHostedHub(new Address($"{hub.Address}/_Exec"), HostedHubCreation.Never);
             execHub?.CancelCurrentExecution();
         }
+
+        // Post response so parent can await confirmation
+        hub.Post(new CancelThreadStreamResponse { ThreadPath = threadPath },
+            o => o.ResponseFor(delivery));
 
         return delivery.Processed();
     }

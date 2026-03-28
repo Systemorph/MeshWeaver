@@ -148,6 +148,14 @@
 
 .chat-progress-text {
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.chat-progress-meta {
+    white-space: nowrap;
+    font-size: 0.75rem;
+    opacity: 0.6;
 }
 
 .selector-agent, .selector-model {

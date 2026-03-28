@@ -102,6 +102,32 @@ public record Thread
     /// </summary>
     public string? PrimaryNodePath => ParentPath;
 
+    /// <summary>
+    /// Whether any execution is currently active on this thread.
+    /// Set to true when a message is submitted, false when execution completes/cancels/errors.
+    /// </summary>
+    public bool IsExecuting { get; init; }
+
+    /// <summary>
+    /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").
+    /// Updated during streaming when tool calls or delegations occur.
+    /// </summary>
+    public string? ExecutionStatus { get; init; }
+
+    /// <summary>
+    /// The ID of the response message currently being generated.
+    /// </summary>
+    public string? ActiveMessageId { get; init; }
+
+    /// <summary>
+    /// Total tokens used in the current execution (input + output).
+    /// </summary>
+    public int TokensUsed { get; init; }
+
+    /// <summary>
+    /// When the current execution started. Used to show elapsed time.
+    /// </summary>
+    public DateTime? ExecutionStartedAt { get; init; }
 }
 
 /// <summary>
@@ -181,18 +207,6 @@ public record ThreadMessage
     /// The user who created this message. Set from the delivery's AccessContext.
     /// </summary>
     public string? CreatedBy { get; init; }
-
-    /// <summary>
-    /// Whether the agent is currently executing (generating response, calling tools, etc.).
-    /// Set to true when the response node is created, false when execution completes.
-    /// </summary>
-    public bool IsExecuting { get; init; }
-
-    /// <summary>
-    /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").
-    /// Updated during streaming when tool calls or delegations occur.
-    /// </summary>
-    public string? ExecutionStatus { get; init; }
 
     /// <summary>
     /// Completed tool calls from this message's execution.

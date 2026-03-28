@@ -169,7 +169,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         var subRespContent = subRespMsg!.Content as ThreadMessage;
         subRespContent!.Role.Should().Be("assistant");
         subRespContent.Text.Should().NotBeNullOrEmpty("sub-agent should have produced a response");
-        subRespContent.IsExecuting.Should().BeFalse("execution should be complete");
+        subContent.IsExecuting.Should().BeFalse("execution should be complete");
 
         Output.WriteLine($"Sub-thread response: '{subRespContent.Text}'");
         Output.WriteLine("Full hierarchy verified: parent → message → sub-thread → sub-messages");
@@ -183,10 +183,13 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
 
     private async Task WaitForMessageCompleteAsync(IMessageHub client, string messagePath, CancellationToken ct)
     {
+        // Derive thread path from message path (parent directory)
+        var threadPath = messagePath[..messagePath.LastIndexOf('/')];
         for (var i = 0; i < 50; i++)
         {
-            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
-            if (node?.Content is ThreadMessage { IsExecuting: false, Text.Length: > 0 })
+            var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+            var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
+            if (threadNode?.Content is MeshThread { IsExecuting: false } && msgNode?.Content is ThreadMessage { Text.Length: > 0 })
                 return;
             await Task.Delay(200, ct);
         }

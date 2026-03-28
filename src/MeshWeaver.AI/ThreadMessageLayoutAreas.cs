@@ -64,28 +64,6 @@ public static class ThreadMessageLayoutAreas
             .DistinctUntilChanged()
             .Subscribe(text => host.UpdateData("text", ConvertReferencesToLinks(text))));
 
-        // Push IsExecuting flag to data section
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return msg?.IsExecuting ?? false;
-            })
-            .DistinctUntilChanged()
-            .Subscribe(isExec => host.UpdateData("isExecuting", isExec)));
-
-        // Push ExecutionStatus to data section
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return msg?.ExecutionStatus ?? "";
-            })
-            .DistinctUntilChanged()
-            .Subscribe(status => host.UpdateData("executionStatus", status)));
-
         // Push ToolCalls to data section
         host.RegisterForDisposal(nodeStream!
             .Select(nodes =>
@@ -270,33 +248,6 @@ public static class ThreadMessageLayoutAreas
                     {
                         if (msgNode.Content is ThreadMessage tmsg)
                         {
-                            // During execution: show live status/preview
-                            // After completion: collapse to just the link (no preview text)
-                            if (tmsg.IsExecuting)
-                            {
-                                string preview;
-                                if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
-                                {
-                                    preview = System.Web.HttpUtility.HtmlEncode(tmsg.ExecutionStatus);
-                                }
-                                else if (!string.IsNullOrEmpty(tmsg.Text))
-                                {
-                                    var lines = tmsg.Text.Split('\n');
-                                    var lastLines = lines.Length > 4 ? lines[^4..] : lines;
-                                    preview = System.Web.HttpUtility.HtmlEncode(
-                                        string.Join("\n", lastLines).Trim());
-                                    if (preview.Length > 300) preview = "..." + preview[^297..];
-                                }
-                                else
-                                {
-                                    preview = "Processing...";
-                                }
-
-                                sb.Append($"<div style=\"font-size: 0.72rem; color: var(--neutral-foreground-hint); " +
-                                           $"white-space: pre-wrap; padding: 2px 8px; border-left: 2px solid var(--accent-fill-rest); " +
-                                           $"margin: 2px 0 4px 12px; max-height: 80px; overflow: auto;\">{preview}</div>");
-                            }
-
                             // Recurse: check if this message has its own sub-delegations
                             if (depth < maxDepth)
                             {

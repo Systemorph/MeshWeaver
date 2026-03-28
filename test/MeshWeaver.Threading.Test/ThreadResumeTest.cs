@@ -70,10 +70,13 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     private async Task WaitForMessageCompleteAsync(string messagePath, CancellationToken ct)
     {
+        // Derive thread path from message path (parent directory)
+        var threadPath = messagePath[..messagePath.LastIndexOf('/')];
         for (var i = 0; i < 50; i++)
         {
-            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
-            if (node?.Content is ThreadMessage { IsExecuting: false, Text.Length: > 0 })
+            var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+            var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
+            if (threadNode?.Content is MeshThread { IsExecuting: false } && msgNode?.Content is ThreadMessage { Text.Length: > 0 })
                 return;
             await Task.Delay(200, ct);
         }

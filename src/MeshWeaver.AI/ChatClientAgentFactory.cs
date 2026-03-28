@@ -273,13 +273,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                     if (execCtx.UserAccessContext != null)
                                         accessService?.SetContext(execCtx.UserAccessContext);
 
-                                    // Read sub-agent's current state
+                                    // Check sub-thread's Thread content for execution state
+                                    var polledThreadNode = await meshService.QueryAsync<MeshNode>(
+                                        $"path:{subThreadPath}").FirstOrDefaultAsync(cancellationToken);
+                                    var subThread = polledThreadNode?.Content as MeshThread;
+
+                                    // Forward NEW tool calls from sub-thread assistant messages
                                     await foreach (var node in meshService.QueryAsync<MeshNode>(
                                         $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
                                     {
                                         if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
                                         {
-                                            // Forward NEW tool calls from sub-thread to parent
                                             if (tmsg.ToolCalls.Count > forwardedToolCallCount)
                                             {
                                                 for (var i = forwardedToolCallCount; i < tmsg.ToolCalls.Count; i++)
@@ -293,30 +297,17 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                                 }
                                                 forwardedToolCallCount = tmsg.ToolCalls.Count;
                                             }
-
-                                            if (!tmsg.IsExecuting)
-                                            {
-                                                completed = true;
-                                                break;
-                                            }
-
-                                            // Forward sub-agent's live status to parent bubble
-                                            if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
-                                            {
-                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {tmsg.ExecutionStatus}");
-                                            }
-                                            else if (!string.IsNullOrEmpty(tmsg.Text))
-                                            {
-                                                var preview = tmsg.Text.Length > 100
-                                                    ? "..." + tmsg.Text[^100..]
-                                                    : tmsg.Text;
-                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {preview}");
-                                            }
-                                            else
-                                            {
-                                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
-                                            }
                                         }
+                                    }
+
+                                    // Check completion via Thread.IsExecuting
+                                    if (subThread is { IsExecuting: false })
+                                    {
+                                        completed = true;
+                                    }
+                                    else
+                                    {
+                                        chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
                                     }
                                 }
                             }

@@ -140,7 +140,11 @@ public static class ThreadLayoutAreas
                 Messages = threadContent?.Messages ?? [],
                 ThreadPath = hubPath,
                 InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName
+                InitialContextDisplayName = contextDisplayName,
+                IsExecuting = threadContent?.IsExecuting ?? false,
+                ExecutionStatus = threadContent?.ExecutionStatus,
+                TokensUsed = threadContent?.TokensUsed ?? 0,
+                ExecutionStartedAt = threadContent?.ExecutionStartedAt
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
@@ -213,7 +217,11 @@ public static class ThreadLayoutAreas
                 Messages = threadContent?.Messages ?? [],
                 ThreadPath = hubPath,
                 InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName
+                InitialContextDisplayName = contextDisplayName,
+                IsExecuting = threadContent?.IsExecuting ?? false,
+                ExecutionStatus = threadContent?.ExecutionStatus,
+                TokensUsed = threadContent?.TokensUsed ?? 0,
+                ExecutionStartedAt = threadContent?.ExecutionStartedAt
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
