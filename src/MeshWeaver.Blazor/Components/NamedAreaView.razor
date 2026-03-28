@@ -24,6 +24,10 @@
     @if (SpinnerType == SpinnerType.Skeleton)
     {
         <div class="skeleton-placeholder">
+            @if (!string.IsNullOrEmpty(ProgressMessage))
+            {
+                <span style="font-size: 0.75rem; opacity: 0.45; letter-spacing: 0.02em;">@ProgressMessage</span>
+            }
             <div class="skeleton-line" style="width: 35%;"></div>
             <div class="skeleton-line" style="width: 80%;"></div>
             <div class="skeleton-line" style="width: 55%;"></div>
