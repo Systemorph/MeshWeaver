@@ -19,6 +19,8 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown;
+using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -414,5 +416,134 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Cleanup
         await NodeFactory.DeleteNodeAsync(created.Path!, ct: TestTimeout);
         Output.WriteLine("Cleanup done");
+    }
+
+    /// <summary>
+    /// Tests the CreateCommentRequest handler end-to-end:
+    ///   1. Send CreateCommentRequest to a markdown node's hub address
+    ///   2. Handler inserts comment markers into the markdown content
+    ///   3. Handler creates a Comment MeshNode in _Comment partition
+    ///   4. Verify both the updated content and the Comment node
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateCommentRequest_ShouldInsertMarkersAndCreateNode()
+    {
+        var client = GetClient();
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var docAddress = new Address(docPath);
+
+        // Initialize the document hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(docAddress),
+            TestTimeout);
+
+        // Send CreateCommentRequest with selected text from the document
+        var request = new CreateCommentRequest
+        {
+            DocumentId = docPath,
+            SelectedText = "satellite entities",
+            CommentText = "This is a test comment via CreateCommentRequest",
+            Author = "TestAuthor"
+        };
+
+        var response = await client.AwaitResponse(
+            request,
+            o => o.WithTarget(docAddress),
+            TestTimeout);
+
+        var commentResponse = response.Message;
+        commentResponse.Should().BeOfType<CreateCommentResponse>();
+        var typed = (CreateCommentResponse)commentResponse;
+        typed.Success.Should().BeTrue("CreateCommentRequest should succeed");
+        typed.MarkerId.Should().NotBeNullOrEmpty("Response should contain a MarkerId");
+        Output.WriteLine($"CreateCommentResponse: Success={typed.Success}, MarkerId={typed.MarkerId}");
+
+        // Wait for async propagation of UpdateNodeRequest and CreateNodeRequest
+        await Task.Delay(2000);
+
+        // Verify: Comment MeshNode should exist at {docPath}/_Comment/{markerId}
+        var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{typed.MarkerId}";
+        var commentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
+        commentNode.Should().NotBeNull($"Comment MeshNode should exist at {commentPath}");
+        var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
+        comment.Text.Should().Be("This is a test comment via CreateCommentRequest");
+        comment.Author.Should().Be("TestAuthor");
+        comment.MarkerId.Should().Be(typed.MarkerId);
+        comment.HighlightedText.Should().Be("satellite entities");
+        Output.WriteLine($"Comment node verified: Path={commentNode.Path}, Text='{comment.Text}'");
+
+        // Verify: markdown content should now contain comment markers
+        var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}").FirstOrDefaultAsync();
+        updatedNode.Should().NotBeNull();
+        var mdContent = updatedNode!.Content.Should().BeOfType<MarkdownContent>().Subject;
+        mdContent.Content.Should().Contain($"<!--comment:{typed.MarkerId}",
+            "Comment markers should be inserted in the markdown content");
+        mdContent.Content.Should().Contain($"<!--/comment:{typed.MarkerId}-->",
+            "Closing comment marker should be present");
+        Output.WriteLine("Markdown content verified: markers inserted");
+
+        // Cleanup
+        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
+    }
+
+    /// <summary>
+    /// Tests creating a page-level comment (no text selection) via CreateCommentRequest.
+    /// The handler should create a Comment MeshNode without inserting markers.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateCommentRequest_PageLevel_ShouldCreateNodeWithoutMarkers()
+    {
+        var client = GetClient();
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var docAddress = new Address(docPath);
+
+        // Initialize the document hub
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(docAddress),
+            TestTimeout);
+
+        // Get original content for comparison
+        var originalNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}").FirstOrDefaultAsync();
+        var originalContent = ((MarkdownContent)originalNode!.Content!).Content;
+
+        // Send CreateCommentRequest with empty SelectedText (page-level comment)
+        var request = new CreateCommentRequest
+        {
+            DocumentId = docPath,
+            SelectedText = "",
+            CommentText = "A page-level comment",
+            Author = "TestAuthor"
+        };
+
+        var response = await client.AwaitResponse(
+            request,
+            o => o.WithTarget(docAddress),
+            TestTimeout);
+
+        var typed = (CreateCommentResponse)response.Message;
+        typed.Success.Should().BeTrue();
+        Output.WriteLine($"Page-level comment created: MarkerId={typed.MarkerId}");
+
+        // Wait for async propagation
+        await Task.Delay(2000);
+
+        // Verify: Comment MeshNode exists
+        var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{typed.MarkerId}";
+        var commentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
+        commentNode.Should().NotBeNull();
+        var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
+        comment.Text.Should().Be("A page-level comment");
+        comment.MarkerId.Should().BeNull("Page-level comments have no MarkerId");
+
+        // Verify: markdown content should NOT have been changed
+        var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}").FirstOrDefaultAsync();
+        var updatedContent = ((MarkdownContent)updatedNode!.Content!).Content;
+        updatedContent.Should().Be(originalContent,
+            "Page-level comments should not modify the markdown content");
+
+        // Cleanup
+        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
     }
 }
