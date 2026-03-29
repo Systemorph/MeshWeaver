@@ -201,17 +201,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     public Func<MessageHubConfiguration, MessageHubConfiguration>? GetCachedHubConfiguration(string nodeTypePath)
     {
-        var hubConfig = _hubConfigurations.GetValueOrDefault(nodeTypePath);
-        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
-
-        // Return combined config if both exist
-        // Apply defaultConfig first (sets defaults like DetailsArea),
-        // then hubConfig (node type can override, e.g., Markdown sets $Content)
-        if (hubConfig != null && defaultConfig != null)
-            return config => hubConfig(defaultConfig(config));
-
-        // Return whichever one exists, or null if neither
-        return hubConfig ?? defaultConfig;
+        // Return the raw cached config — composition with DefaultNodeHubConfiguration
+        // is done by IMeshNodeHubFactory.ResolveHubConfigurationAsync.
+        return _hubConfigurations.GetValueOrDefault(nodeTypePath);
     }
 
     internal void InvalidateCache(string nodeTypePath)
