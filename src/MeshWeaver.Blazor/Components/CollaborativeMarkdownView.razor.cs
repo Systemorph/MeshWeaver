@@ -250,10 +250,10 @@ public partial class CollaborativeMarkdownView
         // Transform annotation markers to HTML spans before markdown rendering
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        // Use the standard pipeline that includes LayoutAreaMarkdownExtension for @@ syntax.
-        // Pass BoundNodePath so relative @references resolve correctly.
+        // Render with source position data attributes (data-start/data-end)
+        // so JS can map text selections back to markdown source positions.
         var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
-        return Markdig.Markdown.ToHtml(transformed, pipeline);
+        return SourceMapHtmlRenderer.RenderWithSourceMap(transformed, pipeline);
     }
 
     // View mode
@@ -377,13 +377,19 @@ public partial class CollaborativeMarkdownView
     /// Called from JS when user selects text and clicks the "Comment" button.
     /// Shows the comment input form instead of creating immediately.
     /// </summary>
+    // Source positions from JS (data-start/data-end on DOM elements)
+    private int _pendingSelectionStart = -1;
+    private int _pendingSelectionEnd = -1;
+
     [JSInvokable]
-    public Task OnCommentFromSelection(string selectedText)
+    public Task OnCommentFromSelection(string selectedText, int selectionStart, int selectionEnd)
     {
         if (string.IsNullOrWhiteSpace(selectedText) || string.IsNullOrEmpty(RawContent))
             return Task.CompletedTask;
 
         _pendingSelectionText = selectedText;
+        _pendingSelectionStart = selectionStart;
+        _pendingSelectionEnd = selectionEnd;
         _pendingCommentText = "";
         _showCommentInput = true;
         InvokeAsync(StateHasChanged);
@@ -404,9 +410,13 @@ public partial class CollaborativeMarkdownView
 
         var selectedText = _pendingSelectionText;
         var commentText = _pendingCommentText;
+        var selStart = _pendingSelectionStart;
+        var selEnd = _pendingSelectionEnd;
         _showCommentInput = false;
         _pendingSelectionText = "";
         _pendingCommentText = "";
+        _pendingSelectionStart = -1;
+        _pendingSelectionEnd = -1;
 
         // Fire-and-forget: Post + RegisterCallback (never await — deadlocks in Orleans)
         var delivery = Hub.Post(
@@ -414,6 +424,8 @@ public partial class CollaborativeMarkdownView
             {
                 DocumentId = BoundNodePath ?? "",
                 SelectedText = selectedText,
+                SelectionStart = selStart,
+                SelectionEnd = selEnd,
                 CommentText = commentText,
                 Author = CurrentAuthor
             },

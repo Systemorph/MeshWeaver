@@ -311,8 +311,34 @@ export function enableCommentSelection(containerEl, dotNetRef) {
 
         _commentButton.style.display = 'none';
 
+        // Resolve source positions from data-start/data-end attributes
+        const range = sel.getRangeAt(0);
+        const startEl = range.startContainer.nodeType === 3
+            ? range.startContainer.parentElement.closest('[data-start]')
+            : range.startContainer.closest?.('[data-start]');
+        const endEl = range.endContainer.nodeType === 3
+            ? range.endContainer.parentElement.closest('[data-end]')
+            : range.endContainer.closest?.('[data-end]');
+
+        let selStart = -1, selEnd = -1;
+        if (startEl && endEl) {
+            const blockStart = parseInt(startEl.dataset.start);
+            const blockEnd = parseInt(endEl.dataset.end);
+            // Narrow to exact selection within the block
+            const blockText = startEl.textContent || '';
+            const innerOffset = blockText.indexOf(selectedText);
+            if (innerOffset >= 0) {
+                selStart = blockStart + innerOffset;
+                selEnd = selStart + selectedText.length;
+            } else {
+                // Selection spans multiple blocks — use block boundaries
+                selStart = blockStart + range.startOffset;
+                selEnd = blockEnd;
+            }
+        }
+
         try {
-            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText);
+            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText, selStart, selEnd);
         } catch (err) {
             console.error('Error creating comment from selection:', err);
         }
