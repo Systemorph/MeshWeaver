@@ -131,22 +131,34 @@ public static class CommentsExtensions
                         workspace.UpdateMeshNode(node =>
                         {
                             // Markdown node: inject comment markers into content
+                            // Uses MarkdownSourceMap to find the selected text even when
+                            // it spans across markdown formatting (bold, italic, headers, etc.)
                             if (hasTextSelection && node.Content is MarkdownContent mdContent
                                 && !string.IsNullOrEmpty(mdContent.Content))
                             {
                                 var rawContent = mdContent.Content;
-                                var cleanContent = MarkdownAnnotationParser.StripAllMarkers(rawContent);
-                                var idx = cleanContent.IndexOf(selectedText!, StringComparison.Ordinal);
+
+                                // Step 1: strip annotation markers to get clean markdown
+                                var cleanMarkdown = MarkdownAnnotationParser.StripAllMarkers(rawContent);
+                                // Step 2: build rendered-text → clean-markdown position map via Markdig AST
+                                var (plainText, cleanMap) = MarkdownSourceMap.BuildRenderedToSourceMap(cleanMarkdown);
+                                // Step 3: build clean-markdown → raw-content position map
+                                var annotationMap = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
+
+                                // Find selected text in the rendered plain text
+                                var idx = plainText.IndexOf(selectedText!, StringComparison.Ordinal);
                                 if (idx < 0)
-                                    idx = cleanContent.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
+                                    idx = plainText.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
                                 if (idx < 0)
                                     return node;
 
-                                var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
-                                var aStart = idx < map.Length ? map[idx] : rawContent.Length;
-                                var aEnd = (idx + selectedText!.Length) < map.Length
-                                    ? map[idx + selectedText.Length]
-                                    : rawContent.Length;
+                                // Map: rendered → clean → raw
+                                var cleanStart = idx < cleanMap.Length ? cleanMap[idx] : cleanMarkdown.Length;
+                                var cleanEnd = (idx + selectedText!.Length) < cleanMap.Length
+                                    ? cleanMap[idx + selectedText.Length]
+                                    : cleanMarkdown.Length;
+                                var aStart = cleanStart < annotationMap.Length ? annotationMap[cleanStart] : rawContent.Length;
+                                var aEnd = cleanEnd < annotationMap.Length ? annotationMap[cleanEnd] : rawContent.Length;
 
                                 var date = DateTime.Now.ToString("MMM d");
                                 var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
