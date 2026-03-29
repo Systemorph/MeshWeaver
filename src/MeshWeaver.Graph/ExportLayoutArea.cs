@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.IO.Compression;
 using System.Reactive.Linq;
-using System.Text.Json;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
@@ -20,6 +19,7 @@ namespace MeshWeaver.Graph;
 /// <summary>
 /// Layout area for exporting mesh node subtrees as ZIP archives
 /// stored in a user-selected content collection.
+/// Uses file persister formats (.md, .cs, .json) for round-trip compatibility with import.
 /// </summary>
 [Browsable(false)]
 public static class ExportLayoutArea
@@ -31,10 +31,11 @@ public static class ExportLayoutArea
     /// </summary>
     public static NodeMenuItemDefinition? GetMenuItem(string hubPath, string? nodeName, Permission perms)
     {
-        if (!perms.HasFlag(Permission.Read))
+        if (!perms.HasFlag(Permission.Export))
             return null;
         var label = string.IsNullOrEmpty(nodeName) ? "Export" : $"Export {nodeName}";
-        return new(label, MeshNodeLayoutAreas.ExportArea, Order: 26,
+        return new(label, MeshNodeLayoutAreas.ExportArea,
+            RequiredPermission: Permission.Export, Order: 26,
             Href: MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea));
     }
 
@@ -85,7 +86,7 @@ public static class ExportLayoutArea
         var content = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
 
         content = content.WithView(Controls.Html(
-            $"<p style=\"color: var(--neutral-foreground-hint);\">Export <strong>{Esc(node?.Name ?? nodePath)}</strong> and its subtree as a ZIP archive.</p>"));
+            $"<p style=\"color: var(--neutral-foreground-hint);\">Export <strong>{Esc(node?.Name ?? nodePath)}</strong> and its subtree as a ZIP archive using native file formats (.md, .cs, .json).</p>"));
 
         // Content collection combobox
         if (collections.Count == 0)
@@ -161,130 +162,53 @@ public static class ExportLayoutArea
                 return;
             }
 
-            var storageAdapter = host.Hub.ServiceProvider.GetRequiredService<IStorageAdapter>();
-            var jsonOptions = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                WriteIndented = true
-            };
+            var exportService = host.Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
 
-            // Build ZIP in memory
-            using var memoryStream = new MemoryStream();
-            using (var archive = new ZipArchive(memoryStream, ZipArchiveMode.Create, leaveOpen: true))
+            // Export to temp directory using file persister formats
+            var tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
+            try
             {
-                var nodeCount = await PackNodeTreeAsync(archive, storageAdapter, nodePath, nodePath, jsonOptions, logger);
-                logger?.LogInformation("Exported {Count} nodes from {Path}", nodeCount, nodePath);
+                var result = await exportService.ExportToDirectoryAsync(nodePath, tempDir);
+                if (!result.Success)
+                {
+                    ShowDialog(ctx, "Export Failed", result.Error!);
+                    return;
+                }
+
+                // ZIP the temp directory
+                using var memoryStream = new MemoryStream();
+                ZipFile.CreateFromDirectory(tempDir, memoryStream, CompressionLevel.Optimal, includeBaseDirectory: false);
+                memoryStream.Position = 0;
+
+                // Generate filename
+                var nodeId = node?.Id ?? nodePath.Split('/').LastOrDefault() ?? "export";
+                var fileName = $"{nodeId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
+
+                // Save to content collection
+                await collection.SaveFileAsync(exportPath, fileName, memoryStream);
+
+                logger?.LogInformation("Exported {Count} nodes from {Path} to {Collection}/{ExportPath}/{FileName}",
+                    result.NodesExported, nodePath, collectionName, exportPath, fileName);
+
+                var resultDialog = Controls.Dialog(
+                    Controls.Markdown(
+                        $"**Export Complete**\n\n" +
+                        $"Exported **{result.NodesExported}** node(s) to collection **{collectionName}** at `{exportPath}/{fileName}`."),
+                    "Export Complete"
+                ).WithSize("M").WithClosable(true);
+                ctx.Host.UpdateArea(DialogControl.DialogArea, resultDialog);
             }
-
-            memoryStream.Position = 0;
-
-            // Generate filename
-            var nodeId = node?.Id ?? nodePath.Split('/').LastOrDefault() ?? "export";
-            var fileName = $"{nodeId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
-
-            // Save to content collection
-            await collection.SaveFileAsync(exportPath, fileName, memoryStream);
-
-            var resultDialog = Controls.Dialog(
-                Controls.Markdown(
-                    $"**Export Complete**\n\n" +
-                    $"Saved to collection **{collectionName}** at `{exportPath}/{fileName}`."),
-                "Export Complete"
-            ).WithSize("M").WithClosable(true);
-            ctx.Host.UpdateArea(DialogControl.DialogArea, resultDialog);
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
         }
         catch (Exception ex)
         {
             logger?.LogError(ex, "Export failed for {Path}", nodePath);
             ShowDialog(ctx, "Export Failed", $"Export failed: {ex.Message}");
         }
-    }
-
-    /// <summary>
-    /// Recursively packs a node subtree into a ZipArchive.
-    /// Follows the same traversal pattern as StorageImporter.ImportRecursivelyAsync.
-    /// </summary>
-    private static async Task<int> PackNodeTreeAsync(
-        ZipArchive archive,
-        IStorageAdapter source,
-        string? parentPath,
-        string rootPath,
-        JsonSerializerOptions options,
-        ILogger? logger,
-        CancellationToken ct = default)
-    {
-        var nodeCount = 0;
-        var (nodePaths, directoryPaths) = await source.ListChildPathsAsync(parentPath, ct);
-
-        foreach (var nodePath in nodePaths)
-        {
-            try
-            {
-                var node = await source.ReadAsync(nodePath, options, ct);
-                if (node != null)
-                {
-                    // Calculate relative path from root
-                    var relativePath = GetRelativePath(nodePath, rootPath);
-                    var entryName = $"{relativePath}.json";
-
-                    var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
-                    await using var entryStream = entry.Open();
-                    await JsonSerializer.SerializeAsync(entryStream, node, options, ct);
-                    nodeCount++;
-
-                    // Export partition data
-                    var subPaths = await source.ListPartitionSubPathsAsync(nodePath, ct);
-                    foreach (var subPath in subPaths)
-                    {
-                        try
-                        {
-                            var objects = new List<object>();
-                            await foreach (var obj in source.GetPartitionObjectsAsync(nodePath, subPath, options, ct))
-                            {
-                                objects.Add(obj);
-                            }
-
-                            if (objects.Count > 0)
-                            {
-                                var partitionEntryName = $"{relativePath}/{subPath}.json";
-                                var partitionEntry = archive.CreateEntry(partitionEntryName, CompressionLevel.Optimal);
-                                await using var partStream = partitionEntry.Open();
-                                await JsonSerializer.SerializeAsync(partStream, objects, options, ct);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            logger?.LogWarning(ex, "Failed to export partition {Path}/{SubPath}", nodePath, subPath);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                logger?.LogWarning(ex, "Failed to export node {Path}", nodePath);
-            }
-
-            // Recurse into children
-            nodeCount += await PackNodeTreeAsync(archive, source, nodePath, rootPath, options, logger, ct);
-        }
-
-        // Recurse into directories that aren't nodes
-        foreach (var dirPath in directoryPaths)
-        {
-            nodeCount += await PackNodeTreeAsync(archive, source, dirPath, rootPath, options, logger, ct);
-        }
-
-        return nodeCount;
-    }
-
-    private static string GetRelativePath(string nodePath, string rootPath)
-    {
-        if (string.IsNullOrEmpty(rootPath) || !nodePath.StartsWith(rootPath))
-            return nodePath;
-
-        var relative = nodePath[rootPath.Length..].TrimStart('/');
-        return string.IsNullOrEmpty(relative) ? nodePath.Split('/').LastOrDefault() ?? nodePath : relative;
     }
 
     private static void ShowDialog(UiActionContext ctx, string title, string message)

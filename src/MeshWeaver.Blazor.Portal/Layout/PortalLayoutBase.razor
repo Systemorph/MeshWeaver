@@ -26,20 +26,49 @@
                     @foreach (var menuItem in GetVisibleMenuItems())
                     {
                         var item = menuItem;
-                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
-                            @if (!string.IsNullOrEmpty(item.Icon))
-                            {
-                                if (IsEmoji(item.Icon))
+                        @if (item.Children != null && item.Children.Count > 0)
+                        {
+                            <FluentMenuItem>
+                                @item.Label
+                                <FluentMenu slot="submenu">
+                                    @foreach (var child in item.Children)
+                                    {
+                                        var childItem = child;
+                                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(childItem))">
+                                            @if (!string.IsNullOrEmpty(childItem.Icon))
+                                            {
+                                                if (IsEmoji(childItem.Icon))
+                                                {
+                                                    <span style="margin-right: 8px;">@childItem.Icon</span>
+                                                }
+                                                else
+                                                {
+                                                    <img src="@childItem.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                                }
+                                            }
+                                            @childItem.Label
+                                        </FluentMenuItem>
+                                    }
+                                </FluentMenu>
+                            </FluentMenuItem>
+                        }
+                        else
+                        {
+                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                @if (!string.IsNullOrEmpty(item.Icon))
                                 {
-                                    <span style="margin-right: 8px;">@item.Icon</span>
+                                    if (IsEmoji(item.Icon))
+                                    {
+                                        <span style="margin-right: 8px;">@item.Icon</span>
+                                    }
+                                    else
+                                    {
+                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                    }
                                 }
-                                else
-                                {
-                                    <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                }
-                            }
-                            @item.Label
-                        </FluentMenuItem>
+                                @item.Label
+                            </FluentMenuItem>
+                        }
                     }
                 </FluentMenu>
                 <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"

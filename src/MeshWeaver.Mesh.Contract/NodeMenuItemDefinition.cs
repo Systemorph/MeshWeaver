@@ -20,7 +20,8 @@ public record NodeMenuItemDefinition(
     string? Icon = null,
     Permission RequiredPermission = Permission.None,
     int Order = 0,
-    string? Href = null);
+    string? Href = null,
+    IReadOnlyList<NodeMenuItemDefinition>? Children = null);
 
 /// <summary>
 /// Provider delegate that yields menu items via IAsyncEnumerable.

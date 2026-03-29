@@ -51,8 +51,8 @@ public record Role
     {
         Id = "Editor",
         DisplayName = "Editor",
-        Description = "Can read, create, update nodes, comment, and use threads",
-        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api,
+        Description = "Can read, create, update, export nodes, comment, and use threads",
+        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export,
         IsInheritable = true
     };
 

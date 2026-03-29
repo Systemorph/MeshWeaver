@@ -90,17 +90,8 @@ public static class NodeMenuItemsExtensions
         var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, nodeName, perms);
         if (edit != null) yield return edit;
 
-        var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
-        if (create != null) yield return create;
-
-        var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
-        if (import != null) yield return import;
-
         var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
         if (files != null) yield return files;
-
-        var export = ExportLayoutArea.GetMenuItem(menuPath, nodeName, perms);
-        if (export != null) yield return export;
 
         yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
 
@@ -110,8 +101,29 @@ public static class NodeMenuItemsExtensions
         var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath, perms);
         if (settings != null) yield return settings;
 
+        // Group Create, Copy, Move, Import, Export, Delete under "Actions" sub-menu
+        var actionsChildren = new List<NodeMenuItemDefinition>();
+
+        var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
+        if (create != null) actionsChildren.Add(create);
+
+        var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
+        if (copy != null) actionsChildren.Add(copy);
+
+        var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
+        if (move != null) actionsChildren.Add(move);
+
+        var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
+        if (import != null) actionsChildren.Add(import);
+
+        var export = ExportLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        if (export != null) actionsChildren.Add(export);
+
         var delete = DeleteLayoutArea.GetMenuItem(menuPath, nodeName, perms);
-        if (delete != null) yield return delete;
+        if (delete != null) actionsChildren.Add(delete);
+
+        if (actionsChildren.Count > 0)
+            yield return new NodeMenuItemDefinition("Actions", "Actions", Order: 95, Children: actionsChildren);
     }
 
     /// <summary>

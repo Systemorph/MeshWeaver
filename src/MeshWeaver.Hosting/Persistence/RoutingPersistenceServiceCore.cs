@@ -358,7 +358,7 @@ internal class RoutingPersistenceServiceCore : IStorageService
             return await store.MoveNodeAsync(sourcePath, targetPath, options, ct);
         }
 
-        // Cross-partition move
+        // Cross-partition move: move root node + all descendants
         var sourceStore = await GetOrCreateStoreAsync(sourceSegment, ct);
         var targetStore = await GetOrCreateStoreAsync(targetSegment, ct);
 
@@ -368,7 +368,36 @@ internal class RoutingPersistenceServiceCore : IStorageService
         if (await targetStore.ExistsAsync(targetPath, ct))
             throw new InvalidOperationException($"Target path already exists: {targetPath}");
 
-        // Create moved node at target
+        // Collect all descendants from source
+        var descendants = new List<MeshNode>();
+        await foreach (var desc in sourceStore.GetDescendantsAsync(sourcePath, options))
+            descendants.Add(desc);
+
+        // Move descendants first
+        foreach (var descendant in descendants)
+        {
+            var newDescPath = targetPath + descendant.Path[sourcePath.Length..];
+            var descTargetSeg = ResolvePartitionKey(newDescPath) ?? PathPartition.GetFirstSegment(newDescPath);
+            var descStore = descTargetSeg != null && !string.Equals(descTargetSeg, targetSegment, StringComparison.OrdinalIgnoreCase)
+                ? await GetOrCreateStoreAsync(descTargetSeg, ct)
+                : targetStore;
+
+            var movedDesc = MeshNode.FromPath(newDescPath) with
+            {
+                Name = descendant.Name,
+                NodeType = descendant.NodeType,
+                Icon = descendant.Icon,
+                Order = descendant.Order,
+                Content = descendant.Content,
+                AssemblyLocation = descendant.AssemblyLocation,
+                HubConfiguration = descendant.HubConfiguration,
+                GlobalServiceConfigurations = descendant.GlobalServiceConfigurations
+            };
+
+            await descStore.SaveNodeAsync(movedDesc, options, ct);
+        }
+
+        // Move root node
         var movedNode = MeshNode.FromPath(targetPath) with
         {
             Name = sourceNode.Name,
@@ -382,7 +411,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
         };
 
         await targetStore.SaveNodeAsync(movedNode, options, ct);
-        await sourceStore.DeleteNodeAsync(sourcePath, false, ct);
+
+        // Delete source tree (recursive)
+        await sourceStore.DeleteNodeAsync(sourcePath, recursive: true, ct);
 
         return movedNode;
     }
