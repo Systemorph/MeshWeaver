@@ -311,30 +311,24 @@ export function enableCommentSelection(containerEl, dotNetRef) {
 
         _commentButton.style.display = 'none';
 
-        // Resolve source positions from data-start/data-end attributes
+        // Resolve source positions from data-start/data-end on annotated elements.
+        // Walk up from selection start/end to nearest [data-start] ancestor,
+        // then compute the text offset within that element to get exact source positions.
         const range = sel.getRangeAt(0);
-        const startEl = range.startContainer.nodeType === 3
-            ? range.startContainer.parentElement.closest('[data-start]')
-            : range.startContainer.closest?.('[data-start]');
-        const endEl = range.endContainer.nodeType === 3
-            ? range.endContainer.parentElement.closest('[data-end]')
-            : range.endContainer.closest?.('[data-end]');
 
         let selStart = -1, selEnd = -1;
-        if (startEl && endEl) {
-            const blockStart = parseInt(startEl.dataset.start);
-            const blockEnd = parseInt(endEl.dataset.end);
-            // Narrow to exact selection within the block
-            const blockText = startEl.textContent || '';
-            const innerOffset = blockText.indexOf(selectedText);
-            if (innerOffset >= 0) {
-                selStart = blockStart + innerOffset;
-                selEnd = selStart + selectedText.length;
-            } else {
-                // Selection spans multiple blocks — use block boundaries
-                selStart = blockStart + range.startOffset;
-                selEnd = blockEnd;
-            }
+
+        const startAncestor = findSourceMappedAncestor(range.startContainer);
+        const endAncestor = findSourceMappedAncestor(range.endContainer);
+
+        if (startAncestor && endAncestor) {
+            // Compute character offset within the start ancestor's text
+            const startTextOffset = getTextOffsetInElement(startAncestor, range.startContainer, range.startOffset);
+            selStart = parseInt(startAncestor.dataset.start) + startTextOffset;
+
+            // Compute character offset within the end ancestor's text
+            const endTextOffset = getTextOffsetInElement(endAncestor, range.endContainer, range.endOffset);
+            selEnd = parseInt(endAncestor.dataset.start) + endTextOffset;
         }
 
         try {
@@ -397,4 +391,33 @@ function getAnnotationId(card) {
         }
     }
     return null;
+}
+
+/**
+ * Walks up the DOM tree to find the nearest ancestor with data-start/data-end.
+ * Handles both text nodes and element nodes.
+ */
+function findSourceMappedAncestor(node) {
+    if (!node) return null;
+    const el = node.nodeType === 3 ? node.parentElement : node;
+    return el?.closest?.('[data-start]') || null;
+}
+
+/**
+ * Computes the character offset within an element's textContent
+ * at the point where (container, offset) points.
+ * Uses a TreeWalker to count text characters before the given position.
+ */
+function getTextOffsetInElement(element, container, offset) {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let charCount = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+        if (node === container) {
+            return charCount + offset;
+        }
+        charCount += node.textContent.length;
+    }
+    // container not found in element — return offset from end
+    return charCount;
 }
