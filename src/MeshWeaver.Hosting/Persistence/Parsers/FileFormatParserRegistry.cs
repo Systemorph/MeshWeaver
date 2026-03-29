@@ -1,3 +1,4 @@
+using System.Text.Json;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Hosting.Persistence.Parsers;
@@ -11,7 +12,7 @@ public class FileFormatParserRegistry
     private readonly Dictionary<string, List<IFileFormatParser>> _parsersByExtension;
     private readonly List<IFileFormatParser> _parsers;
 
-    public FileFormatParserRegistry()
+    public FileFormatParserRegistry(JsonSerializerOptions? jsonOptions = null)
     {
         // Parsers are listed in priority order for each extension
         // AgentFileParser comes before MarkdownFileParser for .md files
@@ -19,7 +20,8 @@ public class FileFormatParserRegistry
         [
             new AgentFileParser(),      // High priority for .md with nodeType: Agent
             new MarkdownFileParser(),   // Fallback for other .md files
-            new CSharpFileParser()
+            new CSharpFileParser(),
+            ..( jsonOptions != null ? [new JsonFileParser(jsonOptions)] : Array.Empty<IFileFormatParser>())
         ];
 
         _parsersByExtension = new Dictionary<string, List<IFileFormatParser>>(StringComparer.OrdinalIgnoreCase);

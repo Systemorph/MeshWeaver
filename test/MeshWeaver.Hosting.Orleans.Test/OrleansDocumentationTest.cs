@@ -86,8 +86,7 @@ public class OrleansDocumentationTest(ITestOutputHelper output) : TestBase(outpu
 
         results.Should().NotBeEmpty("Search for 'business' should find Doc nodes");
 
-        var businessRules = results.FirstOrDefault(n =>
-            n.Path?.Contains("BusinessRules", StringComparison.OrdinalIgnoreCase) == true);
+        var businessRules = results.FirstOrDefault(n => n.Path == "Doc/Architecture/BusinessRules");
         businessRules.Should().NotBeNull("BusinessRules node should appear in search");
         businessRules!.Name.Should().NotBeNullOrEmpty("Name must be set");
         businessRules.Icon.Should().NotBeNullOrEmpty("Icon must be set");
