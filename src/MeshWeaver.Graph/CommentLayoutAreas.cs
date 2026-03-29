@@ -67,19 +67,18 @@ public static class CommentLayoutAreas
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
         var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
 
-        // Check permissions once (parent path for comment permissions)
+        // Permissions checked once via Observable (no await, no blocking)
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
-        var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, parentPath));
+        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, parentPath);
 
-        return nodeStream
-            .CombineLatest(permissionsStream, (nodes, perms) =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-                var canDelete = perms.HasFlag(Permission.Delete);
-                return BuildOverview(host, node, hubPath, editStateId, initialized,
-                    currentUser, canComment, canDelete);
-            });
+        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+            var canDelete = perms.HasFlag(Permission.Delete);
+            return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
+                currentUser, canComment, canDelete);
+        });
     }
 
     /// <summary>
@@ -96,10 +95,12 @@ public static class CommentLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+
+        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
+            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
             return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
         });
     }
