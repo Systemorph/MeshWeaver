@@ -100,26 +100,38 @@ public partial class CollaborativeMarkdownView
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
         CurrentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
 
-        // Subscribe to value changes reactively so we re-process content
-        // when the hub updates (e.g., after accept/reject)
-        var valuePointer = ViewModel.Value as JsonPointerReference;
-        if (Stream != null && valuePointer != null)
+        // Subscribe to workspace stream for reactive content updates.
+        // When workspace.UpdateMeshNode() injects comment markers, the stream
+        // pushes the updated node and the view re-renders with the new content.
+        if (!string.IsNullOrEmpty(BoundHubAddress))
         {
-            AddBinding(Stream
-                .DataBind<string>(valuePointer, DataContext)
-                .Subscribe(value =>
-                {
-                    if (value != null && value != RawContent)
+            var workspace = Hub.GetWorkspace();
+            var remoteStream = workspace.GetRemoteStream<MeshNode>(new Address(BoundHubAddress));
+            if (remoteStream != null)
+            {
+                AddBinding(remoteStream
+                    .Select(nodes => nodes?.FirstOrDefault(n => n.Path == BoundNodePath))
+                    .Where(n => n != null)
+                    .Select(n => MarkdownOverviewLayoutArea.GetMarkdownContent(n))
+                    .DistinctUntilChanged()
+                    .Subscribe(content =>
                     {
-                        RawContent = value;
-                        ProcessContent();
-                        InvokeAsync(StateHasChanged);
-                    }
-                }));
+                        if (content != null && content != RawContent)
+                        {
+                            RawContent = content;
+                            ProcessContent();
+                            InvokeAsync(StateHasChanged);
+                        }
+                    }));
+            }
+            else
+            {
+                // Fallback: one-time bind from ViewModel
+                DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
+            }
         }
         else
         {
-            // Fallback: one-time bind
             DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
         }
 
