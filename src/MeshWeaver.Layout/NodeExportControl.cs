@@ -16,5 +16,10 @@ namespace MeshWeaver.Layout
         /// Display name of the node being exported.
         /// </summary>
         public string? NodeName { get; init; }
+
+        /// <summary>
+        /// Satellite node types that exist under this subtree (for checkbox display).
+        /// </summary>
+        public IReadOnlyList<string>? AvailableSatelliteTypes { get; init; }
     }
 }

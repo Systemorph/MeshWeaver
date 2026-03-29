@@ -57,12 +57,17 @@ public class CollaborationPlugin(IMessageHub hub, IAgentChat chat) : IAgentPlugi
 
         var end = start + selectedText.Length;
 
+        // Use fragment-based matching: first/last few words for fuzzy position finding
+        var words = selectedText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var startFragment = string.Join(" ", words.Take(Math.Min(5, words.Length)));
+        var endFragment = string.Join(" ", words.Skip(Math.Max(0, words.Length - 5)));
+
         var request = new CreateCommentRequest
         {
             DocumentId = resolvedPath,
             SelectedText = selectedText,
-            SelectionStart = start,
-            SelectionEnd = end,
+            StartFragment = startFragment,
+            EndFragment = endFragment,
             CommentText = commentText,
             Author = chat.Context?.Path ?? "agent"
         };

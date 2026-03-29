@@ -34,6 +34,7 @@ public class MeshExportService : IMeshExportService
     public async Task<ExportResult> ExportToDirectoryAsync(
         string rootPath,
         string outputDirectory,
+        IReadOnlySet<string>? excludedNodeTypes = null,
         CancellationToken ct = default)
     {
         try
@@ -53,7 +54,12 @@ public class MeshExportService : IMeshExportService
 
             var allNodes = new List<MeshNode> { rootNode };
             await foreach (var desc in _meshService.QueryAsync<MeshNode>($"path:{rootPath} scope:descendants").WithCancellation(ct))
+            {
+                // Skip excluded satellite node types
+                if (excludedNodeTypes != null && excludedNodeTypes.Contains(desc.NodeType))
+                    continue;
                 allNodes.Add(desc);
+            }
 
             // Export each node
             foreach (var node in allNodes)

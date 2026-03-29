@@ -12,6 +12,21 @@
         with native file formats (.md, .cs, .json).
     </p>
 
+    @if (SatelliteTypes.Count > 0 && !IsExporting && !ExportDone)
+    {
+        <div style="margin-bottom: 24px;">
+            <p style="font-weight: 600; margin-bottom: 8px;">Include satellite data:</p>
+            @foreach (var satType in SatelliteTypes)
+            {
+                var st = satType;
+                <FluentCheckbox Value="@IsIncluded(st)"
+                                ValueChanged="@(v => ToggleSatellite(st, v))"
+                                Label="@st"
+                                Style="margin-bottom: 4px;" />
+            }
+        </div>
+    }
+
     @if (!IsExporting && ExportError == null && !ExportDone)
     {
         <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
@@ -58,17 +73,45 @@
 {
     private string? SourcePath;
     private string? NodeName;
+    private IReadOnlyList<string> SatelliteTypes = [];
+    private HashSet<string> ExcludedSatellites = new();
     private bool IsExporting;
     private bool ExportDone;
     private string ProgressMessage = "";
     private int NodesExported;
     private string? ExportError;
 
+    // Default excluded satellites (ephemeral/internal types)
+    private static readonly HashSet<string> DefaultExcluded = new()
+    {
+        "Thread", "ThreadMessage", "Activity", "ActivityLog", "UserActivity",
+        "Notification", "KernelSession"
+    };
+
     protected override void BindData()
     {
         base.BindData();
         SourcePath = ViewModel?.SourcePath;
         NodeName = ViewModel?.NodeName;
+        SatelliteTypes = ViewModel?.AvailableSatelliteTypes ?? [];
+
+        // By default, exclude ephemeral satellite types; include Comment, TrackedChange, Approval, AccessAssignment
+        ExcludedSatellites = new HashSet<string>();
+        foreach (var st in SatelliteTypes)
+        {
+            if (DefaultExcluded.Contains(st))
+                ExcludedSatellites.Add(st);
+        }
+    }
+
+    private bool IsIncluded(string satelliteType) => !ExcludedSatellites.Contains(satelliteType);
+
+    private void ToggleSatellite(string satelliteType, bool included)
+    {
+        if (included)
+            ExcludedSatellites.Remove(satelliteType);
+        else
+            ExcludedSatellites.Add(satelliteType);
     }
 
     private async Task ExportAndDownloadAsync()
@@ -87,7 +130,12 @@
             var exportService = Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
 
             tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
-            var result = await exportService.ExportToDirectoryAsync(SourcePath, tempDir);
+
+            IReadOnlySet<string>? excluded = ExcludedSatellites.Count > 0
+                ? ExcludedSatellites
+                : null;
+
+            var result = await exportService.ExportToDirectoryAsync(SourcePath, tempDir, excluded);
 
             if (!result.Success)
             {
