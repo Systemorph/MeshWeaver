@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -111,5 +112,29 @@ public static class PermissionHelper
     {
         var permissions = await GetEffectivePermissionsAsync(hub, parentPath);
         return permissions.HasFlag(Permission.Comment) || permissions.HasFlag(Permission.Update);
+    }
+
+    private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+    private static readonly Dictionary<string, (IObservable<Permission> Stream, DateTimeOffset Expiry)> PermissionCache = new();
+
+    /// <summary>
+    /// Returns a cached IObservable that emits the effective permissions.
+    /// Cached per (hub address + nodePath) for 5 minutes.
+    /// Use in layout areas with CombineLatest to avoid await/deadlock.
+    /// </summary>
+    public static IObservable<Permission> ObservePermissions(IMessageHub hub, string nodePath)
+    {
+        var key = $"{hub.Address}:{nodePath}";
+        lock (PermissionCache)
+        {
+            if (PermissionCache.TryGetValue(key, out var cached) && cached.Expiry > DateTimeOffset.UtcNow)
+                return cached.Stream;
+
+            var stream = Observable.FromAsync(() => GetEffectivePermissionsAsync(hub, nodePath))
+                .Replay(1)
+                .RefCount();
+            PermissionCache[key] = (stream, DateTimeOffset.UtcNow + CacheDuration);
+            return stream;
+        }
     }
 }
