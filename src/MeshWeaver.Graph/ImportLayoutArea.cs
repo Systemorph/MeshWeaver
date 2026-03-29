@@ -92,7 +92,7 @@ public static class ImportLayoutArea
                 {
                     new("meshNode", "Copy from Mesh Node"),
                     new("file", "Upload File"),
-                    new("folder", "Upload Folder (ZIP)")
+                    new("zip", "Upload ZIP")
                 },
                 nameof(String))
             {
@@ -111,7 +111,7 @@ public static class ImportLayoutArea
                     {
                         "meshNode" => BuildMeshNodeSource(host, formId, dataContext, currentPath),
                         "file" => (UiControl?)new NodeImportControl { TargetPath = ns, Mode = "file" },
-                        "folder" => (UiControl?)new NodeImportControl { TargetPath = ns, Mode = "folder" },
+                        "zip" => (UiControl?)new NodeImportControl { TargetPath = ns, Mode = "zip" },
                         _ => null
                     };
                 }));
