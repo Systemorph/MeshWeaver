@@ -1,3 +1,4 @@
+using Memex.Portal.Shared;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -55,6 +56,7 @@ public class ProjectTodoViewsTest(ITestOutputHelper output) : MonolithMeshTestBa
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
+            .AddOrganizationType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>

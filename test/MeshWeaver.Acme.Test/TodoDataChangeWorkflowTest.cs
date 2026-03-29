@@ -1,3 +1,4 @@
+using Memex.Portal.Shared;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -92,6 +93,7 @@ public class TodoDataChangeWorkflowTest(ITestOutputHelper output) : MonolithMesh
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
+            .AddOrganizationType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
