@@ -175,46 +175,10 @@ internal class RoutingPersistenceServiceCore : IStorageService
         await foreach (var (_, _) in DiscoverNewProvidersAsync(ct))
         { }
 
-        // 3. Seed static nodes into their partition stores.
-        //    If a partition already exists (e.g., PostgreSQL schema), seed into its in-memory cache
-        //    without writing to the backing store. If no partition exists, create a pure in-memory one.
-        var allStaticNodes = _staticNodeProviders.SelectMany(p => p.GetStaticNodes()).ToList();
-        var staticNamespaces = defaultPartitions
-            .Where(d => !string.IsNullOrEmpty(d.Namespace))
-            .Select(d => d.Namespace!)
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var ns in staticNamespaces)
-        {
-            InMemoryPersistenceService store;
-            if (_stores.TryGetValue(ns, out var existing) && existing is InMemoryPersistenceService existingStore)
-            {
-                store = existingStore;
-            }
-            else if (!_stores.ContainsKey(ns))
-            {
-                store = new InMemoryPersistenceService();
-                _stores[ns] = store;
-                _queryProviders[ns] = new Query.InMemoryMeshQuery(store, changeNotifier: _changeNotifier);
-            }
-            else
-            {
-                continue; // Partition exists but isn't InMemoryPersistenceService — skip
-            }
-
-            // Seed content nodes into cache (skip infrastructure: _Policy, _Access, etc.)
-            var prefix = ns + "/";
-            foreach (var node in allStaticNodes)
-            {
-                if (string.IsNullOrEmpty(node.Path)) continue;
-                if (!node.Path.Equals(ns, StringComparison.OrdinalIgnoreCase)
-                    && !node.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (node.Id.StartsWith('_'))
-                    continue;
-                store.SeedIfAbsent(node);
-            }
-        }
+        // Static nodes (from IStaticNodeProvider like DocumentationNodeProvider) are NOT seeded
+        // into partition stores. They are found on-demand by MeshCatalog.GetNodeAsync which
+        // checks static providers as a fallback. Hub configuration is resolved on-demand
+        // by IMeshNodeHubFactory when a hub is activated.
     }
 
 

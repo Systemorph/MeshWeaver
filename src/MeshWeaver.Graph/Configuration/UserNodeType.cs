@@ -72,6 +72,7 @@ public static class UserNodeType
         Name = "User",
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
+        ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(UserNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "User", RestrictedToNamespaces = ["User"] },
         HubConfiguration = config => config
