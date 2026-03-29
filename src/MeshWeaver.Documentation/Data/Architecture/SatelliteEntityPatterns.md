@@ -73,13 +73,14 @@ internal static IMessageDelivery HandleSubmitMessage(
 ### Rules
 
 1. **Synchronous signature**: `IMessageDelivery` return type, never `async Task<IMessageDelivery>`
-2. **Never await — anywhere in the message pipeline**: `await` == deadlock in Orleans. This applies to handlers, Blazor components sending requests, and any code on the hub execution path. Use `Post` + `RegisterCallback` instead of `AwaitResponse`.
-3. **Never use IMeshStorage/persistence directly**: Use `IMeshService` for CRUD, `workspace.UpdateMeshNode()` for in-memory updates
-4. **Capture workspace before Subscribe**: `var workspace = hub.GetWorkspace()` must be called before entering the Subscribe callback
-5. **Post response in callback**: The response must be posted inside `Subscribe(onNext)`, not before — the caller needs to know the operation completed
-6. **Wrap onNext in try/catch**: If `workspace.UpdateMeshNode()` or any code in the Subscribe callback throws, catch the exception and post a negative response. Otherwise the caller hangs forever waiting.
-7. **Use `meshService.CreateNode()`**: Returns `IObservable<MeshNode>` — internally uses `Post` + `RegisterCallback`
-8. **Use `workspace.UpdateMeshNode()`**: Updates the in-memory workspace stream, which triggers persistence via the debounced `MeshNodeTypeSource`
+2. **Never await — anywhere in the message pipeline**: `await` == deadlock in Orleans. This applies to handlers, Blazor components sending requests, layout areas, and any code on the hub execution path. Use `Post` + `RegisterCallback` instead of `AwaitResponse`.
+3. **No permission checks in handlers or layout areas**: Access control is handled by the delivery pipeline via partition access policies. If a user lacks the `Comment` permission (for comments) or `Thread` permission (for threads), the request is rejected before reaching the handler. Handlers and layout areas assume the caller is authorized. This is symmetrical: threads use `Thread` permission, comments use `Comment` permission.
+4. **Never use IMeshStorage/persistence directly**: Use `IMeshService` for CRUD, `workspace.UpdateMeshNode()` for in-memory updates
+5. **Capture workspace before Subscribe**: `var workspace = hub.GetWorkspace()` must be called before entering the Subscribe callback
+6. **Post response in callback**: The response must be posted inside `Subscribe(onNext)`, not before — the caller needs to know the operation completed
+7. **Wrap onNext in try/catch**: If `workspace.UpdateMeshNode()` or any code in the Subscribe callback throws, catch the exception and post a negative response. Otherwise the caller hangs forever waiting.
+8. **Use `meshService.CreateNode()`**: Returns `IObservable<MeshNode>` — internally uses `Post` + `RegisterCallback`
+9. **Use `workspace.UpdateMeshNode()`**: Updates the in-memory workspace stream, which triggers persistence via the debounced `MeshNodeTypeSource`
 
 ### Blazor Component Pattern
 

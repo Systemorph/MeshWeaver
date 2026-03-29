@@ -21,12 +21,12 @@ public static class MarkdownOverviewLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        // No permission checks here — access control is handled by the delivery pipeline.
+        // canComment/canEdit default to true; the hub won't be reached if user lacks access.
+        return nodeStream.Select(nodes =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
-            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
-            return (UiControl?)BuildOverview(host, node, canComment, canEdit);
+            return (UiControl?)BuildOverview(host, node, canComment: true, canEdit: true);
         });
     }
 
