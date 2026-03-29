@@ -118,48 +118,70 @@ public static class CommentsExtensions
                 Content = comment
             };
 
-            // Create comment node first, then inject markers in onNext callback
+            // Create comment/reply node first, then update parent in onNext callback
             // (same pattern as ThreadExecution: create cells → update parent in callback)
             meshService.CreateNode(commentNode).Subscribe(
                 _ =>
                 {
-                    logger?.LogInformation("[CreateComment] Comment node created: MarkerId={MarkerId} on {Path}", markerId, nodePath);
-
-                    // Inject comment markers into markdown content via workspace stream
-                    if (hasTextSelection)
+                    try
                     {
+                        logger?.LogInformation("[CreateComment] Node created: {Id} on {Path}", markerId, nodePath);
+
+                        // Update parent node via workspace stream
                         workspace.UpdateMeshNode(node =>
                         {
-                            if (node.Content is not MarkdownContent mdContent || string.IsNullOrEmpty(mdContent.Content))
-                                return node;
+                            // Markdown node: inject comment markers into content
+                            if (hasTextSelection && node.Content is MarkdownContent mdContent
+                                && !string.IsNullOrEmpty(mdContent.Content))
+                            {
+                                var rawContent = mdContent.Content;
+                                var cleanContent = MarkdownAnnotationParser.StripAllMarkers(rawContent);
+                                var idx = cleanContent.IndexOf(selectedText!, StringComparison.Ordinal);
+                                if (idx < 0)
+                                    idx = cleanContent.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
+                                if (idx < 0)
+                                    return node;
 
-                            var rawContent = mdContent.Content;
-                            var cleanContent = MarkdownAnnotationParser.StripAllMarkers(rawContent);
-                            var idx = cleanContent.IndexOf(selectedText!, StringComparison.Ordinal);
-                            if (idx < 0)
-                                idx = cleanContent.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
-                            if (idx < 0)
-                                return node;
+                                var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
+                                var aStart = idx < map.Length ? map[idx] : rawContent.Length;
+                                var aEnd = (idx + selectedText!.Length) < map.Length
+                                    ? map[idx + selectedText.Length]
+                                    : rawContent.Length;
 
-                            var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
-                            var aStart = idx < map.Length ? map[idx] : rawContent.Length;
-                            var aEnd = (idx + selectedText!.Length) < map.Length
-                                ? map[idx + selectedText.Length]
-                                : rawContent.Length;
+                                var date = DateTime.Now.ToString("MMM d");
+                                var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
+                                var openTag = $"<!--comment:{markerId}{meta}-->";
+                                var closeTag = $"<!--/comment:{markerId}-->";
+                                var newContent = rawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
 
-                            var date = DateTime.Now.ToString("MMM d");
-                            var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
-                            var openTag = $"<!--comment:{markerId}{meta}-->";
-                            var closeTag = $"<!--/comment:{markerId}-->";
-                            var newContent = rawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
+                                logger?.LogDebug("[CreateComment] Markers inserted: MarkerId={MarkerId}", markerId);
+                                return node with { Content = mdContent with { Content = newContent } };
+                            }
 
-                            logger?.LogDebug("[CreateComment] Markers inserted: MarkerId={MarkerId}", markerId);
-                            return node with { Content = mdContent with { Content = newContent } };
+                            // Comment node: add reply ID to Replies list (same as Thread.Messages)
+                            if (node.Content is Comment parentComment)
+                            {
+                                return node with
+                                {
+                                    Content = parentComment with
+                                    {
+                                        Replies = parentComment.Replies.Add(markerId)
+                                    }
+                                };
+                            }
+
+                            return node;
                         });
-                    }
 
-                    hub.Post(new CreateCommentResponse { Success = true, CommentId = markerId, MarkerId = markerId },
-                        o => o.ResponseFor(request));
+                        hub.Post(new CreateCommentResponse { Success = true, CommentId = markerId, MarkerId = markerId },
+                            o => o.ResponseFor(request));
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogError(ex, "[CreateComment] Error in onNext for {Path}", nodePath);
+                        hub.Post(new CreateCommentResponse { Success = false, Error = ex.Message },
+                            o => o.ResponseFor(request));
+                    }
                 },
                 ex =>
                 {

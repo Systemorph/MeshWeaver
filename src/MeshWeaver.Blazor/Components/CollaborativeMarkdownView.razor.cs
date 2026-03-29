@@ -162,7 +162,9 @@ public partial class CollaborativeMarkdownView
             })
             .Subscribe(list =>
             {
-                var withMarker = list.Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId));
+                var withMarker = list
+                    .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId))
+                    .DistinctBy(n => ((Comment)n.Content!).MarkerId!);
                 commentNodes = withMarker.ToDictionary(
                     n => ((Comment)n.Content!).MarkerId!,
                     n => (Comment)n.Content!);
@@ -395,15 +397,10 @@ public partial class CollaborativeMarkdownView
         _pendingCommentText = "";
     }
 
-    private async Task SubmitSelectionComment()
+    private void SubmitSelectionComment()
     {
-        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
         if (string.IsNullOrWhiteSpace(_pendingSelectionText) || string.IsNullOrEmpty(BoundHubAddress))
-        {
-            logger?.LogWarning("[SubmitComment] Skipped: PendingText={HasText}, HubAddress={Address}",
-                !string.IsNullOrWhiteSpace(_pendingSelectionText), BoundHubAddress);
             return;
-        }
 
         var selectedText = _pendingSelectionText;
         var commentText = _pendingCommentText;
@@ -411,29 +408,28 @@ public partial class CollaborativeMarkdownView
         _pendingSelectionText = "";
         _pendingCommentText = "";
 
-        logger?.LogInformation("[SubmitComment] Sending CreateCommentRequest to {Address}, SelectedText='{Text}', NodePath={NodePath}",
-            BoundHubAddress, selectedText.Length > 50 ? selectedText[..50] + "..." : selectedText, BoundNodePath);
+        // Fire-and-forget: Post + RegisterCallback (never await — deadlocks in Orleans)
+        var delivery = Hub.Post(
+            new CreateCommentRequest
+            {
+                DocumentId = BoundNodePath ?? "",
+                SelectedText = selectedText,
+                CommentText = commentText,
+                Author = CurrentAuthor
+            },
+            o => o.WithTarget(new Address(BoundHubAddress)));
 
-        // Send CreateCommentRequest to the markdown node's hub — the handler
-        // inserts markers, creates the Comment node, and pushes updated content to the stream.
-        try
+        if (delivery != null)
         {
-            var response = await Hub.AwaitResponse(
-                new CreateCommentRequest
+            Hub.RegisterCallback<CreateCommentResponse>(delivery, response =>
+            {
+                if (!response.Message.Success)
                 {
-                    DocumentId = BoundNodePath ?? "",
-                    SelectedText = selectedText,
-                    CommentText = commentText,
-                    Author = CurrentAuthor
-                },
-                o => o.WithTarget(new Address(BoundHubAddress)),
-                default);
-
-            logger?.LogInformation("[SubmitComment] Response received: {ResponseType}", response.Message?.GetType().Name);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "[SubmitComment] FAILED sending to {Address}", BoundHubAddress);
+                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                    logger?.LogWarning("[SubmitComment] FAILED: {Error}", response.Message.Error);
+                }
+                return response;
+            });
         }
     }
 
@@ -450,7 +446,7 @@ public partial class CollaborativeMarkdownView
         _pageCommentText = "";
     }
 
-    private async Task SubmitPageComment()
+    private void SubmitPageComment()
     {
         if (string.IsNullOrWhiteSpace(_pageCommentText) || string.IsNullOrEmpty(BoundHubAddress))
             return;
@@ -459,27 +455,27 @@ public partial class CollaborativeMarkdownView
         _showPageCommentInput = false;
         _pageCommentText = "";
 
-        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
-        logger?.LogInformation("[SubmitPageComment] Sending to {Address}, NodePath={NodePath}", BoundHubAddress, BoundNodePath);
+        // Fire-and-forget: Post + RegisterCallback (never await)
+        var delivery = Hub.Post(
+            new CreateCommentRequest
+            {
+                DocumentId = BoundNodePath ?? "",
+                CommentText = text,
+                Author = CurrentAuthor
+            },
+            o => o.WithTarget(new Address(BoundHubAddress)));
 
-        // Send CreateCommentRequest with empty SelectedText — handler creates comment node only (no markers)
-        try
+        if (delivery != null)
         {
-            var response = await Hub.AwaitResponse(
-                new CreateCommentRequest
+            Hub.RegisterCallback<CreateCommentResponse>(delivery, response =>
+            {
+                if (!response.Message.Success)
                 {
-                    DocumentId = BoundNodePath ?? "",
-                    CommentText = text,
-                    Author = CurrentAuthor
-                },
-                o => o.WithTarget(new Address(BoundHubAddress)),
-                default);
-
-            logger?.LogInformation("[SubmitPageComment] Response: {ResponseType}", response.Message?.GetType().Name);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "[SubmitPageComment] FAILED sending to {Address}", BoundHubAddress);
+                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                    logger?.LogWarning("[SubmitPageComment] FAILED: {Error}", response.Message.Error);
+                }
+                return response;
+            });
         }
     }
 
