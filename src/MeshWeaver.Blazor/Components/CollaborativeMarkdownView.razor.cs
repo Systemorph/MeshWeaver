@@ -389,19 +389,18 @@ public partial class CollaborativeMarkdownView
     /// Called from JS when user selects text and clicks the "Comment" button.
     /// Shows the comment input form instead of creating immediately.
     /// </summary>
-    // Source positions from JS (data-start/data-end on DOM elements)
-    private int _pendingSelectionStart = -1;
-    private int _pendingSelectionEnd = -1;
+    private string _pendingStartFragment = "";
+    private string _pendingEndFragment = "";
 
     [JSInvokable]
-    public Task OnCommentFromSelection(string selectedText, int selectionStart, int selectionEnd)
+    public Task OnCommentFromSelection(string selectedText, string startFragment, string endFragment)
     {
         if (string.IsNullOrWhiteSpace(selectedText) || string.IsNullOrEmpty(RawContent))
             return Task.CompletedTask;
 
         _pendingSelectionText = selectedText;
-        _pendingSelectionStart = selectionStart;
-        _pendingSelectionEnd = selectionEnd;
+        _pendingStartFragment = startFragment ?? "";
+        _pendingEndFragment = endFragment ?? "";
         _pendingCommentText = "";
         _showCommentInput = true;
         InvokeAsync(StateHasChanged);
@@ -422,13 +421,13 @@ public partial class CollaborativeMarkdownView
 
         var selectedText = _pendingSelectionText;
         var commentText = _pendingCommentText;
-        var selStart = _pendingSelectionStart;
-        var selEnd = _pendingSelectionEnd;
+        var startFragment = _pendingStartFragment;
+        var endFragment = _pendingEndFragment;
         _showCommentInput = false;
         _pendingSelectionText = "";
         _pendingCommentText = "";
-        _pendingSelectionStart = -1;
-        _pendingSelectionEnd = -1;
+        _pendingStartFragment = "";
+        _pendingEndFragment = "";
 
         // Fire-and-forget: Post + RegisterCallback (never await — deadlocks in Orleans)
         var delivery = Hub.Post(
@@ -436,8 +435,8 @@ public partial class CollaborativeMarkdownView
             {
                 DocumentId = BoundNodePath ?? "",
                 SelectedText = selectedText,
-                SelectionStart = selStart,
-                SelectionEnd = selEnd,
+                StartFragment = startFragment,
+                EndFragment = endFragment,
                 CommentText = commentText,
                 Author = CurrentAuthor
             },

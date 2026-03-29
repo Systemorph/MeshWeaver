@@ -127,6 +127,43 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return _menuItems;
     }
 
+    private static readonly NodeMenuItemDefinition Separator = new("", "_separator");
+
+    /// <summary>
+    /// Flattens hierarchical menu items: parent items with Children are replaced by
+    /// a separator followed by their children inline.
+    /// </summary>
+    private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
+    {
+        var hasChildren = false;
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+            {
+                hasChildren = true;
+                break;
+            }
+        }
+        if (!hasChildren)
+            return items;
+
+        var result = new List<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+            {
+                if (result.Count > 0)
+                    result.Add(Separator);
+                result.AddRange(item.Children);
+            }
+            else
+            {
+                result.Add(item);
+            }
+        }
+        return result;
+    }
+
     /// <summary>
     /// Navigates to the Create page for a specific node type (fallback/legacy method).
     /// </summary>

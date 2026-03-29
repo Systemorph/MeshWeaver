@@ -94,4 +94,55 @@ public static class MarkdownSourceMap
             }
         }
     }
+
+    /// <summary>
+    /// Finds a text fragment in markdown source using the rendered-to-source map.
+    /// Returns the source position (in cleanMarkdown) or -1 if not found.
+    /// Searches in the rendered plain text and maps back to source position.
+    /// </summary>
+    public static int FindFragmentInSource(string cleanMarkdown, string fragment, int searchFromSourcePos = 0)
+    {
+        if (string.IsNullOrEmpty(fragment) || string.IsNullOrEmpty(cleanMarkdown))
+            return -1;
+
+        var (plainText, map) = BuildRenderedToSourceMap(cleanMarkdown);
+
+        // Find the fragment in the rendered plain text
+        var plainIdx = plainText.IndexOf(fragment, StringComparison.OrdinalIgnoreCase);
+        while (plainIdx >= 0)
+        {
+            var sourcePos = plainIdx < map.Length ? map[plainIdx] : cleanMarkdown.Length;
+            if (sourcePos >= searchFromSourcePos)
+                return sourcePos;
+            // Try next occurrence
+            plainIdx = plainText.IndexOf(fragment, plainIdx + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Finds the end position of a fragment in the source.
+    /// Returns the source position AFTER the fragment.
+    /// </summary>
+    public static int FindFragmentEndInSource(string cleanMarkdown, string fragment, int searchFromSourcePos = 0)
+    {
+        if (string.IsNullOrEmpty(fragment) || string.IsNullOrEmpty(cleanMarkdown))
+            return -1;
+
+        var (plainText, map) = BuildRenderedToSourceMap(cleanMarkdown);
+
+        var plainIdx = plainText.IndexOf(fragment, StringComparison.OrdinalIgnoreCase);
+        while (plainIdx >= 0)
+        {
+            var endPlainIdx = plainIdx + fragment.Length;
+            var sourcePos = plainIdx < map.Length ? map[plainIdx] : cleanMarkdown.Length;
+            var sourceEndPos = endPlainIdx < map.Length ? map[endPlainIdx] : cleanMarkdown.Length;
+            if (sourcePos >= searchFromSourcePos)
+                return sourceEndPos;
+            plainIdx = plainText.IndexOf(fragment, plainIdx + 1, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return -1;
+    }
 }

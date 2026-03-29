@@ -311,28 +311,15 @@ export function enableCommentSelection(containerEl, dotNetRef) {
 
         _commentButton.style.display = 'none';
 
-        // Resolve source positions from data-start/data-end on annotated elements.
-        // Walk up from selection start/end to nearest [data-start] ancestor,
-        // then compute the text offset within that element to get exact source positions.
-        const range = sel.getRangeAt(0);
-
-        let selStart = -1, selEnd = -1;
-
-        const startAncestor = findSourceMappedAncestor(range.startContainer);
-        const endAncestor = findSourceMappedAncestor(range.endContainer);
-
-        if (startAncestor && endAncestor) {
-            // Compute character offset within the start ancestor's text
-            const startTextOffset = getTextOffsetInElement(startAncestor, range.startContainer, range.startOffset);
-            selStart = parseInt(startAncestor.dataset.start) + startTextOffset;
-
-            // Compute character offset within the end ancestor's text
-            const endTextOffset = getTextOffsetInElement(endAncestor, range.endContainer, range.endOffset);
-            selEnd = parseInt(endAncestor.dataset.start) + endTextOffset;
-        }
+        // Send selected text + start/end fragments for robust server-side matching.
+        // The handler uses these fragments to find positions in the raw markdown,
+        // avoiding the impossible task of mapping rendered HTML offsets back to source.
+        const words = selectedText.split(/\s+/);
+        const startFragment = words.slice(0, Math.min(5, words.length)).join(' ');
+        const endFragment = words.slice(Math.max(0, words.length - 5)).join(' ');
 
         try {
-            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText, selStart, selEnd);
+            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText, startFragment, endFragment);
         } catch (err) {
             console.error('Error creating comment from selection:', err);
         }

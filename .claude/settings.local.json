@@ -125,7 +125,8 @@
       "mcp__aspire__select_apphost",
       "Bash(git ls-remote:*)",
       "Bash(git push:*)",
-      "Bash(exit 0)"
+      "Bash(exit 0)",
+      "WebFetch(domain:gist.github.com)"
     ],
     "deny": []
   },

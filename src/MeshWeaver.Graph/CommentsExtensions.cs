@@ -130,44 +130,47 @@ public static class CommentsExtensions
                         // Update parent node via workspace stream
                         workspace.UpdateMeshNode(node =>
                         {
-                            // Markdown node: inject comment markers into content
+                            // Markdown node: inject comment markers using fragment-based matching.
+                            // JS sends start/end fragments (first/last few words of the selection).
+                            // We find them in the rendered plain text and map back to source positions.
                             if (hasTextSelection && node.Content is MarkdownContent mdContent
                                 && !string.IsNullOrEmpty(mdContent.Content))
                             {
                                 var rawContent = mdContent.Content;
-                                int aStart, aEnd;
+                                var cleanMarkdown = MarkdownAnnotationParser.StripAllMarkers(rawContent);
+                                var annotationMap = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
 
-                                // Use JS-provided source positions when available (from data-start/data-end)
-                                // These are positions in the transformed content (after TransformAnnotations),
-                                // which is the same content the SourceMapHtmlRenderer rendered.
-                                if (msg.SelectionStart >= 0 && msg.SelectionEnd > msg.SelectionStart)
+                                var startFrag = msg.StartFragment;
+                                var endFrag = msg.EndFragment;
+
+                                // Find start position using start fragment
+                                var cleanStart = !string.IsNullOrEmpty(startFrag)
+                                    ? MarkdownSourceMap.FindFragmentInSource(cleanMarkdown, startFrag)
+                                    : -1;
+
+                                // Find end position using end fragment (search from after start)
+                                var cleanEnd = !string.IsNullOrEmpty(endFrag)
+                                    ? MarkdownSourceMap.FindFragmentEndInSource(cleanMarkdown, endFrag,
+                                        cleanStart >= 0 ? cleanStart : 0)
+                                    : -1;
+
+                                // Fallback: use full selected text via MarkdownSourceMap
+                                if (cleanStart < 0 || cleanEnd < 0 || cleanEnd <= cleanStart)
                                 {
-                                    aStart = msg.SelectionStart;
-                                    aEnd = msg.SelectionEnd;
-                                    // Clamp to content bounds
-                                    aStart = Math.Min(aStart, rawContent.Length);
-                                    aEnd = Math.Min(aEnd, rawContent.Length);
-                                }
-                                else
-                                {
-                                    // Fallback: use MarkdownSourceMap for text-based matching
-                                    var cleanMarkdown = MarkdownAnnotationParser.StripAllMarkers(rawContent);
                                     var (plainText, cleanMap) = MarkdownSourceMap.BuildRenderedToSourceMap(cleanMarkdown);
-                                    var annotationMap = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
-
-                                    var idx = plainText.IndexOf(selectedText!, StringComparison.Ordinal);
-                                    if (idx < 0)
-                                        idx = plainText.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
+                                    var idx = plainText.IndexOf(selectedText!, StringComparison.OrdinalIgnoreCase);
                                     if (idx < 0)
                                         return node;
 
-                                    var cleanStart = idx < cleanMap.Length ? cleanMap[idx] : cleanMarkdown.Length;
-                                    var cleanEnd = (idx + selectedText!.Length) < cleanMap.Length
+                                    cleanStart = idx < cleanMap.Length ? cleanMap[idx] : cleanMarkdown.Length;
+                                    cleanEnd = (idx + selectedText!.Length) < cleanMap.Length
                                         ? cleanMap[idx + selectedText.Length]
                                         : cleanMarkdown.Length;
-                                    aStart = cleanStart < annotationMap.Length ? annotationMap[cleanStart] : rawContent.Length;
-                                    aEnd = cleanEnd < annotationMap.Length ? annotationMap[cleanEnd] : rawContent.Length;
                                 }
+
+                                // Map clean → raw
+                                var aStart = cleanStart < annotationMap.Length ? annotationMap[cleanStart] : rawContent.Length;
+                                var aEnd = cleanEnd < annotationMap.Length ? annotationMap[cleanEnd] : rawContent.Length;
 
                                 var date = DateTime.Now.ToString("MMM d");
                                 var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";

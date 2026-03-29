@@ -3,6 +3,7 @@ using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Persistence;
@@ -17,20 +18,17 @@ namespace MeshWeaver.Hosting.Persistence;
 public class MeshExportService : IMeshExportService
 {
     private readonly IMeshService _meshService;
-    private readonly IStorageAdapter? _storageAdapter;
     private readonly IMessageHub _hub;
     private readonly ILogger<MeshExportService> _logger;
 
     public MeshExportService(
         IMeshService meshService,
         IMessageHub hub,
-        ILogger<MeshExportService> logger,
-        IStorageAdapter? storageAdapter = null)
+        ILogger<MeshExportService> logger)
     {
         _meshService = meshService;
         _hub = hub;
         _logger = logger;
-        _storageAdapter = storageAdapter;
     }
 
     public async Task<ExportResult> ExportToDirectoryAsync(
@@ -88,15 +86,16 @@ public class MeshExportService : IMeshExportService
                     nodeCount++;
 
                     // Export partition data when storage adapter is available
-                    if (_storageAdapter != null)
+                    var storageAdapter = _hub.ServiceProvider.GetService<IStorageAdapter>();
+                    if (storageAdapter != null)
                     {
-                        var subPaths = await _storageAdapter.ListPartitionSubPathsAsync(node.Path, ct);
+                        var subPaths = await storageAdapter.ListPartitionSubPathsAsync(node.Path, ct);
                         foreach (var subPath in subPaths)
                         {
                             try
                             {
                                 var objects = new List<object>();
-                                await foreach (var obj in _storageAdapter.GetPartitionObjectsAsync(node.Path, subPath, jsonOptions, ct))
+                                await foreach (var obj in storageAdapter.GetPartitionObjectsAsync(node.Path, subPath, jsonOptions, ct))
                                     objects.Add(obj);
 
                                 if (objects.Count > 0)
