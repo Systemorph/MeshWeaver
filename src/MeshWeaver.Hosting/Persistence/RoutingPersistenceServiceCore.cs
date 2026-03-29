@@ -22,16 +22,6 @@ internal class RoutingPersistenceServiceCore : IStorageService
     private readonly SemaphoreSlim _provisionLock = new(1, 1);
     private volatile bool _initialized;
 
-    /// <summary>
-    /// Maps base path prefixes to partition names (e.g., "Doc" -> "Admin" for Documentation).
-    /// Populated from Partition nodes in Admin/Partition namespace.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, string> _basePathToPartition = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Partition metadata keyed by partition node ID (e.g., "Documentation" -> set of base paths).
-    /// </summary>
-    private readonly ConcurrentDictionary<string, string> _partitionNamespaces = new(StringComparer.OrdinalIgnoreCase);
 
     public RoutingPersistenceServiceCore(
         IPartitionedStoreFactory factory,
@@ -74,15 +64,6 @@ internal class RoutingPersistenceServiceCore : IStorageService
     /// </summary>
     internal IEnumerable<string> PartitionNames => _stores.Keys;
 
-    /// <summary>
-    /// Gets the base-path-to-partition mapping for partition access filtering.
-    /// </summary>
-    internal IReadOnlyDictionary<string, string> BasePathToPartition => _basePathToPartition;
-
-    /// <summary>
-    /// Gets the partition metadata (partition ID -> namespace).
-    /// </summary>
-    internal IReadOnlyDictionary<string, string> PartitionNamespaces => _partitionNamespaces;
 
     /// <summary>
     /// Discovers partitions not yet provisioned, provisions each, and yields its key and query provider.
@@ -91,10 +72,9 @@ internal class RoutingPersistenceServiceCore : IStorageService
     internal async IAsyncEnumerable<(string Key, IMeshQueryProvider Provider)> DiscoverNewProvidersAsync(
         [EnumeratorCancellation] CancellationToken ct)
     {
-        // Use a dedicated startup timeout for partition discovery and provisioning —
-        // this is infrastructure that must complete even if the triggering request
-        // is cancelled (e.g., user typing fast in the search bar).
-        using var startupCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        // Link caller's token with a 30s startup timeout
+        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        startupCts.CancelAfter(TimeSpan.FromSeconds(30));
         var startupCt = startupCts.Token;
         var partitions = await _factory.DiscoverPartitionsAsync(startupCt);
 
@@ -146,18 +126,8 @@ internal class RoutingPersistenceServiceCore : IStorageService
 
     private IStorageService? TryGetStore(string? path)
     {
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        // Use ResolvePartitionKey for consistent routing (root-level → Admin)
-        var resolved = ResolvePartitionKey(path);
-        if (resolved != null && _stores.TryGetValue(resolved, out var resolvedStore))
-            return resolvedStore;
-
-        // Fall back to longest-prefix matching on store keys
-        var prefix = PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
-        if (prefix == null) return null;
-        return _stores.TryGetValue(prefix, out var store) ? store : null;
+        var key = ResolvePartitionKey(path);
+        return key != null && _stores.TryGetValue(key, out var store) ? store : null;
     }
 
     /// <summary>
@@ -167,26 +137,24 @@ internal class RoutingPersistenceServiceCore : IStorageService
         => PathPartition.FindLongestMatchingPrefix(path, _stores.Keys);
 
     /// <summary>
-    /// Resolves the partition key for a given path.
-    /// Only returns keys for known/registered partitions — never returns
-    /// an unknown segment that would trigger rogue schema creation.
+    /// Resolves the partition key for a given path using longest-prefix matching.
+    /// Walks from full path down to first segment, returns the first _stores key that matches.
     /// </summary>
     private string? ResolvePartitionKey(string? path)
     {
-        var firstSegment = PathPartition.GetFirstSegment(path);
-        if (firstSegment == null) return null;
+        if (string.IsNullOrEmpty(path)) return null;
 
-        // If the first segment matches a known partition, use it directly
-        if (_stores.ContainsKey(firstSegment))
-            return firstSegment;
+        // Walk from full path down to first segment
+        var test = path;
+        while (true)
+        {
+            if (_stores.ContainsKey(test))
+                return test;
 
-        // Check base-path-to-partition mapping
-        if (_basePathToPartition.TryGetValue(firstSegment, out var mapped))
-            return mapped;
-
-        // Unknown segment → route to Admin (prevents rogue schema creation)
-        if (_stores.ContainsKey("Admin"))
-            return "Admin";
+            var lastSlash = test.LastIndexOf('/');
+            if (lastSlash < 0) break;
+            test = test[..lastSlash];
+        }
 
         return null;
     }
@@ -207,68 +175,48 @@ internal class RoutingPersistenceServiceCore : IStorageService
         await foreach (var (_, _) in DiscoverNewProvidersAsync(ct))
         { }
 
-        // 3. Load partition metadata from Admin/Partition namespace
-        await LoadPartitionMetadataAsync(ct);
+        // 3. Seed static nodes into their partition stores.
+        //    If a partition already exists (e.g., PostgreSQL schema), seed into its in-memory cache
+        //    without writing to the backing store. If no partition exists, create a pure in-memory one.
+        var allStaticNodes = _staticNodeProviders.SelectMany(p => p.GetStaticNodes()).ToList();
+        var staticNamespaces = defaultPartitions
+            .Where(d => !string.IsNullOrEmpty(d.Namespace))
+            .Select(d => d.Namespace!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
 
-        // 4. Ensure static partition definitions (from AddMeshNodes / IStaticNodeProvider)
-        //    are also in the routing map — LoadPartitionMetadataAsync only reads from
-        //    persisted Admin store, missing config-only partitions like "Doc".
-        foreach (var def in defaultPartitions)
+        foreach (var ns in staticNamespaces)
         {
-            if (!string.IsNullOrEmpty(def.Namespace) && !_basePathToPartition.ContainsKey(def.Namespace))
+            InMemoryPersistenceService store;
+            if (_stores.TryGetValue(ns, out var existing) && existing is InMemoryPersistenceService existingStore)
             {
-                var storeKey = _stores.ContainsKey(def.Namespace) ? def.Namespace
-                    : "Admin";
-                _basePathToPartition[def.Namespace] = storeKey;
+                store = existingStore;
             }
-        }
-
-        // 5. Seed static nodes into their partition stores so normal lookups find them.
-        //    This avoids needing fallback code in GetNodeAsync/GetChildrenAsync.
-        var options = new JsonSerializerOptions();
-        foreach (var node in _staticNodeProviders.SelectMany(p => p.GetStaticNodes()))
-        {
-            if (string.IsNullOrEmpty(node.Path)) continue;
-            var storeKey = ResolvePartitionKey(node.Path);
-            if (storeKey != null && _stores.TryGetValue(storeKey, out var store))
+            else if (!_stores.ContainsKey(ns))
             {
-                // Only seed if not already persisted (don't overwrite user edits)
-                var existing = await store.GetNodeAsync(node.Path, options, ct);
-                if (existing == null)
-                    await store.SaveNodeAsync(node, options, ct);
+                store = new InMemoryPersistenceService();
+                _stores[ns] = store;
+                _queryProviders[ns] = new Query.InMemoryMeshQuery(store, changeNotifier: _changeNotifier);
             }
-        }
-    }
-
-    /// <summary>
-    /// Loads Partition nodes from the "Admin" store to populate base-path-to-partition mapping.
-    /// Each Partition node's Content (PartitionDefinition) declares which base paths it serves.
-    /// </summary>
-    private async Task LoadPartitionMetadataAsync(CancellationToken ct = default)
-    {
-        if (!_stores.TryGetValue("Admin", out var adminStore))
-            return;
-
-        // Use default JsonSerializerOptions for reading — this is internal bootstrap
-        var options = new JsonSerializerOptions();
-
-        await foreach (var child in adminStore.GetChildrenAsync("Admin/Partition", options))
-        {
-            if (ct.IsCancellationRequested) break;
-
-            if (child.Content is PartitionDefinition def && !string.IsNullOrEmpty(def.Namespace))
+            else
             {
-                _partitionNamespaces[child.Id] = def.Namespace;
+                continue; // Partition exists but isn't InMemoryPersistenceService — skip
+            }
 
-                // Map namespace to the partition that actually stores it.
-                var storeKey = _stores.ContainsKey(def.Namespace) ? def.Namespace
-                    : _stores.ContainsKey(child.Id) ? child.Id
-                    : PathPartition.GetFirstSegment(def.Namespace);
-                if (storeKey != null)
-                    _basePathToPartition[def.Namespace] = storeKey;
+            // Seed content nodes into cache (skip infrastructure: _Policy, _Access, etc.)
+            var prefix = ns + "/";
+            foreach (var node in allStaticNodes)
+            {
+                if (string.IsNullOrEmpty(node.Path)) continue;
+                if (!node.Path.Equals(ns, StringComparison.OrdinalIgnoreCase)
+                    && !node.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (node.Id.StartsWith('_'))
+                    continue;
+                store.SeedIfAbsent(node);
             }
         }
     }
+
 
     #region Node Operations
 
@@ -276,23 +224,11 @@ internal class RoutingPersistenceServiceCore : IStorageService
     {
         await EnsureInitializedAsync(ct);
 
-        // Use ResolvePartitionKey so root-level nodes route to Admin
-        var segment = ResolvePartitionKey(path);
-        if (segment == null) return null;
+        var partitionKey = ResolvePartitionKey(path);
+        if (partitionKey == null || !_stores.TryGetValue(partitionKey, out var store))
+            return null;
 
-        if (_stores.TryGetValue(segment, out var store))
-        {
-            var node = await store.GetNodeAsync(path, options, ct);
-            if (node != null) return node;
-        }
-
-        // Fallback: root-level Organization nodes are stored in Admin but their
-        // partition name matches a store — check Admin if the resolved store missed.
-        if (path != null && !path.Contains('/') && segment != "Admin"
-            && _stores.TryGetValue("Admin", out var adminStore))
-            return await adminStore.GetNodeAsync(path, options, ct);
-
-        return null;
+        return await store.GetNodeAsync(path, options, ct);
     }
 
     public async IAsyncEnumerable<MeshNode> GetChildrenAsync(
@@ -429,9 +365,6 @@ internal class RoutingPersistenceServiceCore : IStorageService
             }
         }
 
-        // Update partition metadata
-        _partitionNamespaces[def.Namespace] = def.Namespace;
-        _basePathToPartition[def.Namespace] = def.Namespace;
     }
 
     public async Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default)

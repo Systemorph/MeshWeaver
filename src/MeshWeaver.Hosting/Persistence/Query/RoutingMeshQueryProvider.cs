@@ -138,6 +138,18 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
             foreach (var item in crossSorted)
                 yield return item;
+
+            // Also query in-memory partitions not covered by cross-schema (e.g., static Doc partition)
+            var searchableSchemas = new HashSet<string>(schemas, StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, p) in _router.QueryProviders)
+            {
+                if (searchableSchemas.Contains(key)) continue; // Already queried via cross-schema
+                await foreach (var item in p.QueryAsync(
+                    request with { Query = fanOutQuery }, options, ct))
+                {
+                    yield return item;
+                }
+            }
             yield break;
         }
 
