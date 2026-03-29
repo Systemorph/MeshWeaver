@@ -1,4 +1,3 @@
-
 ---
 Name: Business Rules & Calculations
 Category: Architecture
