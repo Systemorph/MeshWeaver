@@ -1,4 +1,5 @@
 using MeshWeaver.Data;
+using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
 
 namespace MeshWeaver.Graph;
@@ -27,6 +28,9 @@ public static class CommentNodeType
     {
         builder.AddMeshNodes(CreateMeshNode());
         builder.AddAutocompleteExcludedTypes(NodeType);
+        builder.ConfigureHub(config => config
+            .WithType<CreateCommentRequest>(nameof(CreateCommentRequest))
+            .WithType<CreateCommentResponse>(nameof(CreateCommentResponse)));
         return builder;
     }
 

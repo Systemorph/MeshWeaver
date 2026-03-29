@@ -1,4 +1,5 @@
 ﻿using System;
+using Memex.Portal.Shared;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -169,6 +170,7 @@ public class CreatableTypesIntegrationTest : MonolithMeshTestBase
                 .AddInMemoryPersistence(persistence)
                 .Configure<CompilationCacheOptions>(o => o.CacheDirectory = cacheDirectory))
             .AddGraph()
+            .AddOrganizationType()
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
@@ -1016,6 +1018,7 @@ public class CreatableTypesFileSystemTest : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
             .AddAcme()
+            .AddOrganizationType()
             .AddSystemorph()
             .AddGraph();
 

@@ -223,7 +223,7 @@
     }
 
     @* Bottom page comment section *@
-    @if (BoundCanComment)
+    @if (!string.IsNullOrEmpty(BoundNodePath))
     {
         <div class="page-comment-section">
             @if (_showPageCommentInput)

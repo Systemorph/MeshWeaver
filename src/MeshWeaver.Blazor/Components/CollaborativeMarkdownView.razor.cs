@@ -13,7 +13,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.JSInterop;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MarkdownAnnotationParser = MeshWeaver.Markdown.Collaboration.MarkdownAnnotationParser;
+using MeshWeaver.Markdown.Collaboration;
+using AnnotationType = MeshWeaver.Markdown.AnnotationType;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -189,8 +190,9 @@ public partial class CollaborativeMarkdownView
             await jsModule.InvokeVoidAsync("positionCards");
         }
 
-        // Enable comment-from-selection when user has comment permission
-        if (jsModule != null && BoundCanComment && !commentSelectionInitialized)
+        // Enable comment-from-selection — always initialize so the floating button appears.
+        // Permissions are checked server-side when actually creating the comment.
+        if (jsModule != null && !commentSelectionInitialized)
         {
             commentSelectionInitialized = true;
             dotNetRef = DotNetObjectReference.Create(this);
@@ -394,7 +396,7 @@ public partial class CollaborativeMarkdownView
 
     private async Task SubmitSelectionComment()
     {
-        if (string.IsNullOrWhiteSpace(_pendingSelectionText))
+        if (string.IsNullOrWhiteSpace(_pendingSelectionText) || string.IsNullOrEmpty(BoundHubAddress))
             return;
 
         var selectedText = _pendingSelectionText;
@@ -403,61 +405,22 @@ public partial class CollaborativeMarkdownView
         _pendingSelectionText = "";
         _pendingCommentText = "";
 
-        // Strip annotation markers to get clean markdown, then search for the selected text
-        var cleanContent = MarkdownAnnotationParser.StripAllMarkers(RawContent);
-        var idx = cleanContent.IndexOf(selectedText, StringComparison.Ordinal);
-        if (idx < 0)
-            idx = cleanContent.IndexOf(selectedText, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0)
-            return;
-
-        // Map clean-content offsets to annotated-content positions
-        var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(RawContent);
-        var aStart = idx < map.Length ? map[idx] : RawContent.Length;
-        var aEnd = (idx + selectedText.Length) < map.Length
-            ? map[idx + selectedText.Length]
-            : RawContent.Length;
-
-        // Build comment markers with author and date
-        var markerId = Guid.NewGuid().ToString("N")[..8];
-        var date = DateTime.Now.ToString("MMM d");
-        var meta = !string.IsNullOrEmpty(CurrentAuthor) ? $":{CurrentAuthor}:{date}" : "";
-        var openTag = $"<!--comment:{markerId}{meta}-->";
-        var closeTag = $"<!--/comment:{markerId}-->";
-
-        var newContent = RawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
-        var previousContent = RawContent;
-        UpdateContentLocally(newContent);
-        if (!await PostContentUpdateAsync(newContent))
+        // Send CreateCommentRequest to the markdown node's hub — the handler
+        // inserts markers, creates the Comment node, and pushes updated content to the stream.
+        try
         {
-            RevertContent(previousContent);
-            return;
+            await Hub.AwaitResponse(
+                new CreateCommentRequest
+                {
+                    DocumentId = BoundNodePath ?? "",
+                    SelectedText = selectedText,
+                    CommentText = commentText,
+                    Author = CurrentAuthor
+                },
+                o => o.WithTarget(new Address(BoundHubAddress)),
+                default);
         }
-
-        // Create Comment MeshNode linked to the inline marker
-        var meshService = Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService != null && !string.IsNullOrEmpty(BoundNodePath))
-        {
-            var comment = new Comment
-            {
-                Id = markerId,
-                PrimaryNodePath = BoundNodePath,
-                MarkerId = markerId,
-                HighlightedText = selectedText,
-                Author = CurrentAuthor,
-                Text = commentText,
-                CreatedAt = DateTimeOffset.UtcNow,
-                Status = CommentStatus.Active
-            };
-            var commentNode = new MeshNode(markerId, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
-            {
-                Name = $"Comment by {CurrentAuthor}",
-                NodeType = CommentNodeType.NodeType,
-                Content = comment
-            };
-            try { await meshService.CreateNodeAsync(commentNode); }
-            catch { /* markers in content, node creation failed */ }
-        }
+        catch { /* handler failed — content unchanged */ }
     }
 
     // Page-level comment (no text selection)
@@ -475,35 +438,27 @@ public partial class CollaborativeMarkdownView
 
     private async Task SubmitPageComment()
     {
-        if (string.IsNullOrWhiteSpace(_pageCommentText))
+        if (string.IsNullOrWhiteSpace(_pageCommentText) || string.IsNullOrEmpty(BoundHubAddress))
             return;
 
         var text = _pageCommentText;
         _showPageCommentInput = false;
         _pageCommentText = "";
 
-        var meshService = Hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService != null && !string.IsNullOrEmpty(BoundNodePath))
+        // Send CreateCommentRequest with empty SelectedText — handler creates comment node only (no markers)
+        try
         {
-            var commentId = Guid.NewGuid().ToString("N")[..8];
-            var comment = new Comment
-            {
-                Id = commentId,
-                PrimaryNodePath = BoundNodePath,
-                Author = CurrentAuthor,
-                Text = text,
-                CreatedAt = DateTimeOffset.UtcNow,
-                Status = CommentStatus.Active
-            };
-            var commentNode = new MeshNode(commentId, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
-            {
-                Name = $"Comment by {CurrentAuthor}",
-                NodeType = CommentNodeType.NodeType,
-                Content = comment
-            };
-            try { await meshService.CreateNodeAsync(commentNode); }
-            catch { /* creation failed */ }
+            await Hub.AwaitResponse(
+                new CreateCommentRequest
+                {
+                    DocumentId = BoundNodePath ?? "",
+                    CommentText = text,
+                    Author = CurrentAuthor
+                },
+                o => o.WithTarget(new Address(BoundHubAddress)),
+                default);
         }
+        catch { /* handler failed */ }
     }
 
     // Comment helpers

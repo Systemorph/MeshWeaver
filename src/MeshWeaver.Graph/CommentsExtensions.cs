@@ -3,12 +3,15 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown;
+using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph;
 
@@ -35,7 +38,10 @@ public static class CommentsExtensions
     /// </summary>
     public static TBuilder WithCommentType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
-        builder.ConfigureHub(config => config.WithType<Comment>(nameof(Comment)));
+        builder.ConfigureHub(config => config
+            .WithType<Comment>(nameof(Comment))
+            .WithType<CreateCommentRequest>(nameof(CreateCommentRequest))
+            .WithType<CreateCommentResponse>(nameof(CreateCommentResponse)));
         return builder;
     }
 
@@ -49,12 +55,144 @@ public static class CommentsExtensions
     {
         return configuration
             .WithType<Comment>(nameof(Comment))  // Register Comment in type registry
+            .WithType<CreateCommentRequest>(nameof(CreateCommentRequest))
+            .WithType<CreateCommentResponse>(nameof(CreateCommentResponse))
             .Set(new CommentsEnabled())
+            .WithHandler<CreateCommentRequest>(HandleCreateCommentRequest)
             .AddData(data => data.WithDataSource(_ =>
                 new MeshDataSource(Guid.NewGuid().AsString(), data.Workspace)
                     .WithType<Comment>(CommentPartition, nameof(Comment))))
             .AddLayout(layout => layout
                 .WithView(MeshNodeLayoutAreas.CommentsArea, CommentsView.Comments));
+    }
+
+    /// <summary>
+    /// Handles CreateCommentRequest by:
+    ///   1. Reading current markdown content from persistence
+    ///   2. Finding selected text and inserting comment markers (if text selection provided)
+    ///   3. Creating Comment MeshNode via CreateNodeRequest (fire-and-forget)
+    ///   4. Updating markdown content via UpdateNodeRequest (fire-and-forget, pushes to GUI stream)
+    ///   5. Returning CreateCommentResponse immediately
+    /// </summary>
+    private static async Task<IMessageDelivery> HandleCreateCommentRequest(
+        IMessageHub hub,
+        IMessageDelivery<CreateCommentRequest> request,
+        CancellationToken ct)
+    {
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<CommentsEnabled>>();
+        var msg = request.Message;
+
+        try
+        {
+            var nodePath = hub.Address.ToString();
+            var persistence = hub.ServiceProvider.GetService<IMeshStorage>();
+            if (persistence == null)
+            {
+                hub.Post(new CreateCommentResponse { Success = false, Error = "Storage not available" },
+                    o => o.ResponseFor(request));
+                return request.Processed();
+            }
+
+            // Generate marker ID
+            var markerId = Guid.NewGuid().ToString("N")[..8];
+            var author = msg.Author;
+            var selectedText = msg.SelectedText;
+            var hasTextSelection = !string.IsNullOrWhiteSpace(selectedText);
+
+            // If text selection provided, read current content and insert markers
+            if (hasTextSelection)
+            {
+                var currentNode = await persistence.GetNodeAsync(nodePath, ct);
+                if (currentNode?.Content is not MarkdownContent mdContent)
+                {
+                    hub.Post(new CreateCommentResponse { Success = false, Error = "Node is not a Markdown document" },
+                        o => o.ResponseFor(request));
+                    return request.Processed();
+                }
+
+                var rawContent = mdContent.Content;
+
+                // Find selected text using marker-aware position mapping
+                var cleanContent = MarkdownAnnotationParser.StripAllMarkers(rawContent);
+                var idx = cleanContent.IndexOf(selectedText, StringComparison.Ordinal);
+                if (idx < 0)
+                    idx = cleanContent.IndexOf(selectedText, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0)
+                {
+                    hub.Post(new CreateCommentResponse { Success = false, Error = "Selected text not found in document" },
+                        o => o.ResponseFor(request));
+                    return request.Processed();
+                }
+
+                var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(rawContent);
+                var aStart = idx < map.Length ? map[idx] : rawContent.Length;
+                var aEnd = (idx + selectedText.Length) < map.Length
+                    ? map[idx + selectedText.Length]
+                    : rawContent.Length;
+
+                // Build comment markers
+                var date = DateTime.Now.ToString("MMM d");
+                var meta = !string.IsNullOrEmpty(author) ? $":{author}:{date}" : "";
+                var openTag = $"<!--comment:{markerId}{meta}-->";
+                var closeTag = $"<!--/comment:{markerId}-->";
+                var newContent = rawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
+
+                // Update markdown content via UpdateNodeRequest (fire-and-forget)
+                var updatedMdNode = currentNode with
+                {
+                    Content = mdContent with { Content = newContent }
+                };
+                hub.Post(new UpdateNodeRequest(updatedMdNode), o => o.WithTarget(hub.Address));
+            }
+
+            // Create Comment MeshNode via CreateNodeRequest (fire-and-forget with RegisterCallback)
+            var comment = new Comment
+            {
+                Id = markerId,
+                PrimaryNodePath = nodePath,
+                MarkerId = hasTextSelection ? markerId : null,
+                HighlightedText = hasTextSelection ? selectedText : null,
+                Author = author,
+                Text = msg.CommentText,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Status = CommentStatus.Active
+            };
+            var commentNode = new MeshNode(markerId, $"{nodePath}/{CommentPartition}")
+            {
+                Name = $"Comment by {author}",
+                NodeType = CommentNodeType.NodeType,
+                Content = comment
+            };
+
+            var createDelivery = hub.Post(new CreateNodeRequest(commentNode),
+                o => o.WithTarget(hub.Address))!;
+            _ = hub.RegisterCallback<CreateNodeResponse>(createDelivery, response =>
+            {
+                if (!response.Message.Success)
+                    logger.LogWarning("Failed to create comment node at {Path}: {Error}",
+                        commentNode.Path, response.Message.Error);
+                return response;
+            });
+
+            // Return success immediately
+            hub.Post(new CreateCommentResponse
+            {
+                Success = true,
+                CommentId = markerId,
+                MarkerId = markerId
+            }, o => o.ResponseFor(request));
+
+            logger.LogInformation("Comment {MarkerId} created on {Path} by {Author}",
+                markerId, nodePath, author);
+            return request.Processed();
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error creating comment on {Path}", hub.Address);
+            hub.Post(new CreateCommentResponse { Success = false, Error = ex.Message },
+                o => o.ResponseFor(request));
+            return request.Processed();
+        }
     }
 
     /// <summary>
