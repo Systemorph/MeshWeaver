@@ -54,7 +54,13 @@ public enum Permission
     Api = 128,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api).
+    /// Permission to export nodes (download as files).
+    /// Granted to Editor and Admin roles, not to Viewer.
     /// </summary>
-    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api
+    Export = 256,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api, Export).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export
 }
