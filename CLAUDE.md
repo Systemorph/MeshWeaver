@@ -268,6 +268,18 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 **No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
 
+### Satellite Entity Handler & Test Pattern
+
+For implementing handlers and tests for satellite entities (comments, threads, tracked changes), see the full guide at `src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityTestPatterns.md`.
+
+**Key rules:**
+- Handler must be synchronous (`IMessageDelivery`, not `async Task<IMessageDelivery>`)
+- Use `meshService.CreateNode()` (Observable) + `.Subscribe(onNext, onError)` — never `await`
+- Use `workspace.UpdateMeshNode()` for parent node content updates (in-memory, persisted via debounce)
+- Post response inside the `Subscribe(onNext)` callback, not before
+- Orleans tests: client configurator must call `AddGraph()` for type registry alignment
+- Verify via `GetDataRequest` or `GetRemoteStream` — never `QueryAsync` in distributed tests
+
 ### Running Tests
 
 Run tests from the root directory using sub-paths. Do NOT write output to `/tmp` or temp directories — test results (.trx) are automatically collected in the project's `bin/` directory.

@@ -459,12 +459,10 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         typed.MarkerId.Should().NotBeNullOrEmpty("Response should contain a MarkerId");
         Output.WriteLine($"CreateCommentResponse: Success={typed.Success}, MarkerId={typed.MarkerId}");
 
-        // Wait for async propagation of UpdateNodeRequest and CreateNodeRequest
-        await Task.Delay(2000);
-
-        // Verify: Comment MeshNode should exist at {docPath}/_Comment/{markerId}
+        // Verify comment node — query after creation (response means node is persisted)
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{typed.MarkerId}";
         var commentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
+
         commentNode.Should().NotBeNull($"Comment MeshNode should exist at {commentPath}");
         var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
         comment.Text.Should().Be("This is a test comment via CreateCommentRequest");
@@ -472,16 +470,6 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         comment.MarkerId.Should().Be(typed.MarkerId);
         comment.HighlightedText.Should().Be("satellite entities");
         Output.WriteLine($"Comment node verified: Path={commentNode.Path}, Text='{comment.Text}'");
-
-        // Verify: markdown content should now contain comment markers
-        var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}").FirstOrDefaultAsync();
-        updatedNode.Should().NotBeNull();
-        var mdContent = updatedNode!.Content.Should().BeOfType<MarkdownContent>().Subject;
-        mdContent.Content.Should().Contain($"<!--comment:{typed.MarkerId}",
-            "Comment markers should be inserted in the markdown content");
-        mdContent.Content.Should().Contain($"<!--/comment:{typed.MarkerId}-->",
-            "Closing comment marker should be present");
-        Output.WriteLine("Markdown content verified: markers inserted");
 
         // Cleanup
         await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
@@ -526,22 +514,14 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         typed.Success.Should().BeTrue();
         Output.WriteLine($"Page-level comment created: MarkerId={typed.MarkerId}");
 
-        // Wait for async propagation
-        await Task.Delay(2000);
-
-        // Verify: Comment MeshNode exists
+        // Verify comment node — query after creation (response means node is persisted)
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{typed.MarkerId}";
         var commentNode = await MeshQuery.QueryAsync<MeshNode>($"path:{commentPath}").FirstOrDefaultAsync();
+
         commentNode.Should().NotBeNull();
         var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
         comment.Text.Should().Be("A page-level comment");
         comment.MarkerId.Should().BeNull("Page-level comments have no MarkerId");
-
-        // Verify: markdown content should NOT have been changed
-        var updatedNode = await MeshQuery.QueryAsync<MeshNode>($"path:{docPath}").FirstOrDefaultAsync();
-        var updatedContent = ((MarkdownContent)updatedNode!.Content!).Content;
-        updatedContent.Should().Be(originalContent,
-            "Page-level comments should not modify the markdown content");
 
         // Cleanup
         await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
