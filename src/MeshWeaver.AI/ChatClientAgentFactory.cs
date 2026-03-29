@@ -1,6 +1,8 @@
+using System.Collections.Immutable;
 using System.Text;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Agents.AI;
@@ -256,59 +258,78 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             }
                             else
                             {
-                                // 3. Wait for execution to complete by polling the sub-thread messages.
-                                //    Forward the sub-agent's ExecutionStatus and text preview to the parent.
-                                // Ensure access context is set for polling queries
-                                var accessService = Hub.ServiceProvider.GetService<AccessService>();
+                                // 3. Wait for execution to complete via reactive remote stream subscription.
+                                //    Subscribe to the child thread's MeshNode and propagate its ActiveProgress
+                                //    into the parent's ActiveProgress tree. Works in distributed Orleans mode.
+                                var workspace = Hub.GetWorkspace();
+                                var childStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                                    new Address(subThreadPath!), new MeshNodeReference());
 
-                                var completed = false;
-                                var pollTimeout = DateTime.UtcNow.AddMinutes(5);
-                                var forwardedToolCallCount = 0; // Track how many we've already forwarded
+                                var completionTcs = new TaskCompletionSource<bool>();
 
-                                while (!completed && DateTime.UtcNow < pollTimeout && !cancellationToken.IsCancellationRequested)
+                                var subscription = childStream.Subscribe(change =>
                                 {
-                                    await Task.Delay(500, cancellationToken);
+                                    var childNode = change.Value;
+                                    var childThread = childNode?.Content as MeshThread;
+                                    if (childThread == null) return;
 
-                                    // Restore user context for the query (AsyncLocal may be lost after await)
-                                    if (execCtx.UserAccessContext != null)
-                                        accessService?.SetContext(execCtx.UserAccessContext);
-
-                                    // Check sub-thread's Thread content for execution state
-                                    var polledThreadNode = await meshService.QueryAsync<MeshNode>(
-                                        $"path:{subThreadPath}").FirstOrDefaultAsync(cancellationToken);
-                                    var subThread = polledThreadNode?.Content as MeshThread;
-
-                                    // Forward NEW tool calls from sub-thread assistant messages
-                                    await foreach (var node in meshService.QueryAsync<MeshNode>(
-                                        $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
-                                    {
-                                        if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
+                                    // Build child's progress entry from its own ActiveProgress or fallback
+                                    var childEntry = childThread.ActiveProgress
+                                        ?? new ThreadProgressEntry
                                         {
-                                            if (tmsg.ToolCalls.Count > forwardedToolCallCount)
-                                            {
-                                                for (var i = forwardedToolCallCount; i < tmsg.ToolCalls.Count; i++)
-                                                {
-                                                    var subCall = tmsg.ToolCalls[i];
-                                                    chat.ForwardToolCall?.Invoke(subCall with
-                                                    {
-                                                        DisplayName = $"{targetId}: {subCall.DisplayName ?? subCall.Name}",
-                                                        DelegationPath = subThreadPath
-                                                    });
-                                                }
-                                                forwardedToolCallCount = tmsg.ToolCalls.Count;
-                                            }
-                                        }
-                                    }
+                                            ThreadPath = subThreadPath!,
+                                            ThreadName = targetId,
+                                            Status = childThread.ExecutionStatus
+                                        };
 
-                                    // Check completion via Thread.IsExecuting
-                                    if (subThread is { IsExecuting: false })
+                                    if (!childThread.IsExecuting)
+                                        childEntry = childEntry with { IsCompleted = true };
+
+                                    // Merge child's progress into parent's ActiveProgress
+                                    workspace.UpdateMeshNode(node =>
                                     {
-                                        completed = true;
+                                        var thread = node.Content as MeshThread ?? new MeshThread();
+                                        var selfEntry = thread.ActiveProgress
+                                            ?? new ThreadProgressEntry
+                                            {
+                                                ThreadPath = execCtx.ThreadPath,
+                                                ThreadName = "Agent"
+                                            };
+
+                                        var children = selfEntry.Children
+                                            .Where(c => c.ThreadPath != subThreadPath)
+                                            .Append(childEntry)
+                                            .ToImmutableList();
+
+                                        return node with
+                                        {
+                                            Content = thread with
+                                            {
+                                                ActiveProgress = selfEntry with { Children = children }
+                                            }
+                                        };
+                                    });
+
+                                    // Update delegation status text
+                                    if (childThread.IsExecuting)
+                                    {
+                                        chat.UpdateDelegationStatus?.Invoke(
+                                            $"{targetId}: {childThread.ExecutionStatus ?? "Processing..."}");
                                     }
                                     else
                                     {
-                                        chat.UpdateDelegationStatus?.Invoke($"{targetId}: Processing...");
+                                        completionTcs.TrySetResult(true);
                                     }
+                                });
+
+                                // Wait for completion reactively (replaces polling while loop)
+                                try
+                                {
+                                    await completionTcs.Task.WaitAsync(TimeSpan.FromMinutes(5), cancellationToken);
+                                }
+                                finally
+                                {
+                                    subscription.Dispose();
                                 }
                             }
 

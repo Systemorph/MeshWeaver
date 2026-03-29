@@ -37,6 +37,9 @@ public record ThreadViewModel
     /// <summary>When the current execution started (for elapsed time display).</summary>
     public DateTime? ExecutionStartedAt { get; init; }
 
+    /// <summary>Hierarchical progress tree of all active executions (this thread + sub-threads).</summary>
+    public ThreadProgressEntry? ActiveProgress { get; init; }
+
     public virtual bool Equals(ThreadViewModel? other)
     {
         if (other is null) return false;
@@ -50,6 +53,7 @@ public record ThreadViewModel
                && ExecutionStatus == other.ExecutionStatus
                && TokensUsed == other.TokensUsed
                && ExecutionStartedAt == other.ExecutionStartedAt
+               && Equals(ActiveProgress, other.ActiveProgress)
                && Messages.SequenceEqual(other.Messages);
     }
 
@@ -65,6 +69,7 @@ public record ThreadViewModel
         hash.Add(ExecutionStatus);
         hash.Add(TokensUsed);
         hash.Add(ExecutionStartedAt);
+        hash.Add(ActiveProgress);
         foreach (var msg in Messages)
             hash.Add(msg);
         return hash.ToHashCode();

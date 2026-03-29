@@ -128,6 +128,36 @@ public record Thread
     /// When the current execution started. Used to show elapsed time.
     /// </summary>
     public DateTime? ExecutionStartedAt { get; init; }
+
+    /// <summary>
+    /// Hierarchical progress tree of all active executions in this thread and its sub-threads.
+    /// Each entry represents one thread in the delegation chain; leaf entries are actively streaming.
+    /// Updated during execution and delegation polling; cleared when execution completes.
+    /// </summary>
+    public ThreadProgressEntry? ActiveProgress { get; init; }
+}
+
+/// <summary>
+/// Represents a node in the hierarchical execution progress tree.
+/// Each thread maintains its own progress entry; parent threads aggregate children's entries
+/// by polling sub-thread MeshNodes during delegation.
+/// </summary>
+public record ThreadProgressEntry
+{
+    /// <summary>Full path of the thread node.</summary>
+    public required string ThreadPath { get; init; }
+
+    /// <summary>Display name (agent name or thread title).</summary>
+    public required string ThreadName { get; init; }
+
+    /// <summary>Current execution status (tool name, arguments, "Generating response...", etc.).</summary>
+    public string? Status { get; init; }
+
+    /// <summary>Whether this thread's execution has completed (shown with checkmark in UI).</summary>
+    public bool IsCompleted { get; init; }
+
+    /// <summary>Active sub-thread progress entries (parallel delegations appear as siblings).</summary>
+    public ImmutableList<ThreadProgressEntry> Children { get; init; } = [];
 }
 
 /// <summary>

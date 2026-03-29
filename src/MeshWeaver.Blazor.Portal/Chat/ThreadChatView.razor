@@ -6,6 +6,7 @@
 @using FluentVerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 @using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
+@using MeshWeaver.AI
 @inject NavigationManager NavigationManager
 
 <div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")" style="@Style">
@@ -63,42 +64,59 @@ else
         @if (ThreadViewModel?.IsExecuting == true || !submissionHandler.IsInputEnabled || isCancelling)
         {
             <div class="chat-progress-bar">
-                <FluentProgressRing Style="width: 18px; height: 18px;" />
-                <span class="chat-progress-text">
-                    @if (isCancelling)
-                    {
-                        @:Cancelling...
-                    }
-                    else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
-                    {
-                        @:Sending...
-                    }
-                    else if (!string.IsNullOrEmpty(ThreadViewModel?.ExecutionStatus))
-                    {
-                        @ThreadViewModel.ExecutionStatus
-                    }
-                    else
-                    {
-                        @:Generating response...
-                    }
-                </span>
-                <span class="chat-progress-meta">
-                    @if (ThreadViewModel?.TokensUsed > 0)
-                    {
-                        @($"{ThreadViewModel.TokensUsed:N0} tokens")
-                    }
-                    @if (ThreadViewModel?.ExecutionStartedAt != null)
-                    {
-                        var elapsed = DateTime.UtcNow - ThreadViewModel.ExecutionStartedAt.Value;
-                        @($" · {elapsed.TotalSeconds:F0}s")
-                    }
-                </span>
-                @if (!isCancelling && (ThreadViewModel?.IsExecuting == true || !submissionHandler.IsInputEnabled))
+                @if (isCancelling)
                 {
-                    <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
-                    </FluentButton>
+                    <div class="chat-progress-row">
+                        <FluentProgressRing Style="width: 18px; height: 18px;" />
+                        <span class="chat-progress-text">Cancelling...</span>
+                    </div>
                 }
+                else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
+                {
+                    <div class="chat-progress-row">
+                        <FluentProgressRing Style="width: 18px; height: 18px;" />
+                        <span class="chat-progress-text">Sending...</span>
+                    </div>
+                }
+                else if (ThreadViewModel?.ActiveProgress is { } progress)
+                {
+                    <div class="chat-progress-tree">
+                        @RenderProgressTree(progress, 0)
+                    </div>
+                }
+                else if (!string.IsNullOrEmpty(ThreadViewModel?.ExecutionStatus))
+                {
+                    <div class="chat-progress-row">
+                        <FluentProgressRing Style="width: 18px; height: 18px;" />
+                        <span class="chat-progress-text">@ThreadViewModel.ExecutionStatus</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="chat-progress-row">
+                        <FluentProgressRing Style="width: 18px; height: 18px;" />
+                        <span class="chat-progress-text">Generating response...</span>
+                    </div>
+                }
+                <div class="chat-progress-footer">
+                    <span class="chat-progress-meta">
+                        @if (ThreadViewModel?.TokensUsed > 0)
+                        {
+                            @($"{ThreadViewModel.TokensUsed:N0} tokens")
+                        }
+                        @if (ThreadViewModel?.ExecutionStartedAt != null)
+                        {
+                            var elapsed = DateTime.UtcNow - ThreadViewModel.ExecutionStartedAt.Value;
+                            @($" · {elapsed.TotalSeconds:F0}s")
+                        }
+                    </span>
+                    @if (!isCancelling && (ThreadViewModel?.IsExecuting == true || !submissionHandler.IsInputEnabled))
+                    {
+                        <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
+                        </FluentButton>
+                    }
+                </div>
             </div>
         }
 
@@ -183,3 +201,55 @@ else
     </div>
 }
 </div>
+
+@code {
+    private RenderFragment RenderProgressTree(ThreadProgressEntry entry, int depth) => __builder =>
+    {
+        var hasChildren = entry.Children.Count > 0;
+        var indent = depth * 16;
+
+        if (hasChildren)
+        {
+            <details class="progress-tree-node @(entry.IsCompleted ? "progress-tree-completed" : "")" style="margin-left: @(indent)px;" open>
+                <summary class="progress-tree-summary">
+                    @if (entry.IsCompleted)
+                    {
+                        <span class="progress-tree-check">&#10003;</span>
+                    }
+                    <span class="progress-tree-name">@entry.ThreadName</span>
+                    @if (!string.IsNullOrEmpty(entry.Status))
+                    {
+                        <span class="progress-tree-status">@GetStatusTitle(entry.Status)</span>
+                    }
+                </summary>
+                @foreach (var child in entry.Children)
+                {
+                    @RenderProgressTree(child, depth + 1)
+                }
+            </details>
+        }
+        else if (entry.IsCompleted)
+        {
+            <div class="progress-tree-leaf progress-tree-completed" style="margin-left: @(indent)px;">
+                <span class="progress-tree-check">&#10003;</span>
+                <span class="progress-tree-name">@entry.ThreadName</span>
+                <span class="progress-tree-status">Done</span>
+            </div>
+        }
+        else
+        {
+            <div class="progress-tree-leaf" style="margin-left: @(indent)px;">
+                <FluentProgressRing Style="width: 14px; height: 14px; flex-shrink: 0;" />
+                <span class="progress-tree-name">@entry.ThreadName</span>
+                <span class="progress-tree-status">@(GetStatusTitle(entry.Status) ?? "Generating response...")</span>
+            </div>
+        }
+    };
+
+    private static string? GetStatusTitle(string? status)
+    {
+        if (string.IsNullOrEmpty(status)) return null;
+        var nl = status.IndexOf('\n');
+        return nl > 0 ? status[..nl] : status;
+    }
+}

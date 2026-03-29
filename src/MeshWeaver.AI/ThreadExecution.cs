@@ -63,7 +63,8 @@ public static class ThreadExecution
                         ExecutionStatus = null,
                         ActiveMessageId = null,
                         TokensUsed = 0,
-                        ExecutionStartedAt = null
+                        ExecutionStartedAt = null,
+                        ActiveProgress = null
                     }
                 };
                 await meshService.UpdateNodeAsync(recovered, ct);
@@ -312,6 +313,20 @@ public static class ThreadExecution
             });
             chatClient.UpdateDelegationStatus = status => { currentStatus = status; };
             chatClient.ForwardToolCall = entry => { toolCallLog.Add(entry); };
+
+            // Self-entry for hierarchical progress display.
+            // Children are managed by ChatClientAgentFactory via remote stream subscriptions.
+            var agentDisplayName = request.AgentName ?? "Agent";
+            UpdateThreadExecution(t => t with
+            {
+                ActiveProgress = new ThreadProgressEntry
+                {
+                    ThreadPath = threadPath,
+                    ThreadName = agentDisplayName,
+                    Status = "Generating response..."
+                }
+            });
+
             var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
 
             await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
@@ -396,8 +411,17 @@ public static class ThreadExecution
                             responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                             [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
                     });
-                    // Update Thread execution status
-                    UpdateThreadExecution(t => t with { ExecutionStatus = status });
+                    // Update Thread execution status + self-entry in ActiveProgress
+                    // (children are managed by ChatClientAgentFactory remote stream subscriptions)
+                    UpdateThreadExecution(t => t with
+                    {
+                        ExecutionStatus = status,
+                        ActiveProgress = (t.ActiveProgress ?? new ThreadProgressEntry
+                        {
+                            ThreadPath = threadPath,
+                            ThreadName = agentDisplayName
+                        }) with { Status = status }
+                    });
                     lastStatusUpdate = DateTimeOffset.UtcNow;
                 }
 
@@ -460,7 +484,7 @@ public static class ThreadExecution
             // Clear Thread execution state
             UpdateThreadExecution(t => t with
             {
-                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null
+                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null, ActiveProgress = null
             });
         }
         catch (OperationCanceledException)
@@ -493,7 +517,7 @@ public static class ThreadExecution
 
             UpdateThreadExecution(t => t with
             {
-                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null
+                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null, ActiveProgress = null
             });
         }
         catch (Exception ex)
@@ -526,7 +550,7 @@ public static class ThreadExecution
 
             UpdateThreadExecution(t => t with
             {
-                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null
+                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null, ActiveProgress = null
             });
         }
 

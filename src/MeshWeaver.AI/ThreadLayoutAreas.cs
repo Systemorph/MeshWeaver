@@ -144,7 +144,8 @@ public static class ThreadLayoutAreas
                 IsExecuting = threadContent?.IsExecuting ?? false,
                 ExecutionStatus = threadContent?.ExecutionStatus,
                 TokensUsed = threadContent?.TokensUsed ?? 0,
-                ExecutionStartedAt = threadContent?.ExecutionStartedAt
+                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
+                ActiveProgress = threadContent?.ActiveProgress
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
@@ -221,7 +222,8 @@ public static class ThreadLayoutAreas
                 IsExecuting = threadContent?.IsExecuting ?? false,
                 ExecutionStatus = threadContent?.ExecutionStatus,
                 TokensUsed = threadContent?.TokensUsed ?? 0,
-                ExecutionStartedAt = threadContent?.ExecutionStartedAt
+                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
+                ActiveProgress = threadContent?.ActiveProgress
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));

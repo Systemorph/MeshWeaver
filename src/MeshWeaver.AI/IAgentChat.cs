@@ -91,4 +91,5 @@ public interface IAgentChat
     /// Called during delegation polling when new tool calls are detected on sub-threads.
     /// </summary>
     Action<ToolCallEntry>? ForwardToolCall { get => null; set { } }
+
 }
