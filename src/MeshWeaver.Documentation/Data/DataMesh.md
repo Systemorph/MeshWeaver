@@ -257,6 +257,7 @@ Data products are **nodes in a graph** — each with a clear owner, schema, and 
 - **[Addressable Paths](UnifiedPath)** — Every product gets a permanent, unique address in the mesh
 - **[Query Language](QuerySyntax)** — GitHub-style search syntax to discover and filter across products
 - **[CRUD Operations](CRUD)** — Type-safe create, read, update, delete for any product
+- **[Node Operations](NodeOperations)** — Export, Import, Copy, and Move node subtrees
 - **[Data Modeling](DataModeling)** — C# records as the schema contract between producers and consumers
 - **[Satellite Entities](SatelliteEntities)** — Comments, approvals, access, and audit trails attach to any node
 - **[Interactive Markdown](InteractiveMarkdown)** — Embed live data and charts directly inside documentation

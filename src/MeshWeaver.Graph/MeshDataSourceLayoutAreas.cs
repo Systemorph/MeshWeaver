@@ -129,12 +129,7 @@ public static class MeshDataSourceLayoutAreas
 
         buttonRow = buttonRow.WithView(Controls.Button("Export")
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
-            {
-                var dialog = ExportLayoutArea.BuildExportDialog(ctx.Host, node, hubPath);
-                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                return Task.CompletedTask;
-            }));
+            .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea)));
 
         stack = stack.WithView(buttonRow);
 
@@ -214,12 +209,7 @@ public static class MeshDataSourceLayoutAreas
 
         buttonRow = buttonRow.WithView(Controls.Button("Export")
             .WithAppearance(Appearance.Outline)
-            .WithClickAction(ctx =>
-            {
-                var dialog = ExportLayoutArea.BuildExportDialog(ctx.Host, node, hubPath);
-                ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
-                return Task.CompletedTask;
-            }));
+            .WithNavigateToHref(MeshNodeLayoutAreas.BuildUrl(hubPath, MeshNodeLayoutAreas.ExportArea)));
 
         stack = stack.WithView(buttonRow);
 
