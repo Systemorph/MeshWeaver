@@ -44,6 +44,13 @@ public partial class CollaborativeMarkdownView
     private bool jsInitialized;
     private bool commentSelectionInitialized;
 
+    // Comment input state
+    private bool _showCommentInput;
+    private string _pendingSelectionText = "";
+    private string _pendingCommentText = "";
+    private bool _showPageCommentInput;
+    private string _pageCommentText = "";
+
     // Parsed data
     private string? _processedHtml;
     private List<ParsedAnnotation> Annotations = new();
@@ -363,25 +370,46 @@ public partial class CollaborativeMarkdownView
 
     /// <summary>
     /// Called from JS when user selects text and clicks the "Comment" button.
-    /// Finds the selected text in the raw content and inserts comment markers.
+    /// Shows the comment input form instead of creating immediately.
     /// </summary>
     [JSInvokable]
-    public async Task OnCommentFromSelection(string selectedText)
+    public Task OnCommentFromSelection(string selectedText)
     {
         if (string.IsNullOrWhiteSpace(selectedText) || string.IsNullOrEmpty(RawContent))
+            return Task.CompletedTask;
+
+        _pendingSelectionText = selectedText;
+        _pendingCommentText = "";
+        _showCommentInput = true;
+        InvokeAsync(StateHasChanged);
+        return Task.CompletedTask;
+    }
+
+    private void CancelSelectionComment()
+    {
+        _showCommentInput = false;
+        _pendingSelectionText = "";
+        _pendingCommentText = "";
+    }
+
+    private async Task SubmitSelectionComment()
+    {
+        if (string.IsNullOrWhiteSpace(_pendingSelectionText))
             return;
+
+        var selectedText = _pendingSelectionText;
+        var commentText = _pendingCommentText;
+        _showCommentInput = false;
+        _pendingSelectionText = "";
+        _pendingCommentText = "";
 
         // Strip annotation markers to get clean markdown, then search for the selected text
         var cleanContent = MarkdownAnnotationParser.StripAllMarkers(RawContent);
         var idx = cleanContent.IndexOf(selectedText, StringComparison.Ordinal);
         if (idx < 0)
-        {
-            // Try case-insensitive search as fallback
             idx = cleanContent.IndexOf(selectedText, StringComparison.OrdinalIgnoreCase);
-        }
-
         if (idx < 0)
-            return; // Could not locate the selected text in the markdown
+            return;
 
         // Map clean-content offsets to annotated-content positions
         var map = MarkdownAnnotationParser.BuildCleanToAnnotatedMap(RawContent);
@@ -417,7 +445,8 @@ public partial class CollaborativeMarkdownView
                 MarkerId = markerId,
                 HighlightedText = selectedText,
                 Author = CurrentAuthor,
-                Text = "",
+                Text = commentText,
+                CreatedAt = DateTimeOffset.UtcNow,
                 Status = CommentStatus.Active
             };
             var commentNode = new MeshNode(markerId, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
@@ -428,6 +457,52 @@ public partial class CollaborativeMarkdownView
             };
             try { await meshService.CreateNodeAsync(commentNode); }
             catch { /* markers in content, node creation failed */ }
+        }
+    }
+
+    // Page-level comment (no text selection)
+    private void StartPageComment()
+    {
+        _showPageCommentInput = true;
+        _pageCommentText = "";
+    }
+
+    private void CancelPageComment()
+    {
+        _showPageCommentInput = false;
+        _pageCommentText = "";
+    }
+
+    private async Task SubmitPageComment()
+    {
+        if (string.IsNullOrWhiteSpace(_pageCommentText))
+            return;
+
+        var text = _pageCommentText;
+        _showPageCommentInput = false;
+        _pageCommentText = "";
+
+        var meshService = Hub.ServiceProvider.GetService<IMeshService>();
+        if (meshService != null && !string.IsNullOrEmpty(BoundNodePath))
+        {
+            var commentId = Guid.NewGuid().ToString("N")[..8];
+            var comment = new Comment
+            {
+                Id = commentId,
+                PrimaryNodePath = BoundNodePath,
+                Author = CurrentAuthor,
+                Text = text,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Status = CommentStatus.Active
+            };
+            var commentNode = new MeshNode(commentId, $"{BoundNodePath}/{CommentsExtensions.CommentPartition}")
+            {
+                Name = $"Comment by {CurrentAuthor}",
+                NodeType = CommentNodeType.NodeType,
+                Content = comment
+            };
+            try { await meshService.CreateNodeAsync(commentNode); }
+            catch { /* creation failed */ }
         }
     }
 
