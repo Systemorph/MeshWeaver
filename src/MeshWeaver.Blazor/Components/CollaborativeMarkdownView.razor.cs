@@ -10,6 +10,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using System.Reactive.Linq;
 using System.Text.Json;
@@ -396,8 +397,13 @@ public partial class CollaborativeMarkdownView
 
     private async Task SubmitSelectionComment()
     {
+        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
         if (string.IsNullOrWhiteSpace(_pendingSelectionText) || string.IsNullOrEmpty(BoundHubAddress))
+        {
+            logger?.LogWarning("[SubmitComment] Skipped: PendingText={HasText}, HubAddress={Address}",
+                !string.IsNullOrWhiteSpace(_pendingSelectionText), BoundHubAddress);
             return;
+        }
 
         var selectedText = _pendingSelectionText;
         var commentText = _pendingCommentText;
@@ -405,11 +411,14 @@ public partial class CollaborativeMarkdownView
         _pendingSelectionText = "";
         _pendingCommentText = "";
 
+        logger?.LogInformation("[SubmitComment] Sending CreateCommentRequest to {Address}, SelectedText='{Text}', NodePath={NodePath}",
+            BoundHubAddress, selectedText.Length > 50 ? selectedText[..50] + "..." : selectedText, BoundNodePath);
+
         // Send CreateCommentRequest to the markdown node's hub — the handler
         // inserts markers, creates the Comment node, and pushes updated content to the stream.
         try
         {
-            await Hub.AwaitResponse(
+            var response = await Hub.AwaitResponse(
                 new CreateCommentRequest
                 {
                     DocumentId = BoundNodePath ?? "",
@@ -419,8 +428,13 @@ public partial class CollaborativeMarkdownView
                 },
                 o => o.WithTarget(new Address(BoundHubAddress)),
                 default);
+
+            logger?.LogInformation("[SubmitComment] Response received: {ResponseType}", response.Message?.GetType().Name);
         }
-        catch { /* handler failed — content unchanged */ }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "[SubmitComment] FAILED sending to {Address}", BoundHubAddress);
+        }
     }
 
     // Page-level comment (no text selection)
@@ -445,10 +459,13 @@ public partial class CollaborativeMarkdownView
         _showPageCommentInput = false;
         _pageCommentText = "";
 
+        var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+        logger?.LogInformation("[SubmitPageComment] Sending to {Address}, NodePath={NodePath}", BoundHubAddress, BoundNodePath);
+
         // Send CreateCommentRequest with empty SelectedText — handler creates comment node only (no markers)
         try
         {
-            await Hub.AwaitResponse(
+            var response = await Hub.AwaitResponse(
                 new CreateCommentRequest
                 {
                     DocumentId = BoundNodePath ?? "",
@@ -457,8 +474,13 @@ public partial class CollaborativeMarkdownView
                 },
                 o => o.WithTarget(new Address(BoundHubAddress)),
                 default);
+
+            logger?.LogInformation("[SubmitPageComment] Response: {ResponseType}", response.Message?.GetType().Name);
         }
-        catch { /* handler failed */ }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "[SubmitPageComment] FAILED sending to {Address}", BoundHubAddress);
+        }
     }
 
     // Comment helpers

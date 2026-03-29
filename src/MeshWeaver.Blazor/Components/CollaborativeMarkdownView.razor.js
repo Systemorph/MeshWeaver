@@ -288,14 +288,16 @@ export function enableCommentSelection(containerEl, dotNetRef) {
                 return;
             }
 
-            // Position the button near the end of the selection
+            // Position the button centered above the selection
             const range = sel.getRangeAt(0);
             const rect = range.getBoundingClientRect();
             const containerRect = containerEl.getBoundingClientRect();
+            const btnWidth = 90; // approximate button width
 
             _commentButton.style.display = 'block';
-            _commentButton.style.top = (rect.bottom - containerRect.top + 4) + 'px';
-            _commentButton.style.left = (rect.right - containerRect.left) + 'px';
+            const centerX = (rect.left + rect.right) / 2 - containerRect.left - btnWidth / 2;
+            _commentButton.style.top = (rect.top - containerRect.top - 32) + 'px';
+            _commentButton.style.left = Math.max(0, centerX) + 'px';
         }, 10);
     };
 
