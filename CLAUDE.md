@@ -268,9 +268,9 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 
 **No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
 
-### Satellite Entity Handler & Test Pattern
+### Satellite Entity Patterns
 
-For implementing handlers and tests for satellite entities (comments, threads, tracked changes), see the full guide at `src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityTestPatterns.md`.
+For implementing and testing satellite entities (comments, threads, tracked changes), see `src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityPatterns.md`.
 
 **Key rules:**
 - Handler must be synchronous (`IMessageDelivery`, not `async Task<IMessageDelivery>`)

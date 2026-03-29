@@ -1,10 +1,25 @@
 ---
-Name: Satellite Entity Handler & Test Patterns
+Name: Satellite Entity Patterns
 Category: Architecture
-Description: How to implement handlers and write tests for satellite entities (comments, threads, tracked changes)
+Description: Implementation and test patterns for satellite entities (comments, threads, tracked changes) — data model, handlers, workspace updates, and Orleans testing
 ---
 
-Satellite entities (Comments, Threads, Tracked Changes) follow a specific pattern for both handler implementation and testing. This document covers the non-blocking handler pattern and the reactive test verification approach.
+Satellite entities (Comments, Threads, Tracked Changes) follow a specific pattern for both handler implementation and testing. This document covers the non-blocking handler pattern, the parent-child tracking pattern, and the reactive test verification approach.
+
+## Data Model Pattern: Parent Tracks Children
+
+Satellite entities use an `ImmutableList<string>` on the parent to track child IDs. This is how the layout area knows which children to render — it reads the list from the workspace stream, not from queries.
+
+| Entity | Parent Field | Children |
+|--------|-------------|----------|
+| Thread | `Messages: ImmutableList<string>` | ThreadMessage nodes |
+| Comment | `Replies: ImmutableList<string>` | Reply Comment nodes |
+
+When a child is created, the handler updates the parent's list via `workspace.UpdateMeshNode()`. The layout area reads the list from the node stream and renders `LayoutArea` controls for each child path.
+
+### Top-level vs Reply detection
+
+A comment is top-level when its namespace ends with `_Comment` (e.g., `Doc/MyDoc/_Comment`). A reply's namespace is the parent comment path (e.g., `Doc/MyDoc/_Comment/c1`). No need to load the parent — just inspect the path.
 
 ## Handler Pattern
 
@@ -28,8 +43,18 @@ internal static IMessageDelivery HandleSubmitMessage(
     inputObs.Zip(outputObs).Subscribe(
         pair =>
         {
-            // 3) Update parent node via workspace stream (synchronous, in-memory)
-            workspace.UpdateMeshNode(node => node with { Content = ... });
+            // 3) Update parent node — add child IDs to tracking list
+            workspace.UpdateMeshNode(node =>
+            {
+                var thread = node.Content as Thread ?? new Thread();
+                return node with
+                {
+                    Content = thread with
+                    {
+                        Messages = thread.Messages.AddRange([userMsgId, responseMsgId])
+                    }
+                };
+            });
 
             // 4) Post response INSIDE the callback (after nodes exist)
             hub.Post(new Response { Success = true }, o => o.ResponseFor(delivery));
@@ -48,12 +73,32 @@ internal static IMessageDelivery HandleSubmitMessage(
 ### Rules
 
 1. **Synchronous signature**: `IMessageDelivery` return type, never `async Task<IMessageDelivery>`
-2. **Never await**: No `await` inside handlers. Use `Observable.Subscribe()` for async operations
+2. **Never await — anywhere in the message pipeline**: `await` == deadlock in Orleans. This applies to handlers, Blazor components sending requests, and any code on the hub execution path. Use `Post` + `RegisterCallback` instead of `AwaitResponse`.
 3. **Never use IMeshStorage/persistence directly**: Use `IMeshService` for CRUD, `workspace.UpdateMeshNode()` for in-memory updates
 4. **Capture workspace before Subscribe**: `var workspace = hub.GetWorkspace()` must be called before entering the Subscribe callback
 5. **Post response in callback**: The response must be posted inside `Subscribe(onNext)`, not before — the caller needs to know the operation completed
-6. **Use `meshService.CreateNode()`**: Returns `IObservable<MeshNode>` — internally uses `Post` + `RegisterCallback`
-7. **Use `workspace.UpdateMeshNode()`**: Updates the in-memory workspace stream, which triggers persistence via the debounced `MeshNodeTypeSource`
+6. **Wrap onNext in try/catch**: If `workspace.UpdateMeshNode()` or any code in the Subscribe callback throws, catch the exception and post a negative response. Otherwise the caller hangs forever waiting.
+7. **Use `meshService.CreateNode()`**: Returns `IObservable<MeshNode>` — internally uses `Post` + `RegisterCallback`
+8. **Use `workspace.UpdateMeshNode()`**: Updates the in-memory workspace stream, which triggers persistence via the debounced `MeshNodeTypeSource`
+
+### Blazor Component Pattern
+
+Blazor components must also use `Post` + `RegisterCallback`, not `AwaitResponse`:
+
+```csharp
+// CORRECT: fire-and-forget with callback
+var delivery = Hub.Post(new CreateCommentRequest { ... },
+    o => o.WithTarget(new Address(hubAddress)));
+Hub.RegisterCallback<CreateCommentResponse>(delivery!, response =>
+{
+    if (!response.Message.Success)
+        logger?.LogWarning("Failed: {Error}", response.Message.Error);
+    return response;
+});
+
+// WRONG: AwaitResponse blocks the Blazor circuit if response never comes
+await Hub.AwaitResponse(request, o => o.WithTarget(address), default);  // DEADLOCK
+```
 
 ### Anti-Patterns
 
@@ -71,6 +116,27 @@ await persistence.SaveNodeAsync(node, ct);  // WRONG
 // WRONG: posting response before async operation completes
 hub.Post(response, o => o.ResponseFor(request));  // too early
 meshService.CreateNode(node).Subscribe(...);       // not done yet
+
+// WRONG: no error handling in Subscribe callback — caller hangs forever
+meshService.CreateNode(node).Subscribe(_ =>
+{
+    workspace.UpdateMeshNode(...);  // throws? response never posted!
+    hub.Post(response, o => o.ResponseFor(request));
+}, ...);
+
+// CORRECT: wrap in try/catch, always post response
+meshService.CreateNode(node).Subscribe(_ =>
+{
+    try
+    {
+        workspace.UpdateMeshNode(...);
+        hub.Post(successResponse, o => o.ResponseFor(request));
+    }
+    catch (Exception ex)
+    {
+        hub.Post(failureResponse, o => o.ResponseFor(request));
+    }
+}, ...);
 ```
 
 ## Test Pattern

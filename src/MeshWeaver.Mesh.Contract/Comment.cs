@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using MeshWeaver.Layout;
@@ -78,6 +79,14 @@ public record Comment
     /// </summary>
     [Browsable(false)]
     public CommentStatus Status { get; init; } = CommentStatus.Active;
+
+    /// <summary>
+    /// Child reply node IDs. Parent comment tracks and keeps up to date.
+    /// Same pattern as Thread.Messages — updated via workspace.UpdateMeshNode()
+    /// when a reply is created.
+    /// </summary>
+    [Browsable(false)]
+    public ImmutableList<string> Replies { get; init; } = [];
 }
 
 /// <summary>
