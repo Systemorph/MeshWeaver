@@ -57,13 +57,17 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var parsed = _parser.Parse(request.Query);
+        var context = request.Context ?? parsed.Context;
+
+        // Static nodes are infrastructure (type definitions, roles, agents), not user content.
+        // When searching in "search" context, skip them entirely.
+        if (string.Equals(context, "search", StringComparison.OrdinalIgnoreCase))
+            yield break;
 
         // Short-circuit: if query has a nodeType filter that doesn't match any static node type
         var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
             yield break;
-
-        var context = request.Context ?? parsed.Context;
 
         // Provider nodes (roles, agents, etc.) — included when:
         // 1. There's an explicit field filter (e.g., nodeType:Role) — global match, no path check

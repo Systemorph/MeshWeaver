@@ -63,15 +63,15 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
     {
-        if (node.AssemblyLocation is null)
-            throw new ArgumentException(
-                $"Assembly location is not configured for node {node.Path}."
-            );
-        var assembly = Assembly.LoadFrom(node.AssemblyLocation);
-        if (assembly is null)
-            throw new ArgumentException(
-                $"Could not load assembly {node.AssemblyLocation}."
-            );
+        // Load assembly if available (dynamic types compiled at runtime)
+        if (node.AssemblyLocation is not null)
+        {
+            var assembly = Assembly.LoadFrom(node.AssemblyLocation);
+            if (assembly is null)
+                throw new ArgumentException(
+                    $"Could not load assembly {node.AssemblyLocation}."
+                );
+        }
 
 
         var nodeConfig = node.HubConfiguration;
