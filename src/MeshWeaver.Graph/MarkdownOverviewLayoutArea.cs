@@ -108,7 +108,7 @@ public static class MarkdownOverviewLayoutArea
     /// <summary>
     /// Extracts markdown content from a MeshNode.
     /// </summary>
-    internal static string GetMarkdownContent(MeshNode? node)
+    public static string GetMarkdownContent(MeshNode? node)
     {
         if (node?.Content == null)
             return string.Empty;
