@@ -34,10 +34,12 @@ public interface IMeshExportService
     /// </summary>
     /// <param name="rootPath">Root path of the subtree to export</param>
     /// <param name="outputDirectory">Target directory to write files to</param>
+    /// <param name="excludedNodeTypes">Node types to exclude from export (e.g., satellite types like Thread, Activity)</param>
     /// <param name="ct">Cancellation token</param>
     /// <returns>Export result with counts</returns>
     Task<ExportResult> ExportToDirectoryAsync(
         string rootPath,
         string outputDirectory,
+        IReadOnlySet<string>? excludedNodeTypes = null,
         CancellationToken ct = default);
 }
