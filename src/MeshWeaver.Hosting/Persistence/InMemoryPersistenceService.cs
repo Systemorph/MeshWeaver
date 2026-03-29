@@ -260,6 +260,17 @@ public class InMemoryPersistenceService : IStorageService, IDisposable
         await LoadNodesRecursivelyAsync(parentPath, options, default);
     }
 
+    /// <summary>
+    /// Seeds a node into the in-memory cache WITHOUT writing to the backing storage adapter.
+    /// Used for static nodes from IStaticNodeProvider that should be queryable but not persisted.
+    /// Only seeds if the node is not already in the cache (doesn't overwrite persisted data).
+    /// </summary>
+    public void SeedIfAbsent(MeshNode node)
+    {
+        var normalizedPath = NormalizePath(node.Path);
+        _nodes.TryAdd(normalizedPath, node);
+    }
+
     public async Task<MeshNode> SaveNodeAsync(MeshNode node, JsonSerializerOptions options, CancellationToken ct = default)
     {
         var normalizedPath = NormalizePath(node.Path);

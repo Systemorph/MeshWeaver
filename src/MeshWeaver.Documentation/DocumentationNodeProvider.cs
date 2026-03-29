@@ -8,6 +8,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using YamlDotNet.Serialization;
 
 namespace MeshWeaver.Documentation;
@@ -20,7 +21,12 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 {
     public const string RootNamespace = "Doc";
 
-    private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadNodes);
+    private readonly Lazy<MeshNode[]> _lazyNodes;
+
+    public DocumentationNodeProvider(IMessageHub hub)
+    {
+        _lazyNodes = new Lazy<MeshNode[]>(() => LoadNodes(hub.JsonSerializerOptions));
+    }
 
     private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
         .UseYamlFrontMatter()
@@ -60,11 +66,11 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             }
         };
 
-        foreach (var node in LazyNodes.Value)
+        foreach (var node in _lazyNodes.Value)
             yield return node;
     }
 
-    private static MeshNode[] LoadNodes()
+    private static MeshNode[] LoadNodes(JsonSerializerOptions jsonOptions)
     {
         var assembly = typeof(DocumentationNodeProvider).Assembly;
         var prefix = $"{assembly.GetName().Name}.Data.";
@@ -85,7 +91,7 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 
             MeshNode? node;
             if (resourceName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-                node = ParseJsonNode(content, relativePath);
+                node = ParseJsonNode(content, relativePath, jsonOptions);
             else if (resourceName.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 node = ParseCodeNode(content, relativePath);
             else
@@ -145,22 +151,15 @@ public class DocumentationNodeProvider : IStaticNodeProvider
         };
     }
 
-    private static MeshNode? ParseJsonNode(string content, string relativePath)
+    private static MeshNode? ParseJsonNode(string content, string relativePath, JsonSerializerOptions options)
     {
         try
         {
-            var node = JsonSerializer.Deserialize<MeshNode>(content);
-            if (node == null) return null;
-
-            // Ensure namespace is under Doc/ root
-            var (id, ns) = DeriveIdAndNamespace(relativePath);
-            if (string.IsNullOrEmpty(node.Namespace))
-                node = node with { Namespace = ns };
-
-            return node;
+            return JsonSerializer.Deserialize<MeshNode>(content, options);
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[DocProvider] Failed to parse JSON node '{relativePath}': {ex.Message}");
             return null;
         }
     }
