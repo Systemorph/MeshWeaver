@@ -68,10 +68,8 @@ public static class CreateLayoutArea
                 return (UiControl?)Controls.Redirect(editUrl);
             }
 
-            // Not transient — redirect to the /create Blazor page with context
-            var ns = currentNode?.Namespace ?? currentPath;
-            var createUrl = $"/create?namespace={Uri.EscapeDataString(ns)}";
-            return (UiControl?)Controls.Redirect(createUrl);
+            // Not transient — show the Create New form inline
+            return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
         });
     }
 

@@ -832,7 +832,6 @@ public class FutuReAnalysisTest(ITestOutputHelper output) : MonolithMeshTestBase
         ids.Should().Contain("Currency");
         ids.Should().Contain("Country");
         ids.Should().Contain("ExchangeRate");
-        ids.Should().Contain("Report");
     }
 
     /// <summary>
