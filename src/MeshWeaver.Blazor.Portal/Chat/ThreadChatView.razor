@@ -58,54 +58,8 @@ else
         </div>
     }
 
-    <!-- Footer: streaming area + progress + input — pinned at bottom, never scrolls -->
+    <!-- Footer: input — pinned at bottom, never scrolls -->
     <div class="thread-chat-footer">
-        @if (ThreadViewModel?.IsExecuting == true && !string.IsNullOrEmpty(threadPath))
-        {
-            <!-- Tool calls area: shows active tool calls / delegation sub-threads -->
-            <div class="chat-streaming-area">
-                <LayoutAreaView ViewModel="@GetToolCallsAreaControl()" Stream="@Stream" Area="toolcalls" />
-            </div>
-        }
-
-        @if (ThreadViewModel?.IsExecuting == true || !submissionHandler.IsInputEnabled || isCancelling)
-        {
-            <div class="chat-progress-bar">
-                <FluentProgressRing Style="width: 18px; height: 18px;" />
-                <span class="chat-progress-text">
-                    @if (isCancelling)
-                    {
-                        @:Cancelling...
-                    }
-                    else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
-                    {
-                        @:Sending...
-                    }
-                    else
-                    {
-                        @:Generating response...
-                    }
-                </span>
-                <span class="chat-progress-meta">
-                    @if (ThreadViewModel?.TokensUsed > 0)
-                    {
-                        @($"{ThreadViewModel.TokensUsed:N0} tokens")
-                    }
-                    @if (ThreadViewModel?.ExecutionStartedAt != null)
-                    {
-                        var elapsed = DateTime.UtcNow - ThreadViewModel.ExecutionStartedAt.Value;
-                        @($" · {elapsed.TotalSeconds:F0}s")
-                    }
-                </span>
-                @if (!isCancelling && (ThreadViewModel?.IsExecuting == true || !submissionHandler.IsInputEnabled))
-                {
-                    <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
-                    </FluentButton>
-                }
-            </div>
-        }
-
         <div class="thread-chat-input-area">
         <!-- Attachment chip collection -->
         <ReferenceChipCollection

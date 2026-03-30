@@ -23,8 +23,7 @@ using MeshThread = MeshWeaver.AI.Thread;
 namespace MeshWeaver.Threading.Test;
 
 /// <summary>
-/// Tests that tool calls on response messages are visible via remote streams
-/// and propagate correctly for the ToolCallsArea to render.
+/// Tests that tool calls on response messages are visible via remote streams.
 /// </summary>
 public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
@@ -213,7 +212,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact]
-    public async Task ToolCallsArea_DelegationAppears_ThenHidesWhenExecutionEnds()
+    public async Task Delegation_AppearsOnResponseMessage_ThenThreadGoesIdle()
     {
         var ct = new CancellationTokenSource(20.Seconds()).Token;
 
@@ -297,7 +296,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         delegations![0].DelegationPath.Should().Be(subThreadPath);
         Output.WriteLine($"Phase 2: delegation appeared — {delegations[0].DisplayName}");
 
-        // 3. Mark thread as not executing — ToolCallsArea hides
+        // 3. Mark thread as not executing
         workspace.UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
@@ -315,7 +314,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
 
         idle!.IsExecuting.Should().BeFalse();
-        idle.ActiveMessageId.Should().BeNull("ActiveMessageId cleared — ToolCallsArea returns null");
-        Output.WriteLine("Phase 3: thread idle — ToolCallsArea hidden");
+        idle.ActiveMessageId.Should().BeNull("ActiveMessageId should be cleared when execution ends");
+        Output.WriteLine("Phase 3: thread idle");
     }
 }

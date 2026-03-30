@@ -350,6 +350,7 @@ public static class ThreadExecution
                         var callKey = functionCall.CallId ?? $"{functionCall.Name}_{pendingCalls.Count}";
                         pendingCalls[callKey] = functionCall;
                         lastCallKey = callKey;
+
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
@@ -373,7 +374,8 @@ public static class ThreadExecution
                                 firstDelegationPath ??= delegationPath;
                             }
 
-                            toolCallLog.Add(new ToolCallEntry
+                            // Replace pending entry with final (has Result + DelegationPath)
+                            var finalEntry = new ToolCallEntry
                             {
                                 Name = originalCall.Name,
                                 DisplayName = ToolStatusFormatter.Format(originalCall),
@@ -382,7 +384,10 @@ public static class ThreadExecution
                                 IsSuccess = functionResult.Result?.ToString()?.StartsWith("Error") != true,
                                 DelegationPath = delegationPath,
                                 Timestamp = DateTime.UtcNow
-                            });
+                            };
+                            var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
+                            if (idx >= 0) toolCallLog[idx] = finalEntry;
+                            else toolCallLog.Add(finalEntry);
                         }
                         currentStatus = null; // Tool call completed
                     }
@@ -395,6 +400,9 @@ public static class ThreadExecution
                     var status = currentStatus ?? "";
                     var liveToolCalls = toolCallLog.ToImmutableList();
                     lastPushedToolCallCount = liveToolCalls.Count;
+                    logger.LogInformation("[ThreadExec] Pushing progress: status={Status}, toolCalls={Count}, delegations={Delegations}",
+                        status, liveToolCalls.Count,
+                        liveToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath)));
                     responseStream.Update(current =>
                     {
                         if (current == null) return null;
@@ -417,8 +425,8 @@ public static class ThreadExecution
                             responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                             [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
                     });
-                    // Push status + live tool calls to Thread node (read by ToolCallsView from workspace stream)
-                    UpdateThreadExecution(t => t with { ExecutionStatus = status, ActiveToolCalls = liveToolCalls });
+                    // Push status to Thread node
+                    UpdateThreadExecution(t => t with { ExecutionStatus = status });
                     lastStatusUpdate = DateTimeOffset.UtcNow;
                 }
 
@@ -477,7 +485,7 @@ public static class ThreadExecution
 
                     UpdateThreadExecution(t => t with
                     {
-                        IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ActiveToolCalls = [],
+                        IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                         ExecutionStartedAt = null                    });
                     }
                     catch (OperationCanceledException)
@@ -486,7 +494,7 @@ public static class ThreadExecution
                         MarkResponseCancelled(responseStream, responseMsgId, request, responsePath, toolCallLog, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
-                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ActiveToolCalls = [],
+                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null                        });
                     }
                     catch (Exception ex)
@@ -495,7 +503,7 @@ public static class ThreadExecution
                         MarkResponseError(responseStream, responseMsgId, request, responsePath, ex, toolCallLog, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
-                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ActiveToolCalls = [],
+                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null                        });
                     }
                 }, ex =>

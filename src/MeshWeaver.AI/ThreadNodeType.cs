@@ -35,18 +35,10 @@ public static class ThreadNodeType
     public const string ThreadChatArea = "ThreadChat";
 
     /// <summary>
-    /// Layout area showing current execution progress: streaming response message
-    /// and active tool calls / delegations. Parent threads subscribe to this.
-    /// Composed of: OutputCell + ToolCallsArea.
+    /// Layout area showing current execution progress: streaming response message.
+    /// Parent threads subscribe to this.
     /// </summary>
     public const string StreamingArea = "Streaming";
-
-    /// <summary>
-    /// Layout area showing only the active tool calls and delegation sub-threads.
-    /// Rendered below the message list in the chat view (without duplicating the output cell).
-    /// Hidden when no tool calls are active.
-    /// </summary>
-    public const string ToolCallsArea = "ToolCalls";
 
     /// <summary>
     /// Layout area for delegation sub-thread history.

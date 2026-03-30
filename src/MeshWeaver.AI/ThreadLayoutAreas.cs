@@ -44,7 +44,6 @@ public static class ThreadLayoutAreas
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
                 .WithView(ThreadNodeType.StreamingArea, StreamingView)
-                .WithView(ThreadNodeType.ToolCallsArea, ToolCallsView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
@@ -265,66 +264,11 @@ public static class ThreadLayoutAreas
 
             var responsePath = $"{hubPath}/{state.ActiveMessageId}";
 
-            // StreamingArea = OutputCell + ToolCallsArea (for parent thread consumption)
-            return (UiControl?)Controls.Stack
-                .WithStyle("gap: 4px;")
-                .WithView(new LayoutAreaControl(responsePath,
+            // StreamingArea = OutputCell (for parent thread consumption)
+            return (UiControl?)new LayoutAreaControl(responsePath,
                     new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
-                    .WithSpinnerType(SpinnerType.Skeleton))
-                .WithView(new LayoutAreaControl(hubPath,
-                    new LayoutAreaReference(ThreadNodeType.ToolCallsArea))
-                    .WithSpinnerType(SpinnerType.Dots));
+                    .WithSpinnerType(SpinnerType.Skeleton);
         });
-    }
-
-    /// <summary>
-    /// ToolCalls area: shows delegation sub-threads from the current response message.
-    /// Each delegation renders the sub-thread's StreamingArea (recursive).
-    /// Returns null when idle or no delegations — area is invisible.
-    /// Subscribes to thread node + response message node, combines reactively.
-    /// </summary>
-    public static IObservable<UiControl?> ToolCallsView(LayoutAreaHost host, RenderingContext _)
-    {
-        var hubPath = host.Hub.Address.ToString();
-        var stream = host.Workspace.GetStream<MeshNode>();
-
-        // Read ActiveToolCalls directly from the thread's own workspace stream.
-        // No remote subscription needed — avoids deadlock with the execution hub.
-        return stream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var thread = node?.Content as MeshThread;
-                return thread is { IsExecuting: true } ? thread.ActiveToolCalls : ImmutableList<ToolCallEntry>.Empty;
-            })
-            .DistinctUntilChanged()
-            .Select(toolCalls =>
-            {
-                var delegations = toolCalls
-                    .Where(c => !string.IsNullOrEmpty(c.DelegationPath))
-                    .ToList();
-
-                if (delegations.Count == 0)
-                    return (UiControl?)null;
-
-                var stack = Controls.Stack.WithStyle("gap: 4px;");
-                foreach (var call in delegations)
-                {
-                    var displayName = System.Web.HttpUtility.HtmlEncode(call.DisplayName ?? call.Name);
-                    stack = stack.WithView(
-                        Controls.Stack
-                            .WithStyle("margin-left: 12px; border-left: 2px solid var(--accent-fill-rest); padding-left: 8px;")
-                            .WithView(Controls.Html(
-                                $"<style>@@keyframes agent-blink {{ 0%,100% {{ opacity:1 }} 50% {{ opacity:0.3 }} }}</style>" +
-                                $"<a href=\"/{call.DelegationPath}\" style=\"font-size: 0.78rem; font-weight: 600; " +
-                                $"color: var(--accent-fill-rest); text-decoration: none;\">" +
-                                $"<span style=\"animation: agent-blink 1.4s ease-in-out infinite;\">&#10041;</span> {displayName}</a>"))
-                            .WithView(new LayoutAreaControl(call.DelegationPath!,
-                                new LayoutAreaReference(ThreadNodeType.StreamingArea))
-                                .WithSpinnerType(SpinnerType.Dots)));
-                }
-                return (UiControl?)stack;
-            });
     }
 
     /// <summary>

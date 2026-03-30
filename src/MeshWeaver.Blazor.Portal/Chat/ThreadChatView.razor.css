@@ -42,7 +42,7 @@
     border: 1px solid var(--neutral-stroke-rest);
     border-radius: 8px;
     background: var(--neutral-layer-card-container);
-    overflow: hidden;
+    overflow: visible;
     min-width: 0;
     max-width: 100%;
 }
@@ -133,40 +133,6 @@
     50% { opacity: 0.15; }
 }
 
-/* Streaming area: active response + sub-thread delegations */
-.chat-streaming-area {
-    max-height: 200px;
-    overflow-y: auto;
-    padding: 4px 12px;
-    border-top: 1px solid var(--neutral-stroke-divider);
-    background: var(--neutral-layer-2);
-    font-size: 0.82rem;
-}
-
-/* Progress bar between messages and input */
-.chat-progress-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 16px;
-    flex-shrink: 0;
-    color: var(--neutral-foreground-hint);
-    font-size: 0.85rem;
-    border-top: 1px solid var(--neutral-stroke-divider);
-    background: var(--neutral-layer-2);
-}
-
-.chat-progress-text {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.chat-progress-meta {
-    white-space: nowrap;
-    font-size: 0.75rem;
-    opacity: 0.6;
-}
 
 
 .selector-agent, .selector-model {

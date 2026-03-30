@@ -60,24 +60,45 @@
         }
     }
 
-    @* Collapsible tool calls — closed by default, click to expand *@
+    @* Tool calls — shown inline, each as a compact entry *@
     @if (HasToolCalls)
     {
-        <details class="thread-msg-tool-calls">
-            <summary class="thread-msg-tool-summary">
-                <svg class="thread-msg-tool-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 0a.5.5 0 0 1 .5.5V2h4V.5a.5.5 0 0 1 1 0V2h1a2 2 0 0 1 2 2v1H2V4a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5M2 7v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7z"/></svg>
-                @toolCalls!.Count tool call(s)
-            </summary>
-            <div class="thread-msg-tool-list">
-                @foreach (var call in toolCalls!)
+        <div class="thread-msg-tool-calls">
+            @foreach (var call in toolCalls!)
+            {
+                var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                var isPending = call.Result == null;
+                var summary = FormatToolCallSummary(call);
+
+                @if (isDelegation)
+                {
+                    <div class="thread-msg-delegation-entry">
+                        <div class="thread-msg-delegation-header">
+                            @if (isPending)
+                            {
+                                <span class="thread-msg-delegation-pulse">&#10041;</span>
+                            }
+                            else
+                            {
+                                <span class="thread-msg-tool-done">@(call.IsSuccess ? "✓" : "✗")</span>
+                            }
+                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
+                        </div>
+                    </div>
+                }
+                else
                 {
                     <details class="thread-msg-tool-entry">
                         <summary class="thread-msg-tool-entry-name">
-                            <span class="@(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.DisplayName ?? call.Name)</span>
-                            @if (!string.IsNullOrEmpty(call.DelegationPath))
+                            @if (isPending)
                             {
-                                <a href="/@call.DelegationPath/Thread" class="thread-msg-delegation-link">View sub-thread</a>
+                                <span class="thread-msg-tool-pending">●</span>
                             }
+                            else
+                            {
+                                <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                            }
+                            <span>@summary</span>
                         </summary>
                         @if (!string.IsNullOrEmpty(call.Arguments))
                         {
@@ -89,8 +110,8 @@
                         }
                     </details>
                 }
-            </div>
-        </details>
+            }
+        </div>
     }
 </div>
 
@@ -218,35 +239,22 @@
         display: none;
     }
 
-    /* Collapsible tool calls */
+    /* Tool calls — inline entries */
     .thread-msg-tool-calls {
         margin-top: 8px;
         padding-top: 8px;
         border-top: 1px solid var(--neutral-stroke-rest);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
     }
-    .thread-msg-tool-summary {
+    .thread-msg-tool-entry {
+        margin-bottom: 0;
+    }
+    .thread-msg-tool-entry-name {
         display: flex;
         align-items: center;
         gap: 6px;
-        font-size: 0.8rem;
-        color: var(--neutral-foreground-hint);
-        cursor: pointer;
-        user-select: none;
-    }
-    .thread-msg-tool-summary:hover {
-        color: var(--neutral-foreground-rest);
-    }
-    .thread-msg-tool-icon {
-        opacity: 0.6;
-    }
-    .thread-msg-tool-list {
-        margin-top: 4px;
-        padding-left: 4px;
-    }
-    .thread-msg-tool-entry {
-        margin-bottom: 2px;
-    }
-    .thread-msg-tool-entry-name {
         font-size: 0.78rem;
         color: var(--neutral-foreground-hint);
         cursor: pointer;
@@ -255,12 +263,35 @@
     .thread-msg-tool-entry-name:hover {
         color: var(--neutral-foreground-rest);
     }
+    .thread-msg-tool-pending {
+        color: var(--accent-fill-rest);
+        animation: thread-dots-blink 1.4s infinite both;
+        font-size: 0.6rem;
+    }
+    .thread-msg-tool-done {
+        font-size: 0.8rem;
+        color: var(--accent-fill-rest);
+    }
     .thread-msg-tool-error {
         color: var(--error);
     }
+    .thread-msg-delegation-entry {
+        border-left: 2px solid var(--accent-fill-rest);
+        padding-left: 8px;
+        margin-left: 4px;
+    }
+    .thread-msg-delegation-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .thread-msg-delegation-pulse {
+        color: var(--accent-fill-rest);
+        animation: thread-dots-blink 1.4s ease-in-out infinite;
+    }
     .thread-msg-delegation-link {
-        margin-left: 8px;
-        font-size: 0.75rem;
+        font-size: 0.8rem;
+        font-weight: 600;
         color: var(--accent-fill-rest);
         text-decoration: none;
     }

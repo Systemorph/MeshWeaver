@@ -987,16 +987,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
             .WithSpinnerType(SpinnerType.Skeleton);
 
-    /// <summary>
-    /// Returns a LayoutAreaControl for the thread's ToolCalls area.
-    /// Shows active tool calls and delegation sub-thread progress (without the response cell itself).
-    /// </summary>
-    private LayoutAreaControl GetToolCallsAreaControl()
-        => new LayoutAreaControl(
-            threadPath!,
-            new LayoutAreaReference(ThreadNodeType.ToolCallsArea))
-            .WithSpinnerType(SpinnerType.Dots);
-
     private static string TruncateText(string text, int maxLength)
     {
         if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
