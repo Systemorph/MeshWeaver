@@ -84,6 +84,13 @@
                             }
                             <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
                         </div>
+                        @if (isPending)
+                        {
+                            @* Subscribe to sub-thread's StreamingArea — shows its active response message *@
+                            <div class="thread-msg-delegation-stream">
+                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")))" />
+                            </div>
+                        }
                     </div>
                 }
                 else
@@ -294,6 +301,13 @@
         font-weight: 600;
         color: var(--accent-fill-rest);
         text-decoration: none;
+    }
+    .thread-msg-delegation-stream {
+        margin-top: 4px;
+        max-height: 120px;
+        overflow-y: auto;
+        font-size: 0.78rem;
+        opacity: 0.85;
     }
     .thread-msg-delegation-link:hover {
         text-decoration: underline;

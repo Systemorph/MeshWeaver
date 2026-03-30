@@ -150,6 +150,120 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         Output.WriteLine($"Response text: '{responseMsg.Text}' ({responseMsg.Text.Length} chars)");
     }
 
+    /// <summary>
+    /// Full delegation flow: submit message → parent delegates to sub-thread →
+    /// sub-thread streams text → parent receives result.
+    /// Traces every step to find where communication breaks.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task DelegationFlow_SubThreadStreamsText_ParentCompletes()
+    {
+        var ct = new CancellationTokenSource(100.Seconds()).Token;
+        var client = await GetClientAsync();
+
+        // Create thread
+        var response = await client.AwaitResponse(
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation flow test")),
+            o => o.WithTarget(new Address(ContextPath)), ct);
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        var threadPath = response.Message.Node!.Path!;
+        Output.WriteLine($"1. Thread created: {threadPath}");
+
+        // Subscribe to thread node for execution state
+        var workspace = client.GetWorkspace();
+        var threadUpdates = new List<string>();
+        workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Subscribe(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                var thread = node?.Content as MeshThread;
+                if (thread != null)
+                {
+                    var msg = $"Thread: IsExecuting={thread.IsExecuting}, Status={thread.ExecutionStatus ?? "(null)"}, Messages={thread.Messages.Count}, ActiveMsg={thread.ActiveMessageId ?? "(null)"}";
+                    threadUpdates.Add(msg);
+                    Output.WriteLine($"  [STREAM] {msg}");
+                }
+            });
+
+        // Subscribe to messages appearing
+        var twoMessages = workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                return (node?.Content as MeshThread)?.Messages ?? [];
+            })
+            .Where(ids => ids.Count >= 2)
+            .FirstAsync()
+            .ToTask(ct);
+
+        // Submit message
+        Output.WriteLine("2. Submitting message...");
+        var submit = await client.AwaitResponse(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Use the test tool please",
+                ContextPath = ContextPath
+            },
+            o => o.WithTarget(new Address(threadPath)), ct);
+        submit.Message.Success.Should().BeTrue(submit.Message.Error);
+        Output.WriteLine("3. Message submitted successfully");
+
+        // Wait for 2 message IDs
+        var msgIds = await twoMessages;
+        Output.WriteLine($"4. Messages appeared: [{string.Join(", ", msgIds)}]");
+        var responseMsgId = msgIds[1];
+        var responsePath = $"{threadPath}/{responseMsgId}";
+
+        // Now poll the response message for tool calls AND text
+        Output.WriteLine("5. Polling response message for content...");
+        ThreadMessage? finalResponse = null;
+        for (var i = 0; i < 100; i++)
+        {
+            var responseMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            if (responseMsg != null)
+            {
+                var hasText = !string.IsNullOrEmpty(responseMsg.Text);
+                var hasTools = responseMsg.ToolCalls.Count > 0;
+                if (hasText || hasTools || i % 10 == 0)
+                {
+                    Output.WriteLine($"  [POLL {i}] text={responseMsg.Text?.Length ?? 0}chars, toolCalls={responseMsg.ToolCalls.Count}, delegations={responseMsg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
+                }
+                if (hasText && responseMsg.ToolCalls.All(c => c.Result != null))
+                {
+                    finalResponse = responseMsg;
+                    break;
+                }
+            }
+            await Task.Delay(300, ct);
+        }
+
+        // Report final state
+        Output.WriteLine($"6. Thread updates collected: {threadUpdates.Count}");
+        foreach (var u in threadUpdates.TakeLast(5))
+            Output.WriteLine($"  {u}");
+
+        if (finalResponse != null)
+        {
+            Output.WriteLine($"7. PASS: Response text='{finalResponse.Text}' ({finalResponse.Text.Length} chars)");
+            Output.WriteLine($"   Tool calls: {finalResponse.ToolCalls.Count}");
+            foreach (var tc in finalResponse.ToolCalls)
+                Output.WriteLine($"   - {tc.DisplayName ?? tc.Name}: success={tc.IsSuccess}, delegation={tc.DelegationPath ?? "(none)"}");
+        }
+        else
+        {
+            // Dump everything we know
+            Output.WriteLine("7. FAIL: Response message never got text");
+            var lastThread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+            Output.WriteLine($"   Thread: IsExecuting={lastThread?.IsExecuting}, Status={lastThread?.ExecutionStatus}");
+            var lastMsg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            Output.WriteLine($"   Response: text={lastMsg?.Text?.Length ?? 0}chars, toolCalls={lastMsg?.ToolCalls.Count ?? 0}");
+        }
+
+        finalResponse.Should().NotBeNull("response message should have text after tool execution completes");
+        finalResponse!.Text.Should().NotBeNullOrEmpty();
+        Output.WriteLine("8. Test PASSED");
+    }
 }
 
 /// <summary>
