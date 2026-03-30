@@ -133,8 +133,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permChild = await securityService.GetEffectivePermissionsAsync("ACME/ProductLaunch", "Alice", TestTimeout);
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Alice", TestTimeout);
 
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api);
-        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api);
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
+        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
         permMeshWeaver.Should().Be(Permission.None);
     }
 
@@ -159,7 +159,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "MultiUser", TestTimeout);
 
         permMeshWeaver.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api);
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
     }
 
     #endregion
@@ -309,7 +309,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permAuthUser = await securityService.GetEffectivePermissionsAsync("Restricted", "AuthUser", TestTimeout);
 
         permAnonymous.Should().Be(Permission.None);
-        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api);
+        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
     }
 
     [Fact]

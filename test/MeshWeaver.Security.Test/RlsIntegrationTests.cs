@@ -380,7 +380,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Assert
         permissions1.Should().Be(Permission.Read | Permission.Execute | Permission.Api); // Viewer only
-        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api); // Editor
+        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export); // Editor
     }
 
     [Fact]
