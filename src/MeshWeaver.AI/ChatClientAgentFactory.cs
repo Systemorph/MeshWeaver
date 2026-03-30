@@ -53,6 +53,34 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     /// <summary>
     /// Creates a ChatClientAgent for the given configuration.
     /// </summary>
+    /// <summary>
+    /// Creates a ChatClientAgent synchronously — no await, no deadlock.
+    /// Uses raw instructions without async @@reference resolution.
+    /// References are resolved lazily at runtime.
+    /// </summary>
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+    {
+        CurrentModelName = modelName;
+
+        if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
+        {
+            var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
+            var resolvedModel = tierConfig?.Resolve(config.ModelTier);
+            if (!string.IsNullOrEmpty(resolvedModel))
+                config = config with { PreferredModel = resolvedModel };
+        }
+
+        // Sync: use raw instructions, skip @@reference resolution (resolved lazily)
+        var instructions = GetAgentInstructions(config, hierarchyAgents, chat);
+        return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);
+    }
+
+    [Obsolete("Use CreateAgent — CreateAgentAsync deadlocks in Orleans")]
     public async Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config,
         IAgentChat chat,
@@ -62,7 +90,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
     {
         CurrentModelName = modelName;
 
-        // Resolve model tier to concrete model name if PreferredModel isn't set
         if (string.IsNullOrEmpty(config.PreferredModel) && !string.IsNullOrEmpty(config.ModelTier))
         {
             var tierConfig = Hub.ServiceProvider.GetService<IOptions<ModelTierConfiguration>>()?.Value;
@@ -71,20 +98,24 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                 config = config with { PreferredModel = resolvedModel };
         }
 
+        var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
+        return CreateAgentCore(config, chat, existingAgents, hierarchyAgents, instructions, modelName);
+    }
+
+    private ChatClientAgent CreateAgentCore(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string instructions, string? modelName)
+    {
         var name = config.Id;
         var description = config.Description ?? string.Empty;
-        var instructions = await GetAgentInstructionsAsync(config, hierarchyAgents, chat);
-
-        // Create a chat client for this agent using the derived class implementation
         var chatClient = CreateChatClient(config);
-
-        // Get delegation/handoff tools
         var agentTools = GetAgentTools(config, chat, existingAgents, hierarchyAgents);
         IEnumerable<AITool> tools = agentTools;
 
         if (config.Plugins is { Count: > 0 })
         {
-            // Explicit plugin mode: only declared plugins are loaded
             foreach (var pluginRef in config.Plugins)
             {
                 var pluginTools = ResolvePluginTools(pluginRef, chat);
@@ -97,7 +128,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
         else
         {
-            // Legacy mode: Mesh tools (backward compatibility)
             var meshPlugin = new MeshPlugin(Hub, chat);
             var needsWriteTools = description.Contains("create", StringComparison.OrdinalIgnoreCase)
                 || description.Contains("update", StringComparison.OrdinalIgnoreCase)
@@ -105,22 +135,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             tools = tools.Concat(needsWriteTools ? meshPlugin.CreateAllTools() : meshPlugin.CreateTools());
         }
 
-        // Add store_plan tool to all agents
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));
 
-        // Create ChatClientAgent with all parameters
         var agent = new ChatClientAgent(
-            chatClient: chatClient,
-            instructions: instructions,
-            name: name,
-            description: description,
-            tools: tools.ToList(),
-            loggerFactory: null,
-            services: null
-        );
+            chatClient: chatClient, instructions: instructions,
+            name: name, description: description,
+            tools: tools.ToList(), loggerFactory: null, services: null);
 
-        // Enable parallel tool execution — when the LLM returns multiple tool calls
-        // in a single response turn, they will be invoked concurrently
         var functionInvoker = agent.ChatClient.GetService<Microsoft.Extensions.AI.FunctionInvokingChatClient>();
         if (functionInvoker != null)
             functionInvoker.AllowConcurrentInvocation = true;
@@ -186,19 +207,19 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
             var delegationTool = DelegationTool.CreateUnifiedDelegationTool(
                 agentConfig,
                 hierarchyAgents,
-                executeAsync: async (agentName, task, context, cancellationToken) =>
+                executeAsync: (agentName, task, context, cancellationToken) =>
                 {
                     // Resolve the target agent by name (strip path prefix if present)
                     var targetId = agentName.Split('/').Last();
                     if (!allAgents.TryGetValue(targetId, out var targetAgent))
                     {
-                        return new DelegationResult
+                        return Task.FromResult(new DelegationResult
                         {
                             AgentName = agentName,
                             Task = task,
                             Result = $"Agent '{agentName}' not found",
                             Success = false
-                        };
+                        });
                     }
 
                     var execCtx = chat.ExecutionContext;
@@ -207,206 +228,172 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         "[Delegation] {Source} → {Target}, user={User}, task={Task}",
                         agentConfig.Id, targetId, userIdentity, task.Length > 100 ? task[..97] + "..." : task);
 
-                    // Create sub-thread and submit via SubmitMessageRequest (same as regular threads)
-                    string? subThreadPath = null;
-                    if (execCtx != null)
+                    if (execCtx == null)
                     {
-                        try
+                        return Task.FromResult(new DelegationResult
                         {
-                            var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
-                            var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
-                            var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
-                            subThreadPath = $"{parentMsgPath}/{subThreadId}";
+                            AgentName = targetId,
+                            Task = task,
+                            Result = "No execution context available for delegation",
+                            Success = false
+                        });
+                    }
 
-                            // 1. Create the sub-thread node (directly under the message, no extra _Thread)
-                            var subThreadNode = new MeshNode(subThreadId, parentMsgPath)
-                            {
-                                Name = task.Length > 60 ? task[..57] + "..." : task,
-                                NodeType = ThreadNodeType.NodeType,
-                                Content = new MeshThread { ParentPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath }
-                            };
-                            await meshService.CreateNodeAsync(subThreadNode, cancellationToken);
+                    // TCS completed by subscription callbacks — framework awaits this, not our code
+                    var tcs = new TaskCompletionSource<DelegationResult>();
+                    var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                    var workspace = Hub.GetWorkspace();
+                    var accessService = Hub.ServiceProvider.GetService<AccessService>();
+
+                    var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
+                    var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
+                    var subThreadPath = $"{parentMsgPath}/{subThreadId}";
+
+                    // 1. Create sub-thread node (Observable — no await)
+                    var mainEntityPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath;
+                    var subThreadNode = new MeshNode(subThreadId, parentMsgPath)
+                    {
+                        Name = task.Length > 60 ? task[..57] + "..." : task,
+                        NodeType = ThreadNodeType.NodeType,
+                        MainNode = mainEntityPath,
+                        Content = new MeshThread { ParentPath = mainEntityPath }
+                    };
+
+                    meshService.CreateNode(subThreadNode).Subscribe(
+                        _ =>
+                        {
                             chat.LastDelegationPath = subThreadPath;
-                            Logger.LogInformation("Created delegation sub-thread at {Path}", subThreadPath);
+                            Logger.LogInformation("[Delegation] Created sub-thread at {Path}", subThreadPath);
 
-                            // 2. Submit message to sub-thread via SubmitMessageRequest
-                            //    This goes through the full ThreadExecution pipeline:
-                            //    creates input/output cells, streams agent response, persists everything.
-                            var submitResponse = await Hub.AwaitResponse(
-                                new SubmitMessageRequest
+                            // 2. Subscribe to child stream — keep alive until hub disposed
+                            var childStream = workspace.GetRemoteStream<MeshNode>(
+                                new Address(subThreadPath), new MeshNodeReference());
+                            workspace.AddDisposable(childStream);
+
+                            childStream.Subscribe(
+                                change =>
                                 {
-                                    ThreadPath = subThreadPath,
-                                    UserMessageText = task,
-                                    AgentName = targetId,
-                                    ContextPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath
-                                },
-                                o =>
-                                {
-                                    o = o.WithTarget(new Address(subThreadPath));
-                                    // Forward the original user's AccessContext so the sub-thread
-                                    // runs under the correct user identity for permission checks
-                                    if (execCtx.UserAccessContext != null)
-                                        o = o.WithAccessContext(execCtx.UserAccessContext);
-                                    return o;
-                                },
-                                cancellationToken);
+                                    using var _ = accessService?.SwitchAccessContext(execCtx.UserAccessContext);
 
-                            if (!submitResponse.Message.Success)
-                            {
-                                Logger.LogWarning("Delegation submit failed for {Path}: {Error}",
-                                    subThreadPath, submitResponse.Message.Error);
-                            }
-                            else
-                            {
-                                // 3. Wait for execution to complete via reactive remote stream subscription.
-                                //    Subscribe to the child thread's MeshNode and propagate its ActiveProgress
-                                //    into the parent's ActiveProgress tree. Works in distributed Orleans mode.
-                                var workspace = Hub.GetWorkspace();
-                                Logger.LogInformation("[Delegation] Subscribing to child stream at {Path}, parentThread={Parent}",
-                                    subThreadPath, execCtx.ThreadPath);
+                                    var childNode = change.Value;
+                                    var childThread = childNode?.Content as MeshThread;
+                                    Logger.LogDebug("[Delegation] Child update: path={Path}, executing={IsExecuting}",
+                                        subThreadPath, childThread?.IsExecuting);
+                                    if (childThread == null) return;
 
-                                // Remote streams: child (read) + parent (write via Update)
-                                var childStream = workspace.GetRemoteStream<MeshNode>(
-                                    new Address(subThreadPath!), new MeshNodeReference());
-                                var parentStream = workspace.GetRemoteStream<MeshNode>(
-                                    new Address(execCtx.ThreadPath), new MeshNodeReference());
+                                    // Merge child's progress into parent's ActiveProgress
+                                    var childEntry = childThread.ActiveProgress
+                                        ?? new ThreadProgressEntry
+                                        {
+                                            ThreadPath = subThreadPath,
+                                            ThreadName = targetId,
+                                            Status = childThread.ExecutionStatus
+                                        };
 
-                                var completionTcs = new TaskCompletionSource<bool>();
+                                    if (!childThread.IsExecuting)
+                                        childEntry = childEntry with { IsCompleted = true };
 
-                                var subscription = childStream.Subscribe(
-                                    change =>
+                                    workspace.UpdateMeshNode(node =>
                                     {
-                                        var childNode = change.Value;
-                                        var childThread = childNode?.Content as MeshThread;
-                                        Logger.LogDebug("[Delegation] Child stream update: path={Path}, hasContent={HasContent}, isExecuting={IsExecuting}",
-                                            subThreadPath, childThread != null, childThread?.IsExecuting);
-                                        if (childThread == null) return;
-
-                                        // Build child's progress entry from its own ActiveProgress or fallback
-                                        var childEntry = childThread.ActiveProgress
+                                        var thread = node.Content as MeshThread ?? new MeshThread();
+                                        var selfEntry = thread.ActiveProgress
                                             ?? new ThreadProgressEntry
                                             {
-                                                ThreadPath = subThreadPath!,
-                                                ThreadName = targetId,
-                                                Status = childThread.ExecutionStatus
+                                                ThreadPath = execCtx.ThreadPath,
+                                                ThreadName = agentConfig.DisplayName ?? agentConfig.Id
                                             };
 
-                                        if (!childThread.IsExecuting)
-                                            childEntry = childEntry with { IsCompleted = true };
+                                        var children = selfEntry.Children
+                                            .Where(c => c.ThreadPath != subThreadPath)
+                                            .Append(childEntry)
+                                            .ToImmutableList();
 
-                                        // Merge child's progress into parent's ActiveProgress via stream.Update()
-                                        parentStream.Update(current =>
+                                        return node with
                                         {
-                                            if (current == null) return null;
-                                            var thread = current.Content as MeshThread ?? new MeshThread();
-                                            var selfEntry = thread.ActiveProgress
-                                                ?? new ThreadProgressEntry
-                                                {
-                                                    ThreadPath = execCtx.ThreadPath,
-                                                    ThreadName = "Agent"
-                                                };
-
-                                            var children = selfEntry.Children
-                                                .Where(c => c.ThreadPath != subThreadPath)
-                                                .Append(childEntry)
-                                                .ToImmutableList();
-
-                                            var updated = current with
+                                            Content = thread with
                                             {
-                                                Content = thread with
-                                                {
-                                                    ActiveProgress = selfEntry with { Children = children }
-                                                }
-                                            };
-                                            return new ChangeItem<MeshNode>(updated, parentStream.StreamId,
-                                                parentStream.StreamId, ChangeType.Patch, parentStream.Hub.Version,
-                                                [new EntityUpdate(nameof(MeshNode), execCtx.ThreadPath, updated) { OldValue = current }]);
+                                                ActiveProgress = selfEntry with { Children = children }
+                                            }
+                                        };
+                                    });
+
+                                    // Forward delegation status
+                                    if (childThread.IsExecuting)
+                                    {
+                                        chat.UpdateDelegationStatus?.Invoke(
+                                            $"{targetId}: {childThread.ExecutionStatus ?? "Processing..."}");
+                                    }
+                                    else
+                                    {
+                                        // Child completed — read result from its last message
+                                        Logger.LogInformation("[Delegation] Child completed: {Path}", subThreadPath);
+                                        var resultText = childThread.Messages.Count > 0
+                                            ? $"Delegation to {targetId} completed. Sub-thread: {subThreadPath}"
+                                            : "Delegation completed (no messages)";
+
+                                        tcs.TrySetResult(new DelegationResult
+                                        {
+                                            AgentName = targetId,
+                                            Task = task,
+                                            Result = resultText,
+                                            Success = true,
+                                            ThreadId = subThreadPath
                                         });
-
-                                        // Update delegation status text
-                                        if (childThread.IsExecuting)
-                                        {
-                                            chat.UpdateDelegationStatus?.Invoke(
-                                                $"{targetId}: {childThread.ExecutionStatus ?? "Processing..."}");
-                                        }
-                                        else
-                                        {
-                                            Logger.LogInformation("[Delegation] Child completed: {Path}", subThreadPath);
-                                            completionTcs.TrySetResult(true);
-                                        }
-                                    },
-                                    ex => Logger.LogError(ex, "[Delegation] Child stream error for {Path}", subThreadPath));
-
-                                // Wait for completion reactively (replaces polling while loop)
-                                try
+                                    }
+                                },
+                                ex =>
                                 {
-                                    await completionTcs.Task.WaitAsync(TimeSpan.FromMinutes(5), cancellationToken);
-                                }
-                                finally
-                                {
-                                    subscription.Dispose();
-                                }
-                            }
+                                    Logger.LogError(ex, "[Delegation] Child stream error for {Path}", subThreadPath);
+                                    tcs.TrySetResult(new DelegationResult
+                                    {
+                                        AgentName = targetId, Task = task,
+                                        Result = $"Stream error: {ex.Message}", Success = false
+                                    });
+                                });
 
-                            // 4. Read the result from the sub-thread's assistant message
-                            var readAccessService = Hub.ServiceProvider.GetService<AccessService>();
-                            if (execCtx.UserAccessContext != null)
-                                readAccessService?.SetContext(execCtx.UserAccessContext);
-                            var resultText = "";
-                            await foreach (var node in meshService.QueryAsync<MeshNode>(
-                                $"namespace:{subThreadPath} nodeType:{ThreadMessageNodeType.NodeType}"))
+                            // 3. Submit message (Post + RegisterCallback — no AwaitResponse)
+                            var delivery = Hub.Post(new SubmitMessageRequest
                             {
-                                if (node.Content is ThreadMessage tmsg && tmsg.Role == "assistant")
-                                {
-                                    resultText = tmsg.Text ?? "";
-                                    break;
-                                }
-                            }
-
-                            Logger.LogInformation("Delegation to {Target} completed via sub-thread, result length: {Length}",
-                                targetId, resultText.Length);
-
-                            return new DelegationResult
-                            {
+                                ThreadPath = subThreadPath,
+                                UserMessageText = task,
                                 AgentName = targetId,
-                                Task = task,
-                                Result = resultText,
-                                Success = true,
-                                ThreadId = subThreadPath
-                            };
-                        }
-                        catch (Exception ex)
-                        {
-                            Logger.LogWarning(ex, "Failed delegation via sub-thread for {Target}", targetId);
-                        }
-                    }
-
-                    // Fallback: run in-memory if no execution context or sub-thread creation failed
-                    Logger.LogInformation("Delegation to {Target}: running in-memory (no sub-thread)", targetId);
-                    var session = await targetAgent.CreateSessionAsync();
-                    var resultBuilder = new StringBuilder();
-
-                    await foreach (var update in targetAgent.RunStreamingAsync(task, session, cancellationToken: cancellationToken))
-                    {
-                        foreach (var content in update.Contents)
-                        {
-                            if (content is FunctionCallContent subCall)
+                                ContextPath = context ?? execCtx.ContextPath ?? execCtx.ThreadPath
+                            }, o =>
                             {
-                                chat.UpdateDelegationStatus?.Invoke($"{targetId}: {ToolStatusFormatter.Format(subCall)}");
-                            }
-                        }
-                        if (!string.IsNullOrEmpty(update.Text))
-                            resultBuilder.Append(update.Text);
-                    }
+                                o = o.WithTarget(new Address(subThreadPath));
+                                if (execCtx.UserAccessContext != null)
+                                    o = o.WithAccessContext(execCtx.UserAccessContext);
+                                return o;
+                            });
 
-                    return new DelegationResult
-                    {
-                        AgentName = targetId,
-                        Task = task,
-                        Result = resultBuilder.ToString(),
-                        Success = true,
-                        ThreadId = subThreadPath
-                    };
+                            if (delivery != null)
+                            {
+                                Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+                                {
+                                    if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+                                    {
+                                        Logger.LogWarning("[Delegation] Submit failed: {Error}", sr.Message.Error);
+                                        tcs.TrySetResult(new DelegationResult
+                                        {
+                                            AgentName = targetId, Task = task,
+                                            Result = $"Submit failed: {sr.Message.Error}", Success = false
+                                        });
+                                    }
+                                    return response;
+                                });
+                            }
+                        },
+                        error =>
+                        {
+                            Logger.LogWarning(error, "[Delegation] Failed to create sub-thread for {Target}", targetId);
+                            tcs.TrySetResult(new DelegationResult
+                            {
+                                AgentName = targetId, Task = task,
+                                Result = $"Node creation failed: {error.Message}", Success = false
+                            });
+                        });
+
+                    return tcs.Task; // AI framework awaits this — not our code
                 },
                 Logger);
 
@@ -466,13 +453,25 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         return allTools;
     }
 
+    /// <summary>
+    /// Sync version — skips @@reference resolution (resolved lazily at runtime).
+    /// </summary>
+    protected string GetAgentInstructions(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)
+    {
+        var baseInstructions = agentConfig.Instructions ?? string.Empty;
+        // @@references left unresolved — will be resolved lazily or by the agent at runtime
+        return BuildInstructionsWithDelegations(baseInstructions, agentConfig, hierarchyAgents, chat);
+    }
+
     protected async Task<string> GetAgentInstructionsAsync(AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)
     {
         var baseInstructions = agentConfig.Instructions ?? string.Empty;
-
-        // Resolve @@ references in agent instructions (e.g., @@Agent/ToolsReference)
         baseInstructions = await InlineReferenceResolver.ResolveAsync(baseInstructions, Hub, chat);
+        return BuildInstructionsWithDelegations(baseInstructions, agentConfig, hierarchyAgents, chat);
+    }
 
+    private string BuildInstructionsWithDelegations(string baseInstructions, AgentConfiguration agentConfig, IReadOnlyList<AgentConfiguration> hierarchyAgents, IAgentChat chat)
+    {
         var hasDelegations = agentConfig.Delegations is { Count: > 0 };
         var hasHandoffs = agentConfig.Handoffs is { Count: > 0 };
         var hasHierarchyAgents = hierarchyAgents.Count > 1;

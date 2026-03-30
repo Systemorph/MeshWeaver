@@ -17,24 +17,29 @@ public static class PlanStorageTool
     /// </summary>
     public static AITool Create(IMessageHub hub, IAgentChat chat)
     {
-        async Task<string> StorePlan(
+        Task<string> StorePlan(
             [Description("The plan content in Markdown format")] string planContent,
             CancellationToken cancellationToken)
         {
             var execCtx = chat.ExecutionContext;
             if (execCtx == null)
-                return "No execution context available — cannot determine thread path.";
+                return Task.FromResult("No execution context available — cannot determine thread path.");
 
             var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var planNode = new MeshNode("Plan", execCtx.ThreadPath)
             {
                 Name = "Execution Plan",
                 NodeType = "Markdown",
+                MainNode = execCtx.ContextPath ?? execCtx.ThreadPath,
                 Content = planContent
             };
 
-            await meshService.CreateNodeAsync(planNode, cancellationToken);
-            return $"Plan stored at {execCtx.ThreadPath}/Plan";
+            // Use IObservable CreateNode — no await, no deadlock
+            var tcs = new TaskCompletionSource<string>();
+            meshService.CreateNode(planNode).Subscribe(
+                _ => tcs.TrySetResult($"Plan stored at {execCtx.ThreadPath}/Plan"),
+                ex => tcs.TrySetResult($"Error storing plan: {ex.Message}"));
+            return tcs.Task;
         }
 
         return AIFunctionFactory.Create(

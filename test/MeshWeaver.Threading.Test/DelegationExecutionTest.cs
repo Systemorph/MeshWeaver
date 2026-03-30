@@ -231,7 +231,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         public IReadOnlyList<string> Models => ["fake-model"];
         public int Order => 0;
 
-        public Task<ChatClientAgent> CreateAgentAsync(
+        public ChatClientAgent CreateAgent(
             AgentConfiguration config, IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
             IReadOnlyList<AgentConfiguration> hierarchyAgents,
@@ -242,8 +242,15 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
                 instructions: config.Instructions ?? "You are a test assistant.",
                 name: config.Id, description: config.Description ?? config.Id,
                 tools: [], loggerFactory: null, services: null);
-            return Task.FromResult(agent);
+            return agent;
         }
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion

@@ -250,6 +250,63 @@ For a production implementation, see:
 - [CededCashflows.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance/Cession/CededCashflows.cs) — cession calculation engine
 - [DistributionLayoutArea.cs](https://github.com/Systemorph/MeshWeaver.Reinsurance/blob/main/src/MeshWeaver.Reinsurance.Pricing/LayoutAreas/DistributionLayoutArea.cs) — PDF/CDF charts with filter toolbars
 
+# Interactive Markdown
+
+You can create rich interactive documents using **Interactive Markdown** — markdown with executable C# code blocks. This is ideal for design studies, prototypes, and data exploration.
+
+## How It Works
+
+Fenced code blocks with `--render <area>` execute C# and display the result inline:
+
+````markdown
+```csharp --render MyChart
+using static MeshWeaver.Layout.Controls;
+Chart.Create(DataSet.Bar(new[] { 10.0, 20.0, 30.0 }, "Revenue"))
+```
+````
+
+## Key Patterns
+
+**Simple output:**
+```csharp --render HelloWorld
+"Hello World " + DateTime.Now.ToString()
+```
+
+**Reactive dialogs with data binding:**
+```csharp
+public static object MyDialog(LayoutAreaHost host, RenderingContext context)
+{
+    host.RegisterForDisposal(host.GetDataStream<BasicInput>(nameof(BasicInput))
+        .Select(x => x.DistributionType)
+        .DistinctUntilChanged()
+        .Subscribe(t => host.UpdateData(nameof(Distribution), Distributions[t])));
+
+    return Controls.Stack
+        .WithView(host.Edit(new BasicInput(), nameof(BasicInput)))
+        .WithView(Controls.Button("Run").WithClickAction(async _ => { /* compute */ }))
+        .WithView(subject.Select(x => x.RenderResults()));
+}
+```
+
+**Charts and visualizations:**
+```csharp --render PriceChart
+var data = Enumerable.Range(1, 12).Select(m => Math.Sin(m * 0.5) * 100 + 500);
+Chart.Create(DataSet.Line(data.ToArray(), "Premium"))
+```
+
+**Mermaid diagrams** are also supported:
+````markdown
+```mermaid
+graph TD
+    A[Input] --> B[Process]
+    B --> C[Output]
+```
+````
+
+For full examples, see: [Interactive Markdown](@@Doc/DataMesh/InteractiveMarkdown) and [Reactive Dialogs](@@Doc/GUI/ReactiveDialogs)
+
+When asked to create an interactive document, create a Markdown node with the executable code blocks embedded.
+
 # Tools
 
 Use the standard Mesh tools (Get, Search, Create, Update, Delete) to manage nodes.

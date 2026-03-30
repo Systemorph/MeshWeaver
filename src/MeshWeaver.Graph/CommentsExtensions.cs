@@ -115,6 +115,7 @@ public static class CommentsExtensions
             {
                 Name = $"Comment by {author}",
                 NodeType = CommentNodeType.NodeType,
+                MainNode = nodePath,
                 Content = comment
             };
 
@@ -477,6 +478,7 @@ public static class CommentsView
                 {
                     Name = "Comment",
                     NodeType = CommentNodeType.NodeType,
+                    MainNode = nodePath,
                     State = MeshNodeState.Transient,
                     Content = new Comment
                     {

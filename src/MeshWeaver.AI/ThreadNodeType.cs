@@ -80,6 +80,7 @@ public static class ThreadNodeType
         {
             Name = name,
             NodeType = NodeType,
+            MainNode = contextPath,
             Content = new Thread { ParentPath = contextPath, CreatedBy = createdBy }
         };
     }

@@ -195,8 +195,11 @@ public class MeshOperations
                     return validationError;
             }
 
-            var created = await mesh.CreateNodeAsync(meshNode);
-            return $"Created: {created.Path}";
+            var tcs = new TaskCompletionSource<string>();
+            mesh.CreateNode(meshNode).Subscribe(
+                created => tcs.TrySetResult($"Created: {created.Path}"),
+                ex => tcs.TrySetResult($"Error creating node: {ex.Message}"));
+            return await tcs.Task;
         }
         catch (JsonException ex)
         {
@@ -235,8 +238,11 @@ public class MeshOperations
                     continue;
                 }
 
-                var updated = await mesh.UpdateNodeAsync(meshNode);
-                results.Add($"Updated: {updated.Path}");
+                var updateTcs = new TaskCompletionSource<string>();
+                mesh.UpdateNode(meshNode).Subscribe(
+                    updated => updateTcs.TrySetResult($"Updated: {updated.Path}"),
+                    ex => updateTcs.TrySetResult($"Error updating {meshNode.Path}: {ex.Message}"));
+                results.Add(await updateTcs.Task);
             }
 
             return string.Join("\n", results);
@@ -282,8 +288,11 @@ public class MeshOperations
                 PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
             };
 
-            var updated = await mesh.UpdateNodeAsync(merged);
-            return $"Patched: {updated.Path}";
+            var patchTcs = new TaskCompletionSource<string>();
+            mesh.UpdateNode(merged).Subscribe(
+                updated => patchTcs.TrySetResult($"Patched: {updated.Path}"),
+                ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
+            return await patchTcs.Task;
         }
         catch (JsonException ex)
         {
@@ -377,8 +386,11 @@ public class MeshOperations
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
-                await mesh.DeleteNodeAsync(resolvedPath);
-                results.Add($"Deleted: {resolvedPath}");
+                var deleteTcs = new TaskCompletionSource<string>();
+                mesh.DeleteNode(resolvedPath).Subscribe(
+                    _ => deleteTcs.TrySetResult($"Deleted: {resolvedPath}"),
+                    ex => deleteTcs.TrySetResult($"Error deleting {resolvedPath}: {ex.Message}"));
+                results.Add(await deleteTcs.Task);
             }
 
             return string.Join("\n", results);

@@ -140,6 +140,88 @@ meshService.CreateNode(node).Subscribe(_ =>
 }, ...);
 ```
 
+## MainNode: Access Control for Satellite Nodes
+
+**Every satellite node MUST set `MainNode` to the content entity it belongs to.** Without this, access control fails because the hub uses the node's own path as identity.
+
+Example: A thread under `PartnerRe/AiConsulting` must have `MainNode = "PartnerRe/AiConsulting"`, not the thread's own path. Same for sub-threads, thread messages, and comments.
+
+```csharp
+// CORRECT: MainNode = content entity
+var threadNode = new MeshNode(threadId, ns)
+{
+    NodeType = "Thread",
+    MainNode = contextPath,  // e.g., "PartnerRe/AiConsulting"
+    Content = new Thread { ParentPath = contextPath }
+};
+
+var msgNode = new MeshNode(msgId, threadPath)
+{
+    NodeType = "ThreadMessage",
+    MainNode = contextPath,  // same content entity, not the thread path
+    Content = new ThreadMessage { ... }
+};
+
+// WRONG: MainNode defaults to self (node.Path) — access denied for sub-threads
+var node = new MeshNode(id, threadPath) { NodeType = "ThreadMessage" };
+// MainNode = "PartnerRe/.../threadId/msgId" — not a real entity, no permissions
+```
+
+This applies to all satellite types: Thread, ThreadMessage, Comment, TrackedChange, Approval.
+
+## SwitchAccessContext: Scoped Identity in Callbacks
+
+When code runs outside the hub delivery pipeline (e.g., in `Subscribe` callbacks), the `AccessContext` is not set. Use `SwitchAccessContext` for scoped identity:
+
+```csharp
+var accessService = hub.ServiceProvider.GetService<AccessService>();
+childStream.Subscribe(change =>
+{
+    using var _ = accessService?.SwitchAccessContext(userAccessContext);
+    // ... operations here run under the correct user identity
+    workspace.UpdateMeshNode(node => { ... });
+});
+```
+
+## Remote Stream Subscription Pattern (Delegation)
+
+When a thread delegates to a sub-thread, subscribe to the child's MeshNode and keep the subscription alive. **Never await completion — use `TaskCompletionSource` instead.**
+
+```csharp
+var tcs = new TaskCompletionSource<DelegationResult>();
+
+// 1. Create node (Observable, no await)
+meshService.CreateNode(subThreadNode).Subscribe(_ =>
+{
+    // 2. Subscribe to child — RegisterForDisposal keeps it alive
+    var childStream = workspace.GetRemoteStream<MeshNode>(
+        new Address(subThreadPath), new MeshNodeReference());
+    workspace.AddDisposable(childStream);
+
+    childStream.Subscribe(change =>
+    {
+        using var _ = accessService?.SwitchAccessContext(userContext);
+        var childThread = change.Value?.Content as Thread;
+        if (childThread == null) return;
+
+        // Update parent's progress
+        workspace.UpdateMeshNode(node => { ... merge child progress ... });
+
+        // On completion, resolve TCS
+        if (!childThread.IsExecuting)
+            tcs.TrySetResult(new DelegationResult { ... });
+    });
+
+    // 3. Submit message (Post + RegisterCallback, NOT AwaitResponse)
+    var delivery = Hub.Post(new SubmitMessageRequest { ... },
+        o => o.WithTarget(childAddress).WithAccessContext(userContext));
+    Hub.RegisterCallback(delivery, response => { ... return response; });
+},
+error => tcs.TrySetResult(new DelegationResult { Success = false }));
+
+return tcs.Task; // AI framework awaits this — our code never does
+```
+
 ## Test Pattern
 
 Tests for satellite entities must verify through **reactive streams**, not `QueryAsync`. This ensures the test exercises the same path the GUI uses.

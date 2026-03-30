@@ -81,8 +81,8 @@ public class ThreadCreationTest(ITestOutputHelper output) : MonolithMeshTestBase
         var node = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
         node.Should().NotBeNull("thread node should be retrievable");
         node!.NodeType.Should().Be(ThreadNodeType.NodeType);
-        node.MainNode.Should().Be($"{contextPath}/{ThreadNodeType.ThreadPartition}",
-            "satellite MainNode should point to the _Thread namespace, not self");
+        node.MainNode.Should().Be(contextPath,
+            "satellite MainNode should point to the content entity, not the _Thread namespace");
         node.MainNode.Should().NotBe(node.Path,
             "satellite MainNode must NOT be self-referencing");
 

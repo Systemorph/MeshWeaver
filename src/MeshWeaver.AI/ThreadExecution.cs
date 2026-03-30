@@ -32,49 +32,111 @@ public static class ThreadExecution
             .WithInitialization(RecoverStaleExecutingThread);
 
     /// <summary>
-    /// On hub startup, find any ThreadMessage nodes that are still marked as IsExecuting=true.
-    /// These are from crashed/restarted sessions. Mark them as cancelled so the UI shows the correct state.
-    /// </summary>
-    /// <summary>
     /// On hub startup, check if this Thread was left in IsExecuting=true state (crashed/restarted).
-    /// Clear the execution state so the UI doesn't show a stale spinner.
+    /// If stale: mark the active response message as "*Cancelled*", clear execution state,
+    /// and mark all ActiveProgress entries as completed. Fully non-blocking — no await.
+    /// Each child thread's own hub recovery handles its own cancellation recursively.
     /// </summary>
-    private static async Task RecoverStaleExecutingThread(IMessageHub hub, CancellationToken ct)
+    private static Task RecoverStaleExecutingThread(IMessageHub hub, CancellationToken ct)
     {
         var logger = hub.ServiceProvider.GetService<ILogger<AgentChatClient>>();
-        var meshService = hub.ServiceProvider.GetService<IMeshService>();
-        if (meshService == null) return;
-
+        var workspace = hub.GetWorkspace();
         var threadPath = hub.Address.Path;
-        try
+
+        // Read the thread node from the workspace stream (already loaded on hub init)
+        workspace.GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
         {
-            var threadNode = await meshService.QueryAsync<MeshNode>($"path:{threadPath}", ct: ct)
-                .FirstOrDefaultAsync(ct);
+            var threadNode = nodes?.FirstOrDefault(n => n.Path == threadPath);
+            if (threadNode?.Content is not Thread { IsExecuting: true } thread)
+                return;
 
-            if (threadNode?.Content is Thread { IsExecuting: true } thread)
+            logger?.LogInformation("[ThreadExec] Recovery: stale execution on {ThreadPath}, activeMsg={ActiveMsg}",
+                threadPath, thread.ActiveMessageId);
+
+            // 1. Mark the active response message as Cancelled
+            if (!string.IsNullOrEmpty(thread.ActiveMessageId))
             {
-                logger?.LogInformation("[ThreadExec] Recovery: clearing stale execution on thread {ThreadPath}", threadPath);
+                var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
+                var responseStream = workspace.GetRemoteStream<MeshNode>(
+                    new Address(responsePath), new MeshNodeReference());
 
-                var recovered = threadNode with
+                responseStream.Update(current =>
                 {
-                    Content = thread with
+                    if (current == null) return null;
+                    var msg = current.Content as ThreadMessage;
+                    var lastUpdated = current.LastModified != default
+                        ? current.LastModified.ToString("HH:mm:ss")
+                        : msg?.Timestamp.ToString("HH:mm:ss") ?? "unknown";
+                    var updated = current with
+                    {
+                        Content = new ThreadMessage
+                        {
+                            Id = thread.ActiveMessageId,
+                            Role = "assistant",
+                            Text = (msg?.Text ?? "") + $"\n\n*Cancelled (last updated {lastUpdated})*",
+                            Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
+                            Type = ThreadMessageType.AgentResponse,
+                            AgentName = msg?.AgentName,
+                            ModelName = msg?.ModelName,
+                            ToolCalls = msg?.ToolCalls ?? []
+                        }
+                    };
+                    return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                        responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                        [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+                });
+            }
+
+            // 2. Clear thread execution state, mark progress as completed
+            workspace.UpdateMeshNode(node =>
+            {
+                var t = node.Content as Thread ?? new Thread();
+                var cancelledAt = DateTime.UtcNow;
+                return node with
+                {
+                    LastModified = cancelledAt,
+                    Content = t with
                     {
                         IsExecuting = false,
-                        ExecutionStatus = null,
+                        ExecutionStatus = $"Cancelled at {cancelledAt:HH:mm:ss}",
                         ActiveMessageId = null,
                         TokensUsed = 0,
                         ExecutionStartedAt = null,
-                        ActiveProgress = null
+                        ActiveProgress = t.ActiveProgress != null
+                            ? MarkAllCompleted(t.ActiveProgress)
+                            : null
                     }
                 };
-                await meshService.UpdateNodeAsync(recovered, ct);
-            }
-        }
-        catch (Exception ex)
+            });
+
+            logger?.LogInformation("[ThreadExec] Recovery: cleared stale execution on {ThreadPath}", threadPath);
+        });
+
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Recursively collects all child thread paths from a progress tree.
+    /// </summary>
+    private static void CollectChildPaths(ThreadProgressEntry? entry, List<string> paths)
+    {
+        if (entry == null) return;
+        foreach (var child in entry.Children)
         {
-            logger?.LogWarning(ex, "[ThreadExec] Recovery failed for {ThreadPath}", threadPath);
+            paths.Add(child.ThreadPath);
+            CollectChildPaths(child, paths);
         }
     }
+
+    /// <summary>
+    /// Recursively marks all entries in a progress tree as completed.
+    /// </summary>
+    private static ThreadProgressEntry MarkAllCompleted(ThreadProgressEntry entry)
+        => entry with
+        {
+            IsCompleted = true,
+            Children = entry.Children.Select(MarkAllCompleted).ToImmutableList()
+        };
 
     /// <summary>
     /// Handles SubmitMessageRequest on the thread hub.
@@ -102,12 +164,17 @@ public static class ThreadExecution
         // Capture workspace BEFORE Subscribe — inside Subscribe callback, hub context may differ
         var threadWorkspace = hub.GetWorkspace();
 
+        // MainNode = content entity (e.g., "PartnerRe/AiConsulting"), not a thread path.
+        // This is critical for access control — all satellite nodes must reference the main entity.
+        var mainEntity = request.ContextPath ?? threadPath;
+
         // 1) Create both cells concurrently via Observable.
         //    CreateNode captures AccessContext eagerly at call time (inside the delivery
         //    pipeline where it's set from delivery.AccessContext). No explicit identity needed.
         var inputObs = meshService.CreateNode(new MeshNode(userMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntity,
             Content = new ThreadMessage
             {
                 Id = userMsgId,
@@ -122,6 +189,7 @@ public static class ThreadExecution
         var outputObs = meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntity,
             Content = new ThreadMessage
             {
                 Id = responseMsgId,
@@ -185,10 +253,14 @@ public static class ThreadExecution
     /// Prepares agent and await-streams the response.
     /// Uses UpdateMeshNode on a remote stream to push text to the response node.
     /// </summary>
-    private static async Task<IMessageDelivery> ExecuteMessageAsync(
+    /// <summary>
+    /// Fully reactive execution handler — zero await, zero QueryAsync.
+    /// Subscribes to chatClient.Initialize() observable, then runs streaming in the callback.
+    /// The AI API streaming (GetStreamingResponseAsync) runs via hub.InvokeAsync for async I/O.
+    /// </summary>
+    private static IMessageDelivery ExecuteMessageAsync(
         IMessageHub hub,
-        IMessageDelivery<SubmitMessageRequest> delivery,
-        CancellationToken ct)
+        IMessageDelivery<SubmitMessageRequest> delivery)
     {
         var request = delivery.Message;
         var parentHub = hub.Configuration.ParentHub!;
@@ -198,11 +270,11 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // Get remote stream ONCE for the response node — declared outside try for catch access
+        // Get remote stream ONCE for the response node
         var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
             new Address(responsePath), new MeshNodeReference());
 
-        // Helper: update Thread execution state on the parent hub's workspace
+        // Helper: update Thread execution state
         var threadWorkspace = parentHub.GetWorkspace();
         void UpdateThreadExecution(Func<MeshThread, MeshThread> mutate)
         {
@@ -213,129 +285,94 @@ public static class ThreadExecution
             });
         }
 
-        // Declared outside try so catch blocks can include partial results
-        var toolCallLog = new List<ToolCallEntry>();
-        string? firstDelegationPath = null;
+        // Set user access context
+        var accessService = parentHub.ServiceProvider.GetService<AccessService>();
+        if (delivery.AccessContext != null)
+            accessService?.SetContext(delivery.AccessContext);
 
-        try
-        {
-            // Set user access context for the entire execution scope
-            // so all tool calls (Create, Update, etc.) run under the correct user identity
-            var accessService = parentHub.ServiceProvider.GetService<AccessService>();
-            if (delivery.AccessContext != null)
-                accessService?.SetContext(delivery.AccessContext);
+        // Initialize agent — returns IObservable<AgentChatClient>
+        var chatClient = new AgentChatClient(parentHub.ServiceProvider);
+        chatClient.SetThreadId(threadPath);
 
-            // 1. Prepare agent
-            logger.LogDebug("[ThreadExec] ExecuteMessageAsync: preparing agent for {ThreadPath}, responsePath={ResponsePath}",
-                threadPath, responsePath);
-            var chatClient = new AgentChatClient(parentHub.ServiceProvider);
-            chatClient.SetThreadId(threadPath);
-            await chatClient.InitializeAsync(request.ContextPath, request.ModelName);
-            logger.LogDebug("[ThreadExec] ExecuteMessageAsync: agent initialized for {ThreadPath}", threadPath);
-
-            // Set application context so the agent knows which node it's working on.
-            // This populates the "Current Application Context" section in the system prompt,
-            // which is critical for sub-threads created via delegation.
-            if (!string.IsNullOrEmpty(request.ContextPath))
+        // Subscribe to Initialize: when agents are ready, start the streaming loop
+        var initSub = chatClient.Initialize(request.ContextPath, request.ModelName)
+            .Take(1) // first emission = agents ready
+            .Subscribe(client =>
             {
-                var meshService2 = parentHub.ServiceProvider.GetRequiredService<IMeshService>();
-                var contextNode = await meshService2.QueryAsync<MeshNode>(
-                    $"path:{request.ContextPath}").FirstOrDefaultAsync(ct);
-                chatClient.SetContext(new AgentContext
+                logger.LogInformation("[ThreadExec] Agents ready for {ThreadPath}, starting execution", threadPath);
+
+                // Set context from remote stream
+                if (!string.IsNullOrEmpty(request.ContextPath))
                 {
-                    Address = new Address(request.ContextPath),
-                    Context = request.ContextPath,
-                    Node = contextNode
-                });
-            }
-
-            if (!string.IsNullOrEmpty(request.AgentName))
-                chatClient.SetSelectedAgent(request.AgentName);
-
-            if (request.Attachments is { Count: > 0 })
-                chatClient.SetAttachments(request.Attachments);
-
-            // Load conversation history from existing thread messages (resume scenario)
-            try
-            {
-                var meshService = parentHub.ServiceProvider.GetRequiredService<IMeshService>();
-                var threadNode = await meshService.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
-                var threadContent = threadNode?.Content as AI.Thread;
-                if (threadContent?.Messages.Count > 0)
-                {
-                    var history = new List<ThreadMessage>();
-                    foreach (var msgId in threadContent.Messages)
+                    var contextStream = workspace.GetRemoteStream<MeshNode>(
+                        new Address(request.ContextPath), new MeshNodeReference());
+                    client.SetContext(new AgentContext
                     {
-                        // Skip the current input/output messages (they're being created right now)
-                        if (msgId == responseMsgId) continue;
-                        await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{threadPath}/{msgId}"))
-                        {
-                            if (msgNode.Content is ThreadMessage tmsg &&
-                                tmsg.Type != ThreadMessageType.EditingPrompt)
-                            {
-                                history.Add(tmsg);
-                            }
-                        }
-                    }
-                    if (history.Count > 0)
-                    {
-                        chatClient.SetConversationHistory(history);
-                        logger.LogInformation("[ThreadExec] Loaded {Count} history messages for {ThreadPath}",
-                            history.Count, threadPath);
-                    }
+                        Address = new Address(request.ContextPath),
+                        Context = request.ContextPath,
+                        Node = contextStream.Current?.Value
+                    });
                 }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to load conversation history for {ThreadPath}", threadPath);
-            }
 
-            // 3. await streaming — update response node via the stream
-            var responseText = new StringBuilder();
-            var lastUpdate = DateTimeOffset.MinValue;
-            var lastStatusUpdate = DateTimeOffset.MinValue;
-            string? currentStatus = null;
-            var pendingCalls = new Dictionary<string, FunctionCallContent>();
-            string? lastCallKey = null;
-            var lastPushedToolCallCount = 0;
+                if (!string.IsNullOrEmpty(request.AgentName))
+                    client.SetSelectedAgent(request.AgentName);
+                if (request.Attachments is { Count: > 0 })
+                    client.SetAttachments(request.Attachments);
 
-            // Set execution context for delegation sub-thread creation
-            // Capture the user's AccessContext from the delivery so it propagates through delegations
-            var userAccessContext = delivery.AccessContext;
-            logger.LogInformation("[ThreadExec] ExecuteMessageAsync: user={User}, threadPath={ThreadPath}",
-                userAccessContext?.ObjectId ?? "(no-user)", threadPath);
-            chatClient.SetExecutionContext(new ThreadExecutionContext
-            {
-                ThreadPath = threadPath,
-                ResponseMessageId = responseMsgId,
-                ContextPath = request.ContextPath,
-                UserAccessContext = userAccessContext
-            });
-            chatClient.UpdateDelegationStatus = status => { currentStatus = status; };
-            chatClient.ForwardToolCall = entry => { toolCallLog.Add(entry); };
+                // Load history from workspace stream
+                LoadHistoryFromStream(client, threadWorkspace, workspace, threadPath, responseMsgId, logger);
 
-            // Self-entry for hierarchical progress display.
-            // Children are managed by ChatClientAgentFactory via remote stream subscriptions.
-            var agentDisplayName = request.AgentName ?? "Agent";
-            UpdateThreadExecution(t => t with
-            {
-                ActiveProgress = new ThreadProgressEntry
+                // Set execution context
+                var userAccessContext = delivery.AccessContext;
+                client.SetExecutionContext(new ThreadExecutionContext
                 {
                     ThreadPath = threadPath,
-                    ThreadName = agentDisplayName,
-                    Status = "Generating response..."
-                }
-            });
+                    ResponseMessageId = responseMsgId,
+                    ContextPath = request.ContextPath,
+                    UserAccessContext = userAccessContext
+                });
 
-            var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
+                var toolCallLog = new List<ToolCallEntry>();
+                string? currentStatus = null;
+                client.UpdateDelegationStatus = status => { currentStatus = status; };
+                client.ForwardToolCall = entry => { toolCallLog.Add(entry); };
 
-            await foreach (var update in chatClient.GetStreamingResponseAsync([chatMessage], ct))
+                var agentDisplayName = request.AgentName ?? "Agent";
+                UpdateThreadExecution(t => t with
+                {
+                    ActiveProgress = new ThreadProgressEntry
+                    {
+                        ThreadPath = threadPath,
+                        ThreadName = agentDisplayName,
+                        Status = "Generating response..."
+                    }
+                });
+
+                // Run AI streaming via InvokeAsync — external I/O, not Orleans
+                var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
+                logger.LogInformation("[ThreadExec] Sending to agent: threadPath={ThreadPath}, agent={Agent}, model={Model}, msgLength={Length}",
+                    threadPath, request.AgentName ?? "(default)", request.ModelName ?? "(default)", request.UserMessageText?.Length ?? 0);
+                string? firstDelegationPath = null;
+
+                hub.InvokeAsync(async ct =>
+                {
+                    try
+                    {
+                    var responseText = new StringBuilder();
+                    var lastUpdate = DateTimeOffset.MinValue;
+                    var lastStatusUpdate = DateTimeOffset.MinValue;
+                    var pendingCalls = new Dictionary<string, FunctionCallContent>();
+                    string? lastCallKey = null;
+                    var lastPushedToolCallCount = 0;
+
+                    await foreach (var update in client.GetStreamingResponseAsync([chatMessage], ct))
             {
                 // Capture function call / delegation activity for execution status
                 foreach (var content in update.Contents)
                 {
                     if (content is FunctionCallContent functionCall)
                     {
+                        logger.LogDebug("[ThreadExec] Tool call: {Name}({Args})", functionCall.Name, SerializeArgs(functionCall.Arguments));
                         // Build detailed status: formatted name + arguments
                         var formatted = ToolStatusFormatter.Format(functionCall);
                         var argsDetail = SerializeArgs(functionCall.Arguments);
@@ -350,6 +387,9 @@ public static class ThreadExecution
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
+                        logger.LogDebug("[ThreadExec] Tool result: {Name}, success={Success}, length={Length}",
+                            functionResult.CallId, functionResult.Result?.ToString()?.StartsWith("Error") != true,
+                            functionResult.Result?.ToString()?.Length ?? 0);
                         // Match result to pending call — try CallId first, then last pending call
                         var resultKey = functionResult.CallId ?? lastCallKey;
                         FunctionCallContent? originalCall = null;
@@ -455,106 +495,154 @@ public static class ThreadExecution
                 }
             }
 
-            // 4. Final update — mark execution as complete
-            var finalText = responseText.ToString();
-            var finalToolCalls = toolCallLog.ToImmutableList();
-            responseStream.Update(current =>
-            {
-                if (current == null) return null;
-                var updated = current with
-                {
-                    Content = new ThreadMessage
+                    // Final update — mark execution as complete
+                    logger.LogInformation("[ThreadExec] Execution completed: threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}",
+                        threadPath, responseText.Length, toolCallLog.Count);
+                    var finalText = responseText.ToString();
+                    var finalToolCalls = toolCallLog.ToImmutableList();
+                    responseStream.Update(current =>
                     {
-                        Id = responseMsgId,
-                        Role = "assistant",
-                        Text = finalText,
-                        Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.AgentResponse,
-                        AgentName = request.AgentName,
-                        ModelName = request.ModelName,
-                        ToolCalls = finalToolCalls,
-                        DelegationPath = firstDelegationPath
-                    }
-                };
-                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-            });
+                        if (current == null) return null;
+                        var updated = current with
+                        {
+                            Content = new ThreadMessage
+                            {
+                                Id = responseMsgId, Role = "assistant", Text = finalText,
+                                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse,
+                                AgentName = request.AgentName, ModelName = request.ModelName,
+                                ToolCalls = finalToolCalls, DelegationPath = firstDelegationPath
+                            }
+                        };
+                        return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                            responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                            [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+                    });
 
-            // Clear Thread execution state
-            UpdateThreadExecution(t => t with
-            {
-                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null, ActiveProgress = null
-            });
-        }
-        catch (OperationCanceledException)
+                    UpdateThreadExecution(t => t with
+                    {
+                        IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                        ExecutionStartedAt = null, ActiveProgress = null
+                    });
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        logger.LogInformation("[ThreadExec] Cancelled: {ThreadPath}", threadPath);
+                        MarkResponseCancelled(responseStream, responseMsgId, request, responsePath, toolCallLog, firstDelegationPath);
+                        UpdateThreadExecution(t => t with
+                        {
+                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                            ExecutionStartedAt = null, ActiveProgress = null
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "[ThreadExec] Error: {ThreadPath}", threadPath);
+                        MarkResponseError(responseStream, responseMsgId, request, responsePath, ex, toolCallLog, firstDelegationPath);
+                        UpdateThreadExecution(t => t with
+                        {
+                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                            ExecutionStartedAt = null, ActiveProgress = null
+                        });
+                    }
+                }, ex =>
+                {
+                    logger.LogError(ex, "[ThreadExec] InvokeAsync error: {ThreadPath}", threadPath);
+                    return Task.CompletedTask;
+                });
+            }, // end of Initialize().Subscribe onNext
+            ex => logger.LogError(ex, "[ThreadExec] Initialize failed for {ThreadPath}", threadPath));
+
+        // Register subscription for disposal
+        workspace.AddDisposable(initSub);
+
+        return delivery.Processed();
+    }
+
+    private static void LoadHistoryFromStream(
+        AgentChatClient client, IWorkspace threadWorkspace, IWorkspace workspace,
+        string threadPath, string responseMsgId, ILogger logger)
+    {
+        try
         {
-            logger.LogInformation("ExecuteMessageAsync: cancelled for {ThreadPath}", threadPath);
-            // Mark execution as stopped on cancellation
-            responseStream.Update(current =>
+            var threadStream = threadWorkspace.GetStream(new MeshNodeReference());
+            var threadNode = threadStream?.Current?.Value;
+            var threadContent = threadNode?.Content as AI.Thread;
+            if (threadContent?.Messages.Count > 0)
             {
-                if (current == null) return null;
-                var msg = current.Content as ThreadMessage;
-                var updated = current with
+                var history = new List<ThreadMessage>();
+                foreach (var msgId in threadContent.Messages)
                 {
-                    Content = new ThreadMessage
-                    {
-                        Id = responseMsgId,
-                        Role = "assistant",
-                        Text = (msg?.Text ?? "") + "\n\n*Cancelled*",
-                        Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.AgentResponse,
-                        AgentName = request.AgentName,
-                        ModelName = request.ModelName,
-                        ToolCalls = toolCallLog.ToImmutableList(),
-                        DelegationPath = firstDelegationPath
-                    }
-                };
-                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-            });
-
-            UpdateThreadExecution(t => t with
-            {
-                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null, ActiveProgress = null
-            });
+                    if (msgId == responseMsgId) continue;
+                    var msgStream = workspace.GetRemoteStream<MeshNode>(
+                        new Address($"{threadPath}/{msgId}"), new MeshNodeReference());
+                    var msgNode = msgStream.Current?.Value;
+                    if (msgNode?.Content is ThreadMessage tmsg && tmsg.Type != ThreadMessageType.EditingPrompt)
+                        history.Add(tmsg);
+                }
+                if (history.Count > 0)
+                {
+                    client.SetConversationHistory(history);
+                    logger.LogInformation("[ThreadExec] Loaded {Count} history messages for {ThreadPath}",
+                        history.Count, threadPath);
+                }
+            }
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "ExecuteMessageAsync: error for {ThreadPath}", threadPath);
-            // Mark execution as stopped on error
-            responseStream.Update(current =>
-            {
-                if (current == null) return null;
-                var msg = current.Content as ThreadMessage;
-                var updated = current with
-                {
-                    Content = new ThreadMessage
-                    {
-                        Id = responseMsgId,
-                        Role = "assistant",
-                        Text = (msg?.Text ?? "") + $"\n\n*Error: {ex.Message}*",
-                        Timestamp = DateTime.UtcNow,
-                        Type = ThreadMessageType.AgentResponse,
-                        AgentName = request.AgentName,
-                        ModelName = request.ModelName,
-                        ToolCalls = toolCallLog.ToImmutableList(),
-                        DelegationPath = firstDelegationPath
-                    }
-                };
-                return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                    responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                    [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-            });
-
-            UpdateThreadExecution(t => t with
-            {
-                IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ExecutionStartedAt = null, ActiveProgress = null
-            });
+            logger.LogWarning(ex, "Failed to load conversation history for {ThreadPath}", threadPath);
         }
+    }
 
-        return delivery.Processed();
+    private static void MarkResponseCancelled(
+        ISynchronizationStream<MeshNode> responseStream, string responseMsgId,
+        SubmitMessageRequest request, string responsePath,
+        List<ToolCallEntry> toolCallLog, string? delegationPath)
+    {
+        responseStream.Update(current =>
+        {
+            if (current == null) return null;
+            var msg = current.Content as ThreadMessage;
+            var updated = current with
+            {
+                Content = new ThreadMessage
+                {
+                    Id = responseMsgId, Role = "assistant",
+                    Text = (msg?.Text ?? "") + "\n\n*Cancelled*",
+                    Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse,
+                    AgentName = request.AgentName, ModelName = request.ModelName,
+                    ToolCalls = toolCallLog.ToImmutableList(), DelegationPath = delegationPath
+                }
+            };
+            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+        });
+    }
+
+    private static void MarkResponseError(
+        ISynchronizationStream<MeshNode> responseStream, string responseMsgId,
+        SubmitMessageRequest request, string responsePath,
+        Exception ex, List<ToolCallEntry> toolCallLog, string? delegationPath)
+    {
+        responseStream.Update(current =>
+        {
+            if (current == null) return null;
+            var msg = current.Content as ThreadMessage;
+            var updated = current with
+            {
+                Content = new ThreadMessage
+                {
+                    Id = responseMsgId, Role = "assistant",
+                    Text = (msg?.Text ?? "") + $"\n\n*Error: {ex.Message}*",
+                    Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse,
+                    AgentName = request.AgentName, ModelName = request.ModelName,
+                    ToolCalls = toolCallLog.ToImmutableList(), DelegationPath = delegationPath
+                }
+            };
+            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+        });
     }
 
     private static string? SerializeArgs(IDictionary<string, object?>? args)
