@@ -287,7 +287,9 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                         {
                                             ThreadPath = subThreadPath,
                                             ThreadName = targetId,
-                                            Status = childThread.ExecutionStatus
+                                            Status = childThread.ExecutionStatus,
+                                            StreamingCellPath = !string.IsNullOrEmpty(childThread.ActiveMessageId)
+                                                ? $"{subThreadPath}/{childThread.ActiveMessageId}" : null
                                         };
 
                                     if (!childThread.IsExecuting)

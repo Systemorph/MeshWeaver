@@ -153,6 +153,10 @@ public record ThreadProgressEntry
     /// <summary>Current execution status (tool name, arguments, "Generating response...", etc.).</summary>
     public string? Status { get; init; }
 
+    /// <summary>Path to the streaming response message cell (e.g., threadPath/responseMsgId).
+    /// UI subscribes to this cell to show tool calls and streaming text for this thread.</summary>
+    public string? StreamingCellPath { get; init; }
+
     /// <summary>Whether this thread's execution has completed (shown with checkmark in UI).</summary>
     public bool IsCompleted { get; init; }
 

@@ -230,6 +230,15 @@
     padding: 1px 0;
 }
 
+::deep .progress-tree-link {
+    text-decoration: none;
+    color: var(--accent-fill-rest);
+}
+
+::deep .progress-tree-link:hover {
+    text-decoration: underline;
+}
+
 ::deep .progress-tree-completed {
     opacity: 0.55;
 }

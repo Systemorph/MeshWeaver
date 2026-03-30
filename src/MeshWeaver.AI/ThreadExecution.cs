@@ -344,7 +344,8 @@ public static class ThreadExecution
                     {
                         ThreadPath = threadPath,
                         ThreadName = agentDisplayName,
-                        Status = "Generating response..."
+                        Status = "Generating response...",
+                        StreamingCellPath = responsePath
                     }
                 });
 
@@ -459,7 +460,8 @@ public static class ThreadExecution
                         ActiveProgress = (t.ActiveProgress ?? new ThreadProgressEntry
                         {
                             ThreadPath = threadPath,
-                            ThreadName = agentDisplayName
+                            ThreadName = agentDisplayName,
+                            StreamingCellPath = responsePath
                         }) with { Status = status }
                     });
                     lastStatusUpdate = DateTimeOffset.UtcNow;

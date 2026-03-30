@@ -216,7 +216,11 @@ else
                     {
                         <span class="progress-tree-check">&#10003;</span>
                     }
-                    <span class="progress-tree-name">@entry.ThreadName</span>
+                    else
+                    {
+                        <FluentProgressRing Style="width: 12px; height: 12px; flex-shrink: 0;" />
+                    }
+                    @RenderEntryName(entry)
                     @if (!string.IsNullOrEmpty(entry.Status))
                     {
                         <span class="progress-tree-status">@GetStatusTitle(entry.Status)</span>
@@ -232,7 +236,7 @@ else
         {
             <div class="progress-tree-leaf progress-tree-completed" style="margin-left: @(indent)px;">
                 <span class="progress-tree-check">&#10003;</span>
-                <span class="progress-tree-name">@entry.ThreadName</span>
+                @RenderEntryName(entry)
                 <span class="progress-tree-status">Done</span>
             </div>
         }
@@ -240,9 +244,21 @@ else
         {
             <div class="progress-tree-leaf" style="margin-left: @(indent)px;">
                 <FluentProgressRing Style="width: 14px; height: 14px; flex-shrink: 0;" />
-                <span class="progress-tree-name">@entry.ThreadName</span>
+                @RenderEntryName(entry)
                 <span class="progress-tree-status">@(GetStatusTitle(entry.Status) ?? "Generating response...")</span>
             </div>
+        }
+    };
+
+    private RenderFragment RenderEntryName(ThreadProgressEntry entry) => __builder =>
+    {
+        if (!string.IsNullOrEmpty(entry.ThreadPath) && entry.ThreadPath != threadPath)
+        {
+            <a class="progress-tree-name progress-tree-link" href="/@entry.ThreadPath/Thread">@entry.ThreadName</a>
+        }
+        else
+        {
+            <span class="progress-tree-name">@entry.ThreadName</span>
         }
     };
 

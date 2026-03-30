@@ -75,6 +75,24 @@ public static class ThreadMessageLayoutAreas
             .DistinctUntilChanged()
             .Subscribe(calls => host.UpdateData("toolCalls", calls)));
 
+        // Push isExecuting + executionStatus by subscribing to the parent thread's node.
+        // This message is "executing" when the parent thread's ActiveMessageId == this message's ID.
+        var threadStream = host.Workspace.GetRemoteStream<MeshNode>(
+            new Address(threadPath), new MeshNodeReference());
+        host.RegisterForDisposal(threadStream
+            .Select(ci =>
+            {
+                var thread = ci.Value?.Content as Thread;
+                var isActive = thread?.IsExecuting == true && thread?.ActiveMessageId == messageId;
+                return (IsExecuting: isActive, Status: isActive ? thread?.ExecutionStatus : null);
+            })
+            .DistinctUntilChanged()
+            .Subscribe(state =>
+            {
+                host.UpdateData("isExecuting", state.IsExecuting);
+                host.UpdateData("executionStatus", state.Status);
+            }));
+
         // Emit control ONCE — role/author/type are fixed, text is data-bound
         return nodeStream!
             .Select(nodes =>
