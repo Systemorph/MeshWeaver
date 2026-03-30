@@ -281,21 +281,18 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                         subThreadPath, childThread?.IsExecuting);
                                     if (childThread == null) return;
 
-                                    // Thread manages its own status — we only watch for completion here.
-                                    // Delegation progress is visible via tool calls on the response message
-                                    // (DelegationPath on ToolCallEntry) and rendered by ThreadMessageLayoutAreas.
-                                    if (!childThread.IsExecuting)
+                                    // Only complete when child was executing and has now stopped.
+                                    // Skip initial emission where IsExecuting is false (child hasn't started yet).
+                                    // Check Messages.Count > 0 to confirm the child actually ran.
+                                    if (!childThread.IsExecuting && childThread.Messages.Count > 0)
                                     {
-                                        Logger.LogInformation("[Delegation] Child completed: {Path}", subThreadPath);
-                                        var resultText = childThread.Messages.Count > 0
-                                            ? $"Delegation to {targetId} completed. Sub-thread: {subThreadPath}"
-                                            : "Delegation completed (no messages)";
-
+                                        Logger.LogInformation("[Delegation] Child completed: {Path}, messages={Count}",
+                                            subThreadPath, childThread.Messages.Count);
                                         tcs.TrySetResult(new DelegationResult
                                         {
                                             AgentName = targetId,
                                             Task = task,
-                                            Result = resultText,
+                                            Result = $"Delegation to {targetId} completed. Sub-thread: {subThreadPath}",
                                             Success = true,
                                             ThreadId = subThreadPath
                                         });

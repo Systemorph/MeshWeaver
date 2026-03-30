@@ -288,47 +288,23 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var stream = host.Workspace.GetStream<MeshNode>();
 
-        // Watch thread for ActiveMessageId changes, subscribe to response msg for tool calls
-        host.RegisterForDisposal(stream!
+        // Read ActiveToolCalls directly from the thread's own workspace stream.
+        // No remote subscription needed — avoids deadlock with the execution hub.
+        return stream!
             .Select(nodes =>
             {
                 var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
                 var thread = node?.Content as MeshThread;
-                return thread is { IsExecuting: true } ? thread.ActiveMessageId : null;
+                return thread is { IsExecuting: true } ? thread.ActiveToolCalls : ImmutableList<ToolCallEntry>.Empty;
             })
             .DistinctUntilChanged()
-            .Subscribe(activeMsgId =>
+            .Select(toolCalls =>
             {
-                if (string.IsNullOrEmpty(activeMsgId))
-                {
-                    host.UpdateData("delegations", ImmutableList<ToolCallEntry>.Empty);
-                    return;
-                }
+                var delegations = toolCalls
+                    .Where(c => !string.IsNullOrEmpty(c.DelegationPath))
+                    .ToList();
 
-                var responsePath = $"{hubPath}/{activeMsgId}";
-                var responseStream = host.Workspace.GetRemoteStream<MeshNode>(
-                    new Address(responsePath), new MeshNodeReference());
-                // ToolCalls is ImmutableList — same instance when unchanged, so
-                // DistinctUntilChanged with reference equality prevents flickering.
-                host.RegisterForDisposal(responseStream
-                    .Select(ci => (ci.Value?.Content as ThreadMessage)?.ToolCalls
-                        ?? ImmutableList<ToolCallEntry>.Empty)
-                    .DistinctUntilChanged()
-                    .Subscribe(toolCalls =>
-                    {
-                        var delegations = toolCalls
-                            .Where(c => !string.IsNullOrEmpty(c.DelegationPath))
-                            .ToImmutableList();
-                        host.UpdateData("delegations", delegations);
-                    }));
-            }));
-
-        // Return a static control — re-renders when /data/delegations changes
-        // Using an observable view built from the data stream
-        return host.Stream.GetDataStream<ImmutableList<ToolCallEntry>>("delegations")
-            .Select(delegations =>
-            {
-                if (delegations is not { Count: > 0 })
+                if (delegations.Count == 0)
                     return (UiControl?)null;
 
                 var stack = Controls.Stack.WithStyle("gap: 4px;");

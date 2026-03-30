@@ -417,8 +417,8 @@ public static class ThreadExecution
                             responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                             [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
                     });
-                    // Update Thread execution status only — ActiveProgress is set once at start
-                    UpdateThreadExecution(t => t with { ExecutionStatus = status });
+                    // Push status + live tool calls to Thread node (read by ToolCallsView from workspace stream)
+                    UpdateThreadExecution(t => t with { ExecutionStatus = status, ActiveToolCalls = liveToolCalls });
                     lastStatusUpdate = DateTimeOffset.UtcNow;
                 }
 
@@ -477,7 +477,7 @@ public static class ThreadExecution
 
                     UpdateThreadExecution(t => t with
                     {
-                        IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                        IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ActiveToolCalls = [],
                         ExecutionStartedAt = null                    });
                     }
                     catch (OperationCanceledException)
@@ -486,7 +486,7 @@ public static class ThreadExecution
                         MarkResponseCancelled(responseStream, responseMsgId, request, responsePath, toolCallLog, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
-                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ActiveToolCalls = [],
                             ExecutionStartedAt = null                        });
                     }
                     catch (Exception ex)
@@ -495,7 +495,7 @@ public static class ThreadExecution
                         MarkResponseError(responseStream, responseMsgId, request, responsePath, ex, toolCallLog, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
-                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
+                            IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null, ActiveToolCalls = [],
                             ExecutionStartedAt = null                        });
                     }
                 }, ex =>

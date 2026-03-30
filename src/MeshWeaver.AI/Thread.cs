@@ -104,6 +104,14 @@ public record Thread
     public string? ExecutionStatus { get; init; }
 
     /// <summary>
+    /// Live tool calls from the current execution, pushed by ThreadExecution during streaming.
+    /// Includes DelegationPath for active delegations. Read by ToolCallsView from the
+    /// thread's own workspace stream — no remote subscription needed (avoids deadlock).
+    /// Cleared when execution completes.
+    /// </summary>
+    public ImmutableList<ToolCallEntry> ActiveToolCalls { get; init; } = [];
+
+    /// <summary>
     /// The ID of the response message currently being generated.
     /// </summary>
     public string? ActiveMessageId { get; init; }

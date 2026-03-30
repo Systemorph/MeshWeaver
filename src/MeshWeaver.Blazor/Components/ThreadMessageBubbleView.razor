@@ -60,10 +60,10 @@
         }
     }
 
-    @* Collapsible tool calls — shown during execution (open) and after (collapsed) *@
+    @* Collapsible tool calls — closed by default, click to expand *@
     @if (HasToolCalls)
     {
-        <details class="thread-msg-tool-calls" open="@isExecuting">
+        <details class="thread-msg-tool-calls">
             <summary class="thread-msg-tool-summary">
                 <svg class="thread-msg-tool-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 0a.5.5 0 0 1 .5.5V2h4V.5a.5.5 0 0 1 1 0V2h1a2 2 0 0 1 2 2v1H2V4a2 2 0 0 1 2-2h1V.5a.5.5 0 0 1 .5-.5M2 7v7a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7z"/></svg>
                 @toolCalls!.Count tool call(s)
