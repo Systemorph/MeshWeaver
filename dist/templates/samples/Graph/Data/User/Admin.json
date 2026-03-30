@@ -1,0 +1,13 @@
+{
+  "id": "Admin",
+  "namespace": "User",
+  "name": "Admin",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "User",
+    "email": "admin@example.com",
+    "bio": "Default administrator account."
+  }
+}

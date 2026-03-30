@@ -1,0 +1,17 @@
+{
+  "id": "Admin_Access",
+  "namespace": "User/_Access",
+  "name": "Admin Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Admin",
+    "displayName": "Admin",
+    "roles": [
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}

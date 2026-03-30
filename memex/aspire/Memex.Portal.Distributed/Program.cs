@@ -1,6 +1,8 @@
 ﻿using Azure.Identity;
+using Azure.Storage.Blobs;
 using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
+using Microsoft.AspNetCore.DataProtection;
 using MeshWeaver.Hosting.Orleans;
 using MeshWeaver.Hosting.PostgreSql;
 using MeshWeaver.Messaging;
@@ -9,6 +11,7 @@ using Orleans.Configuration;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
+builder.Services.AddServerSideBlazor().AddCircuitOptions(o => o.DetailedErrors = true);
 
 // Log levels controlled via appsettings.Development.json
 
@@ -16,6 +19,21 @@ builder.AddServiceDefaults();
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");
 builder.AddKeyedAzureBlobServiceClient("storage");
 builder.AddKeyedAzureBlobServiceClient("orleans-grain-state");
+
+// Data protection: persist keys to Azure Blob Storage (shared across replicas)
+var dpConfig = builder.Configuration.GetSection("DataProtection");
+var containerName = dpConfig["ContainerName"] ?? "dataprotection";
+var blobName = dpConfig["BlobName"] ?? "keys.xml";
+
+builder.Services.AddDataProtection()
+    .SetApplicationName("MemexPortal")
+    .PersistKeysToAzureBlobStorage(sp =>
+    {
+        var blobServiceClient = sp.GetRequiredKeyedService<BlobServiceClient>("storage");
+        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        containerClient.CreateIfNotExists();
+        return containerClient.GetBlobClient(blobName);
+    });
 
 // Register Aspire-injected PostgreSQL data source (with pgvector support)
 // Single shared pool for all partition queries (schema-qualified SQL).

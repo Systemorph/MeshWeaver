@@ -42,10 +42,12 @@ logger.LogInformation("Running database migration...");
 // (portal, migration) can create per-organization schemas at runtime.
 if (connectionString.Contains("database.azure.com"))
 {
+    var csb = new NpgsqlConnectionStringBuilder(connectionString);
+    var dbName = csb.Database ?? "memex";
     await using var grantCmd = dataSource.CreateCommand(
-        "GRANT CREATE ON DATABASE memex TO azure_pg_admin");
+        $"GRANT CREATE ON DATABASE \"{dbName}\" TO azure_pg_admin");
     await grantCmd.ExecuteNonQueryAsync();
-    logger.LogInformation("Granted CREATE ON DATABASE to azure_pg_admin.");
+    logger.LogInformation("Granted CREATE ON DATABASE {Database} to azure_pg_admin.", dbName);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

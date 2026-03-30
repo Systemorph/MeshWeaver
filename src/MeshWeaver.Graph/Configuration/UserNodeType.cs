@@ -103,7 +103,10 @@ public static class UserNodeType
                 // "User/Alice" is public, "User/Alice/SomeThread" is not
                 return nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                        && !nodePath["User/".Length..].Contains('/');
-            });
+            })
+        .AddHubPermissionRule(
+            Permission.Read,
+            (_, userId) => !string.IsNullOrEmpty(userId));
 
     /// <summary>
     /// Adds a create-access rule for portal namespace hubs (onboarding flow).

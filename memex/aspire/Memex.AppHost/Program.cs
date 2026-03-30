@@ -22,17 +22,20 @@ var builder = DistributedApplication.CreateBuilder(args);
 //
 // Required user-secrets for distributed modes:
 //   Parameters:azure-foundry-key
-//   Parameters:embedding-endpoint
-//   Parameters:embedding-key
-//   Parameters:embedding-model
 //   Parameters:microsoft-client-id
 //   Parameters:microsoft-client-secret
+//
+// Optional user-secrets (features disabled when absent):
+//   Parameters:embedding-endpoint, embedding-key, embedding-model
+//   Parameters:google-client-id, google-client-secret
+//   Parameters:custom-domain, certificate-name
 //
 // For local-test/local-prod, also set the connection string to the Azure PostgreSQL:
 //   ConnectionStrings:memex  (Azure PostgreSQL, bypassing provisioning)
 // Blob Storage uses RunAsExisting with Azure Identity (az login) — no secrets needed.
 
-var mode = builder.Configuration["mode"]?.ToLowerInvariant() ?? "local";
+var mode = builder.Configuration["mode"]?.ToLowerInvariant()
+    ?? (builder.ExecutionContext.IsPublishMode ? "test" : "local");
 
 if (mode == "monolith")
 {
@@ -49,20 +52,29 @@ if (mode == "monolith")
 // LLM API key (single Azure Foundry key for both Anthropic and OpenAI endpoints)
 var azureFoundryKey = builder.AddParameter("azure-foundry-key", secret: true);
 
-// Embedding configuration
-var embeddingEndpoint = builder.AddParameter("embedding-endpoint", secret: false);
-var embeddingKey = builder.AddParameter("embedding-key", secret: true);
-var embeddingModel = builder.AddParameter("embedding-model", secret: false);
+// Embedding — optional: skip if embedding-key is not configured
+var hasEmbedding = !string.IsNullOrEmpty(builder.Configuration["Parameters:embedding-key"]);
+var embeddingEndpoint = hasEmbedding ? builder.AddParameter("embedding-endpoint", secret: false) : null;
+var embeddingKey = hasEmbedding ? builder.AddParameter("embedding-key", secret: true) : null;
+var embeddingModel = hasEmbedding ? builder.AddParameter("embedding-model", secret: false) : null;
 
-// Authentication
+// Authentication — Microsoft (required)
 var microsoftClientId = builder.AddParameter("microsoft-client-id", secret: false);
 var microsoftClientSecret = builder.AddParameter("microsoft-client-secret", secret: true);
-var googleClientId = builder.AddParameter("google-client-id", secret: false);
-var googleClientSecret = builder.AddParameter("google-client-secret", secret: true);
 
-// --- Custom domain (for deployed modes) ---
-var customDomain = builder.AddParameter("custom-domain", secret: false);
-var certificateName = builder.AddParameter("certificate-name", secret: false);
+// Authentication — Microsoft tenant (optional: defaults to "common" for multi-tenant)
+var hasTenantId = !string.IsNullOrEmpty(builder.Configuration["Parameters:microsoft-tenant-id"]);
+var microsoftTenantId = hasTenantId ? builder.AddParameter("microsoft-tenant-id", secret: false) : null;
+
+// Authentication — Google (optional: skip if google-client-secret is not configured)
+var hasGoogleAuth = !string.IsNullOrEmpty(builder.Configuration["Parameters:google-client-secret"]);
+var googleClientId = hasGoogleAuth ? builder.AddParameter("google-client-id", secret: false) : null;
+var googleClientSecret = hasGoogleAuth ? builder.AddParameter("google-client-secret", secret: true) : null;
+
+// --- Custom domain (optional, for deployed modes with DNS configured) ---
+var hasCustomDomain = !string.IsNullOrEmpty(builder.Configuration["Parameters:custom-domain"]);
+var customDomain = hasCustomDomain ? builder.AddParameter("custom-domain", secret: false) : null;
+var certificateName = hasCustomDomain ? builder.AddParameter("certificate-name", secret: false) : null;
 
 // --- Infrastructure axes ---
 var isDeployed = mode is "test" or "prod";
@@ -118,8 +130,9 @@ var appInsights = builder.AddAzureApplicationInsights("appinsights")
 var dbMigration = builder
     .AddProject<Projects.Memex_Database_Migration>("db-migration")
     .WithReference(appInsights)
-    .WaitFor(appInsights)
-    .WithEnvironment("Embedding__Model", embeddingModel);
+    .WaitFor(appInsights);
+if (hasEmbedding)
+    dbMigration = dbMigration.WithEnvironment("Embedding__Model", embeddingModel!);
 
 // --- Portal (co-hosted Orleans silo + web) ---
 var portal = builder
@@ -127,10 +140,6 @@ var portal = builder
     .WithExternalHttpEndpoints()
     .WithReference(orleans)
     .WithReference(appInsights)
-    // Embedding
-    .WithEnvironment("Embedding__Endpoint", embeddingEndpoint)
-    .WithEnvironment("Embedding__ApiKey", embeddingKey)
-    .WithEnvironment("Embedding__Model", embeddingModel)
     // LLM: Anthropic (Azure Foundry Claude)
     .WithEnvironment("Anthropic__Endpoint", "https://s-meshweaver.services.ai.azure.com/anthropic/")
     .WithEnvironment("Anthropic__ApiKey", azureFoundryKey)
@@ -146,12 +155,11 @@ var portal = builder
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
     .WithEnvironment("AzureOpenAIS__Models__0", "gpt-5-mini")
     .WithEnvironment("AzureOpenAIS__Models__1", "gpt-5.4")
-    // Authentication
+    // Authentication — Microsoft (required)
     .WithEnvironment("Authentication__EnableDevLogin", mode != "prod" ? "true" : "false")
     .WithEnvironment("Authentication__Microsoft__ClientId", microsoftClientId)
     .WithEnvironment("Authentication__Microsoft__ClientSecret", microsoftClientSecret)
-    .WithEnvironment("Authentication__Google__ClientId", googleClientId)
-    .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
+    .WithEnvironment("Authentication__Microsoft__TenantId", "common")
     // Wait for dependencies
     .WaitFor(orleansTables)
     .WaitFor(grainStateBlobs)
@@ -159,14 +167,45 @@ var portal = builder
     // ACA deployment: sticky sessions (Blazor Server) + custom domain + resources
     .PublishAsAzureContainerApp((module, app) =>
     {
+        // Fix: Aspire's Orleans integration sets primary ingress to TCP/internal
+        // on the silo port. Override to HTTP/external for the Blazor web app.
+        app.Configuration.Ingress.External = true;
+        app.Configuration.Ingress.Transport = ContainerAppIngressTransportMethod.Auto;
+        app.Configuration.Ingress.TargetPort = 8080;
+
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
-        app.ConfigureCustomDomain(customDomain, certificateName);
+        if (hasCustomDomain)
+            app.ConfigureCustomDomain(customDomain!, certificateName!);
 
         // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
         // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
         app.Template.Scale.MinReplicas = 2;
         app.Template.Scale.MaxReplicas = 6;
     });
+
+// Embedding — optional
+if (hasEmbedding)
+{
+    portal = portal
+        .WithEnvironment("Embedding__Endpoint", embeddingEndpoint!)
+        .WithEnvironment("Embedding__ApiKey", embeddingKey!)
+        .WithEnvironment("Embedding__Model", embeddingModel!);
+}
+
+// Authentication — Google (optional)
+if (hasGoogleAuth)
+{
+    portal = portal
+        .WithEnvironment("Authentication__Google__ClientId", googleClientId!)
+        .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret!);
+}
+
+// Authentication — Microsoft tenant (optional: overrides "common" default)
+if (hasTenantId)
+{
+    portal = portal
+        .WithEnvironment("Authentication__Microsoft__TenantId", microsoftTenantId!);
+}
 
 // --- Azure Blob Storage ---
 if (useLocalDb)

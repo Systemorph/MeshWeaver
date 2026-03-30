@@ -376,7 +376,10 @@ samples/Graph/Data/VUser/
 /memex/Azurite/Orleans/__azurite_db_table__.json
 /memex/Azurite/Orleans/AzuriteConfig
 /memex/Azurite/Data/__blobstorage__/e7429c6f-7085-4422-ae51-515f33ac8fc1
+/memex/Azurite/Data/__blobstorage__/901d58e2-347d-4ffb-b363-14b77f399fe7
 
 # User activity data
 **/_useractivity/
-/memex/Azurite/Data/__blobstorage__/901d58e2-347d-4ffb-b363-14b77f399fe7
+
+# Azure Developer CLI
+.azure/

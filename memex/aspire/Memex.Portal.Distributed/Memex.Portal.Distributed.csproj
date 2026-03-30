@@ -27,5 +27,6 @@
     <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" />
     <PackageReference Include="Microsoft.Orleans.Server" />
     <PackageReference Include="Microsoft.Orleans.Sdk" />
+    <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" />
   </ItemGroup>
 </Project>

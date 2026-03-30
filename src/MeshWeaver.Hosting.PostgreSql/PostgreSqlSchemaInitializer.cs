@@ -1198,6 +1198,27 @@ public static class PostgreSqlSchemaInitializer
                 END IF;
             END;
             $$;
+
+            -- Simple access_control and group_members tables used by convenience methods
+            CREATE TABLE IF NOT EXISTS access_control (
+                node_path   TEXT    NOT NULL,
+                subject     TEXT    NOT NULL,
+                permission  TEXT    NOT NULL,
+                is_allow    BOOLEAN NOT NULL,
+                PRIMARY KEY (node_path, subject, permission)
+            );
+
+            CREATE TABLE IF NOT EXISTS group_members (
+                group_name  TEXT    NOT NULL,
+                member_id   TEXT    NOT NULL,
+                PRIMARY KEY (group_name, member_id)
+            );
+
+            -- Node type permission flags (populated from DI-registered NodeTypePermission records)
+            CREATE TABLE IF NOT EXISTS node_type_permissions (
+                node_type   TEXT    NOT NULL PRIMARY KEY,
+                public_read BOOLEAN NOT NULL DEFAULT false
+            );
             """;
     }
 }
