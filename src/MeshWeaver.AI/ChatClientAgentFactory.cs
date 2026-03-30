@@ -262,65 +262,80 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                 //    Subscribe to the child thread's MeshNode and propagate its ActiveProgress
                                 //    into the parent's ActiveProgress tree. Works in distributed Orleans mode.
                                 var workspace = Hub.GetWorkspace();
-                                var childStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
+                                Logger.LogInformation("[Delegation] Subscribing to child stream at {Path}, parentThread={Parent}",
+                                    subThreadPath, execCtx.ThreadPath);
+
+                                // Remote streams: child (read) + parent (write via Update)
+                                var childStream = workspace.GetRemoteStream<MeshNode>(
                                     new Address(subThreadPath!), new MeshNodeReference());
+                                var parentStream = workspace.GetRemoteStream<MeshNode>(
+                                    new Address(execCtx.ThreadPath), new MeshNodeReference());
 
                                 var completionTcs = new TaskCompletionSource<bool>();
 
-                                var subscription = childStream.Subscribe(change =>
-                                {
-                                    var childNode = change.Value;
-                                    var childThread = childNode?.Content as MeshThread;
-                                    if (childThread == null) return;
-
-                                    // Build child's progress entry from its own ActiveProgress or fallback
-                                    var childEntry = childThread.ActiveProgress
-                                        ?? new ThreadProgressEntry
-                                        {
-                                            ThreadPath = subThreadPath!,
-                                            ThreadName = targetId,
-                                            Status = childThread.ExecutionStatus
-                                        };
-
-                                    if (!childThread.IsExecuting)
-                                        childEntry = childEntry with { IsCompleted = true };
-
-                                    // Merge child's progress into parent's ActiveProgress
-                                    workspace.UpdateMeshNode(node =>
+                                var subscription = childStream.Subscribe(
+                                    change =>
                                     {
-                                        var thread = node.Content as MeshThread ?? new MeshThread();
-                                        var selfEntry = thread.ActiveProgress
+                                        var childNode = change.Value;
+                                        var childThread = childNode?.Content as MeshThread;
+                                        Logger.LogDebug("[Delegation] Child stream update: path={Path}, hasContent={HasContent}, isExecuting={IsExecuting}",
+                                            subThreadPath, childThread != null, childThread?.IsExecuting);
+                                        if (childThread == null) return;
+
+                                        // Build child's progress entry from its own ActiveProgress or fallback
+                                        var childEntry = childThread.ActiveProgress
                                             ?? new ThreadProgressEntry
                                             {
-                                                ThreadPath = execCtx.ThreadPath,
-                                                ThreadName = "Agent"
+                                                ThreadPath = subThreadPath!,
+                                                ThreadName = targetId,
+                                                Status = childThread.ExecutionStatus
                                             };
 
-                                        var children = selfEntry.Children
-                                            .Where(c => c.ThreadPath != subThreadPath)
-                                            .Append(childEntry)
-                                            .ToImmutableList();
+                                        if (!childThread.IsExecuting)
+                                            childEntry = childEntry with { IsCompleted = true };
 
-                                        return node with
+                                        // Merge child's progress into parent's ActiveProgress via stream.Update()
+                                        parentStream.Update(current =>
                                         {
-                                            Content = thread with
-                                            {
-                                                ActiveProgress = selfEntry with { Children = children }
-                                            }
-                                        };
-                                    });
+                                            if (current == null) return null;
+                                            var thread = current.Content as MeshThread ?? new MeshThread();
+                                            var selfEntry = thread.ActiveProgress
+                                                ?? new ThreadProgressEntry
+                                                {
+                                                    ThreadPath = execCtx.ThreadPath,
+                                                    ThreadName = "Agent"
+                                                };
 
-                                    // Update delegation status text
-                                    if (childThread.IsExecuting)
-                                    {
-                                        chat.UpdateDelegationStatus?.Invoke(
-                                            $"{targetId}: {childThread.ExecutionStatus ?? "Processing..."}");
-                                    }
-                                    else
-                                    {
-                                        completionTcs.TrySetResult(true);
-                                    }
-                                });
+                                            var children = selfEntry.Children
+                                                .Where(c => c.ThreadPath != subThreadPath)
+                                                .Append(childEntry)
+                                                .ToImmutableList();
+
+                                            var updated = current with
+                                            {
+                                                Content = thread with
+                                                {
+                                                    ActiveProgress = selfEntry with { Children = children }
+                                                }
+                                            };
+                                            return new ChangeItem<MeshNode>(updated, parentStream.StreamId,
+                                                parentStream.StreamId, ChangeType.Patch, parentStream.Hub.Version,
+                                                [new EntityUpdate(nameof(MeshNode), execCtx.ThreadPath, updated) { OldValue = current }]);
+                                        });
+
+                                        // Update delegation status text
+                                        if (childThread.IsExecuting)
+                                        {
+                                            chat.UpdateDelegationStatus?.Invoke(
+                                                $"{targetId}: {childThread.ExecutionStatus ?? "Processing..."}");
+                                        }
+                                        else
+                                        {
+                                            Logger.LogInformation("[Delegation] Child completed: {Path}", subThreadPath);
+                                            completionTcs.TrySetResult(true);
+                                        }
+                                    },
+                                    ex => Logger.LogError(ex, "[Delegation] Child stream error for {Path}", subThreadPath));
 
                                 // Wait for completion reactively (replaces polling while loop)
                                 try

@@ -51,7 +51,8 @@ public static class ExportLayoutArea
             var satelliteTypes = new HashSet<string>();
             await foreach (var desc in meshService.QueryAsync<MeshNode>($"path:{hubPath} scope:descendants"))
             {
-                if (desc.IsSatelliteType || (desc.MainNode != null && desc.MainNode != desc.Path))
+                if ((desc.IsSatelliteType || (desc.MainNode != null && desc.MainNode != desc.Path))
+                    && desc.NodeType != null)
                     satelliteTypes.Add(desc.NodeType);
             }
 
