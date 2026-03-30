@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -316,5 +317,153 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
         idle!.IsExecuting.Should().BeFalse();
         idle.ActiveMessageId.Should().BeNull("ActiveMessageId should be cleared when execution ends");
         Output.WriteLine("Phase 3: thread idle");
+    }
+
+    /// <summary>
+    /// Reproduces feedback loop: opening the layout area for a response message,
+    /// then updating tool calls via stream. The layout area subscriptions must NOT
+    /// cause runaway version increments (host.UpdateData re-triggering the stream).
+    /// </summary>
+    [Fact]
+    public async Task ToolCallsUpdate_WithLayoutArea_NoFeedbackLoop()
+    {
+        var ct = new CancellationTokenSource(15.Seconds()).Token;
+
+        var threadPath = "User/Roland/_Thread/feedback-loop-test";
+        var responseMsgId = "resp-loop";
+        var responsePath = $"{threadPath}/{responseMsgId}";
+
+        // Create response message — empty, simulating start of execution
+        await NodeFactory.CreateNodeAsync(new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = "User/Roland",
+            Content = new ThreadMessage
+            {
+                Id = responseMsgId,
+                Role = "assistant",
+                Text = "",
+                Type = ThreadMessageType.AgentResponse,
+                AgentName = "TestAgent"
+            }
+        }, ct);
+
+        // Create thread in executing state
+        await NodeFactory.CreateNodeAsync(new MeshNode("feedback-loop-test", "User/Roland/_Thread")
+        {
+            NodeType = ThreadNodeType.NodeType,
+            MainNode = "User/Roland",
+            Content = new MeshThread
+            {
+                IsExecuting = true,
+                ActiveMessageId = responseMsgId,
+                Messages = [responseMsgId]
+            }
+        }, ct);
+
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+
+        // Open the layout area for the response message — this activates
+        // ThreadMessageLayoutAreas.Overview subscriptions (text + toolCalls + isExecuting)
+        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(responsePath),
+            new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
+
+        // Wait for layout to render
+        var layoutRendered = await layoutStream!
+            .Where(ci => ci.Value.ValueKind != JsonValueKind.Null)
+            .Timeout(10.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
+        Output.WriteLine("Layout area rendered");
+
+        // Get the response node stream (same as ThreadExecution uses)
+        var responseStream = workspace.GetRemoteStream<MeshNode>(
+            new Address(responsePath), new MeshNodeReference());
+
+        // Record version BEFORE the update
+        var versionBefore = responseStream.Hub.Version;
+        Output.WriteLine($"Version before update: {versionBefore}");
+
+        // Push tool calls — simulating what ThreadExecution does during streaming
+        responseStream.Update(current =>
+        {
+            if (current == null) return null;
+            var updated = current with
+            {
+                Content = new ThreadMessage
+                {
+                    Id = responseMsgId,
+                    Role = "assistant",
+                    Text = "",
+                    Type = ThreadMessageType.AgentResponse,
+                    AgentName = "TestAgent",
+                    ToolCalls = ImmutableList.Create(new ToolCallEntry
+                    {
+                        Name = "Search",
+                        DisplayName = "Searching nodes...",
+                        Arguments = "query: test",
+                        Timestamp = DateTime.UtcNow
+                    })
+                }
+            };
+            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+        });
+
+        // Wait a bit for any feedback loop to manifest
+        await Task.Delay(500, ct);
+
+        var versionAfter = responseStream.Hub.Version;
+        Output.WriteLine($"Version after update + 500ms: {versionAfter}");
+
+        // The version should NOT have exploded. A single update should cause
+        // at most a handful of version increments (update + layout reaction).
+        // If feedback loop exists, version jumps by hundreds or thousands.
+        var versionDelta = versionAfter - versionBefore;
+        versionDelta.Should().BeLessThan(20,
+            "a single tool call update should not cause runaway version increments. " +
+            $"Delta was {versionDelta} — indicates a feedback loop in layout area subscriptions");
+        Output.WriteLine($"Version delta: {versionDelta} (no feedback loop)");
+
+        // Also push a second update with completed tool call
+        responseStream.Update(current =>
+        {
+            if (current == null) return null;
+            var updated = current with
+            {
+                Content = new ThreadMessage
+                {
+                    Id = responseMsgId,
+                    Role = "assistant",
+                    Text = "Done.",
+                    Type = ThreadMessageType.AgentResponse,
+                    AgentName = "TestAgent",
+                    ToolCalls = ImmutableList.Create(new ToolCallEntry
+                    {
+                        Name = "Search",
+                        DisplayName = "Searching nodes...",
+                        Arguments = "query: test",
+                        Result = "Found 5 nodes",
+                        IsSuccess = true,
+                        Timestamp = DateTime.UtcNow
+                    })
+                }
+            };
+            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+        });
+
+        await Task.Delay(500, ct);
+
+        var versionFinal = responseStream.Hub.Version;
+        var totalDelta = versionFinal - versionBefore;
+        totalDelta.Should().BeLessThan(40,
+            "two updates should not cause runaway versions. " +
+            $"Total delta was {totalDelta}");
+        Output.WriteLine($"Total version delta after 2 updates: {totalDelta}");
     }
 }

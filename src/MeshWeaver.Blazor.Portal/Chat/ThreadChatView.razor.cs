@@ -562,6 +562,33 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
+    private void CancelExecution()
+    {
+        if (string.IsNullOrEmpty(threadPath) || isCancelling)
+            return;
+
+        isCancelling = true;
+        StateHasChanged();
+
+        var delivery = Hub.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
+            o => o.WithTarget(new Address(threadPath)));
+
+        if (delivery != null)
+        {
+            _ = Hub.RegisterCallback(delivery, (response, _) =>
+            {
+                isCancelling = false;
+                InvokeAsync(StateHasChanged);
+                return Task.FromResult(response);
+            }, CancellationToken.None);
+        }
+        else
+        {
+            isCancelling = false;
+            StateHasChanged();
+        }
+    }
+
     /// <summary>
     /// Checks if the navigation context has changed since the last message and updates the context attachment if needed.
     /// </summary>

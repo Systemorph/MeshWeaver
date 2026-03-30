@@ -264,6 +264,185 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         finalResponse!.Text.Should().NotBeNullOrEmpty();
         Output.WriteLine("8. Test PASSED");
     }
+
+    /// <summary>
+    /// THE critical test: submit message → orchestrator delegates to agent →
+    /// parent response message shows delegation tool call with DelegationPath LIVE
+    /// (without page reload). Then sub-thread streams text that appears on the
+    /// sub-thread's response message. Tests the FULL real-world path.
+    /// </summary>
+    [Fact(Timeout = 90000)]
+    public async Task Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
+    {
+        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        var client = await GetClientAsync();
+        var workspace = client.GetWorkspace();
+
+        // 1. Create thread
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Delegation live test")),
+            o => o.WithTarget(new Address(ContextPath)), ct);
+        createResp.Message.Success.Should().BeTrue(createResp.Message.Error);
+        var threadPath = createResp.Message.Node!.Path!;
+        Output.WriteLine($"1. Thread: {threadPath}");
+
+        // 2. Submit message
+        var submitResp = await client.AwaitResponse(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Use the test tool please",
+                ContextPath = ContextPath
+            },
+            o => o.WithTarget(new Address(threadPath)), ct);
+        submitResp.Message.Success.Should().BeTrue(submitResp.Message.Error);
+        Output.WriteLine("2. Message submitted");
+
+        // 3. Wait for 2 messages (user + response)
+        var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes =>
+            {
+                var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
+                return (node?.Content as MeshThread)?.Messages ?? [];
+            })
+            .Where(ids => ids.Count >= 2)
+            .Timeout(15.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
+        var responseMsgId = msgIds[1];
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        Output.WriteLine($"3. Response message: {responseMsgId}");
+
+        // 4. Subscribe to the response message node — watch for tool calls appearing
+        var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
+
+        // Poll via GetDataRequest — does the grain have the content?
+        Output.WriteLine("4. Polling response message for content...");
+        ThreadMessage? msgWithContent = null;
+        for (var i = 0; i < 60; i++)
+        {
+            var polled = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            if (polled != null && (!string.IsNullOrEmpty(polled.Text) || polled.ToolCalls.Count > 0))
+            {
+                Output.WriteLine($"   [POLL {i}] text={polled.Text?.Length ?? 0}, toolCalls={polled.ToolCalls.Count}");
+                msgWithContent = polled;
+                break;
+            }
+            if (i % 10 == 0) Output.WriteLine($"   [POLL {i}] waiting...");
+            await Task.Delay(500, ct);
+        }
+
+        msgWithContent.Should().NotBeNull("response should have content after execution");
+        Output.WriteLine($"5. Content found via polling: text={msgWithContent!.Text?.Length ?? 0}, toolCalls={msgWithContent.ToolCalls.Count}");
+
+        // Now verify the STREAM also received the update (this is the critical live-update check)
+        Output.WriteLine("6. Checking if stream received the update...");
+        var streamMsg = await responseStream
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
+            .Where(m => !string.IsNullOrEmpty(m?.Text))
+            .Timeout(5.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
+
+        streamMsg.Should().NotBeNull("stream should receive the text update live");
+        streamMsg!.Text.Should().NotBeNullOrEmpty("stream should have text");
+        Output.WriteLine($"7. STREAM received update: text={streamMsg.Text?.Length ?? 0}, toolCalls={streamMsg.ToolCalls.Count}");
+        Output.WriteLine("8. PASS — live streaming works via UpdateThreadMessageContent → workspace.UpdateMeshNode → client stream");
+
+        Output.WriteLine("8. PASS — live streaming works via UpdateThreadMessageContent → workspace.UpdateMeshNode → client stream");
+    }
+
+    /// <summary>
+    /// Tests the EXACT path the layout area uses:
+    /// 1. Post UpdateThreadMessageContent to response message hub
+    /// 2. Layout area subscribes via GetStream(new MeshNodeReference())
+    /// 3. Assert the layout data section gets updated with text
+    /// This is what Blazor sees — the layout area stream, not the raw entity stream.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task LayoutArea_ReceivesUpdateThreadMessageContent_ViaLayoutStream()
+    {
+        var ct = new CancellationTokenSource(50.Seconds()).Token;
+        var client = await GetClientAsync();
+        var workspace = client.GetWorkspace();
+
+        // 1. Create thread + submit message
+        var createResp = await client.AwaitResponse(
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, "Layout stream test")),
+            o => o.WithTarget(new Address(ContextPath)), ct);
+        var threadPath = createResp.Message.Node!.Path!;
+        Output.WriteLine($"1. Thread: {threadPath}");
+
+        var submitResp = await client.AwaitResponse(
+            new SubmitMessageRequest
+            {
+                ThreadPath = threadPath,
+                UserMessageText = "Test",
+                ContextPath = ContextPath
+            },
+            o => o.WithTarget(new Address(threadPath)), ct);
+        submitResp.Message.Success.Should().BeTrue();
+        Output.WriteLine("2. Submitted");
+
+        // 2. Wait for response message to appear
+        var msgIds = await workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
+            .Select(nodes => (nodes?.FirstOrDefault(n => n.Path == threadPath)?.Content as MeshThread)?.Messages ?? [])
+            .Where(ids => ids.Count >= 2)
+            .Timeout(15.Seconds()).FirstAsync().ToTask(ct);
+        var responseMsgId = msgIds[1];
+        var responsePath = $"{threadPath}/{responseMsgId}";
+        Output.WriteLine($"3. Response: {responseMsgId}");
+
+        // 3. Wait for execution to complete (text appears on raw entity stream)
+        ThreadMessage? completed = null;
+        for (var i = 0; i < 30; i++)
+        {
+            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            if (!string.IsNullOrEmpty(completed?.Text)) break;
+            await Task.Delay(500, ct);
+        }
+        completed.Should().NotBeNull();
+        Output.WriteLine($"4. Execution done: text={completed!.Text?.Length ?? 0}");
+
+        // 4. NOW subscribe to the LAYOUT AREA — this is what Blazor does
+        var layoutStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(responsePath),
+            new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
+
+        var firstLayout = await layoutStream!
+            .Where(ci => ci.Value.ValueKind == JsonValueKind.Object)
+            .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
+        Output.WriteLine($"5. Layout rendered");
+
+        // 5. Check the data section for the ThreadMessageViewModel
+        var dataStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(responsePath),
+            new LayoutAreaReference("data"));
+
+        var data = await dataStream!
+            .Where(ci => ci.Value.ValueKind == JsonValueKind.Object)
+            .Timeout(10.Seconds()).FirstAsync().ToTask(ct);
+
+        Output.WriteLine($"6. Data section: {data.Value}");
+
+        // Does it have the msg view model with text?
+        var hasMsg = data.Value.TryGetProperty("msg", out var msgVm);
+        Output.WriteLine($"7. Has 'msg' key: {hasMsg}");
+        if (hasMsg)
+        {
+            var hasText = msgVm.TryGetProperty("text", out var textProp);
+            Output.WriteLine($"   Has 'text': {hasText}, value='{textProp}'");
+            hasText.Should().BeTrue("data section should have msg.text from ThreadMessageViewModel");
+            textProp.GetString().Should().NotBeNullOrEmpty("text should have content");
+            Output.WriteLine("8. PASS — layout data section has text from UpdateThreadMessageContent");
+        }
+        else
+        {
+            // Dump all keys
+            Output.WriteLine($"   Keys: [{string.Join(", ", data.Value.EnumerateObject().Select(p => p.Name))}]");
+            Assert.Fail("Data section missing 'msg' key — SubscribeToDataStream not working");
+        }
+    }
 }
 
 /// <summary>

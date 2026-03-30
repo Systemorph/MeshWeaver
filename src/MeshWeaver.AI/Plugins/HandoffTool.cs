@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -34,14 +35,14 @@ public static class HandoffTool
         Action<HandoffRequest> requestHandoff,
         ILogger? logger = null)
     {
-        var handoffInfo = new List<HandoffInfo>();
+        var handoffInfo = ImmutableList<HandoffInfo>.Empty;
 
         // Add explicit handoffs from current agent
         if (currentAgent.Handoffs != null)
         {
             foreach (var h in currentAgent.Handoffs)
             {
-                handoffInfo.Add(new HandoffInfo(
+                handoffInfo = handoffInfo.Add(new HandoffInfo(
                     h.AgentPath,
                     h.Instructions ?? "Specialized agent for this task"));
             }

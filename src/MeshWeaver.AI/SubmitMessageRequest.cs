@@ -49,4 +49,14 @@ public record SubmitMessageResponse
 {
     public bool Success { get; init; }
     public string? Error { get; init; }
+    public SubmitMessageStatus Status { get; init; } = SubmitMessageStatus.CellsCreated;
+    public string? ResponseText { get; init; }
+}
+
+public enum SubmitMessageStatus
+{
+    CellsCreated,
+    ExecutionCompleted,
+    ExecutionFailed,
+    ExecutionCancelled
 }

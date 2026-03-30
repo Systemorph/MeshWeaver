@@ -1,7 +1,7 @@
 @inherits BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 @using MeshWeaver.Layout
 
-<div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant") @(isExecuting ? "thread-msg-is-executing" : "")" style="@Style">
+<div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
     @if (!IsUser && (!string.IsNullOrEmpty(ViewModel.ModelName) || ViewModel.Timestamp.HasValue))
     {
@@ -17,48 +17,7 @@
         </div>
     }
 
-    @if (ShowSpinner)
-    {
-        <div class="thread-msg-spinner">
-            <span class="thread-msg-dots">
-                <span class="thread-msg-dot" style="animation-delay: 0s;"></span>
-                <span class="thread-msg-dot" style="animation-delay: 0.2s;"></span>
-                <span class="thread-msg-dot" style="animation-delay: 0.4s;"></span>
-            </span>
-            <span class="thread-msg-status">Generating response...</span>
-        </div>
-    }
-    else
-    {
-        <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
-    }
-
-    @if (IsEffectivelyExecuting && !IsUser)
-    {
-        <div class="thread-msg-cancel-row">
-            <button class="thread-msg-cancel-btn" @onclick="OnCancelClick">
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
-                Stop
-            </button>
-        </div>
-    }
-
-    @if (ShowExecutingIndicator)
-    {
-        <div class="thread-msg-executing-indicator">
-            <span class="thread-msg-dots thread-msg-dots-small">
-                <span class="thread-msg-dot-small"></span>
-                <span class="thread-msg-dot-small" style="animation-delay: 0.2s;"></span>
-                <span class="thread-msg-dot-small" style="animation-delay: 0.4s;"></span>
-            </span>
-            <span class="thread-msg-exec-status">@StatusTitle</span>
-            <button class="thread-msg-cancel-btn-small" @onclick="OnCancelClick">Cancel</button>
-        </div>
-        @if (StatusDetail != null)
-        {
-            <pre class="thread-msg-status-detail thread-msg-status-detail-small">@StatusDetail</pre>
-        }
-    }
+    <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
 
     @* Tool calls — shown inline, each as a compact entry *@
     @if (HasToolCalls)

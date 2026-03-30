@@ -76,6 +76,8 @@ public static class AIExtensions
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
             .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
+            .WithType(typeof(UpdateThreadMessageContent), nameof(UpdateThreadMessageContent))
+            .WithType(typeof(DelegationCompletedEvent), nameof(DelegationCompletedEvent))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
             .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))

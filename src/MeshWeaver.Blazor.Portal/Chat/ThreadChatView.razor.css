@@ -27,6 +27,85 @@
     padding: 16px;
 }
 
+/* Execution status bar above chat input */
+.thread-exec-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px;
+    background: color-mix(in srgb, var(--accent-fill-rest) 8%, var(--neutral-layer-2));
+    border-top: 2px solid var(--accent-fill-rest);
+    max-height: 200px;
+    overflow-y: auto;
+}
+.thread-exec-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.thread-exec-preview {
+    font-size: 0.78rem;
+    color: var(--neutral-foreground-hint);
+    white-space: pre-wrap;
+    overflow: hidden;
+    max-height: 80px;
+    line-height: 1.4;
+}
+.thread-exec-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.thread-exec-tool {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--neutral-layer-4);
+    color: var(--neutral-foreground-hint);
+}
+.thread-exec-tool.pending {
+    color: var(--accent-fill-rest);
+}
+.thread-exec-tool.done {
+    color: var(--neutral-foreground-hint);
+}
+.thread-exec-dots {
+    display: inline-flex;
+    gap: 3px;
+}
+.thread-exec-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-fill-rest);
+    animation: thread-exec-blink 1.4s infinite both;
+}
+.thread-exec-status {
+    flex: 1;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--accent-fill-rest);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.thread-exec-cancel {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--neutral-foreground-rest);
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.thread-exec-cancel:hover {
+    background: var(--neutral-layer-4);
+}
+
 /* Footer: progress + input pinned at bottom */
 .thread-chat-footer {
     flex-shrink: 0;
@@ -131,6 +210,10 @@
 @@keyframes skeleton-pulse {
     0%, 100% { opacity: 0.3; }
     50% { opacity: 0.15; }
+}
+@@keyframes thread-exec-blink {
+    0%, 100% { opacity: 0.2; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.2); }
 }
 
 

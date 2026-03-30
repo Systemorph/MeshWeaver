@@ -199,7 +199,7 @@ public static class ThreadExecution
     /// Subscribes to chatClient.Initialize() observable, then runs streaming in the callback.
     /// The AI API streaming (GetStreamingResponseAsync) runs via hub.InvokeAsync for async I/O.
     /// </summary>
-    private static IMessageDelivery ExecuteMessageAsync(
+    internal static IMessageDelivery ExecuteMessageAsync(
         IMessageHub hub,
         IMessageDelivery<SubmitMessageRequest> delivery)
     {
@@ -211,9 +211,23 @@ public static class ThreadExecution
         var logger = parentHub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var workspace = parentHub.ServiceProvider.GetRequiredService<IWorkspace>();
 
-        // Get remote stream ONCE for the response node
-        var responseStream = workspace.GetRemoteStream<MeshNode, MeshNodeReference>(
-            new Address(responsePath), new MeshNodeReference());
+        // Helper: push content to response message hub.
+        // Posts UpdateThreadMessageContent which is handled ON the grain —
+        // calls workspace.UpdateMeshNode() locally → sync stream → clients.
+        void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
+            string? agentName, string? modelName, string? delegationPath = null)
+        {
+            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}",
+                responsePath, text.Length, toolCalls.Count);
+            parentHub.Post(new UpdateThreadMessageContent
+            {
+                Text = text,
+                ToolCalls = toolCalls,
+                AgentName = agentName,
+                ModelName = modelName,
+                DelegationPath = delegationPath
+            }, o => o.WithTarget(new Address(responsePath)));
+        }
 
         // Helper: update Thread execution state
         var threadWorkspace = parentHub.GetWorkspace();
@@ -273,10 +287,26 @@ public static class ThreadExecution
                     UserAccessContext = userAccessContext
                 });
 
-                var toolCallLog = new List<ToolCallEntry>();
+                var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 string? currentStatus = null;
-                client.UpdateDelegationStatus = status => { currentStatus = status; };
-                client.ForwardToolCall = entry => { toolCallLog.Add(entry); };
+                client.UpdateDelegationStatus = status =>
+                {
+                    currentStatus = status;
+                    // Push immediately when delegation path becomes available —
+                    // the streaming loop is blocked during tool execution so the
+                    // throttle block never runs. This ensures the parent message
+                    // shows the delegation link while the sub-thread executes.
+                    if (!string.IsNullOrEmpty(chatClient.LastDelegationPath))
+                    {
+                        toolCallLog = toolCallLog.Select(e =>
+                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null
+                                ? e with { DelegationPath = chatClient.LastDelegationPath }
+                                : e).ToImmutableList();
+                        PushToResponseMessage("", toolCallLog,
+                            request.AgentName, request.ModelName);
+                    }
+                };
+                client.ForwardToolCall = entry => { toolCallLog = toolCallLog.Add(entry); };
 
                 var agentDisplayName = request.AgentName ?? "Agent";
 
@@ -286,16 +316,17 @@ public static class ThreadExecution
                     threadPath, request.AgentName ?? "(default)", request.ModelName ?? "(default)", request.UserMessageText?.Length ?? 0);
                 string? firstDelegationPath = null;
 
+                logger.LogInformation("[ThreadExec] INVOKE_ASYNC_START: threadPath={ThreadPath}, responsePath={ResponsePath}",
+                    threadPath, responsePath);
                 hub.InvokeAsync(async ct =>
                 {
+                    var responseText = new StringBuilder();
                     try
                     {
-                    var responseText = new StringBuilder();
+                    logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                     var lastUpdate = DateTimeOffset.MinValue;
-                    var lastStatusUpdate = DateTimeOffset.MinValue;
-                    var pendingCalls = new Dictionary<string, FunctionCallContent>();
+                    var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
-                    var lastPushedToolCallCount = 0;
 
                     await foreach (var update in client.GetStreamingResponseAsync([chatMessage], ct))
             {
@@ -304,60 +335,39 @@ public static class ThreadExecution
                 {
                     if (content is FunctionCallContent functionCall)
                     {
-                        logger.LogDebug("[ThreadExec] Tool call: {Name}({Args})", functionCall.Name, SerializeArgs(functionCall.Arguments));
-                        // Build detailed status: formatted name + arguments
+                        logger.LogDebug("[ThreadExec] TOOL_START: {Time:HH:mm:ss.fff} {Name} callId={CallId} args={Args}",
+                            DateTime.UtcNow, functionCall.Name, functionCall.CallId,
+                            SerializeArgs(functionCall.Arguments)?[..Math.Min(100, SerializeArgs(functionCall.Arguments)?.Length ?? 0)]);
                         var formatted = ToolStatusFormatter.Format(functionCall);
                         var argsDetail = SerializeArgs(functionCall.Arguments);
                         currentStatus = argsDetail != null
                             ? $"{formatted}\n{argsDetail}"
                             : formatted;
 
-                        // Track pending call — use CallId if available, fall back to Name+counter
                         var callKey = functionCall.CallId ?? $"{functionCall.Name}_{pendingCalls.Count}";
-                        pendingCalls[callKey] = functionCall;
+                        pendingCalls = pendingCalls.SetItem(callKey, functionCall);
                         lastCallKey = callKey;
 
-                        // Add pending entry and push immediately (don't wait for throttle —
-                        // during delegation the streaming loop blocks on tool execution)
-                        toolCallLog.Add(new ToolCallEntry
+                        // Add pending tool call to local log — will be pushed on next throttled update
+                        toolCallLog = toolCallLog.Add(new ToolCallEntry
                         {
                             Name = functionCall.Name,
                             DisplayName = formatted,
                             Arguments = argsDetail,
                             Timestamp = DateTime.UtcNow
                         });
-                        var pendingToolCalls = toolCallLog.ToImmutableList();
-                        responseStream.Update(current =>
-                        {
-                            if (current == null) return null;
-                            var msg = current.Content as ThreadMessage;
-                            var updated = current with
-                            {
-                                Content = new ThreadMessage
-                                {
-                                    Id = responseMsgId, Role = "assistant", Text = "",
-                                    Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
-                                    Type = ThreadMessageType.AgentResponse,
-                                    AgentName = request.AgentName, ModelName = request.ModelName,
-                                    ToolCalls = pendingToolCalls
-                                }
-                            };
-                            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-                        });
-                        lastPushedToolCallCount = pendingToolCalls.Count;
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
-                        logger.LogDebug("[ThreadExec] Tool result: {Name}, success={Success}, length={Length}",
-                            functionResult.CallId, functionResult.Result?.ToString()?.StartsWith("Error") != true,
+                        logger.LogDebug("[ThreadExec] TOOL_RESULT: {Time:HH:mm:ss.fff} callId={CallId}, success={Success}, resultLen={Length}",
+                            DateTime.UtcNow, functionResult.CallId,
+                            functionResult.Result?.ToString()?.StartsWith("Error") != true,
                             functionResult.Result?.ToString()?.Length ?? 0);
                         // Match result to pending call — try CallId first, then last pending call
                         var resultKey = functionResult.CallId ?? lastCallKey;
                         FunctionCallContent? originalCall = null;
-                        if (resultKey != null)
-                            pendingCalls.Remove(resultKey, out originalCall);
+                        if (resultKey != null && pendingCalls.TryGetValue(resultKey, out originalCall))
+                            pendingCalls = pendingCalls.Remove(resultKey);
                         originalCall ??= pendingCalls.Values.LastOrDefault();
 
                         if (originalCall != null)
@@ -382,135 +392,73 @@ public static class ThreadExecution
                                 Timestamp = DateTime.UtcNow
                             };
                             var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
-                            if (idx >= 0) toolCallLog[idx] = finalEntry;
-                            else toolCallLog.Add(finalEntry);
+                            toolCallLog = idx >= 0 ? toolCallLog.SetItem(idx, finalEntry) : toolCallLog.Add(finalEntry);
+                            logger.LogDebug("[ThreadExec] TOOL_DONE: {Time:HH:mm:ss.fff} {Name} callId={CallId} delegation={Delegation} resultLen={ResultLen}",
+                                DateTime.UtcNow, originalCall.Name, originalCall.CallId, delegationPath,
+                                finalEntry.Result?.Length ?? 0);
                         }
                         currentStatus = null; // Tool call completed
                     }
                 }
 
-                // Update execution status when status or tool calls change (throttled)
-                if ((currentStatus != null || toolCallLog.Count > lastPushedToolCallCount) && responseText.Length == 0
-                    && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
-                {
-                    // Update pending delegation entries with DelegationPath if now available
-                    if (!string.IsNullOrEmpty(chatClient.LastDelegationPath))
-                    {
-                        for (var i = 0; i < toolCallLog.Count; i++)
-                        {
-                            if (toolCallLog[i].Name.StartsWith("delegate_to") && toolCallLog[i].DelegationPath == null)
-                                toolCallLog[i] = toolCallLog[i] with { DelegationPath = chatClient.LastDelegationPath };
-                        }
-                    }
-
-                    var status = currentStatus ?? "";
-                    var liveToolCalls = toolCallLog.ToImmutableList();
-                    lastPushedToolCallCount = liveToolCalls.Count;
-                    logger.LogInformation("[ThreadExec] Pushing progress: status={Status}, toolCalls={Count}, delegations={Delegations}",
-                        status, liveToolCalls.Count,
-                        liveToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath)));
-                    responseStream.Update(current =>
-                    {
-                        if (current == null) return null;
-                        var msg = current.Content as ThreadMessage;
-                        var updated = current with
-                        {
-                            Content = new ThreadMessage
-                            {
-                                Id = responseMsgId,
-                                Role = "assistant",
-                                Text = "",
-                                Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
-                                Type = ThreadMessageType.AgentResponse,
-                                AgentName = request.AgentName,
-                                ModelName = request.ModelName,
-                                ToolCalls = liveToolCalls
-                            }
-                        };
-                        return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                            responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                            [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-                    });
-                    // Push status to Thread node
-                    UpdateThreadExecution(t => t with { ExecutionStatus = status });
-                    lastStatusUpdate = DateTimeOffset.UtcNow;
-                }
-
                 if (!string.IsNullOrEmpty(update.Text))
-                {
                     responseText.Append(update.Text);
 
-                    if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(200))
+                // Push streaming content at ~1/sec via responseStream.Update
+                if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(1000))
+                {
+                    if (!string.IsNullOrEmpty(chatClient.LastDelegationPath))
                     {
-                        var text = responseText.ToString();
-                        responseStream.Update(current =>
-                        {
-                            if (current == null) return null;
-                            var updated = current with
-                            {
-                                Content = new ThreadMessage
-                                {
-                                    Id = responseMsgId,
-                                    Role = "assistant",
-                                    Text = text,
-                                    Timestamp = DateTime.UtcNow,
-                                    Type = ThreadMessageType.AgentResponse
-                                }
-                            };
-                            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-                        });
-                        lastUpdate = DateTimeOffset.UtcNow;
+                        toolCallLog = toolCallLog.Select(e =>
+                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null
+                                ? e with { DelegationPath = chatClient.LastDelegationPath }
+                                : e).ToImmutableList();
                     }
+
+                    PushToResponseMessage(responseText.ToString(), toolCallLog,
+                        request.AgentName, request.ModelName);
+                    lastUpdate = DateTimeOffset.UtcNow;
                 }
             }
 
-                    // Final update — mark execution as complete
-                    logger.LogInformation("[ThreadExec] Execution completed: threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}",
-                        threadPath, responseText.Length, toolCallLog.Count);
+                    // Final update
+                    logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}",
+                        DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count);
                     var finalText = responseText.ToString();
-                    var finalToolCalls = toolCallLog.ToImmutableList();
-                    responseStream.Update(current =>
-                    {
-                        if (current == null) return null;
-                        var updated = current with
-                        {
-                            Content = new ThreadMessage
-                            {
-                                Id = responseMsgId, Role = "assistant", Text = finalText,
-                                Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse,
-                                AgentName = request.AgentName, ModelName = request.ModelName,
-                                ToolCalls = finalToolCalls, DelegationPath = firstDelegationPath
-                            }
-                        };
-                        return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                            responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                            [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-                    });
-
+                    PushToResponseMessage(finalText, toolCallLog,
+                        request.AgentName, request.ModelName, firstDelegationPath);
+                    // Clear streaming state from Thread
                     UpdateThreadExecution(t => t with
                     {
                         IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
-                        ExecutionStartedAt = null                    });
+                        ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
+                    });
+                    // Notify parent thread that delegation completed
+                    NotifyParentCompletion(parentHub, delivery, finalText, true);
                     }
                     catch (OperationCanceledException)
                     {
-                        logger.LogInformation("[ThreadExec] Cancelled: {ThreadPath}", threadPath);
-                        MarkResponseCancelled(responseStream, responseMsgId, request, responsePath, toolCallLog, firstDelegationPath);
+                        logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
+                        var cancelText = (responseText.ToString() + "\n\n*Cancelled*").Trim();
+                        PushToResponseMessage(cancelText, toolCallLog, request.AgentName, request.ModelName, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
-                            ExecutionStartedAt = null                        });
+                            ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
+                        });
+                        NotifyParentCompletion(parentHub, delivery, cancelText, false, SubmitMessageStatus.ExecutionCancelled);
                     }
                     catch (Exception ex)
                     {
-                        logger.LogError(ex, "[ThreadExec] Error: {ThreadPath}", threadPath);
-                        MarkResponseError(responseStream, responseMsgId, request, responsePath, ex, toolCallLog, firstDelegationPath);
+                        logger.LogError(ex, "[ThreadExec] ERROR: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
+                        var errorText = (responseText.ToString() + $"\n\n*Error: {ex.Message}*").Trim();
+                        PushToResponseMessage(errorText, toolCallLog, request.AgentName, request.ModelName, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
-                            ExecutionStartedAt = null                        });
+                            ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
+                        });
+                        NotifyParentCompletion(parentHub, delivery, errorText, false, SubmitMessageStatus.ExecutionFailed);
                     }
                 }, ex =>
                 {
@@ -537,7 +485,7 @@ public static class ThreadExecution
             var threadContent = threadNode?.Content as AI.Thread;
             if (threadContent?.Messages.Count > 0)
             {
-                var history = new List<ThreadMessage>();
+                var history = ImmutableList<ThreadMessage>.Empty;
                 foreach (var msgId in threadContent.Messages)
                 {
                     if (msgId == responseMsgId) continue;
@@ -545,7 +493,7 @@ public static class ThreadExecution
                         new Address($"{threadPath}/{msgId}"), new MeshNodeReference());
                     var msgNode = msgStream.Current?.Value;
                     if (msgNode?.Content is ThreadMessage tmsg && tmsg.Type != ThreadMessageType.EditingPrompt)
-                        history.Add(tmsg);
+                        history = history.Add(tmsg);
                 }
                 if (history.Count > 0)
                 {
@@ -561,56 +509,26 @@ public static class ThreadExecution
         }
     }
 
-    private static void MarkResponseCancelled(
-        ISynchronizationStream<MeshNode> responseStream, string responseMsgId,
-        SubmitMessageRequest request, string responsePath,
-        List<ToolCallEntry> toolCallLog, string? delegationPath)
+    /// <summary>
+    /// Push streaming content via DataChangeRequest to the response message hub.
+    /// One-way message — the response hub updates its own local workspace.
+    /// No remote stream sync, no amplification storm.
+    /// </summary>
+    /// <summary>
+    /// Notifies the parent thread that this child thread's execution completed.
+    /// The parent's delegation tool handler resolves its TaskCompletionSource.
+    /// Only posts if this thread IS a child (path has a parent response message segment).
+    /// </summary>
+    private static void NotifyParentCompletion(IMessageHub hub,
+        IMessageDelivery delivery, string responseText, bool success,
+        SubmitMessageStatus status = SubmitMessageStatus.ExecutionCompleted)
     {
-        responseStream.Update(current =>
+        hub.Post(new SubmitMessageResponse
         {
-            if (current == null) return null;
-            var msg = current.Content as ThreadMessage;
-            var updated = current with
-            {
-                Content = new ThreadMessage
-                {
-                    Id = responseMsgId, Role = "assistant",
-                    Text = (msg?.Text ?? "") + "\n\n*Cancelled*",
-                    Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse,
-                    AgentName = request.AgentName, ModelName = request.ModelName,
-                    ToolCalls = toolCallLog.ToImmutableList(), DelegationPath = delegationPath
-                }
-            };
-            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-        });
-    }
-
-    private static void MarkResponseError(
-        ISynchronizationStream<MeshNode> responseStream, string responseMsgId,
-        SubmitMessageRequest request, string responsePath,
-        Exception ex, List<ToolCallEntry> toolCallLog, string? delegationPath)
-    {
-        responseStream.Update(current =>
-        {
-            if (current == null) return null;
-            var msg = current.Content as ThreadMessage;
-            var updated = current with
-            {
-                Content = new ThreadMessage
-                {
-                    Id = responseMsgId, Role = "assistant",
-                    Text = (msg?.Text ?? "") + $"\n\n*Error: {ex.Message}*",
-                    Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse,
-                    AgentName = request.AgentName, ModelName = request.ModelName,
-                    ToolCalls = toolCallLog.ToImmutableList(), DelegationPath = delegationPath
-                }
-            };
-            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-        });
+            Success = success,
+            Status = status,
+            ResponseText = Truncate(responseText, 500)
+        }, o => o.ResponseFor(delivery));
     }
 
     private static string? SerializeArgs(IDictionary<string, object?>? args)
@@ -620,7 +538,7 @@ public static class ThreadExecution
         try
         {
             // Format as readable key=value pairs instead of raw JSON
-            var parts = new List<string>();
+            var parts = ImmutableList<string>.Empty;
             foreach (var (key, value) in args)
             {
                 var valStr = value switch
@@ -634,7 +552,7 @@ public static class ThreadExecution
                 // Truncate long values and unescape unicode
                 if (valStr.Length > 200)
                     valStr = valStr[..197] + "...";
-                parts.Add($"{key}: {valStr}");
+                parts = parts.Add($"{key}: {valStr}");
             }
             return string.Join("\n", parts);
         }

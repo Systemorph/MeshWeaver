@@ -9,6 +9,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -26,6 +27,7 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadMessageViews(this MessageHubConfiguration configuration)
         => configuration
+            .WithHandler<UpdateThreadMessageContent>(HandleUpdateContent)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
@@ -36,12 +38,39 @@ public static class ThreadMessageLayoutAreas
     private const string MessageDataKey = "msg";
 
     /// <summary>
+    /// Handles content updates from thread execution.
+    /// Runs ON the response message grain — updates local workspace → sync stream → clients.
+    /// </summary>
+    private static IMessageDelivery HandleUpdateContent(
+        IMessageHub hub, IMessageDelivery<UpdateThreadMessageContent> delivery)
+    {
+        var msg = delivery.Message;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.MsgLayout");
+        logger?.LogInformation("[MsgLayout] HANDLE_UPDATE: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
+            hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
+        hub.GetWorkspace().UpdateMeshNode(node =>
+        {
+            var current = node.Content as ThreadMessage ?? new ThreadMessage { Id = node.Id, Role = "assistant", Text = "" };
+            return node with
+            {
+                Content = current with
+                {
+                    Text = msg.Text ?? current.Text,
+                    ToolCalls = msg.ToolCalls ?? current.ToolCalls,
+                    AgentName = msg.AgentName ?? current.AgentName,
+                    ModelName = msg.ModelName ?? current.ModelName,
+                    DelegationPath = msg.DelegationPath ?? current.DelegationPath
+                }
+            };
+        });
+        return delivery.Processed();
+    }
+
+    /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Emits control ONCE (Take(1)) based on initial role/author/type.
-    /// - EditingPrompt: inline editor with Submit/Cancel buttons
-    /// - ExecutedInput: bubble + Edit/Resubmit/Delete action buttons
-    /// - AgentResponse: bubble + Delete action button
-    /// Text is data-bound via JsonPointerReference — only text updates during streaming.
+    /// Emits control once from first node emission. Text and tool calls are data-bound
+    /// via JsonPointerReference — updates flow through host.UpdateData, no control rebuilds.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -50,43 +79,23 @@ public static class ThreadMessageLayoutAreas
         var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
         var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        // Subscribe to the MeshNodeReference sync stream — receives updates from
+        // responseStream.Update() / PatchDataChangeRequest. Map to ThreadMessageViewModel
+        // and push to data section. The bubble binds to the view model via JsonPointerReference.
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
-        // Push ThreadMessage text to data section for data-bound rendering
-        // Convert @path references to clickable markdown links (absolute paths)
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
+        host.SubscribeToDataStream(MessageDataKey, syncStream!
+            .Select(change => change.Value?.Content as ThreadMessage)
+            .Where(m => m != null)
+            .Select(m => (object)(ThreadMessageViewModel.FromMessage(m!) with
             {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return msg?.Text ?? "";
-            })
-            .DistinctUntilChanged()
-            .Subscribe(text => host.UpdateData("text", ConvertReferencesToLinks(text))));
+                Text = ConvertReferencesToLinks(m!.Text ?? "")
+            })));
 
-        // Push ToolCalls to data section
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return (object)(msg?.ToolCalls ?? System.Collections.Immutable.ImmutableList<ToolCallEntry>.Empty);
-            })
-            .DistinctUntilChanged()
-            .Subscribe(calls => host.UpdateData("toolCalls", calls)));
-
-        // isExecuting/executionStatus: NOT subscribed from parent thread.
-        // Cross-hub subscriptions cause back-sync issues.
-        // The message bubble shows spinner based on empty text + tool calls presence.
-
-        // Emit control ONCE — role/author/type are fixed, text is data-bound
-        return nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                return node?.Content as ThreadMessage;
-            })
-            .Where(msg => msg != null)
+        // Emit control once — role/author are static, text/toolCalls are data-bound.
+        return syncStream!
+            .Select(change => change.Value?.Content as ThreadMessage)
+            .Where(m => m != null)
             .Take(1)
             .Select(msg =>
             {
@@ -98,8 +107,8 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Overview for ExecutedInput/AgentResponse messages:
-    /// ThreadMessageBubbleControl + action buttons (Edit, Resubmit, Delete).
+    /// Builds the Overview for messages. Role/author are static from the initial message.
+    /// Text and tool calls are data-bound via JsonPointerReference.
     /// </summary>
     private static UiControl BuildMessageOverview(
         LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId)
@@ -107,24 +116,16 @@ public static class ThreadMessageLayoutAreas
         var isUser = msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
         var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
 
+        // Bind to ThreadMessageViewModel in data section
+        var dataPointer = LayoutAreaReference.GetDataPointer(MessageDataKey);
         var bubble = new ThreadMessageBubbleControl()
             .WithRole(msg.Role)
             .WithAuthorName(authorName)
             .WithModelName(msg.ModelName)
             .WithTimestamp(msg.Timestamp)
-            .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")))
-            .WithIsExecuting(new JsonPointerReference(LayoutAreaReference.GetDataPointer("isExecuting")))
-            .WithExecutionStatus(new JsonPointerReference(LayoutAreaReference.GetDataPointer("executionStatus")))
-            .WithToolCalls(new JsonPointerReference(LayoutAreaReference.GetDataPointer("toolCalls")))
-            .WithThreadPath(threadPath)
-            .WithClickAction(_ =>
-            {
-                // Cancel execution — posted when the bubble's cancel button is clicked
-                host.Hub.Post(new CancelThreadStreamRequest
-                {
-                    ThreadPath = threadPath
-                }, o => o.WithTarget(new Address(threadPath)));
-            });
+            .WithText(new JsonPointerReference($"{dataPointer}/text"))
+            .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
+            .WithThreadPath(threadPath);
 
         // Action buttons — small stealth icon buttons, right-aligned
         // Hidden during execution via CSS :has() on the parent container

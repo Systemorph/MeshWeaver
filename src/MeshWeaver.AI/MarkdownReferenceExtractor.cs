@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 
 namespace MeshWeaver.AI;
@@ -50,8 +51,8 @@ public static class MarkdownReferenceExtractor
         if (string.IsNullOrEmpty(markdown))
             return Array.Empty<ExtractedReference>();
 
-        var references = new List<ExtractedReference>();
-        var usedRanges = new List<(int Start, int End)>();
+        var references = ImmutableList<ExtractedReference>.Empty;
+        var usedRanges = ImmutableList<(int Start, int End)>.Empty;
 
         // Extract parentheses references first (most specific): @(path) or @("path")
         foreach (Match match in ParenthesesReferencePattern.Matches(markdown))
@@ -60,12 +61,12 @@ public static class MarkdownReferenceExtractor
             var path = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
             if (!string.IsNullOrWhiteSpace(path))
             {
-                references.Add(new ExtractedReference(
+                references = references.Add(new ExtractedReference(
                     path.Trim(),
                     match.Index,
                     match.Index + match.Length,
                     match.Value));
-                usedRanges.Add((match.Index, match.Index + match.Length));
+                usedRanges = usedRanges.Add((match.Index, match.Index + match.Length));
             }
         }
 
@@ -79,12 +80,12 @@ public static class MarkdownReferenceExtractor
             var path = match.Groups[1].Value;
             if (!string.IsNullOrWhiteSpace(path))
             {
-                references.Add(new ExtractedReference(
+                references = references.Add(new ExtractedReference(
                     path.Trim(),
                     match.Index,
                     match.Index + match.Length,
                     match.Value));
-                usedRanges.Add((match.Index, match.Index + match.Length));
+                usedRanges = usedRanges.Add((match.Index, match.Index + match.Length));
             }
         }
 
@@ -99,17 +100,17 @@ public static class MarkdownReferenceExtractor
             // Filter out known non-reference @ patterns (like @agent, @model commands)
             if (!string.IsNullOrWhiteSpace(path) && !IsKnownCommand(path))
             {
-                references.Add(new ExtractedReference(
+                references = references.Add(new ExtractedReference(
                     path,
                     match.Index,
                     match.Index + match.Length,
                     match.Value));
-                usedRanges.Add((match.Index, match.Index + match.Length));
+                usedRanges = usedRanges.Add((match.Index, match.Index + match.Length));
             }
         }
 
         // Sort by start index for consistent ordering
-        return references.OrderBy(r => r.StartIndex).ToList();
+        return references.OrderBy(r => r.StartIndex).ToImmutableList();
     }
 
     /// <summary>
@@ -179,7 +180,7 @@ public static class MarkdownReferenceExtractor
             .ToList();
     }
 
-    private static bool OverlapsWithExisting(List<(int Start, int End)> ranges, int start, int end)
+    private static bool OverlapsWithExisting(ImmutableList<(int Start, int End)> ranges, int start, int end)
     {
         foreach (var (rangeStart, rangeEnd) in ranges)
         {

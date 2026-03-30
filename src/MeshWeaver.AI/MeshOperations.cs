@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
@@ -50,11 +51,11 @@ public class MeshOperations
             if (resolvedPath.EndsWith("/*"))
             {
                 var parentPath = resolvedPath[..^2];
-                var result = new List<object>();
+                var result = ImmutableList<object>.Empty;
                 var query = $"namespace:{parentPath}";
                 await foreach (var node in mesh.QueryAsync<MeshNode>(MeshQueryRequest.FromQuery(query)))
                 {
-                    result.Add(new
+                    result = result.Add(new
                     {
                         node.Path,
                         node.Name,
@@ -152,12 +153,12 @@ public class MeshOperations
 
         try
         {
-            var results = new List<object>();
+            var results = ImmutableList<object>.Empty;
             await foreach (var item in mesh.QueryAsync(new MeshQueryRequest { Query = fullQuery, Limit = 50 }))
             {
                 if (item is MeshNode node)
                 {
-                    results.Add(new
+                    results = results.Add(new
                     {
                         node.Path,
                         node.Name,
@@ -166,7 +167,7 @@ public class MeshOperations
                 }
                 else
                 {
-                    results.Add(item);
+                    results = results.Add(item);
                 }
             }
 
@@ -232,7 +233,7 @@ public class MeshOperations
             if (nodeList == null || nodeList.Count == 0)
                 return "No nodes provided.";
 
-            var results = new List<string>();
+            var results = ImmutableList<string>.Empty;
             foreach (var rawNode in nodeList)
             {
                 var meshNode = SanitizeNodeId(rawNode);
@@ -241,7 +242,7 @@ public class MeshOperations
                 // Use Patch for partial changes instead.
                 if (string.IsNullOrEmpty(meshNode.NodeType))
                 {
-                    results.Add($"Error: node at {meshNode.Path} is missing nodeType. " +
+                    results = results.Add($"Error: node at {meshNode.Path} is missing nodeType. " +
                                 "Update requires the complete node (from Get). Use Patch for partial updates.");
                     continue;
                 }
@@ -250,7 +251,7 @@ public class MeshOperations
                 mesh.UpdateNode(meshNode).Subscribe(
                     updated => updateTcs.TrySetResult($"Updated: {updated.Path}"),
                     ex => updateTcs.TrySetResult($"Error updating {meshNode.Path}: {ex.Message}"));
-                results.Add(await updateTcs.Task);
+                results = results.Add(await updateTcs.Task);
             }
 
             return string.Join("\n", results);
@@ -390,7 +391,7 @@ public class MeshOperations
             if (pathList == null || pathList.Count == 0)
                 return "No paths provided.";
 
-            var results = new List<string>();
+            var results = ImmutableList<string>.Empty;
             foreach (var path in pathList)
             {
                 var resolvedPath = ResolvePath(path);
@@ -398,7 +399,7 @@ public class MeshOperations
                 mesh.DeleteNode(resolvedPath).Subscribe(
                     _ => deleteTcs.TrySetResult($"Deleted: {resolvedPath}"),
                     ex => deleteTcs.TrySetResult($"Error deleting {resolvedPath}: {ex.Message}"));
-                results.Add(await deleteTcs.Task);
+                results = results.Add(await deleteTcs.Task);
             }
 
             return string.Join("\n", results);

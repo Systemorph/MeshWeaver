@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Graph;
 
 namespace MeshWeaver.AI;
@@ -45,7 +46,7 @@ public static class ThreadMessageNodeType
         Name = "Thread Message",
         Icon = "/static/NodeTypeIcons/message.svg",
         IsSatelliteType = true,
-        ExcludeFromContext = new HashSet<string> { "search", "create" },
+        ExcludeFromContext = ImmutableHashSet.Create("search", "create"),
         AssemblyLocation = typeof(ThreadMessageNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddThreadMessageViews()

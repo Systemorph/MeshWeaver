@@ -268,48 +268,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         {
                             Logger.LogInformation("[Delegation] Created sub-thread at {Path}", subThreadPath);
 
-                            // 2. Subscribe to child stream — keep alive until hub disposed
-                            var childStream = workspace.GetRemoteStream<MeshNode>(
-                                new Address(subThreadPath), new MeshNodeReference());
-                            workspace.AddDisposable(childStream);
-
-                            childStream.Subscribe(
-                                change =>
-                                {
-                                    using var _ = accessService?.SwitchAccessContext(execCtx.UserAccessContext);
-
-                                    var childNode = change.Value;
-                                    var childThread = childNode?.Content as MeshThread;
-                                    Logger.LogDebug("[Delegation] Child update: path={Path}, executing={IsExecuting}",
-                                        subThreadPath, childThread?.IsExecuting);
-                                    if (childThread == null) return;
-
-                                    // Only complete when child was executing and has now stopped.
-                                    // Skip initial emission where IsExecuting is false (child hasn't started yet).
-                                    // Check Messages.Count > 0 to confirm the child actually ran.
-                                    if (!childThread.IsExecuting && childThread.Messages.Count > 0)
-                                    {
-                                        Logger.LogInformation("[Delegation] Child completed: {Path}, messages={Count}",
-                                            subThreadPath, childThread.Messages.Count);
-                                        tcs.TrySetResult(new DelegationResult
-                                        {
-                                            AgentName = targetId,
-                                            Task = task,
-                                            Result = $"Delegation to {targetId} completed. Sub-thread: {subThreadPath}",
-                                            Success = true,
-                                            ThreadId = subThreadPath
-                                        });
-                                    }
-                                },
-                                ex =>
-                                {
-                                    Logger.LogError(ex, "[Delegation] Child stream error for {Path}", subThreadPath);
-                                    tcs.TrySetResult(new DelegationResult
-                                    {
-                                        AgentName = targetId, Task = task,
-                                        Result = $"Stream error: {ex.Message}", Success = false
-                                    });
-                                });
+                            // 2. Completion is notified via a second SubmitMessageResponse
+                            // with Status=ExecutionCompleted, posted by ThreadExecution when done.
 
                             // 3. Submit message (Post + RegisterCallback — no AwaitResponse)
                             var delivery = Hub.Post(new SubmitMessageRequest
@@ -330,14 +290,33 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             {
                                 Hub.RegisterCallback((IMessageDelivery)delivery, response =>
                                 {
-                                    if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+                                    if (response is IMessageDelivery<SubmitMessageResponse> sr)
                                     {
-                                        Logger.LogWarning("[Delegation] Submit failed: {Error}", sr.Message.Error);
-                                        tcs.TrySetResult(new DelegationResult
+                                        var msg = sr.Message;
+                                        if (!msg.Success)
                                         {
-                                            AgentName = targetId, Task = task,
-                                            Result = $"Submit failed: {sr.Message.Error}", Success = false
-                                        });
+                                            Logger.LogWarning("[Delegation] Submit failed: {Error}", msg.Error);
+                                            tcs.TrySetResult(new DelegationResult
+                                            {
+                                                AgentName = targetId, Task = task,
+                                                Result = $"Submit failed: {msg.Error}", Success = false
+                                            });
+                                        }
+                                        else if (msg.Status != SubmitMessageStatus.CellsCreated)
+                                        {
+                                            // Execution completed/cancelled/failed — resolve delegation
+                                            Logger.LogInformation("[Delegation] Child finished: {Path}, status={Status}, textLen={TextLen}",
+                                                subThreadPath, msg.Status, msg.ResponseText?.Length ?? 0);
+                                            using var __ = accessService?.SwitchAccessContext(execCtx.UserAccessContext);
+                                            tcs.TrySetResult(new DelegationResult
+                                            {
+                                                AgentName = targetId, Task = task,
+                                                Result = msg.ResponseText ?? $"Delegation to {targetId} completed.",
+                                                Success = msg.Status == SubmitMessageStatus.ExecutionCompleted,
+                                                ThreadId = subThreadPath
+                                            });
+                                        }
+                                        // CellsCreated = initial response, keep waiting for completion
                                     }
                                     return response;
                                 });
@@ -406,7 +385,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // Apply method filtering if specified
         if (pluginRef.Methods is { Count: > 0 })
         {
-            var methodSet = new HashSet<string>(pluginRef.Methods, StringComparer.OrdinalIgnoreCase);
+            var methodSet = pluginRef.Methods.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
             return allTools.Where(t => methodSet.Contains(t.Name));
         }
 
@@ -444,25 +423,25 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         var result = baseInstructions;
 
         // Delegation guidelines
-        var delegationList = new List<string>();
+        var delegationList = ImmutableList<string>.Empty;
 
         if (agentConfig.Delegations != null)
         {
             foreach (var d in agentConfig.Delegations)
             {
                 var agentId = d.AgentPath.Split('/').Last();
-                delegationList.Add($"- {agentId}: {d.Instructions}");
+                delegationList = delegationList.Add($"- {agentId}: {d.Instructions}");
             }
         }
 
-        var listedIds = agentConfig.Delegations?.Select(d => d.AgentPath.Split('/').Last()).ToHashSet()
-            ?? new HashSet<string>();
-        var handoffIds = agentConfig.Handoffs?.Select(h => h.AgentPath.Split('/').Last()).ToHashSet()
-            ?? new HashSet<string>();
+        var listedIds = agentConfig.Delegations?.Select(d => d.AgentPath.Split('/').Last()).ToImmutableHashSet()
+            ?? ImmutableHashSet<string>.Empty;
+        var handoffIds = agentConfig.Handoffs?.Select(h => h.AgentPath.Split('/').Last()).ToImmutableHashSet()
+            ?? ImmutableHashSet<string>.Empty;
 
         foreach (var agent in hierarchyAgents.Where(a => a.Id != agentConfig.Id && !listedIds.Contains(a.Id) && !handoffIds.Contains(a.Id)))
         {
-            delegationList.Add($"- {agent.Id}: {agent.Description ?? "Agent in hierarchy"}");
+            delegationList = delegationList.Add($"- {agent.Id}: {agent.Description ?? "Agent in hierarchy"}");
         }
 
         if (delegationList.Count > 0)
@@ -491,11 +470,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         // Handoff guidelines
         if (hasHandoffs)
         {
-            var handoffList = new List<string>();
+            var handoffList = ImmutableList<string>.Empty;
             foreach (var h in agentConfig.Handoffs!)
             {
                 var agentId = h.AgentPath.Split('/').Last();
-                handoffList.Add($"- {agentId}: {h.Instructions}");
+                handoffList = handoffList.Add($"- {agentId}: {h.Instructions}");
             }
 
             var handoffListStr = string.Join('\n', handoffList);

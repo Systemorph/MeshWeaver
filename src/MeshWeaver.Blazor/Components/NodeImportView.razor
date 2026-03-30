@@ -23,6 +23,13 @@
             <FluentCheckbox @bind-Value="@ForceReimport" Label="Force re-import (overwrite existing data)" />
         </div>
 
+        @if (!IsFileMode)
+        {
+            <div style="margin-bottom: 16px;">
+                <FluentCheckbox @bind-Value="@RemoveMissing" Label="Delete superfluous nodes (remove nodes in target not present in source)" />
+            </div>
+        }
+
         <div style="margin-bottom: 16px;">
             <FluentButton Id="node-import-upload" Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
                           IconStart="@(new Icons.Regular.Size16.ArrowUpload())">
@@ -85,6 +92,7 @@
     private string? TargetPath;
     private string? ImportMode;
     private bool ForceReimport;
+    private bool RemoveMissing;
     private bool IsImporting;
     private int ProgressPercent;
     private string ProgressMessage = "";
@@ -100,6 +108,7 @@
         TargetPath = ViewModel?.TargetPath;
         ImportMode = ViewModel?.Mode;
         ForceReimport = ViewModel?.Force ?? false;
+        RemoveMissing = ViewModel?.RemoveMissing ?? false;
     }
 
     private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
@@ -174,6 +183,7 @@
                 tempDir,
                 TargetPath,
                 ForceReimport,
+                removeMissing: RemoveMissing,
                 onProgress: (nodes, partitions, currentPath) =>
                 {
                     ProgressPercent = Math.Min(60 + (nodes + partitions) % 40, 99);

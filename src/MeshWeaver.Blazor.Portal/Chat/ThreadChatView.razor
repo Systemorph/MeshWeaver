@@ -58,6 +58,40 @@ else
         </div>
     }
 
+    <!-- Execution status bar — shows when thread is executing -->
+    @if (ThreadViewModel?.IsExecuting == true)
+    {
+        <div class="thread-exec-bar">
+            <div class="thread-exec-header">
+                <span class="thread-exec-dots">
+                    <span class="thread-exec-dot"></span>
+                    <span class="thread-exec-dot" style="animation-delay: 0.2s;"></span>
+                    <span class="thread-exec-dot" style="animation-delay: 0.4s;"></span>
+                </span>
+                <span class="thread-exec-status">@(ThreadViewModel.ExecutionStatus ?? "Generating response...")</span>
+                <button class="thread-exec-cancel" @onclick="CancelExecution">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+                    Stop
+                </button>
+            </div>
+            @if (!string.IsNullOrEmpty(ThreadViewModel.StreamingText))
+            {
+                <div class="thread-exec-preview">@TruncateText(ThreadViewModel.StreamingText, 300)</div>
+            }
+            @if (ThreadViewModel.StreamingToolCalls is { Count: > 0 })
+            {
+                <div class="thread-exec-tools">
+                    @foreach (var call in ThreadViewModel.StreamingToolCalls)
+                    {
+                        <span class="thread-exec-tool @(call.Result != null ? "done" : "pending")">
+                            @(call.Result != null ? "✓" : "●") @(call.DisplayName ?? call.Name)
+                        </span>
+                    }
+                </div>
+            }
+        </div>
+    }
+
     <!-- Footer: input — pinned at bottom, never scrolls -->
     <div class="thread-chat-footer">
         <div class="thread-chat-input-area">

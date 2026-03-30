@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Collections.Immutable;
+using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Services;
@@ -125,7 +126,7 @@ public static class ThreadNodeType
             Name = "Thread",
             Icon = "/static/NodeTypeIcons/chat.svg",
             IsSatelliteType = true,
-            ExcludeFromContext = new HashSet<string> { "search" },
+            ExcludeFromContext = ImmutableHashSet.Create("search"),
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             HubConfiguration = config => config
                 .AddThreadLayoutAreas()

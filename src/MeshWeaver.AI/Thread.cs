@@ -118,6 +118,18 @@ public record Thread
     /// </summary>
     public DateTime? ExecutionStartedAt { get; init; }
 
+    /// <summary>
+    /// Streaming text buffer — updated at 2/sec during execution on the Thread node (local workspace).
+    /// Cleared when execution completes (final text is persisted on the response message).
+    /// </summary>
+    public string? StreamingText { get; init; }
+
+    /// <summary>
+    /// Streaming tool calls — updated at 2/sec during execution.
+    /// Cleared when execution completes.
+    /// </summary>
+    public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
+
 }
 
 /// <summary>

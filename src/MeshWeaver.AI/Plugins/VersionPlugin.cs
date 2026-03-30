@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -30,10 +31,10 @@ public class VersionPlugin(IMessageHub hub)
 
         try
         {
-            var versions = new List<object>();
+            var versions = ImmutableList<object>.Empty;
             await foreach (var v in versionQuery.GetVersionsAsync(path))
             {
-                versions.Add(new
+                versions = versions.Add(new
                 {
                     v.Version,
                     LastModified = v.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
