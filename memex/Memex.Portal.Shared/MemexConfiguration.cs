@@ -65,6 +65,9 @@ public static class MemexConfiguration
         // Trust forwarded headers from Azure Container Apps reverse proxy
         services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
         {
+            options.ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
+                                     | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+                                     | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedHost;
             options.KnownIPNetworks.Clear();
             options.KnownProxies.Clear();
         });
@@ -375,11 +378,11 @@ public static class MemexConfiguration
 
         // Forward headers from reverse proxy (Azure Container Apps) so OIDC
         // middleware constructs redirect URIs with the correct scheme and host.
-        app.UseForwardedHeaders(new ForwardedHeadersOptions
-        {
-            ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor
-                             | Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
-        });
+        // When ASPNETCORE_FORWARDEDHEADERS_ENABLED=true (set in Bicep), the hosting
+        // layer calls UseForwardedHeaders() automatically from DI options. The explicit
+        // call here ensures it also works in local development without that env var.
+        if (!app.Environment.IsProduction())
+            app.UseForwardedHeaders();
 
         // Static files middleware must run before routing to serve _content/* paths from RCLs
         app.UseStaticFiles();

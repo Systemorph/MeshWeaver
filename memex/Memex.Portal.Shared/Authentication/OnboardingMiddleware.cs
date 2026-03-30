@@ -34,6 +34,7 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
         "/static/",
         "/favicon.ico",
         "/mcp",
+        "/signin-",
     };
 
     public async Task InvokeAsync(HttpContext context)

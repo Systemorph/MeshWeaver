@@ -2,8 +2,10 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OAuth;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
 
 namespace MeshWeaver.Blazor.Portal.Authentication;
@@ -45,6 +47,20 @@ public static class AuthenticationBuilderExtensions
                     && uri.Host == "login.microsoftonline.com")
                     return issuer;
                 throw new SecurityTokenInvalidIssuerException($"Invalid issuer: {issuer}");
+            };
+            // Surface OIDC failures as a redirect instead of a blank page / 500
+            options.Events = new OpenIdConnectEvents
+            {
+                OnRemoteFailure = context =>
+                {
+                    var logger = context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("MicrosoftAuth");
+                    logger.LogError(context.Failure, "Microsoft OIDC remote failure");
+                    context.Response.Redirect("/login?error=auth_failed");
+                    context.HandleResponse();
+                    return Task.CompletedTask;
+                }
             };
         });
 
