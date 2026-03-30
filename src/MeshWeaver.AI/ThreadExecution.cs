@@ -53,41 +53,7 @@ public static class ThreadExecution
             logger?.LogInformation("[ThreadExec] Recovery: stale execution on {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, thread.ActiveMessageId);
 
-            // 1. Mark the active response message as Cancelled
-            if (!string.IsNullOrEmpty(thread.ActiveMessageId))
-            {
-                var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
-                var responseStream = workspace.GetRemoteStream<MeshNode>(
-                    new Address(responsePath), new MeshNodeReference());
-
-                responseStream.Update(current =>
-                {
-                    if (current == null) return null;
-                    var msg = current.Content as ThreadMessage;
-                    var lastUpdated = current.LastModified != default
-                        ? current.LastModified.ToString("HH:mm:ss")
-                        : msg?.Timestamp.ToString("HH:mm:ss") ?? "unknown";
-                    var updated = current with
-                    {
-                        Content = new ThreadMessage
-                        {
-                            Id = thread.ActiveMessageId,
-                            Role = "assistant",
-                            Text = (msg?.Text ?? "") + $"\n\n*Cancelled (last updated {lastUpdated})*",
-                            Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
-                            Type = ThreadMessageType.AgentResponse,
-                            AgentName = msg?.AgentName,
-                            ModelName = msg?.ModelName,
-                            ToolCalls = msg?.ToolCalls ?? []
-                        }
-                    };
-                    return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
-                        responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
-                        [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
-                });
-            }
-
-            // 2. Clear thread execution state, mark progress as completed
+            // Clear thread execution state — set to cancelled
             workspace.UpdateMeshNode(node =>
             {
                 var t = node.Content as Thread ?? new Thread();
@@ -351,6 +317,36 @@ public static class ThreadExecution
                         pendingCalls[callKey] = functionCall;
                         lastCallKey = callKey;
 
+                        // Add pending entry and push immediately (don't wait for throttle —
+                        // during delegation the streaming loop blocks on tool execution)
+                        toolCallLog.Add(new ToolCallEntry
+                        {
+                            Name = functionCall.Name,
+                            DisplayName = formatted,
+                            Arguments = argsDetail,
+                            Timestamp = DateTime.UtcNow
+                        });
+                        var pendingToolCalls = toolCallLog.ToImmutableList();
+                        responseStream.Update(current =>
+                        {
+                            if (current == null) return null;
+                            var msg = current.Content as ThreadMessage;
+                            var updated = current with
+                            {
+                                Content = new ThreadMessage
+                                {
+                                    Id = responseMsgId, Role = "assistant", Text = "",
+                                    Timestamp = msg?.Timestamp ?? DateTime.UtcNow,
+                                    Type = ThreadMessageType.AgentResponse,
+                                    AgentName = request.AgentName, ModelName = request.ModelName,
+                                    ToolCalls = pendingToolCalls
+                                }
+                            };
+                            return new ChangeItem<MeshNode>(updated, responseStream.StreamId,
+                                responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
+                                [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
+                        });
+                        lastPushedToolCallCount = pendingToolCalls.Count;
                     }
                     else if (content is FunctionResultContent functionResult)
                     {
@@ -397,6 +393,16 @@ public static class ThreadExecution
                 if ((currentStatus != null || toolCallLog.Count > lastPushedToolCallCount) && responseText.Length == 0
                     && DateTimeOffset.UtcNow - lastStatusUpdate > TimeSpan.FromMilliseconds(300))
                 {
+                    // Update pending delegation entries with DelegationPath if now available
+                    if (!string.IsNullOrEmpty(chatClient.LastDelegationPath))
+                    {
+                        for (var i = 0; i < toolCallLog.Count; i++)
+                        {
+                            if (toolCallLog[i].Name.StartsWith("delegate_to") && toolCallLog[i].DelegationPath == null)
+                                toolCallLog[i] = toolCallLog[i] with { DelegationPath = chatClient.LastDelegationPath };
+                        }
+                    }
+
                     var status = currentStatus ?? "";
                     var liveToolCalls = toolCallLog.ToImmutableList();
                     lastPushedToolCallCount = liveToolCalls.Count;
