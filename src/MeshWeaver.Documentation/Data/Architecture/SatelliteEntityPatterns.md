@@ -333,3 +333,32 @@ builder.ConfigureHub(config => config
 ```
 
 Both the **silo** and **client** must call `AddGraph()` (or equivalent) to share the same type registry. Without this, the client serializes types with full namespace names that the silo can't match.
+
+## Cross-Grain Live Updates (Critical for Orleans)
+
+When pushing data from one grain to another (e.g., thread execution updating the response message), **never** use:
+- `workspace.GetRemoteStream().Update()` — creates a local proxy, doesn't propagate to other clients
+- `DataChangeRequest` posted to another grain — updates entity store but doesn't trigger the sync stream
+
+These methods persist data correctly (visible on page refresh) but **do not trigger live updates** to Blazor clients.
+
+### Correct Pattern: Custom Message + Local Workspace Update
+
+```csharp
+// 1. Define a message type
+public record UpdateMyContent { public string Text { get; init; } }
+
+// 2. Register handler ON the target hub (runs on the target grain)
+config.WithHandler<UpdateMyContent>((hub, delivery) =>
+{
+    hub.GetWorkspace().UpdateMeshNode(node =>
+        node with { Content = /* updated content */ });
+    return delivery.Processed();
+});
+
+// 3. Post FROM the calling grain
+hub.Post(new UpdateMyContent { Text = "hello" },
+    o => o.WithTarget(new Address(targetPath)));
+```
+
+**Why this works:** `workspace.UpdateMeshNode()` updates the **local** data source stream on the target grain. This triggers `DataChangedEvent` on the sync stream that clients subscribe to via `GetRemoteStream`. The update flows: grain workspace → sync stream → Orleans routing → Blazor SignalR → UI render.

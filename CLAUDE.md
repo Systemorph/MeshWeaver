@@ -93,6 +93,17 @@ dotnet run --project memex/aspire/Memex.AppHost
 # Requires Docker for dependencies
 ```
 
+## Collections Policy
+
+**NEVER use mutable collections.** Always use `System.Collections.Immutable`:
+- `List<T>` → `ImmutableList<T>.Empty` + `= list.Add(item)`
+- `Dictionary<K,V>` → `ImmutableDictionary<K,V>.Empty` + `= dict.SetItem(key, val)`
+- `HashSet<T>` → `ImmutableHashSet<T>.Empty` + `= set.Add(item)`
+- `Queue<T>` → `ImmutableQueue<T>.Empty` + `= queue.Enqueue(item)` / `= queue.Dequeue(out var item)`
+- `.ToList()` → `.ToImmutableList()`, `.ToHashSet()` → `.ToImmutableHashSet()`
+
+The codebase is distributed (Orleans, reactive streams). Mutable collections cause race conditions and unpredictable behavior. The only exception is `ConcurrentDictionary` for thread-safe concurrent mutation patterns.
+
 ## Architecture Overview
 
 ### Core Concepts

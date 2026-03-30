@@ -21,5 +21,10 @@ namespace MeshWeaver.Layout
         /// Import mode: "file" for single-file upload, "zip" (or null) for ZIP archive upload.
         /// </summary>
         public string? Mode { get; init; }
+
+        /// <summary>
+        /// Whether to remove nodes in the target that are not present in the source (ZIP/folder mode only).
+        /// </summary>
+        public bool RemoveMissing { get; init; }
     }
 }
