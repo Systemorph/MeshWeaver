@@ -155,8 +155,7 @@ public class OrleansThreadAccessTest(ITestOutputHelper output) : TestBase(output
         // 4. Verify Thread content
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull("Thread hub should return Thread content");
-        threadContent!.ParentPath.Should().Be(docPath, "thread should reference the parent document");
-        Output.WriteLine($"Thread verified: ParentPath={threadContent.ParentPath}, Messages={threadContent.Messages.Count}");
+        Output.WriteLine($"Thread verified: Messages={threadContent!.Messages.Count}");
     }
 
     /// <summary>

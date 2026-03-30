@@ -80,16 +80,20 @@ internal class FakeChatClientFactory : IChatClientFactory
     public IReadOnlyList<string> Models => ["fake-model"];
     public int Order => 0;
 
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => new(chatClient: new FakeChatClient(ResponseText),
+            instructions: config.Instructions ?? "Test assistant.",
+            name: config.Id, description: config.Description ?? config.Id,
+            tools: [], loggerFactory: null, services: null);
+
     public Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config, IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null)
-    {
-        return Task.FromResult(new ChatClientAgent(
-            chatClient: new FakeChatClient(ResponseText),
-            instructions: config.Instructions ?? "Test assistant.",
-            name: config.Id, description: config.Description ?? config.Id,
-            tools: [], loggerFactory: null, services: null));
-    }
+        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
