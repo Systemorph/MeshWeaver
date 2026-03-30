@@ -795,7 +795,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .WithHiddenQuery(hiddenQuery)
             .WithPlaceholder("Search threads...")
             .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithGridBreakpoints(xs: 12, sm: 12, md: 12, lg: 12)
+            .WithMaxColumns(1)
             .WithDisableNavigation();
 
         viewMode = ChatViewMode.ResumeThreads;

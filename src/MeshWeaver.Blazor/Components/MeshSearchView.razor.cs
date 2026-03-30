@@ -636,14 +636,16 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    private string AreaGridStyle
+    private string CardGridStyle
     {
         get
         {
             var maxCols = BoundMaxColumns;
-            if (maxCols.HasValue)
-                return $"grid-template-columns: repeat({maxCols.Value}, 1fr);";
-            return "";
+            if (!maxCols.HasValue || maxCols.Value <= 0) return "";
+            if (maxCols.Value == 1) return "grid-template-columns: 1fr;";
+            // Container-responsive: auto-fill capped at maxCols via percentage minimum
+            var pct = 100.0 / maxCols.Value;
+            return $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, 200px), 1fr));";
         }
     }
 

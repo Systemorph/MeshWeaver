@@ -155,7 +155,6 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(4)
-            .WithGridBreakpoints(12, 6, 3, 3)
             .WithItemLimit(8));
 
         // Visible child nodes — security service automatically filters to viewer-visible nodes
@@ -167,7 +166,6 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(true)
             .WithItemLimit(20)
             .WithMaxColumns(4)
-            .WithGridBreakpoints(12, 6, 3, 3)
             .WithCollapsibleSections(true));
 
         profile = profile.WithView(content);
@@ -270,7 +268,6 @@ public static class UserActivityLayoutAreas
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
             .WithMaxColumns(1)
-            .WithGridBreakpoints(12, 12, 12, 12)
             .WithItemLimit(4);
     }
 
@@ -288,7 +285,6 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(false)
             .WithItemLimit(8)
             .WithMaxColumns(4)
-            .WithGridBreakpoints(12, 6, 3, 3)
             .WithCreateNodeType("Thread")
             .WithCreateNamespace(nodePath);
     }
@@ -307,7 +303,6 @@ public static class UserActivityLayoutAreas
             .WithSectionCounts(true)
             .WithItemLimit(10)
             .WithMaxColumns(4)
-            .WithGridBreakpoints(12, 6, 3, 3)
             .WithCollapsibleSections(true)
             .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(nodePath)}");
     }
