@@ -101,10 +101,7 @@ public static class ThreadExecution
                         ExecutionStatus = $"Cancelled at {cancelledAt:HH:mm:ss}",
                         ActiveMessageId = null,
                         TokensUsed = 0,
-                        ExecutionStartedAt = null,
-                        ActiveProgress = t.ActiveProgress != null
-                            ? MarkAllCompleted(t.ActiveProgress)
-                            : null
+                        ExecutionStartedAt = null
                     }
                 };
             });
@@ -115,28 +112,6 @@ public static class ThreadExecution
         return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Recursively collects all child thread paths from a progress tree.
-    /// </summary>
-    private static void CollectChildPaths(ThreadProgressEntry? entry, List<string> paths)
-    {
-        if (entry == null) return;
-        foreach (var child in entry.Children)
-        {
-            paths.Add(child.ThreadPath);
-            CollectChildPaths(child, paths);
-        }
-    }
-
-    /// <summary>
-    /// Recursively marks all entries in a progress tree as completed.
-    /// </summary>
-    private static ThreadProgressEntry MarkAllCompleted(ThreadProgressEntry entry)
-        => entry with
-        {
-            IsCompleted = true,
-            Children = entry.Children.Select(MarkAllCompleted).ToImmutableList()
-        };
 
     /// <summary>
     /// Handles SubmitMessageRequest on the thread hub.
@@ -338,16 +313,6 @@ public static class ThreadExecution
                 client.ForwardToolCall = entry => { toolCallLog.Add(entry); };
 
                 var agentDisplayName = request.AgentName ?? "Agent";
-                UpdateThreadExecution(t => t with
-                {
-                    ActiveProgress = new ThreadProgressEntry
-                    {
-                        ThreadPath = threadPath,
-                        ThreadName = agentDisplayName,
-                        Status = "Generating response...",
-                        StreamingCellPath = responsePath
-                    }
-                });
 
                 // Run AI streaming via InvokeAsync — external I/O, not Orleans
                 var chatMessage = new ChatMessage(ChatRole.User, request.UserMessageText);
@@ -452,18 +417,8 @@ public static class ThreadExecution
                             responseStream.StreamId, ChangeType.Patch, responseStream.Hub.Version,
                             [new EntityUpdate(nameof(MeshNode), responsePath, updated) { OldValue = current }]);
                     });
-                    // Update Thread execution status + self-entry in ActiveProgress
-                    // (children are managed by ChatClientAgentFactory remote stream subscriptions)
-                    UpdateThreadExecution(t => t with
-                    {
-                        ExecutionStatus = status,
-                        ActiveProgress = (t.ActiveProgress ?? new ThreadProgressEntry
-                        {
-                            ThreadPath = threadPath,
-                            ThreadName = agentDisplayName,
-                            StreamingCellPath = responsePath
-                        }) with { Status = status }
-                    });
+                    // Update Thread execution status only — ActiveProgress is set once at start
+                    UpdateThreadExecution(t => t with { ExecutionStatus = status });
                     lastStatusUpdate = DateTimeOffset.UtcNow;
                 }
 
@@ -523,8 +478,7 @@ public static class ThreadExecution
                     UpdateThreadExecution(t => t with
                     {
                         IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
-                        ExecutionStartedAt = null, ActiveProgress = null
-                    });
+                        ExecutionStartedAt = null                    });
                     }
                     catch (OperationCanceledException)
                     {
@@ -533,8 +487,7 @@ public static class ThreadExecution
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
-                            ExecutionStartedAt = null, ActiveProgress = null
-                        });
+                            ExecutionStartedAt = null                        });
                     }
                     catch (Exception ex)
                     {
@@ -543,8 +496,7 @@ public static class ThreadExecution
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
-                            ExecutionStartedAt = null, ActiveProgress = null
-                        });
+                            ExecutionStartedAt = null                        });
                     }
                 }, ex =>
                 {

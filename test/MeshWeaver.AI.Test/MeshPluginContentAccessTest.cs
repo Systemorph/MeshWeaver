@@ -34,6 +34,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
 {
     private static readonly string TestDataPath = Path.Combine(AppContext.BaseDirectory, "TestData");
     private static readonly string ContentBasePath = Path.Combine(Path.GetTempPath(), "MeshPluginContentAccessTest_" + Guid.NewGuid().ToString("N"));
+    private readonly string _testId = Guid.NewGuid().ToString("N")[..8];
 
     public MeshPluginContentAccessTest(ITestOutputHelper output) : base(output)
     {
@@ -76,8 +77,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     [Fact]
     public async Task Get_ContentReference_NoSlash_ReturnsFileFromDefaultCollection()
     {
-        // Arrange — create node and content file
-        var nodePath = "TestOrg";
+        var nodePath = $"ContentTest_{_testId}_A";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "Input_Markus.txt"), "Hello from Markus");
@@ -85,13 +85,11 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(
             new MeshNode(nodePath) { Name = "Test Org", NodeType = "Markdown" });
 
-        // Act — MeshPlugin.Get with content: prefix (no slash = default "content" collection)
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:Input_Markus.txt");
 
         Output.WriteLine($"Result: {result}");
 
-        // Assert
         result.Should().NotStartWith("Not found");
         result.Should().NotStartWith("Error");
         result.Should().Contain("Hello from Markus");
@@ -104,8 +102,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     [Fact]
     public async Task Get_ContentReference_NestedPath_ReturnsFileContent()
     {
-        // Arrange — create nested node and content file
-        var nodePath = "PartnerRe/AIConsulting/Interviews";
+        var nodePath = $"ContentTest_{_testId}_B/SubUnit/Interviews";
 
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
@@ -115,13 +112,11 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(
             new MeshNode(nodePath) { Name = "Interviews", NodeType = "Markdown" });
 
-        // Act — MeshPlugin.Get replicating the exact production call
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:Input_Markus.txt");
 
         Output.WriteLine($"Result: {result}");
 
-        // Assert
         result.Should().NotStartWith("Not found");
         result.Should().NotStartWith("Error");
         result.Should().Contain("Interview notes for Markus");
@@ -133,8 +128,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     [Fact]
     public async Task Get_ContentReference_WithExplicitCollection_ReturnsFileContent()
     {
-        // Arrange — content:content/filename.txt = explicit "content" collection
-        var nodePath = "TestOrg2";
+        var nodePath = $"ContentTest_{_testId}_C";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "report.md"), "# Report Content");
@@ -142,13 +136,11 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(
             new MeshNode(nodePath) { Name = "Test Org 2", NodeType = "Markdown" });
 
-        // Act
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:content/report.md");
 
         Output.WriteLine($"Result: {result}");
 
-        // Assert
         result.Should().NotStartWith("Error");
         result.Should().Contain("# Report Content");
     }
@@ -160,8 +152,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     [Fact]
     public async Task GetDataRequest_ContentReference_DirectToNodeHub_ReturnsFileContent()
     {
-        // Arrange
-        var nodePath = "DirectTest";
+        var nodePath = $"ContentTest_{_testId}_D";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "data.txt"), "Direct access content");
@@ -169,7 +160,6 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         await NodeFactory.CreateNodeAsync(
             new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" });
 
-        // Act — send GetDataRequest directly to the node hub
         var client = GetClient();
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("content:data.txt")),
@@ -179,7 +169,6 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Output.WriteLine($"Response error: {response.Message.Error}");
         Output.WriteLine($"Response data: {response.Message.Data}");
 
-        // Assert
         response.Message.Error.Should().BeNull();
         response.Message.Data.Should().NotBeNull();
         var content = response.Message.Data as string;
@@ -192,15 +181,13 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
     [Fact]
     public async Task NodeHub_ContentCollection_IsRegistered()
     {
-        // Arrange — create node to activate hub
-        var nodePath = "CollectionTest";
+        var nodePath = $"ContentTest_{_testId}_E";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
 
         await NodeFactory.CreateNodeAsync(
             new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" });
 
-        // Act — query content collections via GetDataRequest
         var client = GetClient();
         var response = await client.AwaitResponse(
             new GetDataRequest(new UnifiedReference("collection:")),
@@ -210,7 +197,6 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Output.WriteLine($"Response error: {response.Message.Error}");
         Output.WriteLine($"Response data type: {response.Message.Data?.GetType().Name}");
 
-        // Assert — should contain the "content" collection
         response.Message.Error.Should().BeNull();
     }
 

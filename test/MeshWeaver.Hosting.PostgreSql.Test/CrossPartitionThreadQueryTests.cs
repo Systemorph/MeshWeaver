@@ -75,7 +75,7 @@ public class CrossPartitionThreadQueryTests
             NodeType = "Thread",
             MainNode = "ACME",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "ACME", CreatedBy = "Roland" },
+            Content = new MeshThread { CreatedBy = "Roland" },
             LastModified = DateTimeOffset.UtcNow.AddMinutes(-10),
         }, _options, ct);
 
@@ -85,7 +85,7 @@ public class CrossPartitionThreadQueryTests
             NodeType = "Thread",
             MainNode = "ACME",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "ACME", CreatedBy = "Roland" },
+            Content = new MeshThread { CreatedBy = "Roland" },
             LastModified = DateTimeOffset.UtcNow.AddMinutes(-5),
         }, _options, ct);
 
@@ -96,7 +96,7 @@ public class CrossPartitionThreadQueryTests
             NodeType = "Thread",
             MainNode = "Northwind",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "Northwind", CreatedBy = "Roland" },
+            Content = new MeshThread { CreatedBy = "Roland" },
             LastModified = DateTimeOffset.UtcNow.AddMinutes(-2),
         }, _options, ct);
 
@@ -107,7 +107,7 @@ public class CrossPartitionThreadQueryTests
             NodeType = "Thread",
             MainNode = "Northwind",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "Northwind", CreatedBy = "Alice" },
+            Content = new MeshThread { CreatedBy = "Alice" },
             LastModified = DateTimeOffset.UtcNow.AddMinutes(-1),
         }, _options, ct);
 
@@ -206,7 +206,7 @@ public class CrossPartitionThreadQueryTests
             NodeType = "Thread",
             MainNode = "TestOrg",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "TestOrg", CreatedBy = null },
+            Content = new MeshThread { CreatedBy = null },
         }, _options, ct);
 
         var parser = new QueryParser();
@@ -250,7 +250,7 @@ public class CrossPartitionThreadQueryTests
             NodeType = "Thread",
             MainNode = "CaseTest",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "CaseTest", CreatedBy = "Bob" },
+            Content = new MeshThread { CreatedBy = "Bob" },
         }, _options, ct);
 
         // Verify the JSONB content has camelCase keys

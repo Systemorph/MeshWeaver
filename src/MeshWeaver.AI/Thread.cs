@@ -75,12 +75,6 @@ public record Thread
     public ImmutableList<string> Messages { get; init; } = [];
 
     /// <summary>
-    /// The path of the parent node where this thread was created.
-    /// Used for navigation back to context.
-    /// </summary>
-    public string? ParentPath { get; init; }
-
-    /// <summary>
     /// Azure AI Foundry persistent thread ID. When set, conversation history is server-managed.
     /// </summary>
     public string? PersistentThreadId { get; init; }
@@ -96,11 +90,6 @@ public record Thread
     /// Used to filter "my threads" across all partitions.
     /// </summary>
     public string? CreatedBy { get; init; }
-
-    /// <summary>
-    /// The primary node path — permissions are checked against the parent node.
-    /// </summary>
-    public string? PrimaryNodePath => ParentPath;
 
     /// <summary>
     /// Whether any execution is currently active on this thread.
@@ -129,39 +118,6 @@ public record Thread
     /// </summary>
     public DateTime? ExecutionStartedAt { get; init; }
 
-    /// <summary>
-    /// Hierarchical progress tree of all active executions in this thread and its sub-threads.
-    /// Each entry represents one thread in the delegation chain; leaf entries are actively streaming.
-    /// Updated during execution and delegation polling; cleared when execution completes.
-    /// </summary>
-    public ThreadProgressEntry? ActiveProgress { get; init; }
-}
-
-/// <summary>
-/// Represents a node in the hierarchical execution progress tree.
-/// Each thread maintains its own progress entry; parent threads aggregate children's entries
-/// by polling sub-thread MeshNodes during delegation.
-/// </summary>
-public record ThreadProgressEntry
-{
-    /// <summary>Full path of the thread node.</summary>
-    public required string ThreadPath { get; init; }
-
-    /// <summary>Display name (agent name or thread title).</summary>
-    public required string ThreadName { get; init; }
-
-    /// <summary>Current execution status (tool name, arguments, "Generating response...", etc.).</summary>
-    public string? Status { get; init; }
-
-    /// <summary>Path to the streaming response message cell (e.g., threadPath/responseMsgId).
-    /// UI subscribes to this cell to show tool calls and streaming text for this thread.</summary>
-    public string? StreamingCellPath { get; init; }
-
-    /// <summary>Whether this thread's execution has completed (shown with checkmark in UI).</summary>
-    public bool IsCompleted { get; init; }
-
-    /// <summary>Active sub-thread progress entries (parallel delegations appear as siblings).</summary>
-    public ImmutableList<ThreadProgressEntry> Children { get; init; } = [];
 }
 
 /// <summary>

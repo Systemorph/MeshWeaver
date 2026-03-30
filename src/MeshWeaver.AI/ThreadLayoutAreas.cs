@@ -43,6 +43,8 @@ public static class ThreadLayoutAreas
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
+                .WithView(ThreadNodeType.StreamingArea, StreamingView)
+                .WithView(ThreadNodeType.ToolCallsArea, ToolCallsView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
@@ -131,10 +133,9 @@ public static class ThreadLayoutAreas
         {
             var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
-            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? threadContent.ParentPath : hubPath;
-            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
+            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
+            var contextDisplayName = node?.MainNode != node?.Path
+                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
             return new ThreadViewModel
             {
                 Messages = threadContent?.Messages ?? [],
@@ -145,7 +146,6 @@ public static class ThreadLayoutAreas
                 ExecutionStatus = threadContent?.ExecutionStatus,
                 TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-                ActiveProgress = threadContent?.ActiveProgress
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
@@ -209,10 +209,9 @@ public static class ThreadLayoutAreas
         {
             var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
-            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? threadContent.ParentPath : hubPath;
-            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
+            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
+            var contextDisplayName = node?.MainNode != node?.Path
+                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
             return new ThreadViewModel
             {
                 Messages = threadContent?.Messages ?? [],
@@ -223,7 +222,6 @@ public static class ThreadLayoutAreas
                 ExecutionStatus = threadContent?.ExecutionStatus,
                 TokensUsed = threadContent?.TokensUsed ?? 0,
                 ExecutionStartedAt = threadContent?.ExecutionStartedAt,
-                ActiveProgress = threadContent?.ActiveProgress
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
@@ -238,6 +236,119 @@ public static class ThreadLayoutAreas
 
         return new ThreadChatControl()
             .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)));
+    }
+
+    /// <summary>
+    /// Streaming area: shows the active response message cell and any delegation sub-threads.
+    /// Reactive — emits null when idle, a LayoutAreaControl for the streaming cell when executing.
+    /// Parent threads subscribe to child threads' Streaming area to see cascading progress.
+    /// Returns IObservable so it updates reactively as execution state changes.
+    /// </summary>
+    public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream<MeshNode>();
+
+        // Only re-emit when IsExecuting or ActiveMessageId changes — prevents flickering
+        return stream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var thread = node?.Content as MeshThread;
+                return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
+            })
+            .DistinctUntilChanged()
+            .Select(state =>
+        {
+            if (!state.IsExecuting || string.IsNullOrEmpty(state.ActiveMessageId))
+                return (UiControl?)null;
+
+            var responsePath = $"{hubPath}/{state.ActiveMessageId}";
+
+            // StreamingArea = OutputCell + ToolCallsArea (for parent thread consumption)
+            return (UiControl?)Controls.Stack
+                .WithStyle("gap: 4px;")
+                .WithView(new LayoutAreaControl(responsePath,
+                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
+                    .WithSpinnerType(SpinnerType.Skeleton))
+                .WithView(new LayoutAreaControl(hubPath,
+                    new LayoutAreaReference(ThreadNodeType.ToolCallsArea))
+                    .WithSpinnerType(SpinnerType.Dots));
+        });
+    }
+
+    /// <summary>
+    /// ToolCalls area: shows delegation sub-threads from the current response message.
+    /// Each delegation renders the sub-thread's StreamingArea (recursive).
+    /// Returns null when idle or no delegations — area is invisible.
+    /// Subscribes to thread node + response message node, combines reactively.
+    /// </summary>
+    public static IObservable<UiControl?> ToolCallsView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream<MeshNode>();
+
+        // Watch thread for ActiveMessageId changes, subscribe to response msg for tool calls
+        host.RegisterForDisposal(stream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var thread = node?.Content as MeshThread;
+                return thread is { IsExecuting: true } ? thread.ActiveMessageId : null;
+            })
+            .DistinctUntilChanged()
+            .Subscribe(activeMsgId =>
+            {
+                if (string.IsNullOrEmpty(activeMsgId))
+                {
+                    host.UpdateData("delegations", ImmutableList<ToolCallEntry>.Empty);
+                    return;
+                }
+
+                var responsePath = $"{hubPath}/{activeMsgId}";
+                var responseStream = host.Workspace.GetRemoteStream<MeshNode>(
+                    new Address(responsePath), new MeshNodeReference());
+                // ToolCalls is ImmutableList — same instance when unchanged, so
+                // DistinctUntilChanged with reference equality prevents flickering.
+                host.RegisterForDisposal(responseStream
+                    .Select(ci => (ci.Value?.Content as ThreadMessage)?.ToolCalls
+                        ?? ImmutableList<ToolCallEntry>.Empty)
+                    .DistinctUntilChanged()
+                    .Subscribe(toolCalls =>
+                    {
+                        var delegations = toolCalls
+                            .Where(c => !string.IsNullOrEmpty(c.DelegationPath))
+                            .ToImmutableList();
+                        host.UpdateData("delegations", delegations);
+                    }));
+            }));
+
+        // Return a static control — re-renders when /data/delegations changes
+        // Using an observable view built from the data stream
+        return host.Stream.GetDataStream<ImmutableList<ToolCallEntry>>("delegations")
+            .Select(delegations =>
+            {
+                if (delegations is not { Count: > 0 })
+                    return (UiControl?)null;
+
+                var stack = Controls.Stack.WithStyle("gap: 4px;");
+                foreach (var call in delegations)
+                {
+                    var displayName = System.Web.HttpUtility.HtmlEncode(call.DisplayName ?? call.Name);
+                    stack = stack.WithView(
+                        Controls.Stack
+                            .WithStyle("margin-left: 12px; border-left: 2px solid var(--accent-fill-rest); padding-left: 8px;")
+                            .WithView(Controls.Html(
+                                $"<style>@@keyframes agent-blink {{ 0%,100% {{ opacity:1 }} 50% {{ opacity:0.3 }} }}</style>" +
+                                $"<a href=\"/{call.DelegationPath}\" style=\"font-size: 0.78rem; font-weight: 600; " +
+                                $"color: var(--accent-fill-rest); text-decoration: none;\">" +
+                                $"<span style=\"animation: agent-blink 1.4s ease-in-out infinite;\">&#10041;</span> {displayName}</a>"))
+                            .WithView(new LayoutAreaControl(call.DelegationPath!,
+                                new LayoutAreaReference(ThreadNodeType.StreamingArea))
+                                .WithSpinnerType(SpinnerType.Dots)));
+                }
+                return (UiControl?)stack;
+            });
     }
 
     /// <summary>

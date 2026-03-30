@@ -256,7 +256,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         Name = task.Length > 60 ? task[..57] + "..." : task,
                         NodeType = ThreadNodeType.NodeType,
                         MainNode = mainEntityPath,
-                        Content = new MeshThread { ParentPath = mainEntityPath }
+                        Content = new MeshThread()
                     };
 
                     meshService.CreateNode(subThreadNode).Subscribe(
@@ -281,53 +281,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                         subThreadPath, childThread?.IsExecuting);
                                     if (childThread == null) return;
 
-                                    // Merge child's progress into parent's ActiveProgress
-                                    var childEntry = childThread.ActiveProgress
-                                        ?? new ThreadProgressEntry
-                                        {
-                                            ThreadPath = subThreadPath,
-                                            ThreadName = targetId,
-                                            Status = childThread.ExecutionStatus,
-                                            StreamingCellPath = !string.IsNullOrEmpty(childThread.ActiveMessageId)
-                                                ? $"{subThreadPath}/{childThread.ActiveMessageId}" : null
-                                        };
-
+                                    // Thread manages its own status — we only watch for completion here.
+                                    // Delegation progress is visible via tool calls on the response message
+                                    // (DelegationPath on ToolCallEntry) and rendered by ThreadMessageLayoutAreas.
                                     if (!childThread.IsExecuting)
-                                        childEntry = childEntry with { IsCompleted = true };
-
-                                    workspace.UpdateMeshNode(node =>
                                     {
-                                        var thread = node.Content as MeshThread ?? new MeshThread();
-                                        var selfEntry = thread.ActiveProgress
-                                            ?? new ThreadProgressEntry
-                                            {
-                                                ThreadPath = execCtx.ThreadPath,
-                                                ThreadName = agentConfig.DisplayName ?? agentConfig.Id
-                                            };
-
-                                        var children = selfEntry.Children
-                                            .Where(c => c.ThreadPath != subThreadPath)
-                                            .Append(childEntry)
-                                            .ToImmutableList();
-
-                                        return node with
-                                        {
-                                            Content = thread with
-                                            {
-                                                ActiveProgress = selfEntry with { Children = children }
-                                            }
-                                        };
-                                    });
-
-                                    // Forward delegation status
-                                    if (childThread.IsExecuting)
-                                    {
-                                        chat.UpdateDelegationStatus?.Invoke(
-                                            $"{targetId}: {childThread.ExecutionStatus ?? "Processing..."}");
-                                    }
-                                    else
-                                    {
-                                        // Child completed — read result from its last message
                                         Logger.LogInformation("[Delegation] Child completed: {Path}", subThreadPath);
                                         var resultText = childThread.Messages.Count > 0
                                             ? $"Delegation to {targetId} completed. Sub-thread: {subThreadPath}"

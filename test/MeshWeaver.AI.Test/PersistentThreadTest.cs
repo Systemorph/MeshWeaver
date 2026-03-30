@@ -48,15 +48,13 @@ public class PersistentThreadTest
         var original = new Thread
         {
             PersistentThreadId = "thread_abc123",
-            ProviderType = "AzureFoundryPersistent",
-            ParentPath = "/some/path"
+            ProviderType = "AzureFoundryPersistent"
         };
 
-        var copy = original with { ParentPath = "/other/path" };
+        var copy = original with { ProviderType = "AzureFoundryUpdated" };
 
         copy.PersistentThreadId.Should().Be("thread_abc123");
-        copy.ProviderType.Should().Be("AzureFoundryPersistent");
-        copy.ParentPath.Should().Be("/other/path");
+        copy.ProviderType.Should().Be("AzureFoundryUpdated");
     }
 
     [Fact]
@@ -84,8 +82,7 @@ public class PersistentThreadTest
         var thread = new Thread
         {
             PersistentThreadId = "thread_abc123",
-            ProviderType = "AzureFoundryPersistent",
-            ParentPath = "/test"
+            ProviderType = "AzureFoundryPersistent"
         };
 
         var json = JsonSerializer.Serialize(thread);
@@ -94,21 +91,19 @@ public class PersistentThreadTest
         deserialized.Should().NotBeNull();
         deserialized!.PersistentThreadId.Should().Be("thread_abc123");
         deserialized.ProviderType.Should().Be("AzureFoundryPersistent");
-        deserialized.ParentPath.Should().Be("/test");
     }
 
     [Fact]
     public void Thread_JsonRoundtrip_NullPersistentFields_DeserializesAsNull()
     {
         // Simulate old JSON without persistent fields (backward compatibility)
-        var json = """{"ParentPath":"/test"}""";
+        var json = """{}""";
 
         var deserialized = JsonSerializer.Deserialize<Thread>(json);
 
         deserialized.Should().NotBeNull();
         deserialized!.PersistentThreadId.Should().BeNull();
         deserialized.ProviderType.Should().BeNull();
-        deserialized.ParentPath.Should().Be("/test");
     }
 
     [Fact]
@@ -148,6 +143,12 @@ public class PersistentThreadTest
         public int Order => 0;
         // IsPersistent uses default interface member (false)
 
+        public Microsoft.Agents.AI.ChatClientAgent CreateAgent(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents, string? modelName = null)
+            => throw new NotImplementedException();
+
         public Task<Microsoft.Agents.AI.ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config, IAgentChat chat,
             IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
@@ -161,6 +162,12 @@ public class PersistentThreadTest
         public IReadOnlyList<string> Models => [];
         public int Order => 0;
         public bool IsPersistent => true;
+
+        public Microsoft.Agents.AI.ChatClientAgent CreateAgent(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, Microsoft.Agents.AI.ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents, string? modelName = null)
+            => throw new NotImplementedException();
 
         public Task<Microsoft.Agents.AI.ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config, IAgentChat chat,

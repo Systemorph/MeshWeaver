@@ -302,11 +302,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
         {
             var threadPath = context.Namespace;
-            var threadContent = context.Node.Content as MeshWeaver.AI.Thread;
-            var parentPath = threadContent?.ParentPath;
+            var mainNode = context.Node.MainNode;
 
-            // Navigate to parent (or home if no parent path)
-            var navigateTo = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
+            // Navigate to content entity (or home if self-referencing)
+            var navigateTo = mainNode != context.Node.Path ? $"/{mainNode}" : "/";
             NavigationManager.NavigateTo(navigateTo);
 
             // Open panel with thread and set title

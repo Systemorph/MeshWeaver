@@ -31,14 +31,14 @@ var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
 {
     NodeType = "Thread",
     MainNode = contextPath,  // "PartnerRe/AiConsulting" — the real entity
-    Content = new Thread { ParentPath = contextPath }
+    Content = new Thread()
 };
 
 // WRONG: omitting MainNode — defaults to self, access control fails
 var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
 {
     NodeType = "Thread",
-    Content = new Thread { ParentPath = contextPath }
+    Content = new Thread()
 };
 // MainNode defaults to "PartnerRe/AiConsulting/_Thread/threadId" — not a real entity
 ```

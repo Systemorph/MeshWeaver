@@ -103,7 +103,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         public IReadOnlyList<string> Models => ["capturing-model"];
         public int Order => 0;
 
-        public Task<ChatClientAgent> CreateAgentAsync(
+        public ChatClientAgent CreateAgent(
             AgentConfiguration config,
             IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
@@ -111,7 +111,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
             string? modelName = null)
         {
             var client = new CapturingChatClient(AllCapturedMessages);
-            var agent = new ChatClientAgent(
+            return new ChatClientAgent(
                 chatClient: client,
                 instructions: config.Instructions ?? "Test assistant.",
                 name: config.Id,
@@ -120,8 +120,15 @@ public class AttachmentContextTest : MonolithMeshTestBase
                 loggerFactory: null,
                 services: null
             );
-            return Task.FromResult(agent);
         }
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config,
+            IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion

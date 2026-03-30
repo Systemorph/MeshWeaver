@@ -78,7 +78,6 @@ public static class AIExtensions
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
             .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
-            .WithType(typeof(ThreadProgressEntry), nameof(ThreadProgressEntry))
             .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))
             .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse));
 

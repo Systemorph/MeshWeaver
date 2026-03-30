@@ -116,7 +116,15 @@ public class MeshOperations
             new GetDataRequest(reference),
             o => o.WithTarget(address))!;
         var callbackResponse = await hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
-        var responseMsg = ((IMessageDelivery<GetDataResponse>)callbackResponse).Message;
+
+        // Handle routing failures (e.g., node hub not found in Orleans)
+        if (callbackResponse is IMessageDelivery<DeliveryFailure> failure)
+            return $"Error: {failure.Message.Message ?? "Delivery failed to " + addressPart}";
+
+        if (callbackResponse is not IMessageDelivery<GetDataResponse> dataResponse)
+            return $"Error: Unexpected response type {callbackResponse.Message?.GetType().Name} for {remainder} at {addressPart}";
+
+        var responseMsg = dataResponse.Message;
 
         if (responseMsg.Error != null)
             return $"Error: {responseMsg.Error}";

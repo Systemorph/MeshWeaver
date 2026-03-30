@@ -152,7 +152,7 @@ var threadNode = new MeshNode(threadId, ns)
 {
     NodeType = "Thread",
     MainNode = contextPath,  // e.g., "PartnerRe/AiConsulting"
-    Content = new Thread { ParentPath = contextPath }
+    Content = new Thread()
 };
 
 var msgNode = new MeshNode(msgId, threadPath)

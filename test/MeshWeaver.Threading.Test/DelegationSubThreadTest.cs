@@ -78,7 +78,8 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         {
             Name = "Explore mesh schema",
             NodeType = ThreadNodeType.NodeType,
-            Content = new MeshThread { ParentPath = threadPath }
+            MainNode = contextPath,
+            Content = new MeshThread()
         }, ct);
 
         // Verify sub-thread path does NOT have double _Thread
@@ -92,6 +93,14 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         subThread.Should().NotBeNull();
         subThread!.NodeType.Should().Be(ThreadNodeType.NodeType);
         subThread.Name.Should().Be("Explore mesh schema");
+
+        // Verify namespace IS the response message path (sub-thread owned by the message)
+        subThread.Namespace.Should().Be(parentMsgPath,
+            "sub-thread namespace should be the response message that owns it via tool call");
+
+        // Verify MainNode points to content entity, not thread path
+        subThread.MainNode.Should().Be(contextPath,
+            "sub-thread MainNode should be the content entity for access control");
     }
 
     [Fact]
@@ -137,9 +146,9 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
         {
             Name = "Research the topic",
             NodeType = ThreadNodeType.NodeType,
+            MainNode = contextPath,
             Content = new MeshThread
             {
-                ParentPath = threadPath,
                 Messages = [inputId, outputId]
             }
         }, ct);
@@ -340,7 +349,7 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 Name = "Research task",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = threadPath, Messages = [] }
+                Content = new MeshThread { Messages = [] }
             }, ct);
 
         // Verify: Plan exists as Markdown child of thread

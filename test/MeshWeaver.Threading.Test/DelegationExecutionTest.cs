@@ -107,7 +107,7 @@ public class DelegationExecutionTest(ITestOutputHelper output) : MonolithMeshTes
         {
             Name = "Research reinsurance pricing",
             NodeType = ThreadNodeType.NodeType,
-            Content = new MeshThread { ParentPath = threadPath }
+            Content = new MeshThread()
         }, ct);
         Output.WriteLine($"Sub-thread created: {subThreadPath}");
 

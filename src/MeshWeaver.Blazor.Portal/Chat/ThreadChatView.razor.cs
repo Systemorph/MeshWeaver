@@ -216,11 +216,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (node == null)
                 return cleanPath;
 
-            // For Thread nodes: use ParentPath (the original content node), not MainNode
-            if (node.Content is AI.Thread threadContent && !string.IsNullOrEmpty(threadContent.ParentPath))
-                return threadContent.ParentPath;
-
-            // For other satellite nodes: use MainNode
+            // For satellite nodes (threads, comments): use MainNode (content entity)
             if (node.MainNode != node.Path)
                 return node.MainNode;
         }
@@ -990,6 +986,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             $"{threadPath}/{msgId}",
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
             .WithSpinnerType(SpinnerType.Skeleton);
+
+    /// <summary>
+    /// Returns a LayoutAreaControl for the thread's ToolCalls area.
+    /// Shows active tool calls and delegation sub-thread progress (without the response cell itself).
+    /// </summary>
+    private LayoutAreaControl GetToolCallsAreaControl()
+        => new LayoutAreaControl(
+            threadPath!,
+            new LayoutAreaReference(ThreadNodeType.ToolCallsArea))
+            .WithSpinnerType(SpinnerType.Dots);
 
     private static string TruncateText(string text, int maxLength)
     {

@@ -281,8 +281,6 @@ public class MeshNodeReferenceSingleInstanceTest(ITestOutputHelper output) : Mon
         threads.Should().ContainSingle("should find the created sub-thread");
         threads[0].Path.Should().Be(subThreadPath);
         threads[0].Content.Should().BeOfType<MeshThread>();
-        var content = (MeshThread)threads[0].Content!;
-        content.ParentPath.Should().Be(threadPath);
-        Output.WriteLine($"Sub-thread verified: {threads[0].Path}, ParentPath={content.ParentPath}");
+        Output.WriteLine($"Sub-thread verified: {threads[0].Path}");
     }
 }
