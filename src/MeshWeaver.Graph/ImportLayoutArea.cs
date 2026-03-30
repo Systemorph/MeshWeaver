@@ -99,21 +99,22 @@ public static class ImportLayoutArea
                 DataContext = dataContext
             }.WithOrientation(Orientation.Vertical)));
 
-        // Conditional source section — reactive based on "source" field
+        // Conditional source section — reactive based on "source" field only.
+        // DistinctUntilChanged on the source type string prevents spurious re-renders
+        // when other form fields (namespace, sourceNode) change.
         stack = stack.WithView<UiControl?>((h, __) =>
             h.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-                .Select(data =>
+                .Select(data => (
+                    source: data?.GetValueOrDefault("source")?.ToString() ?? "meshNode",
+                    ns: data?.GetValueOrDefault("namespace")?.ToString() ?? currentPath
+                ))
+                .DistinctUntilChanged(x => x.source)
+                .Select(x => x.source switch
                 {
-                    var sourceType = data?.GetValueOrDefault("source")?.ToString() ?? "meshNode";
-                    var ns = data?.GetValueOrDefault("namespace")?.ToString() ?? currentPath;
-
-                    return sourceType switch
-                    {
-                        "meshNode" => BuildMeshNodeSource(host, formId, dataContext, currentPath),
-                        "file" => (UiControl?)new NodeImportControl { TargetPath = ns, Mode = "file" },
-                        "zip" => (UiControl?)new NodeImportControl { TargetPath = ns, Mode = "zip" },
-                        _ => null
-                    };
+                    "meshNode" => BuildMeshNodeSource(host, formId, dataContext, currentPath),
+                    "file" => (UiControl?)new NodeImportControl { TargetPath = x.ns, Mode = "file" },
+                    "zip" => (UiControl?)new NodeImportControl { TargetPath = x.ns, Mode = "zip" },
+                    _ => null
                 }));
 
         // Cancel button
