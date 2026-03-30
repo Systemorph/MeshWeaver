@@ -23,6 +23,26 @@ ACME/Projects/Alpha/_Activity/act1         ← Activity log entry
 
 Satellite entities reference their parent via the `MainNode` property, which points back to the primary node path.
 
+**CRITICAL:** When creating satellite nodes in code, always set `MainNode` explicitly to the content entity path. Without this, the node's path becomes its identity for access control, which fails for nested satellites (sub-threads, thread messages). Example:
+
+```csharp
+// CORRECT: MainNode points to content entity
+var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
+{
+    NodeType = "Thread",
+    MainNode = contextPath,  // "PartnerRe/AiConsulting" — the real entity
+    Content = new Thread { ParentPath = contextPath }
+};
+
+// WRONG: omitting MainNode — defaults to self, access control fails
+var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
+{
+    NodeType = "Thread",
+    Content = new Thread { ParentPath = contextPath }
+};
+// MainNode defaults to "PartnerRe/AiConsulting/_Thread/threadId" — not a real entity
+```
+
 # Sub-Namespace Conventions
 
 Each satellite type has a reserved sub-namespace prefix:

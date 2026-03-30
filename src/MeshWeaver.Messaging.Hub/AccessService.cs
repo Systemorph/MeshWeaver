@@ -96,32 +96,36 @@ public class AccessService
     }
 
     /// <summary>
+    /// Temporarily switches the access context. Restores the previous value when disposed.
+    /// Usage: using (accessService.SwitchAccessContext(newContext)) { ... }
+    /// </summary>
+    public IDisposable SwitchAccessContext(AccessContext? newContext)
+        => new AccessContextScope(this, newContext);
+
+    /// <summary>
     /// Temporarily sets the access context to the hub's identity.
     /// Restores the previous AsyncLocal value when disposed (does not affect circuitContext).
     /// Usage: using (accessService.ImpersonateAsHub(hub)) { ... }
     /// </summary>
     public IDisposable ImpersonateAsHub(IMessageHub hub)
     {
-        return new ImpersonationScope(this, new AccessContext
+        return new AccessContextScope(this, new AccessContext
         {
             ObjectId = hub.Address.ToFullString(),
             Name = hub.Address.ToString()
         });
     }
 
-    private sealed class ImpersonationScope : IDisposable
+    private sealed class AccessContextScope : IDisposable
     {
         private readonly AccessService service;
         private readonly AccessContext? previousAsyncLocal;
 
-        public ImpersonationScope(AccessService service, AccessContext hubContext)
+        public AccessContextScope(AccessService service, AccessContext? newContext)
         {
             this.service = service;
-            // Capture only the raw AsyncLocal value, not the circuitContext fallback.
-            // On dispose we restore exactly the AsyncLocal value, so circuitContext
-            // changes made during the scope are not masked.
             previousAsyncLocal = service.context.Value;
-            service.SetContext(hubContext);
+            service.SetContext(newContext);
         }
 
         public void Dispose() => service.SetContext(previousAsyncLocal);
