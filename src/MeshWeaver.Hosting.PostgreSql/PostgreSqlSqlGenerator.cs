@@ -666,16 +666,17 @@ public class PostgreSqlSqlGenerator
             ? $"EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN ({userList}) AND pa.partition = '{SchemaName}')"
             : "";
 
-        // Public-read node types (e.g. User, Organization) are visible to all authenticated users
-        // regardless of partition_access.
+        // Public-read node types (e.g. User, Markdown) are visible to all authenticated users
+        // who have partition access. public_read skips node-level permission checks but
+        // still requires partition_access — prevents cross-partition data leakage.
         var publicReadClause = userId == WellKnownUsers.Anonymous
             ? ""
             : $"EXISTS (SELECT 1 FROM {ntpTable} ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)";
 
         // Build the access control clause:
-        // A node is visible if:
-        //   (a) public-read node type (bypasses partition check), OR
-        //   (b) user has partition access AND (owns the node OR has Read permission)
+        // A node is visible if the user has partition access (when schema-qualified) AND:
+        //   (a) public-read node type (no further permission check), OR
+        //   (b) owns the node OR has Read permission
         var nodeAccessClause = $"""
                 n.main_node = {paramName}
                 OR
@@ -689,21 +690,19 @@ public class PostgreSqlSqlGenerator
                  LIMIT 1) = true
             """;
 
-        if (!string.IsNullOrEmpty(publicReadClause) && hasPartitionCheck)
-        {
-            // Schema-qualified + authenticated: public-read OR (partition_access AND node-level)
-            return $"""
-                (
-                    {publicReadClause}
-                    OR
-                    ({partitionAccessExists} AND ({nodeAccessClause}))
-                )
-                """;
-        }
-
         if (hasPartitionCheck)
         {
-            // Schema-qualified + anonymous: partition_access AND node-level
+            // Schema-qualified: partition_access is always required.
+            // public_read skips node-level checks but NOT partition access.
+            if (!string.IsNullOrEmpty(publicReadClause))
+            {
+                return $"""
+                    (
+                        {partitionAccessExists} AND ({publicReadClause} OR {nodeAccessClause})
+                    )
+                    """;
+            }
+
             return $"""
                 (
                     {partitionAccessExists} AND ({nodeAccessClause})
@@ -711,7 +710,7 @@ public class PostgreSqlSqlGenerator
                 """;
         }
 
-        // No schema: just node-level access
+        // No schema: just node-level access (or public-read bypass)
         if (!string.IsNullOrEmpty(publicReadClause))
         {
             return $"""
