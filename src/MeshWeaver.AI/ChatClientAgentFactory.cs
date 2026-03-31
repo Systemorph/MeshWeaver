@@ -224,9 +224,24 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
                     var execCtx = chat.ExecutionContext;
                     var userIdentity = execCtx?.UserAccessContext?.ObjectId ?? "(no-user)";
+
+                    // Guard: limit delegation depth to prevent infinite recursion
+                    var depth = execCtx?.ThreadPath?.Split("/_Thread/").Length - 1 ?? 0;
+                    if (depth >= 3)
+                    {
+                        Logger.LogWarning("[Delegation] Max delegation depth ({Depth}) reached for {Source} → {Target}",
+                            depth, agentConfig.Id, targetId);
+                        return Task.FromResult(new DelegationResult
+                        {
+                            AgentName = targetId, Task = task,
+                            Result = $"Maximum delegation depth reached ({depth}). Cannot delegate further — handle the task directly.",
+                            Success = false
+                        });
+                    }
+
                     Logger.LogInformation(
-                        "[Delegation] {Source} → {Target}, user={User}, task={Task}",
-                        agentConfig.Id, targetId, userIdentity, task.Length > 100 ? task[..97] + "..." : task);
+                        "[Delegation] {Source} → {Target}, user={User}, depth={Depth}, task={Task}",
+                        agentConfig.Id, targetId, userIdentity, depth, task.Length > 100 ? task[..97] + "..." : task);
 
                     if (execCtx == null)
                     {

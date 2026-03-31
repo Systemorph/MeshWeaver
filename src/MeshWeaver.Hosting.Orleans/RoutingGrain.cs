@@ -21,11 +21,17 @@ internal class RoutingGrain(
         var resolution = await pathResolver.ResolvePathAsync(addressPath);
         var grainKey = resolution?.Prefix ?? addressPath;
 
+        logger.LogDebug("RouteMessage: {MessageType} → address={Address}, resolved={Prefix}, remainder={Remainder}, grainKey={GrainKey}",
+            delivery.Message.GetType().Name, addressPath, resolution?.Prefix ?? "(null)",
+            resolution?.Remainder ?? "(null)", grainKey);
+
         // When resolution splits the path into prefix + remainder, update the delivery
         // to match the resolved grain address. Without this, the grain receives a delivery
         // whose Target doesn't match its hub address → routing loop.
         if (resolution != null && !string.IsNullOrEmpty(resolution.Remainder))
         {
+            logger.LogInformation("RouteMessage: updating target for {MessageType}: {Original} → prefix={Prefix}, remainder={Remainder}",
+                delivery.Message.GetType().Name, addressPath, resolution.Prefix, resolution.Remainder);
             var resolvedAddress = new Address(resolution.Prefix.Split('/'));
             delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
             delivery = delivery.WithTarget(resolvedAddress);
@@ -38,8 +44,8 @@ internal class RoutingGrain(
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "Grain delivery failed for {Address} (key={Key}), falling back to stream",
-                address, grainKey);
+            logger.LogWarning(ex, "Grain delivery failed for {MessageType} to {Address} (key={Key}), falling back to stream",
+                delivery.Message.GetType().Name, address, grainKey);
             var stream = this.GetStreamProvider(StreamProviders.Memory)
                 .GetStream<IMessageDelivery>(addressPath);
             await stream.OnNextAsync(delivery);
