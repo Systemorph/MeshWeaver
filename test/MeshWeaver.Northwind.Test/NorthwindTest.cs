@@ -1,40 +1,41 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
-using MeshWeaver.Charting;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
-using MeshWeaver.GridModel;
 using MeshWeaver.Layout;
+using MeshWeaver.Layout.Chart;
+using MeshWeaver.Layout.Pivot;
 using MeshWeaver.Messaging;
 using MeshWeaver.Northwind.Application;
 using MeshWeaver.Northwind.Domain;
 using MeshWeaver.Northwind.Model;
-using MeshWeaver.Reporting.Models;
 using Xunit;
 
 namespace MeshWeaver.Northwind.Test;
 
 public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    protected override MessageHubConfiguration ConfigureRouter(
+    private const string TestCategoryNameSuffix = " (Updated)";
+
+    protected override MessageHubConfiguration ConfigureMesh(
         MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration)
+        return base.ConfigureMesh(configuration)
             .WithRoutes(forward =>
                 forward
-                    .RouteAddressToHostedHub<ReferenceDataAddress>(c =>
+                    .RouteAddressToHostedHub(NorthwindAddresses.ReferenceDataType, c =>
                         c.AddNorthwindReferenceData()
                     )
-                    .RouteAddressToHostedHub<EmployeeAddress>(c => c.AddNorthwindEmployees())
-                    .RouteAddressToHostedHub<OrderAddress>(c => c.AddNorthwindOrders())
-                    .RouteAddressToHostedHub<SupplierAddress>(c => c.AddNorthwindSuppliers())
-                    .RouteAddressToHostedHub<ProductAddress>(c => c.AddNorthwindProducts())
-                    .RouteAddressToHostedHub<CustomerAddress>(c => c.AddNorthwindCustomers())
+                    .RouteAddressToHostedHub(NorthwindAddresses.EmployeeType, c => c.AddNorthwindEmployees())
+                    .RouteAddressToHostedHub(NorthwindAddresses.OrderType, c => c.AddNorthwindOrders())
+                    .RouteAddressToHostedHub(NorthwindAddresses.SupplierType, c => c.AddNorthwindSuppliers())
+                    .RouteAddressToHostedHub(NorthwindAddresses.ProductType, c => c.AddNorthwindProducts())
+                    .RouteAddressToHostedHub(NorthwindAddresses.CustomerType, c => c.AddNorthwindCustomers())
             );
     }
 
@@ -44,24 +45,27 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .AddNorthwindViewModels()
             .AddData(data =>
                 data.AddHubSource(
-                        new ReferenceDataAddress(),
+                        NorthwindAddresses.ReferenceData(),
                         dataSource => dataSource.AddNorthwindReferenceData()
                     )
-                    .AddHubSource(new CustomerAddress(), c => c.WithType<Customer>())
-                    .AddHubSource(new ProductAddress(), c => c.WithType<Product>())
-                    .AddHubSource(new EmployeeAddress(), c => c.WithType<Employee>())
-                    .AddHubSource(new OrderAddress(), c => c.WithType<Order>().WithType<OrderDetails>())
-                    .AddHubSource(new SupplierAddress(), c => c.WithType<Supplier>())
-            );
+                    .AddHubSource(NorthwindAddresses.Customer(), c => c.WithType<Customer>())
+                    .AddHubSource(NorthwindAddresses.Product(), c => c.WithType<Product>())
+                    .AddHubSource(NorthwindAddresses.Employee(), c => c.WithType<Employee>())
+                    .AddHubSource(NorthwindAddresses.Order(), c => c.WithType<Order>().WithType<OrderDetails>())
+                    .AddHubSource(NorthwindAddresses.Supplier(), c => c.WithType<Supplier>())
+            )
+            .AddNorthwindDataCube();
     }
 
     protected override MessageHubConfiguration ConfigureClient(
         MessageHubConfiguration configuration
     ) =>
         base.ConfigureClient(configuration)
-            .WithTypes(typeof(ChartControl), typeof(GridControl))
+            .WithTypes(typeof(ChartControl), typeof(PivotGridControl))
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource => dataSource.AddNorthwindDomain())
+                data.AddHubSource(CreateHostAddress(), dataSource => dataSource
+                    .AddNorthwindDomain()
+                    .WithType<NorthwindDataCube>())
             ).AddLayoutClient(x => x);
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
@@ -128,7 +132,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
-        var controlName = $"{ViewName}"; 
+        var controlName = $"{ViewName}";
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream.GetControlStream(controlName)
@@ -136,22 +140,13 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
             .FirstAsync(x => x != null);
 
         var stack = control.Should().BeOfType<StackControl>().Subject;
-        var gridArea =  stack.Areas.Last().Area;
+        var gridArea = stack.Areas.Last().Area;
         control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
-        var grid = control.Should().BeOfType<GridControl>().Subject;
-        grid.Data.Should()
-            .BeOfType<GridOptions>()
-            .Which.RowData.Should()
-            .BeOfType<List<object>>()
-            .Which.Should()
-            .HaveCountGreaterThan(2)
-            .And.Subject.First()
-            .Should()
-            .BeOfType<GridRow>()
-            .Which.RowGroup!.DisplayName.Should()
-            .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
+        var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
+        pivotGrid.Configuration.Should().NotBeNull();
+        pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
     }
 
 
@@ -161,7 +156,7 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         var workspace = GetHost().GetWorkspace();
 
         const string ViewName = nameof(SupplierSummaryArea.SupplierSummary);
-        var controlName = $"{ViewName}"; 
+        var controlName = $"{ViewName}";
         var stream = workspace.GetStream(new LayoutAreaReference(ViewName));
 
         var control = await stream
@@ -173,18 +168,126 @@ public class NorthwindTest(ITestOutputHelper output) : HubTestBase(output)
         control = await stream.GetControlStream(gridArea.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
-        var grid = control.Should().BeOfType<GridControl>().Subject;
-        grid.Data.Should()
-            .BeOfType<GridOptions>()
-            .Which.RowData.Should()
-            .BeOfType<List<object>>()
-            .Which.Should()
-            .HaveCountGreaterThan(2)
-            .And.Subject.First()
-            .Should()
-            .BeOfType<GridRow>()
-            .Which.RowGroup!.DisplayName.Should()
-            .MatchRegex(@"[^0-9]+"); // should contain at least one non-numeric character, i.e. dimsnsion is matched.
+        var pivotGrid = control.Should().BeOfType<PivotGridControl>().Subject;
+        pivotGrid.Configuration.Should().NotBeNull();
+        pivotGrid.Configuration.RowDimensions.Should().HaveCountGreaterThan(0);
+    }
+
+    /// <summary>
+    /// Tests that updating a Category propagates to the NorthwindDataCube virtual data source.
+    /// This verifies that the virtual data source correctly reacts to changes in source data.
+    /// </summary>
+    [Fact]
+    public async Task CategoryUpdate_ShouldPropagateToDataCube()
+    {
+        var client = GetClient();
+        var workspace = client.GetWorkspace();
+
+        // Step 1: Get initial NorthwindDataCube data
+        var initialCubeData = await workspace
+            .GetObservable<NorthwindDataCube>()
+            .Timeout(Timeout)
+            .FirstAsync(x => x.Any());
+
+        initialCubeData.Should().HaveCountGreaterThan(0, "Should have data cube entries");
+
+        // Step 2: Get a category to update
+        var categories = await workspace
+            .GetObservable<Category>()
+            .Timeout(Timeout)
+            .FirstAsync();
+
+        var categoryToUpdate = categories.First();
+        var originalCategoryName = categoryToUpdate.CategoryName;
+
+        Output.WriteLine($"Original category: Id={categoryToUpdate.CategoryId}, Name='{originalCategoryName}'");
+
+        // Verify initial data cube has entries with this category
+        var initialCubeEntriesWithCategory = initialCubeData
+            .Where(c => c.CategoryName == originalCategoryName)
+            .ToList();
+        initialCubeEntriesWithCategory.Should().HaveCountGreaterThan(0,
+            $"Should have data cube entries with category '{originalCategoryName}'");
+        Output.WriteLine($"Found {initialCubeEntriesWithCategory.Count} data cube entries with category '{originalCategoryName}'");
+
+        // Step 3: Update the category name
+        var newCategoryName = originalCategoryName + TestCategoryNameSuffix;
+        var updatedCategory = categoryToUpdate with { CategoryName = newCategoryName };
+
+        var changeRequest = new DataChangeRequest().WithUpdates(updatedCategory);
+
+        Output.WriteLine($"Sending update: CategoryName '{originalCategoryName}' -> '{newCategoryName}'");
+        client.Post(changeRequest, o => o.WithTarget(NorthwindAddresses.ReferenceData()));
+
+        // Step 4: Wait for the NorthwindDataCube to update with the new category name
+        Output.WriteLine("Waiting for NorthwindDataCube to reflect the category name change...");
+
+        var updatedCubeData = await workspace
+            .GetObservable<NorthwindDataCube>()
+            .Timeout(TimeSpan.FromSeconds(30))
+            .FirstAsync(cubeEntries =>
+                cubeEntries.Any(c => c.CategoryName == newCategoryName));
+
+        // Step 5: Verify the data cube updated correctly
+        var updatedCubeEntriesWithNewCategory = updatedCubeData
+            .Where(c => c.CategoryName == newCategoryName)
+            .ToList();
+
+        updatedCubeEntriesWithNewCategory.Should().HaveCountGreaterThan(0,
+            $"Should have data cube entries with updated category name '{newCategoryName}'");
+
+        // Verify the count matches (same number of entries should now have the new name)
+        updatedCubeEntriesWithNewCategory.Count.Should().Be(initialCubeEntriesWithCategory.Count,
+            "Number of entries with updated category should match original count");
+
+        Output.WriteLine($"SUCCESS: {updatedCubeEntriesWithNewCategory.Count} data cube entries now have category name '{newCategoryName}'");
+
+        // Verify no entries remain with the old category name
+        var entriesWithOldName = updatedCubeData
+            .Where(c => c.CategoryName == originalCategoryName)
+            .ToList();
+        entriesWithOldName.Should().BeEmpty(
+            $"No data cube entries should still have old category name '{originalCategoryName}'");
+
+        Output.WriteLine("SUCCESS: Virtual data source correctly propagated category update to NorthwindDataCube");
+    }
+
+    [Fact]
+    public async Task GetLayoutAreas_ShouldReturnNorthwindAreas()
+    {
+        var client = GetClient();
+
+        var response = await client.AwaitResponse(
+            new GetLayoutAreasRequest(),
+            o => o.WithTarget(CreateHostAddress()),
+            new CancellationTokenSource(Timeout).Token
+        );
+
+        var areas = response.Message.Areas.ToList();
+        areas.Should().NotBeEmpty("Northwind should have layout areas defined");
+        Output.WriteLine($"Found {areas.Count} layout areas");
+        foreach (var area in areas)
+        {
+            Output.WriteLine($"  - {area.Area}: {area.Description}");
+        }
+    }
+
+    [Fact]
+    public async Task GetLayoutAreaStream_ShouldReturnLayoutAreasCatalog()
+    {
+        var host = GetHost();
+        var workspace = host.GetWorkspace();
+
+        Output.WriteLine("Getting stream for LayoutAreas...");
+        var stream = workspace.GetStream(new LayoutAreaReference("LayoutAreas"))!;
+
+        Output.WriteLine("Waiting for first emission...");
+        var result = await stream
+            .Timeout(TimeSpan.FromSeconds(10))
+            .FirstAsync();
+
+        result.Should().NotBeNull();
+        Output.WriteLine($"Got result: {result.Value}");
     }
 
 }

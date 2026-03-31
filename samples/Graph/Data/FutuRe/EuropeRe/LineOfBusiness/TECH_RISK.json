@@ -1,0 +1,18 @@
+{
+  "id": "TECH_RISK",
+  "namespace": "FutuRe/EuropeRe/LineOfBusiness",
+  "name": "Technology Risk",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Combined cyber insurance and technology professional liability for digital economy risks",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "TECH_RISK",
+    "displayName": "Technology Risk",
+    "description": "Integrated technology risk insurance combining cyber liability, data breach response, and technology professional indemnity under GDPR and NIS2 regulatory frameworks. Covers ransomware, system outage business interruption, privacy violation fines, and technology errors & omissions. This local line reflects the European market trend of bundling cyber and tech E&O coverages, particularly for technology companies, digital platforms, and data-intensive enterprises operating across EU member states.",
+    "order": 6,
+    "productExamples": "Cyber liability, Data breach response, Technology E&O, GDPR fines, System failure BI, Media liability, Cloud service interruption"
+  }
+}

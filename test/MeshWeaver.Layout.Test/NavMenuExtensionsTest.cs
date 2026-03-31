@@ -21,7 +21,7 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
         {
             return base.ConfigureHost(configuration)
                 .WithRoutes(r =>
-                    r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                    r.RouteAddress(ClientType, (_, d) => d.Package())
                 )
                 .AddLayout(layout =>
                     layout
@@ -46,13 +46,13 @@ public class NavMenuExtensionsTest(ITestOutputHelper output) : HubTestBase(outpu
 
             var workspace = GetClient().GetWorkspace();
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-                new HostAddress(),
+                CreateHostAddress(),
                 reference
             );
 
-            var control = await stream.GetControlStream(reference.Area.ToString()!)
+            var control = await stream.GetControlStream(reference.Area!)
                 .Timeout(10.Seconds())
-                .FirstAsync();
+                .FirstAsync(x => x != null);
             
             control
                 .Should()

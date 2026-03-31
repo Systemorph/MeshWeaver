@@ -1,0 +1,23 @@
+{
+  "id": "NuNuCa_Nu\u00df-Nougat-Creme",
+  "namespace": "Northwind/Product",
+  "name": "NuNuCa Nu\u00df-Nougat-Creme",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "NuNuCa Nu\u00df-Nougat-Creme - 20 - 450 g glasses",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 25,
+    "productName": "NuNuCa Nu\u00df-Nougat-Creme",
+    "supplierId": 11,
+    "categoryId": 3,
+    "quantityPerUnit": "20 - 450 g glasses",
+    "unitPrice": 14.0,
+    "unitsInStock": 76,
+    "unitsOnOrder": 0,
+    "reorderLevel": 30,
+    "discontinued": false
+  }
+}

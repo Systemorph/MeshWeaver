@@ -73,8 +73,12 @@ namespace MeshWeaver.DataSetReader.Csv
             var dataSet = new DataSet();
             var content = await reader.ReadLineAsync();
 
-            while (string.IsNullOrEmpty(content) && !reader.EndOfStream)
+            while (string.IsNullOrEmpty(content))
+            {
                 content = await reader.ReadLineAsync();
+                if (content is null)
+                    break;
+            }
 
             string? format = null;
             if (content != null && content.StartsWith(FormatPrefix))

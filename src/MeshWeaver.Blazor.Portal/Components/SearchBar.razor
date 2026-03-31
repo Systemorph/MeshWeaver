@@ -1,0 +1,69 @@
+@using MeshWeaver.Mesh.Services
+
+<div class="search-bar-container">
+    <input @key="_inputKey"
+           @ref="inputRef"
+           type="text"
+           @oninput="OnInput"
+           @onkeydown="HandleKeyDown"
+           @onfocus="OnFocus"
+           @onblur="OnBlur"
+           autocomplete="off"
+           placeholder="@SearchPlaceholder"
+           class="search-input" />
+
+    @if (showDropdown && (isLoading || suggestions.Length > 0))
+    {
+        <div class="search-dropdown">
+            @if (isLoading && suggestions.Length == 0)
+            {
+                <div class="search-dropdown-loading">Searching...</div>
+            }
+            else
+            {
+                @for (var i = 0; i < suggestions.Length; i++)
+                {
+                    var index = i;
+                    var suggestion = suggestions[i];
+                    <div class="search-dropdown-item @(index == highlightedIndex ? "highlighted" : "")"
+                         @onmousedown="() => NavigateToSuggestion(suggestion)"
+                         @onmousedown:preventDefault>
+                        <div class="search-dropdown-icon">
+                            @{ var iconUrl = MeshWeaver.Graph.MeshNodeImageHelper.GetIconForRendering(suggestion.Icon); }
+                            @if (iconUrl != null && iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <div style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">@((MarkupString)iconUrl)</div>
+                            }
+                            else if (iconUrl != null && !iconUrl.Contains('/') && !iconUrl.StartsWith("data:"))
+                            {
+                                <span style="font-size: 1.4em;">@iconUrl</span>
+                            }
+                            else if (iconUrl != null)
+                            {
+                                <img src="@iconUrl" alt="" />
+                            }
+                            else
+                            {
+                                <span class="search-dropdown-initial">@GetInitial(suggestion)</span>
+                            }
+                        </div>
+                        <div class="search-dropdown-text">
+                            <div class="search-dropdown-name">@suggestion.Name</div>
+                            <div class="search-dropdown-path">
+                                @suggestion.Path
+                                @if (!string.IsNullOrEmpty(suggestion.NodeType))
+                                {
+                                    <span> &middot; @GetNodeTypeDisplay(suggestion.NodeType)</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            }
+            @if (isLoading && suggestions.Length > 0)
+            {
+                <div class="search-dropdown-progress"></div>
+            }
+        </div>
+    }
+</div>

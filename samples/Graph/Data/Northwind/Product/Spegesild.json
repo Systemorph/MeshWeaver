@@ -1,0 +1,23 @@
+{
+  "id": "Spegesild",
+  "namespace": "Northwind/Product",
+  "name": "Spegesild",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Spegesild - 4 - 450 g glasses",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 46,
+    "productName": "Spegesild",
+    "supplierId": 21,
+    "categoryId": 8,
+    "quantityPerUnit": "4 - 450 g glasses",
+    "unitPrice": 12.0,
+    "unitsInStock": 95,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

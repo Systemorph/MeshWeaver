@@ -1,0 +1,186 @@
+.notebook-cell {
+    display: flex;
+    flex-direction: row;
+    border: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    border-radius: 4px;
+    margin-bottom: 8px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    background: var(--neutral-layer-1, #ffffff);
+}
+
+.notebook-cell:hover {
+    border-color: var(--neutral-stroke-hover, #c0c0c0);
+}
+
+.notebook-cell.selected {
+    border-color: var(--accent-fill-rest, #0078d4);
+    box-shadow: 0 0 0 1px var(--accent-fill-rest, #0078d4);
+}
+
+.notebook-cell:focus {
+    outline: none;
+    border-color: var(--accent-fill-rest, #0078d4);
+}
+
+.notebook-cell.markdown {
+    border-left: 3px solid var(--neutral-stroke-rest, #6e6e6e);
+}
+
+.notebook-cell.code {
+    border-left: 3px solid var(--accent-fill-rest, #0078d4);
+}
+
+.cell-gutter {
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    width: 50px;
+    min-width: 50px;
+    padding: 8px 4px;
+    background: var(--neutral-layer-2, #f5f5f5);
+    border-right: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    font-family: var(--font-family-monospace, 'Consolas', 'Monaco', monospace);
+    font-size: 12px;
+    color: var(--neutral-foreground-hint, #767676);
+}
+
+.cell-index {
+    display: inline-block;
+    min-width: 24px;
+    text-align: center;
+}
+
+.cell-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.cell-toolbar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: var(--neutral-layer-2, #f5f5f5);
+    border-bottom: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+}
+
+.cell-editor {
+    flex: 1;
+    min-height: 60px;
+}
+
+.cell-output {
+    padding: 8px 12px;
+    background: var(--neutral-layer-2, #f8f8f8);
+    border-top: 1px solid var(--neutral-stroke-rest, #e0e0e0);
+    overflow: auto;
+    max-height: 400px;
+}
+
+.cell-output.success {
+    border-left: 3px solid var(--success, #107c10);
+}
+
+.cell-output.error {
+    border-left: 3px solid var(--error, #d13438);
+    background: var(--error-background, #fef0f0);
+}
+
+.output-error {
+    color: var(--error, #d13438);
+    font-family: var(--font-family-monospace, 'Consolas', 'Monaco', monospace);
+    font-size: 13px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.output-stdout {
+    color: var(--neutral-foreground-rest, #333333);
+    font-family: var(--font-family-monospace, 'Consolas', 'Monaco', monospace);
+    font-size: 13px;
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.output-value {
+    font-family: var(--font-family-monospace, 'Consolas', 'Monaco', monospace);
+    font-size: 13px;
+}
+
+.output-value pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+/* Dark mode support */
+[data-theme="dark"] .notebook-cell,
+.dark .notebook-cell,
+.fluent-dark .notebook-cell {
+    background: var(--neutral-layer-1, #1e1e1e);
+    border-color: var(--neutral-stroke-rest, #3c3c3c);
+}
+
+[data-theme="dark"] .notebook-cell:hover,
+.dark .notebook-cell:hover,
+.fluent-dark .notebook-cell:hover {
+    border-color: var(--neutral-stroke-hover, #5c5c5c);
+}
+
+[data-theme="dark"] .cell-gutter,
+.dark .cell-gutter,
+.fluent-dark .cell-gutter {
+    background: var(--neutral-layer-2, #252525);
+    border-right-color: var(--neutral-stroke-rest, #3c3c3c);
+}
+
+[data-theme="dark"] .cell-toolbar,
+.dark .cell-toolbar,
+.fluent-dark .cell-toolbar {
+    background: var(--neutral-layer-2, #252525);
+    border-bottom-color: var(--neutral-stroke-rest, #3c3c3c);
+}
+
+[data-theme="dark"] .cell-output,
+.dark .cell-output,
+.fluent-dark .cell-output {
+    background: var(--neutral-layer-2, #252525);
+    border-top-color: var(--neutral-stroke-rest, #3c3c3c);
+}
+
+[data-theme="dark"] .cell-output.error,
+.dark .cell-output.error,
+.fluent-dark .cell-output.error {
+    background: var(--error-background, #3d1f1f);
+}
+
+[data-theme="dark"] .output-stdout,
+.dark .output-stdout,
+.fluent-dark .output-stdout {
+    color: var(--neutral-foreground-rest, #d4d4d4);
+}
+
+@media (prefers-color-scheme: dark) {
+    .notebook-cell {
+        background: var(--neutral-layer-1, #1e1e1e);
+        border-color: var(--neutral-stroke-rest, #3c3c3c);
+    }
+
+    .cell-gutter {
+        background: var(--neutral-layer-2, #252525);
+    }
+
+    .cell-toolbar {
+        background: var(--neutral-layer-2, #252525);
+    }
+
+    .cell-output {
+        background: var(--neutral-layer-2, #252525);
+    }
+}

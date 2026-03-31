@@ -1,0 +1,74 @@
+.catalog-container {
+    width: 100%;
+}
+
+.catalog-section {
+    width: 100%;
+}
+
+.catalog-section-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-weight: 600;
+    font-size: 1.1rem;
+}
+
+.catalog-section-emoji {
+    font-size: 1.25rem;
+}
+
+.catalog-section-title {
+    flex: 1;
+}
+
+.catalog-section-count {
+    margin-left: auto;
+}
+
+.catalog-grid {
+    padding: 0;
+}
+
+/* Remove default accordion padding and neutralize backgrounds */
+::deep fluent-accordion {
+    background: transparent;
+}
+
+::deep fluent-accordion-item {
+    background: transparent;
+}
+
+::deep fluent-accordion-item::part(heading) {
+    padding: 0;
+    background: transparent;
+}
+
+::deep fluent-accordion-item::part(region) {
+    padding: 4px 0 0 0;
+    background: transparent;
+}
+
+/* Neutralize FluentGrid background */
+::deep fluent-grid {
+    background: transparent;
+}
+
+/* Ensure grid items stretch to equal height within rows */
+::deep fluent-grid-item {
+    display: flex;
+    align-items: stretch;
+}
+
+/* Ensure cards within grid items fill the height */
+::deep fluent-grid-item > * {
+    width: 100%;
+    height: 100%;
+}
+
+/* Ensure layout areas fill the card */
+::deep .layout-area-container {
+    height: 100%;
+    width: 100%;
+}

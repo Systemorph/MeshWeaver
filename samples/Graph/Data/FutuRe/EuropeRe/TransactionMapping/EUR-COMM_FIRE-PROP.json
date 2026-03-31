@@ -1,0 +1,18 @@
+{
+  "id": "EUR-COMM_FIRE-PROP",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Commercial Fire → Property (80%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-COMM_FIRE-PROP",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "COMM_FIRE",
+    "localLineOfBusinessName": "Commercial Fire",
+    "groupLineOfBusiness": "PROP",
+    "groupLineOfBusinessName": "Property",
+    "percentage": 0.8
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

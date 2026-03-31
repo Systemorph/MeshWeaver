@@ -2,8 +2,10 @@
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Diagnostics;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
@@ -12,13 +14,11 @@ using Json.Pointer;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
+using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
-using System.Linq;
-using System.Threading;
-using Xunit;
 
 
 namespace MeshWeaver.Layout.Test;
@@ -32,7 +32,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                r.RouteAddress(ClientType, (_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -69,6 +69,9 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                     .WithView(nameof(DataGrid), DataGrid)
                     .WithView(nameof(DataBoundCheckboxes), DataBoundCheckboxes)
                     .WithView(nameof(AsyncView), AsyncView)
+                    .WithView(nameof(StartWithLoadingView), StartWithLoadingView)
+                    .WithView(nameof(StartWithDelayedView), StartWithDelayedView)
+                    .WithView(nameof(StartWithSubjectView), StartWithSubjectView)
             );
     }
 
@@ -85,11 +88,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
-        var control = await stream.GetControlStream(reference.Area)
+        var control = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var areas = control
@@ -99,13 +102,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .HaveCount(2)
             .And.Subject;
 
-        var areaControls = await areas
-            .ToAsyncEnumerable()
-            .SelectAwait(async a =>
+        var areaControls = await Task.WhenAll(
+            areas.Select(async a =>
                 await stream.GetControlStream(a.Area.ToString()!)
                 .Timeout(10.Seconds())
                 .FirstAsync(x => x != null)!)
-            .ToArrayAsync();
+        );
 
         areaControls.Should().HaveCount(2).And.AllBeOfType<HtmlControl>();
     }
@@ -133,15 +135,16 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = GetClient().GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
-        var controls = await stream
-            .GetControlStream(reference.Area.ToString()!)
-            .TakeUntil(o => o is HtmlControl)
-            .Timeout(10.Seconds())
-            .ToArray();
-        controls.Should().HaveCountGreaterThan(1);// .And.HaveCountLessThan(12);
+        // Wait for the async view to complete and emit the final HtmlControl
+        var finalControl = await stream
+            .GetControlStream(reference.Area!)
+            .Where(o => o is HtmlControl)
+            .Timeout(30.Seconds())
+            .FirstAsync();
+        finalControl.Should().BeOfType<HtmlControl>();
     }
 
     private record Toolbar(int Year);
@@ -166,12 +169,12 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var reportArea = $"{reference.Area}/Content";
         var content = await stream.GetControlStream(reportArea)
-            // .Timeout(10.Seconds())
+            .Timeout(10.Seconds())
             .FirstAsync(x => x is not null)!;
         content.Should().BeOfType<HtmlControl>().Which.Data.ToString().Should().Contain("2024");
 
@@ -180,7 +183,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var yearTextBox = (TextFieldControl)await stream
             .GetControlStream(toolbarArea)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not null)!;
+            .FirstAsync(x => x is not null);
         yearTextBox.DataContext.Should().Be("/data/\"toolbar\"");
 
         var dataPointer = yearTextBox.Data.Should().BeOfType<JsonPointerReference>().Which;
@@ -231,7 +234,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var controlArea = $"{reference.Area}";
@@ -285,7 +288,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var buttonArea = $"{reference.Area}/Button";
@@ -298,7 +301,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
             .Which.Data.ToString()
             .Should()
             .Contain("Count");
-        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(new HostAddress()));
+        hub.Post(new ClickedEvent(buttonArea, stream.StreamId), o => o.WithTarget(CreateHostAddress()));
         var counterArea = $"{reference.Area}/Counter";
         content = await stream
             .GetControlStream(counterArea)
@@ -325,11 +328,11 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var content = await stream
-            .GetControlStream(reference.Area.ToString()!)
+            .GetControlStream(reference.Area!)
             //.Timeout(TimeSpan.FromSeconds(3))
             .FirstAsync(x => x != null);
 
@@ -385,7 +388,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
         var controlArea = $"{reference.Area}/{Filter}";
@@ -479,10 +482,10 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var grid = content
@@ -530,13 +533,13 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var hub = GetClient();
         var workspace = hub.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
 
         var stopwatch = Stopwatch.StartNew();
 
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
@@ -553,7 +556,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
     public void TestSerializationOptionsComparison()
     {
         var client = GetClient();
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         Output.WriteLine("=== CLIENT HUB CONVERTERS ===");
         for (int i = 0; i < client.JsonSerializerOptions.Converters.Count; i++)
@@ -622,11 +625,157 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         }
     }
 
+
+    // Subject for testing controlled emission
+    private static readonly System.Reactive.Subjects.ReplaySubject<UiControl> TestSubject = new(1);
+
+    /// <summary>
+    /// Test that demonstrates the issue with IObservable views using StartWith.
+    /// When a view returns IObservable&lt;UiControl&gt; with .StartWith(loadingControl),
+    /// and the underlying data stream needs to initialize, the view can get stuck
+    /// at the loading state and never transition to the actual content.
+    /// </summary>
+    [HubFact]
+    public async Task TestStartWithLoading()
+    {
+        var reference = new LayoutAreaReference(nameof(StartWithLoadingView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Get the control - we should eventually see "DataGrid" content, not stay at "Loading"
+        var controls = await stream
+            .GetControlStream(reference.Area!)
+            .TakeUntil(o => o is DataGridControl)
+            .Timeout(5.Seconds())
+            .ToArray();
+
+        // Should have received at least the loading control and the final data grid
+        controls.Should().HaveCountGreaterThanOrEqualTo(1);
+
+        // The last control should be the DataGrid, not the Markdown loading message
+        controls.Last().Should().BeOfType<DataGridControl>();
+    }
+
+    /// <summary>
+    /// Test with delayed data emission to better reproduce the StartWith issue.
+    /// This simulates a scenario where data loads after a delay, which can cause
+    /// the view to get stuck at the loading state if there's a hashing/timing issue.
+    /// </summary>
+    [HubFact]
+    public async Task TestStartWithDelayedData()
+    {
+        var reference = new LayoutAreaReference(nameof(StartWithDelayedView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // First, we should get the loading control
+        var firstControl = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(2.Seconds())
+            .FirstAsync(x => x != null);
+
+        firstControl.Should().BeOfType<MarkdownControl>()
+            .Which.Markdown.ToString().Should().Contain("Loading");
+
+        // Then, we should eventually get the actual content after the delay
+        var finalControl = await stream
+            .GetControlStream(reference.Area!)
+            .TakeUntil(o => o is HtmlControl)
+            .Timeout(5.Seconds())
+            .LastAsync();
+
+        finalControl.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("Data Loaded");
+    }
+
+    private IObservable<UiControl> StartWithLoadingView(LayoutAreaHost area, RenderingContext context)
+    {
+        // This pattern is commonly used: return a stream that starts with a loading indicator
+        // and then emits the actual content when data is available
+        return area
+            .Hub.GetWorkspace()
+            .GetStream(typeof(DataRecord))
+            .Select(x => x.Value!.GetData<DataRecord>())
+            .DistinctUntilChanged()
+            .Select(data => (UiControl)area.ToDataGrid(data))
+            .StartWith(Controls.Markdown("# Loading...\n\n*Please wait while data loads...*"));
+    }
+
+    private IObservable<UiControl> StartWithDelayedView(LayoutAreaHost area, RenderingContext context)
+    {
+        // Simulate delayed data loading - this should still transition from loading to content
+        return Observable.Timer(TimeSpan.FromMilliseconds(500))
+            .Select(_ => (UiControl)Controls.Html("Data Loaded Successfully"))
+            .StartWith(Controls.Markdown("# Loading...\n\n*Please wait while data loads...*"));
+    }
+
+    private IObservable<UiControl> StartWithSubjectView(LayoutAreaHost area, RenderingContext context)
+    {
+        // Use a subject to control exactly when the actual content is emitted
+        // This helps isolate timing issues with StartWith
+        return TestSubject
+            .StartWith(Controls.Markdown("# Loading...\n\n*Waiting for data...*"));
+    }
+
+    /// <summary>
+    /// Test with controlled subject to isolate timing issues with StartWith.
+    /// This test ensures that when data is emitted after initialization,
+    /// the view properly transitions from loading to content.
+    /// </summary>
+    [HubFact]
+    public async Task TestStartWithControlledSubject()
+    {
+        // Reset the subject for this test
+        var subject = new System.Reactive.Subjects.ReplaySubject<UiControl>(1);
+
+        var reference = new LayoutAreaReference(nameof(StartWithSubjectView));
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // First control should be the loading message from StartWith
+        var firstControl = await stream
+            .GetControlStream(reference.Area!)
+            .Timeout(2.Seconds())
+            .FirstAsync(x => x != null);
+
+        firstControl.Should().BeOfType<MarkdownControl>()
+            .Which.Markdown.ToString().Should().Contain("Loading");
+
+        // Now emit the actual content via the subject
+        TestSubject.OnNext(Controls.Html("Subject Data Loaded"));
+
+        // Wait for the content to transition
+        var finalControl = await stream
+            .GetControlStream(reference.Area!)
+            .TakeUntil(o => o is HtmlControl)
+            .Timeout(3.Seconds())
+            .LastAsync();
+
+        // The final control should be the HTML content, not still the loading message
+        finalControl.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("Subject Data Loaded");
+    }
+
     [HubFact]
     public void TestPolymorphicCollectionSerialization()
     {
         var client = GetClient();
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Test 1: Simple individual object
         var singleColumn = new PropertyColumnControl<string>
@@ -638,11 +787,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         var singleSerialized = JsonSerializer.Serialize(singleColumn, client.JsonSerializerOptions);
         Output.WriteLine($"Single object serialized: {singleSerialized}");
 
-        var singleClientDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, client.JsonSerializerOptions);
-        var singleHostedDeserialized = JsonSerializer.Deserialize<PropertyColumnControl>(singleSerialized, hosted.JsonSerializerOptions);
+        var singleClientDeserialized = JsonSerializer.Deserialize<object>(singleSerialized, client.JsonSerializerOptions);
+        var singleHostedDeserialized = JsonSerializer.Deserialize<object>(singleSerialized, hosted.JsonSerializerOptions);
 
         Output.WriteLine($"Single - Client deserialized type: {singleClientDeserialized?.GetType().FullName}");
         Output.WriteLine($"Single - Hosted deserialized type: {singleHostedDeserialized?.GetType().FullName}");
+
+        // Both should deserialize to the concrete PropertyColumnControl<string> type
+        singleClientDeserialized.Should().BeOfType<PropertyColumnControl<string>>();
+        singleHostedDeserialized.Should().BeOfType<PropertyColumnControl<string>>();
 
         // Test 2: Collection of polymorphic objects
         var columnCollection = new List<object>
@@ -675,6 +828,15 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
                 Output.WriteLine($"Collection - Hosted item {i} type: {collectionHostedDeserialized[i].GetType().FullName}");
             }
         }
+
+        // Both should deserialize collections the same way
+        collectionClientDeserialized.Should().NotBeNull();
+        collectionHostedDeserialized.Should().NotBeNull();
+        collectionClientDeserialized.Count.Should().Be(collectionHostedDeserialized.Count);
+
+        // Each item should be properly deserialized as PropertyColumnControl<string>
+        collectionClientDeserialized.Should().AllBeOfType<PropertyColumnControl<string>>();
+        collectionHostedDeserialized.Should().AllBeOfType<PropertyColumnControl<string>>();
     }
 
     [HubFact]
@@ -710,7 +872,7 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         Output.WriteLine($"Serialized JSON: {serialized}");
 
         var client = GetClient();
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         Output.WriteLine($"Client JsonSerializerOptions converters: {client.JsonSerializerOptions.Converters.Count}");
         foreach (var converter in client.JsonSerializerOptions.Converters)
@@ -787,6 +949,146 @@ public class LayoutTest(ITestOutputHelper output) : HubTestBase(output)
         secondColumn.Title.Should().Be(nameof(DataRecord.DisplayName).Wordify());
     }
 
+    [HubFact]
+    public void DataViewTruncation_TruncatesLongContent()
+    {
+        // arrange - create JSON that will serialize to more than 100 lines
+        var largeData = Enumerable.Range(1, 50)
+            .Select(i => new DataRecord(i.ToString(), $"Item {i}"))
+            .ToArray();
+
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        var json = JsonSerializer.Serialize(largeData, options);
+        var lines = json.Split('\n');
+
+        // act - verify large data has more than 100 lines
+        lines.Length.Should().BeGreaterThan(100);
+
+        // Truncating to first 100 lines
+        var truncatedLines = lines.Take(100).ToArray();
+        var truncatedJson = string.Join('\n', truncatedLines) + "\n...";
+
+        // assert - truncated content should be smaller
+        truncatedJson.Split('\n').Length.Should().Be(101); // 100 lines + "..."
+        truncatedJson.Should().EndWith("...");
+    }
+}
+
+/// <summary>
+/// Tests for the DefaultArea functionality - when Area is null/empty,
+/// the system should use the configured DefaultArea via WithDefaultArea.
+/// </summary>
+public class DefaultAreaTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string DefaultView = nameof(DefaultView);
+    private const string OtherView = nameof(OtherView);
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .WithRoutes(r =>
+                r.RouteAddress(ClientType, (_, d) => d.Package())
+            )
+            .AddLayout(layout =>
+                layout
+                    .WithDefaultArea(DefaultView) // Configure the default area
+                    .WithView(DefaultView, Controls.Html("This is the default view"))
+                    .WithView(OtherView, Controls.Html("This is another view"))
+            );
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(
+        MessageHubConfiguration configuration
+    ) => base.ConfigureClient(configuration)
+        .AddLayoutClient(d => d);
+
+    [HubFact]
+    public async Task NullArea_ReturnsNamedAreaControlPointingToDefaultArea()
+    {
+        // Arrange - create a reference with null area
+        var reference = new LayoutAreaReference(null);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for empty area
+        var control = await stream.GetControlStream(string.Empty)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get a NamedAreaControl pointing to the default area
+        var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
+        namedArea.Area.Should().Be(DefaultView);
+    }
+
+    [HubFact]
+    public async Task EmptyArea_ReturnsNamedAreaControlPointingToDefaultArea()
+    {
+        // Arrange - create a reference with empty area
+        var reference = new LayoutAreaReference(string.Empty);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for empty area
+        var control = await stream.GetControlStream(string.Empty)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get a NamedAreaControl pointing to the default area
+        var namedArea = control.Should().BeOfType<NamedAreaControl>().Which;
+        namedArea.Area.Should().Be(DefaultView);
+    }
+
+    [HubFact]
+    public async Task ExplicitArea_UsesSpecifiedArea()
+    {
+        // Arrange - create a reference with explicit area
+        var reference = new LayoutAreaReference(OtherView);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for the specified area
+        var control = await stream.GetControlStream(reference.Area!)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get the other view content, not the default
+        control.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("another view");
+    }
+
+    [HubFact]
+    public async Task DefaultAreaContent_IsRenderedCorrectly()
+    {
+        // Arrange - create a reference with null area
+        var reference = new LayoutAreaReference(null);
+
+        var workspace = GetClient().GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Act - get the control stream for the actual default view (not empty string)
+        var control = await stream.GetControlStream(DefaultView)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Assert - should get the default view content
+        control.Should().BeOfType<HtmlControl>()
+            .Which.Data.ToString().Should().Contain("default view");
+    }
 }
 
 public static class TestAreas
@@ -801,4 +1103,173 @@ public record LabelAndBool(string Label, bool Value);
 public record DataRecord([property: Key] string SystemName, string DisplayName)
 {
     public static readonly DataRecord[] InitialData = [new("Hello", "Hello"), new("World", "World")];
+}
+
+/// <summary>
+/// Tests for CodeEditor-style data binding with JsonPointerReference.
+/// Simulates the pattern used by CodeEditorView where DataContext points to a data location
+/// and Value is an empty JsonPointerReference to bind to the root of that data.
+/// </summary>
+public class CodeEditorDataBindingTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private const string CodeEditorView = nameof(CodeEditorView);
+    private const string InitialCode = "// Initial code content";
+    private const string UpdatedCode = "// Updated code content";
+    private const string CodeDataId = "codeData";
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return base.ConfigureHost(configuration)
+            .WithRoutes(r =>
+                r.RouteAddress(ClientType, (_, d) => d.Package())
+            )
+            .AddLayout(layout =>
+                layout
+                    .WithView(CodeEditorView, BuildCodeEditorView)
+            );
+    }
+
+    /// <summary>
+    /// Build a view that simulates CodeEditorView's data binding pattern:
+    /// - Store code in data section with UpdateData
+    /// - Bind to it using DataContext + empty JsonPointerReference
+    /// </summary>
+    private static UiControl BuildCodeEditorView(LayoutAreaHost host, RenderingContext ctx)
+    {
+        // Initialize the code data (like NodeTypeView does)
+        host.UpdateData(CodeDataId, InitialCode);
+
+        // Create a control that binds to the data using the CodeEditor pattern:
+        // - DataContext points to the data location
+        // - Data (or Value) is an empty JsonPointerReference to bind to root
+        var editor = new TextFieldControl(new JsonPointerReference(""))
+        {
+            DataContext = LayoutAreaReference.GetDataPointer(CodeDataId)
+        };
+
+        return Controls.Stack
+            .WithView(editor, "Editor")
+            .WithView(
+                Controls.Button("Save")
+                    .WithClickAction(async actx =>
+                    {
+                        // Read the current value from the stream (this is what Save button does)
+                        var currentValue = await host.Stream.GetDataStream<string>(CodeDataId).FirstAsync();
+                        // Store in a separate location so we can verify what was read
+                        host.UpdateData("savedValue", currentValue ?? "null");
+                    }),
+                "SaveButton"
+            );
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(
+        MessageHubConfiguration configuration
+    ) => base.ConfigureClient(configuration)
+        .AddLayoutClient(d => d);
+
+    /// <summary>
+    /// Test that simulates what CodeEditorView does:
+    /// 1. View initializes data with UpdateData
+    /// 2. Client updates the data via UpdatePointer (simulating user editing)
+    /// 3. Save button reads the data back
+    /// 4. Verify the updated value is saved, not the initial value
+    /// </summary>
+    [HubFact]
+    public async Task CodeEditor_UpdatePointer_SavesUpdatedValue()
+    {
+        var reference = new LayoutAreaReference(CodeEditorView);
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Wait for the editor control to be rendered
+        var editorArea = $"{reference.Area}/Editor";
+        var editorControl = await stream.GetControlStream(editorArea)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        var textField = editorControl.Should().BeOfType<TextFieldControl>().Which;
+        textField.DataContext.Should().Be(LayoutAreaReference.GetDataPointer(CodeDataId));
+        var valuePointer = textField.Data.Should().BeOfType<JsonPointerReference>().Which;
+        valuePointer.Pointer.Should().Be("");
+
+        // Verify initial value is loaded
+        var initialValue = await stream
+            .GetDataStream<string>(new JsonPointerReference(textField.DataContext!))
+            .Timeout(5.Seconds())
+            .FirstAsync();
+        initialValue.Should().Be(InitialCode);
+
+        // Now simulate what CodeEditorView.OnValueChanged does:
+        // Update the data using UpdatePointer with the same pattern
+        stream.UpdatePointer(UpdatedCode, textField.DataContext, valuePointer);
+
+        // Wait for the update to be applied
+        await Task.Delay(500);
+
+        // Verify the value was updated in the stream
+        var updatedValue = await stream
+            .GetDataStream<string>(new JsonPointerReference(textField.DataContext!))
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // THIS IS THE KEY ASSERTION - the value should be updated, not still initial
+        updatedValue.Should().Be(UpdatedCode,
+            "UpdatePointer should have updated the value at the data location");
+    }
+
+    /// <summary>
+    /// Test the GetPointer helper to verify the path construction.
+    /// </summary>
+    [HubFact]
+    public async Task CodeEditor_EmptyPointer_ResolvesToCorrectPath()
+    {
+        var reference = new LayoutAreaReference(CodeEditorView);
+
+        var hub = GetClient();
+        var workspace = hub.GetWorkspace();
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            CreateHostAddress(),
+            reference
+        );
+
+        // Wait for the editor control
+        var editorArea = $"{reference.Area}/Editor";
+        await stream.GetControlStream(editorArea)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+
+        // Get the data context pointer
+        var dataContext = LayoutAreaReference.GetDataPointer(CodeDataId);
+        Output.WriteLine($"DataContext: {dataContext}");
+
+        // Test reading with empty pointer - should resolve to the data itself
+        var valuePointer = new JsonPointerReference("");
+
+        // Read using DataBind (the observable way)
+        var valueFromBind = await stream
+            .DataBind<string>(valuePointer, dataContext)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        valueFromBind.Should().Be(InitialCode,
+            "DataBind with empty pointer should read the value at DataContext");
+
+        // Now update using UpdatePointer with empty pointer
+        stream.UpdatePointer("New Value", dataContext, valuePointer);
+        await Task.Delay(500);
+
+        // Read again
+        var valueAfterUpdate = await stream
+            .DataBind<string>(valuePointer, dataContext)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        valueAfterUpdate.Should().Be("New Value",
+            "UpdatePointer with empty pointer should update the value at DataContext");
+    }
 }

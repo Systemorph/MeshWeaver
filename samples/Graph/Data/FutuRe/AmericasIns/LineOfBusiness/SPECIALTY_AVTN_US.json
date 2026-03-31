@@ -1,0 +1,18 @@
+{
+  "id": "SPECIALTY_AVTN_US",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Specialty & Aviation",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "US specialty lines including aviation, space, political risk, and surety for Americas operations",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "SPECIALTY_AVTN_US",
+    "displayName": "Specialty & Aviation",
+    "description": "Americas specialty and aviation insurance combining niche high-severity coverages. Aviation covers US airlines, regional carriers, general aviation, airports, and aerospace manufacturers — the world's largest aviation insurance market. Space launch covers commercial launch vehicles and satellite operators. Specialty lines include political risk and trade credit for Latin American trade flows, surety bonds for US federal and state construction projects (Miller Act), fidelity bonds, kidnap & ransom for multinational corporates, and event cancellation for major US sporting and entertainment events.",
+    "order": 7,
+    "productExamples": "Aviation hull & liability, General aviation, Space launch, Surety bonds, Political risk, Trade credit, K&R, Event cancellation"
+  }
+}

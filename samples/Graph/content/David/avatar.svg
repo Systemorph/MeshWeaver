@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <pattern id="david-pattern" patternUnits="userSpaceOnUse" width="14" height="14" patternTransform="rotate(30)">
+      <rect width="14" height="14" fill="#7C3AED"/>
+      <line x1="0" y1="7" x2="14" y2="7" stroke="#A78BFA" stroke-width="3"/>
+    </pattern>
+    <clipPath id="david-clip">
+      <circle cx="64" cy="64" r="60"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#david-pattern)"/>
+  <g clip-path="url(#david-clip)">
+    <!-- Head -->
+    <circle cx="64" cy="42" r="20" fill="#8D5524"/>
+    <!-- Hair (short fade) -->
+    <ellipse cx="64" cy="30" rx="17" ry="8" fill="#1C1917"/>
+    <rect x="48" y="28" width="32" height="8" rx="2" fill="#1C1917"/>
+    <!-- Face -->
+    <circle cx="64" cy="44" r="18" fill="#8D5524"/>
+    <!-- Eyes -->
+    <circle cx="57" cy="42" r="2.5" fill="#1F2937"/>
+    <circle cx="71" cy="42" r="2.5" fill="#1F2937"/>
+    <!-- Eyebrows -->
+    <path d="M53 37 L61 38" stroke="#1C1917" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M67 38 L75 37" stroke="#1C1917" stroke-width="2.5" stroke-linecap="round"/>
+    <!-- Beard stubble pattern -->
+    <ellipse cx="64" cy="54" rx="10" ry="6" fill="#1C1917" opacity="0.3"/>
+    <!-- Smile -->
+    <path d="M59 50 Q64 54 69 50" stroke="#1F2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <!-- Body/Shoulders (hoodie style) -->
+    <ellipse cx="64" cy="95" rx="34" ry="30" fill="#8B5CF6"/>
+    <!-- Hood strings -->
+    <line x1="56" y1="78" x2="56" y2="90" stroke="#7C3AED" stroke-width="2"/>
+    <line x1="72" y1="78" x2="72" y2="90" stroke="#7C3AED" stroke-width="2"/>
+    <circle cx="56" cy="92" r="2" fill="#7C3AED"/>
+    <circle cx="72" cy="92" r="2" fill="#7C3AED"/>
+  </g>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#7C3AED" stroke-width="4"/>
+</svg>

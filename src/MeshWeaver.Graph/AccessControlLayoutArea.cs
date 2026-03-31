@@ -1,0 +1,512 @@
+using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Data;
+using MeshWeaver.Domain;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.Domain;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using MeshWeaver.ShortGuid;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace MeshWeaver.Graph;
+
+/// <summary>
+/// Layout area for managing access control on a mesh node.
+/// Inherited assignments are loaded via IMeshService from ancestor nodes (merged per person).
+/// Local assignments are rendered via MeshSearchControl with Thumbnail areas.
+/// </summary>
+public static class AccessControlLayoutArea
+{
+    /// <summary>
+    /// Entry point for the Access Control layout area.
+    /// </summary>
+    public static IObservable<UiControl?> AccessControl(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var securityService = host.Hub.ServiceProvider.GetService<ISecurityService>();
+
+        if (securityService == null)
+        {
+            return Observable.Return<UiControl?>(
+                Controls.Stack.WithView(
+                    Controls.Html(
+                        "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled. " +
+                        "Add .AddRowLevelSecurity() to your mesh configuration.</p>")
+                )
+            );
+        }
+
+        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
+        var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? [])
+            ?? Observable.Return<MeshNode[]>([]);
+
+        return nodeStream
+            .SelectMany(async nodes =>
+            {
+                var node = nodes.FirstOrDefault(n => n.Namespace == hubPath || n.Path == hubPath);
+                var isAdmin = await CheckAdminPermission(host.Hub, hubPath);
+
+                // Load inherited assignments from ancestor nodes via IMeshService (one-shot, rarely changes)
+                var inherited = new List<(AccessAssignment Assignment, string SourcePath, MeshNode Node)>();
+                if (meshQuery != null)
+                {
+                    try
+                    {
+                        var ancestorAssignments = await meshQuery
+                            .QueryAsync<MeshNode>($"path:{hubPath} nodeType:AccessAssignment scope:ancestors")
+                            .ToListAsync();
+
+                        foreach (var assignmentNode in ancestorAssignments)
+                        {
+                            var assignment = DeserializeAssignment(assignmentNode);
+                            if (assignment != null)
+                                inherited.Add((assignment, assignmentNode.Namespace ?? "", assignmentNode));
+                        }
+                    }
+                    catch
+                    {
+                        // Query may fail if index not ready
+                    }
+                }
+
+                // Pre-fetch user nodes for icons (assignment nodes may lack avatars)
+                var userNodeLookup = new Dictionary<string, MeshNode>();
+                if (meshQuery != null)
+                {
+                    var userPaths = inherited.Select(x => x.Assignment.AccessObject).Distinct();
+                    foreach (var userPath in userPaths)
+                    {
+                        try
+                        {
+                            var userNode = await meshQuery.QueryAsync<MeshNode>(
+                                $"path:{userPath}").FirstOrDefaultAsync();
+                            if (userNode != null)
+                                userNodeLookup[userPath] = userNode;
+                        }
+                        catch { }
+                    }
+                }
+
+                // Load partition access policy for this namespace
+                PartitionAccessPolicy? activePolicy = null;
+                if (securityService != null)
+                {
+                    try { activePolicy = await securityService.GetPolicyAsync(hubPath); }
+                    catch { }
+                }
+
+                return BuildAccessControlPage(host, node, hubPath, isAdmin, inherited, userNodeLookup, securityService, activePolicy);
+            });
+    }
+
+    internal static AccessAssignment? DeserializeAssignment(MeshNode node)
+    {
+        if (node.Content is AccessAssignment aa)
+            return aa;
+        if (node.Content is System.Text.Json.JsonElement je)
+            return System.Text.Json.JsonSerializer.Deserialize<AccessAssignment>(je.GetRawText());
+        return null;
+    }
+
+    private static async Task<bool> CheckAdminPermission(IMessageHub hub, string nodePath)
+    {
+        var permissions = await PermissionHelper.GetEffectivePermissionsAsync(hub, nodePath);
+        return permissions.HasFlag(Permission.Delete); // Admin = has Delete permission
+    }
+
+    private static UiControl? BuildAccessControlPage(
+        LayoutAreaHost host,
+        MeshNode? node,
+        string nodePath,
+        bool isAdmin,
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
+        Dictionary<string, MeshNode> userNodeLookup,
+        ISecurityService? securityService,
+        PartitionAccessPolicy? activePolicy)
+    {
+        var stack = Controls.Stack.WithStyle("padding: 24px; gap: 24px; width: 100%;");
+
+        // Header
+        var headerText = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? nodePath;
+        stack = stack.WithView(Controls.H2($"Access Control - {headerText}"));
+
+        // Policy Banner
+        if (activePolicy != null)
+        {
+            var allowed = FormatPermissions(activePolicy.GetPermissionCap());
+            var breakText = activePolicy.BreaksInheritance ? " Inheritance is broken." : "";
+            stack = stack.WithView(Controls.Html(
+                $"<div style=\"padding: 12px 16px; background: var(--neutral-fill-secondary-rest); border-left: 4px solid var(--accent-fill-rest); border-radius: 4px;\">" +
+                $"<strong>Partition Policy Active</strong> — Allowed: <strong>{allowed}</strong>.{breakText}</div>"));
+        }
+
+        if (isAdmin && securityService != null)
+        {
+            var buttonLabel = activePolicy != null ? "Edit Policy" : "Set Policy";
+            stack = stack.WithView(Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap: 8px;")
+                .WithView(Controls.Button(buttonLabel)
+                    .WithAppearance(Appearance.Accent)
+                    .WithStyle("align-self: flex-start;")
+                    .WithClickAction(async ctx => await ShowSetPolicyDialog(ctx, nodePath, securityService, activePolicy)))
+                .WithView(activePolicy != null
+                    ? Controls.Button("Remove Policy")
+                        .WithAppearance(Appearance.Neutral)
+                        .WithStyle("align-self: flex-start;")
+                        .WithClickAction(async ctx =>
+                        {
+                            await securityService.RemovePolicyAsync(nodePath);
+                            ctx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                        })
+                    : (UiControl)Controls.Html("")));
+        }
+
+        // Section 1: Inherited Permissions (merged per person, using builder)
+        stack = stack.WithView(Controls.H3("Inherited Permissions").WithStyle("margin: 0;"));
+
+        if (inherited.Count == 0)
+        {
+            stack = stack.WithView(Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">No inherited permissions.</p>"));
+        }
+        else
+        {
+            stack = stack.WithView(BuildInheritedSection(inherited, userNodeLookup));
+        }
+
+        // Section 2: Local Assignments (reactive via MeshSearchControl with Thumbnail areas)
+        stack = stack.WithView(Controls.H3("Local Assignments").WithStyle("margin: 0;"));
+
+        stack = stack.WithView(Controls.MeshSearch
+            .WithHiddenQuery($"namespace:{nodePath}/_Access nodeType:AccessAssignment")
+            .WithPlaceholder("Search assignments...")
+            .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
+            .WithMaxColumns(4)
+            .WithReactiveMode(true)
+            .WithDisableNavigation()
+            .WithStyle("width:100%;"));
+
+        // + button if admin
+        if (isAdmin)
+        {
+            stack = stack.WithView(Controls.Button("+ Add Assignment")
+                .WithAppearance(Appearance.Accent)
+                .WithStyle("align-self: flex-start; margin-top: 8px;")
+                .WithClickAction(async ctx => await ShowAddAssignmentDialog(ctx, nodePath)));
+        }
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Builds the inherited section by merging assignments per person.
+    /// Uses the MeshNode from the ancestor query to get user icons.
+    /// </summary>
+    private static UiControl BuildInheritedSection(
+        IReadOnlyList<(AccessAssignment Assignment, string SourcePath, MeshNode Node)> inherited,
+        Dictionary<string, MeshNode> userNodeLookup)
+    {
+        var merged = inherited
+            .GroupBy(x => x.Assignment.AccessObject)
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var first = g.First();
+                var mergedRoles = g
+                    .SelectMany(x =>
+                    {
+                        var source = string.IsNullOrEmpty(x.SourcePath) ? "Global" : x.SourcePath.Split('/').LastOrDefault() ?? x.SourcePath;
+                        return x.Assignment.Roles.Select(r => new RoleAssignment
+                        {
+                            Role = string.IsNullOrEmpty(r.Role) ? $"(no role) [{source}]" : $"{r.Role} [{source}]",
+                            Denied = r.Denied
+                        });
+                    })
+                    .ToList();
+
+                return (Assignment: first.Assignment with { Roles = mergedRoles }, first.Node);
+            })
+            .ToList();
+
+        var container = Controls.Stack.WithStyle("gap: 6px;");
+        foreach (var item in merged)
+        {
+            // Prefer user node (has avatar) over assignment node (may lack icon)
+            var userNode = userNodeLookup.GetValueOrDefault(item.Assignment.AccessObject);
+            var displayNode = userNode ?? item.Node;
+            container = container.WithView(AccessAssignmentControlBuilder.Build(
+                item.Assignment, node: displayNode, isEditable: false));
+        }
+        return container;
+    }
+
+    /// <summary>
+    /// Deletes an AccessAssignment node.
+    /// </summary>
+    internal static async Task DeleteAssignment(UiActionContext ctx, LayoutAreaHost host, string nodePath)
+    {
+        var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+        try
+        {
+            await nodeFactory.DeleteNodeAsync(nodePath);
+        }
+        catch (Exception ex)
+        {
+            var dialog = Controls.Dialog(
+                Controls.Markdown($"Failed to delete: {ex.Message}"),
+                "Error"
+            ).WithSize("S").WithClosable(true);
+            ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+        }
+    }
+
+    /// <summary>
+    /// Shows a dialog to add a new access assignment.
+    /// Captures both Subject (user/group) AND Role in one dialog.
+    /// </summary>
+    private static Task ShowAddAssignmentDialog(UiActionContext ctx, string nodePath)
+    {
+        var formId = $"add_assignment_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
+        {
+            ["accessObject"] = "",
+            ["role"] = ""
+        });
+
+        // Resolve queries for AccessObject from [MeshNode] attribute
+        var meshNodeAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.AccessObject))!
+            .GetCustomAttributes(typeof(MeshNodeAttribute), false).OfType<MeshNodeAttribute>().First();
+        var subjectQueries = MeshNodeAttribute.ResolveQueries(meshNodeAttr.Queries, nodePath, nodePath);
+
+        // Resolve queries for Role from [MeshNodeCollection] attribute
+        var rolesAttr = typeof(AccessAssignment).GetProperty(nameof(AccessAssignment.Roles))!
+            .GetCustomAttributes(typeof(MeshNodeCollectionAttribute), false)
+            .OfType<MeshNodeCollectionAttribute>().First();
+        var roleQueries = MeshNodeCollectionAttribute.ResolveQueries(rolesAttr.Queries, nodePath, nodePath);
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("accessObject"))
+            {
+                Queries = subjectQueries,
+                Label = "Subject (User or Group)",
+                Required = true,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new MeshNodePickerControl(new JsonPointerReference("role"))
+            {
+                Queries = roleQueries,
+                Label = "Role",
+                Required = true,
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            });
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Create")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async saveCtx =>
+                {
+                    var formValues = await saveCtx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+
+                    var selectedSubject = formValues.GetValueOrDefault("accessObject")?.ToString()?.Trim();
+                    var selectedRole = formValues.GetValueOrDefault("role")?.ToString()?.Trim();
+
+                    if (string.IsNullOrEmpty(selectedSubject))
+                    {
+                        ShowValidationError(saveCtx, "Please select a **Subject**.");
+                        return;
+                    }
+                    if (string.IsNullOrEmpty(selectedRole))
+                    {
+                        ShowValidationError(saveCtx, "Please select a **Role**.");
+                        return;
+                    }
+
+                    var subjectName = selectedSubject.Split('/').Last();
+                    var nodeId = $"{subjectName}_Access";
+                    var accessNs = $"{nodePath}/_Access";
+                    var path = $"{accessNs}/{nodeId}";
+
+                    // Check if an assignment already exists for this subject
+                    MeshNode? existing = null;
+                    var query = saveCtx.Hub.ServiceProvider.GetService<IMeshService>();
+                    if (query != null)
+                    {
+                        try
+                        {
+                            existing = await query.QueryAsync<MeshNode>($"path:{path}")
+                                .FirstOrDefaultAsync();
+                        }
+                        catch { }
+                    }
+
+                    // Close dialog
+                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+
+                    if (existing != null)
+                    {
+                        // Assignment already exists for this subject — dialog closes, page stays
+                    }
+                    else
+                    {
+                        // Create the node directly with the role already set
+                        // Look up the subject node to copy their icon
+                        string? subjectIcon = null;
+                        if (query != null)
+                        {
+                            try
+                            {
+                                var subjectNode = await query.QueryAsync<MeshNode>($"path:{selectedSubject}")
+                                    .FirstOrDefaultAsync();
+                                subjectIcon = subjectNode?.Icon;
+                            }
+                            catch { }
+                        }
+
+                        var newNode = new MeshNode(nodeId, accessNs)
+                        {
+                            NodeType = Configuration.AccessAssignmentNodeType.NodeType,
+                            Name = $"{subjectName} Access",
+                            Icon = subjectIcon,
+                            MainNode = nodePath,
+                            Content = new AccessAssignment
+                            {
+                                AccessObject = selectedSubject,
+                                DisplayName = subjectName,
+                                Roles = [new RoleAssignment { Role = selectedRole, Denied = false }]
+                            }
+                        };
+
+                        // Save directly — no transient/Create view needed
+                        saveCtx.Hub.Post(
+                            new DataChangeRequest { ChangedBy = saveCtx.Host.Stream.ClientId }.WithUpdates(newNode),
+                            o => o.WithTarget(saveCtx.Hub.Address));
+                    }
+                }));
+
+        var dialog = Controls.Dialog(formContent, "Add Assignment")
+            .WithSize("M")
+            .WithActions(actions);
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+        return Task.CompletedTask;
+    }
+
+    private static void ShowValidationError(UiActionContext ctx, string message)
+    {
+        var errorDialog = Controls.Dialog(
+            Controls.Markdown(message),
+            "Validation Error"
+        ).WithSize("S").WithClosable(true);
+        ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
+    }
+
+    private static string FormatPermissions(Permission permissions)
+    {
+        if (permissions == Permission.All) return "All";
+        if (permissions == Permission.None) return "None";
+        var names = new List<string>();
+        if (permissions.HasFlag(Permission.Read)) names.Add("Read");
+        if (permissions.HasFlag(Permission.Create)) names.Add("Create");
+        if (permissions.HasFlag(Permission.Update)) names.Add("Update");
+        if (permissions.HasFlag(Permission.Delete)) names.Add("Delete");
+        if (permissions.HasFlag(Permission.Comment)) names.Add("Comment");
+        return string.Join(", ", names);
+    }
+
+    private static Task ShowSetPolicyDialog(UiActionContext ctx, string nodePath, ISecurityService securityService, PartitionAccessPolicy? existing)
+    {
+        var formId = $"set_policy_{Guid.NewGuid().AsString()}";
+        ctx.Host.UpdateData(formId, new Dictionary<string, object?>
+        {
+            ["allowRead"] = existing?.Read != false,
+            ["allowCreate"] = existing?.Create != false,
+            ["allowUpdate"] = existing?.Update != false,
+            ["allowDelete"] = existing?.Delete != false,
+            ["allowComment"] = existing?.Comment != false,
+            ["breaksInheritance"] = existing?.BreaksInheritance ?? false
+        });
+
+        var formContent = Controls.Stack.WithStyle("gap: 16px; padding: 16px;")
+            .WithView(Controls.Markdown("Set a partition access policy to restrict permissions for **all users** at this namespace. Turn off permissions to deny them."))
+            .WithView(new SwitchControl(new JsonPointerReference("allowRead"))
+            {
+                Label = "Read",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowCreate"))
+            {
+                Label = "Create",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowUpdate"))
+            {
+                Label = "Update",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowDelete"))
+            {
+                Label = "Delete",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("allowComment"))
+            {
+                Label = "Comment",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            })
+            .WithView(new SwitchControl(new JsonPointerReference("breaksInheritance"))
+            {
+                Label = "Break inheritance (discard roles from parent scopes)",
+                DataContext = LayoutAreaReference.GetDataPointer(formId)
+            });
+
+        var actions = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithStyle("gap: 8px;")
+            .WithView(Controls.Button("Cancel")
+                .WithAppearance(Appearance.Neutral)
+                .WithClickAction(cancelCtx =>
+                {
+                    cancelCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                    return Task.CompletedTask;
+                }))
+            .WithView(Controls.Button("Save")
+                .WithAppearance(Appearance.Accent)
+                .WithClickAction(async saveCtx =>
+                {
+                    var formValues = await saveCtx.Host.Stream
+                        .GetDataStream<Dictionary<string, object?>>(formId).FirstAsync();
+
+                    var policy = new PartitionAccessPolicy
+                    {
+                        Read = formValues.GetValueOrDefault("allowRead") is true ? null : false,
+                        Create = formValues.GetValueOrDefault("allowCreate") is true ? null : false,
+                        Update = formValues.GetValueOrDefault("allowUpdate") is true ? null : false,
+                        Delete = formValues.GetValueOrDefault("allowDelete") is true ? null : false,
+                        Comment = formValues.GetValueOrDefault("allowComment") is true ? null : false,
+                        BreaksInheritance = formValues.GetValueOrDefault("breaksInheritance") is true
+                    };
+
+                    await securityService.SetPolicyAsync(nodePath, policy);
+                    saveCtx.Host.UpdateArea(DialogControl.DialogArea, null!);
+                }));
+
+        var dialog = Controls.Dialog(formContent, "Partition Access Policy")
+            .WithSize("M")
+            .WithActions(actions);
+
+        ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
+        return Task.CompletedTask;
+    }
+}

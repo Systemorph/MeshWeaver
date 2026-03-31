@@ -1,0 +1,11 @@
+@using MeshWeaver.Blazor.Portal.Layout
+@inherits PortalLayoutBase
+
+@{
+    // Keep desktop nav visible (unlike MainLayout which hides it)
+    MobileNavMenu = @<MemexMobileMenu IsOpen="@IsNavMenuOpen" OnClose="@CloseMobileNavMenu" />;
+}
+
+@{
+    base.BuildRenderTree(__builder);
+}

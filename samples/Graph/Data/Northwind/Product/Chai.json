@@ -1,0 +1,23 @@
+{
+  "id": "Chai",
+  "namespace": "Northwind/Product",
+  "name": "Chai",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Chai - 10 boxes x 30 bags",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 1,
+    "productName": "Chai",
+    "supplierId": 8,
+    "categoryId": 1,
+    "quantityPerUnit": "10 boxes x 30 bags",
+    "unitPrice": 18.0,
+    "unitsInStock": 39,
+    "unitsOnOrder": 0,
+    "reorderLevel": 10,
+    "discontinued": true
+  }
+}

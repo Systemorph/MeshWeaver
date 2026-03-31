@@ -1,0 +1,193 @@
+@using MeshWeaver.Blazor.Components.Monaco
+@using MeshWeaver.Graph
+@using MeshWeaver.Layout
+@using MeshWeaver.Mesh
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<div class="mesh-search-container">
+    @if (BoundShowSearchBox || !string.IsNullOrEmpty(BoundTitle) || ShowCreateButton)
+    {
+        <div class="mesh-search-box">
+            <div class="mesh-search-box-inner">
+                @if (!string.IsNullOrEmpty(BoundTitle))
+                {
+                    <div class="mesh-search-title">@BoundTitle</div>
+                }
+                @if (BoundShowSearchBox)
+                {
+                    <div class="mesh-search-box-input">
+                        <MonacoEditorView @ref="monacoEditor"
+                                          Value="@_currentValue"
+                                          ValueChanged="@OnValueChanged"
+                                          OnSubmit="HandleSearch"
+                                          Placeholder="@BoundPlaceholder"
+                                          Height="38px"
+                                          MaxHeight="38px"
+                                          ShowBorder="true"
+                                          CodeEditMode="false"
+                                          AsyncCompletionCallback="@GetCompletionsAsync" />
+                    </div>
+                    <button type="button" class="mesh-search-button" @onclick="HandleSearch">
+                        Search
+                    </button>
+                    <button type="button" class="mesh-search-options-button" @onclick="ToggleSearchOptions"
+                            title="Search options">
+                        <FluentIcon Value="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size16.Settings())" />
+                    </button>
+                }
+                @if (ShowCreateButton)
+                {
+                    <button type="button" class="mesh-search-create-button" @onclick="HandleCreateClick"
+                            title="Create new">
+                        +
+                    </button>
+                }
+            </div>
+        </div>
+    }
+
+    @if (_showSearchOptions)
+    {
+        <div class="mesh-search-options-panel">
+            <div class="mesh-search-options-header">
+                <span>Query</span>
+                <button type="button" class="mesh-search-options-close" @onclick="ToggleSearchOptions">&times;</button>
+            </div>
+            <textarea class="mesh-search-options-query" rows="2"
+                      @bind="_editableHiddenQuery" @bind:event="oninput" />
+            <div class="mesh-search-options-actions">
+                <button type="button" class="mesh-search-button" @onclick="ApplySearchOptions">Apply</button>
+            </div>
+        </div>
+    }
+
+    <div class="mesh-search-results">
+        @if (_isLoading && !IsPrecomputedMode && BoundShowLoadingIndicator)
+        {
+            <div class="mesh-search-area-grid">
+                @for (var i = 0; i < 3; i++)
+                {
+                    <FluentCard Class="mesh-search-card">
+                        <div class="mesh-search-card-content">
+                            <div class="mesh-search-skeleton-avatar"></div>
+                            <div class="mesh-search-card-text">
+                                <div class="mesh-search-skeleton-line" style="width: 60%;"></div>
+                                <div class="mesh-search-skeleton-line" style="width: 40%;"></div>
+                            </div>
+                        </div>
+                    </FluentCard>
+                }
+            </div>
+        }
+        else if (!HasResults() && BoundShowEmptyMessage)
+        {
+            @if (ShowCreateButton)
+            {
+                <div class="mesh-search-empty-create" @onclick="HandleCreateClick">
+                    <div class="mesh-search-empty-icon">
+                        <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="8" y="12" width="48" height="40" rx="6" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3" opacity="0.4"/>
+                            <circle cx="32" cy="32" r="14" fill="var(--accent-fill-rest)" opacity="0.12"/>
+                            <line x1="32" y1="24" x2="32" y2="40" stroke="var(--accent-fill-rest)" stroke-width="2.5" stroke-linecap="round"/>
+                            <line x1="24" y1="32" x2="40" y2="32" stroke="var(--accent-fill-rest)" stroke-width="2.5" stroke-linecap="round"/>
+                        </svg>
+                    </div>
+                    <div class="mesh-search-empty-title">Nothing here yet</div>
+                    <div class="mesh-search-empty-hint">Click to create your first item</div>
+                </div>
+            }
+            else
+            {
+                <FluentLabel Typo="Microsoft.FluentUI.AspNetCore.Components.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+            }
+        }
+        else
+        {
+            var groups = GetGroups();
+            var skipHeaders = groups.Count == 1;
+
+            @foreach (var group in groups)
+            {
+                var isCollapsed = _collapsedGroups.Contains(group.GroupKey);
+                var showCollapsible = (BoundSections?.Collapsible ?? true) && !skipHeaders;
+                var showCounts = BoundSections?.ShowCounts ?? true;
+                var headerLabel = showCounts ? $"{group.Label} ({group.TotalCount})" : group.Label;
+                var groupKey = group.GroupKey;
+
+                <div class="mesh-search-section">
+                    @if (!skipHeaders)
+                    {
+                        @if (showCollapsible)
+                        {
+                            <div class="mesh-search-section-header" @onclick="() => ToggleGroup(groupKey)">
+                                <span class="@(isCollapsed ? "mesh-search-collapse-icon" : "mesh-search-collapse-icon expanded")">&#x25b6;</span>
+                                <span class="mesh-search-section-label">@headerLabel</span>
+                            </div>
+                        }
+                        else
+                        {
+                            <h3 class="mesh-search-section-title">@headerLabel</h3>
+                        }
+                    }
+
+                    @if (!isCollapsed)
+                    {
+                        <div class="mesh-search-grid-wrapper">
+                            <div class="mesh-search-area-grid" style="@CardGridStyle">
+                                @foreach (var item in group.Items)
+                                {
+                                    if (item is MeshNode node)
+                                    {
+                                        @RenderCard(node)
+                                    }
+                                }
+                            </div>
+                        </div>
+
+                        @if (group.Items.Count < group.TotalCount)
+                        {
+                            <div class="mesh-search-show-more" style="display: flex; align-items: center; gap: 12px; padding-top: 4px;">
+                                <span style="color: var(--neutral-foreground-hint);">Showing @group.Items.Count of @group.TotalCount</span>
+                                @if (!string.IsNullOrEmpty(BoundShowAllHref))
+                                {
+                                    <a href="@BoundShowAllHref" style="color: var(--accent-foreground-rest); text-decoration: none; font-size: 0.85rem; font-weight: 500;">Show all &rarr;</a>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private RenderFragment RenderCard(MeshNode node) => __builder =>
+    {
+        var cardControl = GetCardControl(node);
+        var clickAddress = ViewModel?.ClickMessageAddress?.ToString();
+
+        if (OnNodeSelected.HasDelegate)
+        {
+            <div style="cursor: pointer;" @onclick="() => OnNodeSelected.InvokeAsync(node)">
+                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+            </div>
+        }
+        else if (!string.IsNullOrEmpty(clickAddress))
+        {
+            <div style="cursor: pointer;" @onclick="() => PostClickMessage(node, clickAddress)">
+                <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+            </div>
+        }
+        else
+        {
+            <MeshNodeCardView ViewModel="@cardControl" Stream="@Stream" Area="@($"search-{node.Path}")" />
+        }
+    };
+
+    private void PostClickMessage(MeshNode node, string targetAddress)
+    {
+        Hub.Post(new NavigationRequest($"/{node.Path}") { Target = "SidePanel" },
+            o => o.WithTarget(new MeshWeaver.Messaging.Address(targetAddress)));
+    }
+}

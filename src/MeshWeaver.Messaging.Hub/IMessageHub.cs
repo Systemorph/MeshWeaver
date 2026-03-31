@@ -7,6 +7,13 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 {
     MessageHubConfiguration Configuration { get; }
     long Version { get; }
+
+    /// <summary>
+    /// Sets the initial version for the hub. Only callable during initialization
+    /// before any messages are processed.
+    /// </summary>
+    void SetInitialVersion(long version);
+
     Task Started { get; }
     IMessageDelivery<TMessage>? Post<TMessage>(TMessage message, Func<PostOptions, PostOptions>? options = null);
     IMessageDelivery DeliverMessage(IMessageDelivery delivery);
@@ -68,30 +75,25 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// Returns a non-null <see cref="IMessageHub"/> if <paramref name="create"/> is <see cref="HostedHubCreation.Always"/>.
     /// Returns <c>null</c> if <paramref name="create"/> is <see cref="HostedHubCreation.Never"/> and the hub does not exist.
     /// </summary>
-    IMessageHub? GetHostedHub<TAddress>(TAddress address, HostedHubCreation create)
-        where TAddress : Address
+    IMessageHub? GetHostedHub(Address address, HostedHubCreation create)
         => GetHostedHub(address, x => x, create);
 
     /// <summary>
     /// Gets a hosted hub for the specified address.
     /// </summary>
-    /// <typeparam name="TAddress"></typeparam>
     /// <param name="address"></param>
     /// <returns></returns>
-    IMessageHub GetHostedHub<TAddress>(TAddress address)
-        where TAddress : Address
+    IMessageHub GetHostedHub(Address address)
         => GetHostedHub(address, x => x);
 
 
     /// <summary>
     /// Gets a hosted hub for the specified address and configuration.
     /// </summary>
-    /// <typeparam name="TAddress"></typeparam>
     /// <param name="address"></param>
     /// <param name="config"></param>
     /// <returns></returns>
-    IMessageHub GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
-        where TAddress : Address
+    IMessageHub GetHostedHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config)
         => GetHostedHub(address, config, HostedHubCreation.Always)!;
 
     /// <summary>
@@ -99,8 +101,7 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
     /// Returns a non-null <see cref="IMessageHub"/> if <paramref name="create"/> is <see cref="HostedHubCreation.Always"/>.
     /// Returns <c>null</c> if <paramref name="create"/> is <see cref="HostedHubCreation.Never"/> and the hub does not exist.
     /// </summary>
-    IMessageHub? GetHostedHub<TAddress>(TAddress address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create)
-        where TAddress : Address;
+    IMessageHub? GetHostedHub(Address address, Func<MessageHubConfiguration, MessageHubConfiguration> config, HostedHubCreation create);
 
     IMessageHub RegisterForDisposal(IDisposable disposable) => RegisterForDisposal(_ => disposable.Dispose());
     IMessageHub RegisterForDisposal(Action<IMessageHub> disposeAction);
@@ -126,4 +127,17 @@ public interface IMessageHub : IMessageHandlerRegistry, IDisposable
 
 
     internal void Start();
+
+    /// <summary>
+    /// Faults the hub's Started task so that DataSource.Initialized will also fault.
+    /// Called when a stream errors during initialization (e.g., access denied).
+    /// </summary>
+    void FailStartup(Exception error);
+
+    /// <summary>
+    /// Cancels the currently executing handler's CancellationToken and creates a fresh one
+    /// for subsequent messages. Use this to abort long-running handlers (e.g., streaming)
+    /// without disposing the hub.
+    /// </summary>
+    void CancelCurrentExecution();
 }

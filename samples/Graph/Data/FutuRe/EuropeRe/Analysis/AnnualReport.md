@@ -1,0 +1,76 @@
+---
+NodeType: Markdown
+Title: "EuropeRe Profitability Report"
+Icon: /static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg
+Abstract: "Local profitability analysis for EuropeRe (EMEA, EUR), covering 8 local lines of business over an 18-month rolling window."
+Tags:
+  - "Profitability"
+  - "EuropeRe"
+  - "Local Analysis"
+---
+
+Local profitability analysis for EuropeRe (EMEA, EUR), covering 8 local lines of business over an 18-month rolling window.
+
+---
+
+## Key Performance Indicators
+
+The KPIs below summarise total premium, claims, and profitability ratios for EuropeRe's local lines of business.
+
+@@("FutuRe/EuropeRe/Analysis/KeyMetrics")
+
+---
+
+## Profit by Line of Business
+
+The chart below ranks each local line of business by net profit (Premium minus all cost components) across the full 18-month window.
+
+@@("FutuRe/EuropeRe/Analysis/ProfitByLoB")
+
+---
+
+## Monthly Profitability Overview
+
+The chart below shows the monthly P&L waterfall — premium income (positive) stacked against claims and cost components (negative), with a net profit line overlay.
+
+@@("FutuRe/EuropeRe/Analysis/ProfitabilityOverview")
+
+---
+
+## Line of Business Breakdown
+
+The table summarises estimated premium, claims, operating costs, net profit, and loss ratio for each local line of business across the full 18-month window.
+
+@@("FutuRe/EuropeRe/Analysis/ProfitabilityTable")
+
+---
+
+## Loss Ratios
+
+Loss ratio (Claims / Premium) is the primary underwriting performance metric. A ratio above 100 % indicates an underwriting loss on that line. The chart below compares loss ratios across all local lines of business.
+
+@@("FutuRe/EuropeRe/Analysis/LossRatio")
+
+---
+
+## Quarterly Trend
+
+Quarterly aggregation smooths monthly volatility and reveals seasonal patterns. The chart compares actual computed profit against expected profit budgets.
+
+@@("FutuRe/EuropeRe/Analysis/QuarterlyTrend")
+
+---
+
+## Annual Profitability Waterfall
+
+The waterfall chart below shows how total premium flows through claims and cost components to arrive at net profit.
+
+@@("FutuRe/EuropeRe/Analysis/AnnualProfitabilityWaterfall")
+
+---
+
+## Estimate vs Actual
+
+For amount types that track actuals (Premium, Claims, External Cost), the section below shows a month-by-month comparison table and a Premium estimate-vs-actual chart.
+
+@@("FutuRe/EuropeRe/Analysis/EstimateVsActual")

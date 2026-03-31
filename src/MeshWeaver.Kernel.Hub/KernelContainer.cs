@@ -1,7 +1,9 @@
 ﻿using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
+using MeshWeaver.Kernel;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
@@ -25,7 +27,6 @@ public class KernelContainer(IServiceProvider serviceProvider)
 {
 
     private readonly HashSet<Address> subscriptions = new();
-    private readonly IMeshCatalog meshCatalog = serviceProvider.GetRequiredService<IMeshCatalog>();
     private readonly ILogger<KernelContainer> logger = serviceProvider.GetRequiredService<ILogger<KernelContainer>>();
 
     /// <summary>
@@ -44,6 +45,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     public MessageHubConfiguration ConfigureHub(MessageHubConfiguration config)
     {
+        // Note: Kernel types are registered at mesh level in KernelNodeType.AddKernel
         return config
             .AddLayout(layout =>
                 layout.WithView(_ => true,
@@ -67,6 +69,21 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .WithInitialization((hub, _) =>
             {
                 DisposeOnTimeout(hub);
+                // Delete the kernel session MeshNode when the hub is disposed
+                hub.RegisterForDisposal(async (_, _) =>
+                {
+                    try
+                    {
+                        var meshService = hub.ServiceProvider.GetService<IMeshService>();
+                        var nodePath = $"{hub.Address}";
+                        if (meshService != null)
+                            await meshService.DeleteNodeAsync(nodePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to delete kernel session node on dispose");
+                    }
+                });
                 return Task.CompletedTask;
             })
             .WithHandler<KernelCommandEnvelope>(HandleKernelCommandEnvelope)
@@ -75,6 +92,42 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
             .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request));
 
+    }
+
+    /// <summary>
+    /// Hub configuration for kernel sub-hubs (local subhosts).
+    /// Includes AddLayout for layout area subscriptions but omits AddMeshTypes/WithRoutes.
+    /// </summary>
+    public MessageHubConfiguration ConfigureSubHub(MessageHubConfiguration config)
+    {
+        return config
+            .AddLayout(layout =>
+                layout.WithView(_ => true,
+                    (host, ctx) => GetAreaStream(host.Hub.ServiceProvider)
+                        .Select(a =>
+                        {
+                            var valueOrDefault = a.Value!.GetValueOrDefault(ctx.Area);
+                            if (valueOrDefault is null)
+                                return null;
+                            var uiControlService = host.Hub.ServiceProvider.GetRequiredService<IUiControlService>();
+                            return uiControlService.Convert(valueOrDefault);
+                        })
+                )
+            )
+            .WithServices(services => services
+                .AddScoped(CreateKernelAsync)
+                .AddScoped(CreateAreaStream)
+            )
+            .WithInitialization((hub, _) =>
+            {
+                DisposeOnTimeout(hub);
+                return Task.CompletedTask;
+            })
+            .WithHandler<KernelCommandEnvelope>(HandleKernelCommandEnvelope)
+            .WithHandler<SubmitCodeRequest>(HandleKernelCommand)
+            .WithHandler<SubscribeKernelEventsRequest>((_, request) => HandleSubscribe(request))
+            .WithHandler<UnsubscribeKernelEventsRequest>((_, request) => HandleUnsubscribe(request))
+            .WithHandler<KernelEventEnvelope>((_, request) => HandleKernelEvent(request));
     }
 
     ISynchronizationStream<ImmutableDictionary<string, object>> GetAreaStream(IServiceProvider sp)
@@ -93,53 +146,50 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
     }
 
-    private async Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
+    private Task<IMessageDelivery> RouteToSubHubs(IMessageHub kernelHub, IMessageDelivery request, CancellationToken cancellationToken)
     {
-        if (request.Target is not HostedAddress hosted || !kernelHub.Address.Equals(hosted.Host))
-            return request;
+        Address? subAddress = null;
+
+        // Pattern 1: Host-based routing (existing, for backward compat)
+        if (request.Target?.Host != null && kernelHub.Address.Equals(request.Target.Host))
+        {
+            subAddress = request.Target with { Host = null };
+        }
+        // Pattern 2: Path-based routing via UnifiedPath (local subhost for interactive markdown)
+        // The delivery target is the full address (e.g., kernel/test-kernel-xxx).
+        // We use it as the sub-hub address so HierarchicalRouting recognizes the sub-hub
+        // as the correct target (targetWithoutHost == hub.Address).
+        else if (request.Target != null
+                 && request.Properties.TryGetValue("UnifiedPath", out var unifiedPath)
+                 && unifiedPath is string path && !string.IsNullOrEmpty(path))
+        {
+            subAddress = request.Target;
+        }
+
+        if (subAddress == null)
+            return Task.FromResult(request);
+
         try
         {
-            var hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
+            var hub = kernelHub.GetHostedHub(
+                subAddress,
+                config => new KernelContainer(config.ParentHub!.ServiceProvider).ConfigureSubHub(config),
+                HostedHubCreation.Always);
+
             if (hub is not null)
             {
-                hub.DeliverMessage(request);
-                return request.Processed();
+                // Clear UnifiedPath to prevent routing loop in the sub-hub's own RouteToSubHubs
+                hub.DeliverMessage(request.SetProperty("UnifiedPath", ""));
+                return Task.FromResult(request.Processed());
             }
 
-            var meshNode = await meshCatalog.GetNodeAsync(hosted.Address);
-            if (meshNode == null)
-                return DeliveryFailure(kernelHub, request, $"No mesh node was found for {hosted.Address}");
-
-            if (meshNode.StartupScript is null)
-                return DeliveryFailure(kernelHub, request, $"No startup script is defined for {hosted.Address}");
-
-            var kernel = await kernelHub.ServiceProvider.GetRequiredService<Task<CompositeKernel>>();
-            var result = await kernel.SendAsync(new SubmitCode(meshNode.StartupScript), cancellationToken);
-            if (!result.Events.Any(e => e is CommandSucceeded))
-            {
-                var message = $"Startup script failed:\n{string.Join('\n',
-                    result.Events.OfType<DiagnosticsProduced>().SelectMany(d => d.FormattedDiagnostics.Select(z => z.Value)))}";
-
-                return DeliveryFailure(
-                    kernelHub, request,
-                    new DeliveryFailure(request) { ErrorType = ErrorType.StartupScriptFailed, Message = message });
-            }
-
-
-            hub = kernelHub.GetHostedHub(hosted.Address, HostedHubCreation.Never);
-            if (hub is not null)
-            {
-                hub.DeliverMessage(request.ForwardTo(hosted.Address));
-                return request.Processed();
-            }
-
-            return DeliveryFailure(kernelHub, request, $"Could not start hub for {hosted.Address}");
+            return Task.FromResult(DeliveryFailure(kernelHub, request, $"Could not create kernel sub-hub for {subAddress}"));
         }
         catch (ObjectDisposedException)
         {
-            logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}: {Command}", kernelHub.Address, request);
+            logger.LogInformation("Trying to invoke kernel command on disposed kernel: {Address}", kernelHub.Address);
             kernelHub.Dispose();
-            return request.Failed($"Kernel disposed");
+            return Task.FromResult(request.Failed("Kernel disposed"));
         }
         catch (Exception e)
         {
@@ -149,7 +199,7 @@ public class KernelContainer(IServiceProvider serviceProvider)
                 ExceptionType = e.GetType().Name,
                 Message = e.Message,
             }, o => o.ResponseFor(request));
-            return request.Failed($"No mesh node was found for {request.Target}");
+            return Task.FromResult(request.Failed(e.Message));
         }
     }
 
@@ -269,7 +319,17 @@ public class KernelContainer(IServiceProvider serviceProvider)
 
         ret.KernelInfo.Uri = new Uri(ret.KernelInfo.Uri.ToString().Replace("local", "mesh"));
 
-        ret.AddAssemblyReferences([typeof(IMessageHub).Assembly.Location, typeof(KernelAddress).Assembly.Location, typeof(UiControl).Assembly.Location, typeof(DataExtensions).Assembly.Location]);
+        ret.AddAssemblyReferences([
+            typeof(IMessageHub).Assembly.Location,
+            typeof(Address).Assembly.Location,
+            typeof(UiControl).Assembly.Location,
+            typeof(DataExtensions).Assembly.Location,
+            typeof(EntityStore).Assembly.Location, // MeshWeaver.Data.Contract - required for Layout types
+            typeof(System.ComponentModel.DescriptionAttribute).Assembly.Location,
+            typeof(System.ComponentModel.DataAnnotations.RequiredAttribute).Assembly.Location,
+            typeof(System.Reactive.Linq.Observable).Assembly.Location, // System.Reactive - for reactive UI examples
+            typeof(FluentIcons).Assembly.Location // MeshWeaver.Application.Styles - for icon support
+        ]);
 
         var composite = new CompositeKernel("mesh")
             .UseNugetDirective(OnResolve);
@@ -277,6 +337,23 @@ public class KernelContainer(IServiceProvider serviceProvider)
         composite.Add(ret);
         await Task.WhenAll(composite.ChildKernels.OfType<CSharpKernel>()
             .Select(k => k.SetValueAsync(nameof(Mesh), hub, typeof(IMessageHub))));
+
+        // Add default using directives for interactive markdown
+        // Note: We don't include "using static MeshWeaver.Layout.Controls;" because
+        // Controls.DateTime() conflicts with System.DateTime
+        var defaultUsings = @"
+using System;
+using System.Linq;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.DataGrid;
+using MeshWeaver.Messaging;
+";
+        await ret.SendAsync(new SubmitCode(defaultUsings));
         composite.KernelEvents.Subscribe(e => PublishEventToContext(hub, e));
 
         hub.RegisterForDisposal(composite);

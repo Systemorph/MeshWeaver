@@ -1,0 +1,120 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Mesh.Services
+@inject IPathResolver PathResolver
+
+@if (IsLoading)
+{
+    <div class="skeleton-placeholder">
+        <span style="font-size: 0.75rem; opacity: 0.45; letter-spacing: 0.02em;">@ShortName</span>
+        <div class="skeleton-line" style="width: 35%;"></div>
+        <div class="skeleton-line" style="width: 80%;"></div>
+        <div class="skeleton-line" style="width: 55%;"></div>
+    </div>
+}
+else if (ErrorMessage != null)
+{
+    <div class="layout-area-error" style="padding: 8px; color: #c00;">@ErrorMessage</div>
+}
+else if (ResolvedViewModel != null)
+{
+    <LayoutAreaView ViewModel="@ResolvedViewModel" />
+}
+else
+{
+    <div class="layout-area-error" style="padding: 8px; color: #c00;">Could not resolve path: @Path</div>
+}
+
+@code {
+    [Parameter]
+    public string? Path { get; set; }
+
+    private string ShortName => Path?.Contains('/') == true ? Path[(Path.LastIndexOf('/') + 1)..] : Path ?? "";
+
+    private bool IsLoading { get; set; } = true;
+    private string? ErrorMessage { get; set; }
+    private string? DiagInfo { get; set; }
+    private LayoutAreaControl? ResolvedViewModel { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrEmpty(Path))
+        {
+            IsLoading = false;
+            ErrorMessage = "No path specified";
+            return;
+        }
+
+        IsLoading = true;
+        ErrorMessage = null;
+        ResolvedViewModel = null;
+
+        try
+        {
+            if (PathResolver == null)
+            {
+                ErrorMessage = "PathResolver service not available";
+                return;
+            }
+
+            var resolution = await PathResolver.ResolvePathAsync(Path);
+            if (resolution != null)
+            {
+                var (area, id) = ParseRemainder(resolution.Remainder);
+                ResolvedViewModel = new LayoutAreaControl(
+                    (Messaging.Address)resolution.Prefix,
+                    new Data.LayoutAreaReference(area) { Id = id }
+                )
+                {
+                    ShowProgress = true,
+                    SpinnerType = Layout.SpinnerType.Skeleton,
+                    ProgressMessage = ShortName
+                };
+                DiagInfo = $"Resolved: {resolution.Prefix}" +
+                    (area != null ? $" area={area}" : "") +
+                    (id != null ? $" id={id}" : "");
+            }
+            else
+            {
+                ErrorMessage = $"Path not found: {Path}";
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Error resolving path: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static (string? Area, string? Id) ParseRemainder(string? remainder)
+    {
+        if (string.IsNullOrEmpty(remainder))
+            return (null, null);
+
+        // First, check for query string - it becomes the Id
+        string? queryString = null;
+        var questionIndex = remainder.IndexOf('?');
+        if (questionIndex >= 0)
+        {
+            queryString = remainder.Substring(questionIndex); // Keep the ? prefix
+            remainder = remainder.Substring(0, questionIndex);
+        }
+
+        // Now handle area/id from the path portion
+        var slashIndex = remainder.IndexOf('/');
+        if (slashIndex >= 0)
+        {
+            var area = remainder.Substring(0, slashIndex);
+            var pathId = remainder.Substring(slashIndex + 1);
+            // Combine path id with query string if both exist
+            var id = string.IsNullOrEmpty(pathId) ? queryString : (pathId + (queryString ?? ""));
+            return (area, id);
+        }
+
+        // No slash - remainder is the area, query string is the id
+        return (remainder, queryString);
+    }
+}

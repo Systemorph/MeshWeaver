@@ -1,0 +1,13 @@
+{
+  "id": "Roland",
+  "namespace": "User",
+  "name": "Roland Buergi",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "User",
+    "email": "rbuergi@systemorph.com",
+    "bio": "Founder of Systemorph and creator of MeshWeaver."
+  }
+}

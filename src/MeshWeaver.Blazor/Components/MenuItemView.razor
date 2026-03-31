@@ -1,41 +1,82 @@
-﻿@inherits SkinnedView<MenuItemControl, MenuItemSkin, MenuItemView>
+@using Icon = MeshWeaver.Domain.Icon
+@using MeshWeaver.Layout
+@inherits SkinnedView<MenuItemControl, MenuItemSkin, MenuItemView>
 @using FluentAppearance = Microsoft.FluentUI.AspNetCore.Components.Appearance
 
 @if (HasSubMenus)
 {
-    @if (HasTopLevelAction)
+    @if (IconOnly)
+    {
+        <!-- Icon-only mode with plain HTML dropdown -->
+        <div Style="@($"width: {Width}; {Style}; position: relative;")" class="icon-only-menu-container">
+            <FluentButton Appearance="@ButtonAppearance"
+                IconStart="@ButtonIcon"
+                Style="border-radius: 4px;"
+                OnClick="ToggleMenu" />
+            @if (isMenuOpen)
+            {
+                <div class="menu-backdrop" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 999;" @onclick="CloseMenu" @onclick:stopPropagation="true"></div>
+                <div class="dropdown-menu" style="position: absolute; top: 100%; right: 0; z-index: 1000; background: var(--neutral-layer-floating); border-radius: calc(var(--layer-corner-radius) * 1px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); min-width: 160px; padding: 4px 0;">
+                    <CascadingValue Name="IsInMenuContext" Value="true">
+                        @foreach (var area in ViewModel.Areas ?? [])
+                        {
+                            <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+                        }
+                    </CascadingValue>
+                </div>
+            }
+        </div>
+    }
+    else if (HasTopLevelAction)
     {
         <!-- Has top-level action AND sub-menus: Split button with main action and expand arrow -->
-        <FluentStack Orientation="Microsoft.FluentUI.AspNetCore.Components.Orientation.Horizontal"
-            Style="@($"display: flex; gap: 0; width: {Width}; {Style}")">
+        <div Style="@($"display: flex; gap: 0; width: {Width}; {Style}; position: relative;")">
             <FluentButton Appearance="@ButtonAppearance" OnClick="OnClick"
+                IconStart="@ButtonIcon"
                 Style="flex: 1; border-radius: 4px 0 0 4px; text-align: left; justify-content: flex-start; display: flex;">
                 @Title
             </FluentButton>
-            <FluentMenuButton  ButtonAppearance="@ButtonAppearance"
-                Style="border-radius: 0 4px 4px 0; width: 32px; flex-shrink: 0;">
-                @foreach (var area in ViewModel.Areas ?? [])
-                {
-                    <FluentMenuItem>
-                        <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
-                    </FluentMenuItem>
-                }
-            </FluentMenuButton>
-        </FluentStack>
+            <FluentButton Appearance="@ButtonAppearance"
+                IconEnd="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size12.ChevronDown())"
+                Style="border-radius: 0 4px 4px 0; width: 32px; flex-shrink: 0;"
+                OnClick="ToggleMenu" />
+            @if (isMenuOpen)
+            {
+                <div class="menu-backdrop" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 999;" @onclick="CloseMenu" @onclick:stopPropagation="true"></div>
+                <div class="dropdown-menu" style="position: absolute; top: 100%; right: 0; z-index: 1000; background: var(--neutral-layer-floating); border-radius: calc(var(--layer-corner-radius) * 1px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); min-width: 160px; padding: 4px 0;">
+                    <CascadingValue Name="IsInMenuContext" Value="true">
+                        @foreach (var area in ViewModel.Areas ?? [])
+                        {
+                            <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+                        }
+                    </CascadingValue>
+                </div>
+            }
+        </div>
     }
     else
     {
         <!-- No top-level action: Clicking button expands menu -->
-        <div Style="@($"width: {Width}; {Style}")">
-            <FluentMenuButton Text="@Title" Appearance="@ButtonAppearance"
-                Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
-                @foreach (var area in ViewModel.Areas ?? [])
-                {
-                    <FluentMenuItem>
-                        <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
-                    </FluentMenuItem>
-                }
-            </FluentMenuButton>
+        <div Style="@($"width: {Width}; {Style}; position: relative;")">
+            <FluentButton Appearance="@ButtonAppearance"
+                IconStart="@ButtonIcon"
+                IconEnd="@(new Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size12.ChevronDown())"
+                Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;"
+                OnClick="ToggleMenu">
+                @DisplayText
+            </FluentButton>
+            @if (isMenuOpen)
+            {
+                <div class="menu-backdrop" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 999;" @onclick="CloseMenu" @onclick:stopPropagation="true"></div>
+                <div class="dropdown-menu" style="position: absolute; top: 100%; left: 0; z-index: 1000; background: var(--neutral-layer-floating); border-radius: calc(var(--layer-corner-radius) * 1px); box-shadow: 0 4px 8px rgba(0,0,0,0.2); min-width: 100%; padding: 4px 0;">
+                    <CascadingValue Name="IsInMenuContext" Value="true">
+                        @foreach (var area in ViewModel.Areas ?? [])
+                        {
+                            <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+                        }
+                    </CascadingValue>
+                </div>
+            }
         </div>
     }
 }
@@ -44,6 +85,7 @@ else
     <!-- Regular menu item without sub-menus -->
     <div Style="@($"width: {Width}; {Style}")">
         <FluentButton OnClick="OnClick" Appearance="@ButtonAppearance"
+            IconStart="@ButtonIcon"
             Style="width: 100%; text-align: left; justify-content: flex-start; display: flex;">
             @Title
         </FluentButton>
@@ -53,15 +95,29 @@ else
 @code
 {
     private string? Title { get; set; }
+    private Icon? IconValue { get; set; }
     private FluentAppearance ButtonAppearance { get; set; } = FluentAppearance.Neutral;
     private string? Width { get; set; } = "auto";
     private bool HasSubMenus => ViewModel.Areas?.Any() == true;
     private bool HasTopLevelAction => ViewModel.IsClickable;
+    private bool isMenuOpen = false;
+
+    // Icon-only mode property
+    private bool IconOnly => Skin.IconOnly;
+
+    // Icon converted to FluentUI icon type
+    private Microsoft.FluentUI.AspNetCore.Components.Icon? ButtonIcon =>
+        IconValue?.ToFluentIcon();
+
+    // Display text: show title, or nothing if only icon (icon-only button)
+    private string? DisplayText =>
+        string.IsNullOrEmpty(Title) ? null : Title;
 
     protected override void BindData()
     {
         base.BindData();
         DataBind(Skin.Title, x => x.Title);
+        DataBind(Skin.Icon, x => x.IconValue);
         DataBind(Skin.Width, x => x.Width);
         DataBind(Skin.Style, x => x.Style);
 
@@ -70,6 +126,16 @@ else
         {
             ConvertToFluentAppearance(Skin.Appearance);
         }
+    }
+
+    private void ToggleMenu()
+    {
+        isMenuOpen = !isMenuOpen;
+    }
+
+    private void CloseMenu()
+    {
+        isMenuOpen = false;
     }
 
     private void ConvertToFluentAppearance(object appearance)

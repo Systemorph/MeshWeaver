@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks.Dataflow;
+using MeshWeaver.Reflection;
 using Microsoft.Extensions.Logging;
 // ReSharper disable InconsistentlySynchronizedField
 
@@ -45,7 +46,14 @@ public class MessageService : IMessageService
         this.logger = logger;
         this.hub = hub;
 
-        deliveryAction = new(x => x.Invoke());
+        deliveryAction = new(async x =>
+        {
+            try { await x.Invoke(); }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Unhandled exception in delivery pipeline for hub {Address}", address);
+            }
+        });
         postPipeline = hub.Configuration.PostPipeline
             .Aggregate(new SyncPipelineConfig(hub, d => d), (p, c) => c.Invoke(p)).SyncDelivery;
         hierarchicalRouting = new HierarchicalRouting(hub, parentHub);
@@ -104,7 +112,7 @@ public class MessageService : IMessageService
                         logger.LogDebug("Linking deferred buffer to main buffer for hub {Address}", Address);
                         deferredBuffer.LinkTo(buffer, new DataflowLinkOptions { PropagateCompletion = false });
 
-                        logger.LogInformation("Message hub {address} fully initialized (all gates opened)", Address);
+                        logger.LogDebug("Message hub {address} fully initialized (all gates opened)", Address);
                     }
                 }
 
@@ -123,12 +131,17 @@ public class MessageService : IMessageService
         logger.LogWarning("An exception occurred processing {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);
 
+        // Don't post DeliveryFailure during shutdown - recipients are likely also disposing
+        // and the messages just clog the pipeline
+        if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs)
+            return delivery;
+
         // Prevent recursive failure reporting - don't report failures for DeliveryFailure messages
         if (delivery.Message is not DeliveryFailure)
         {
             try
             {
-                var message = delivery.Properties.TryGetValue("Error", out var error) ? error.ToString() : $"Message delivery failed in address {Address}d}}";
+                var message = delivery.Properties.TryGetValue("Error", out var error) ? error.ToString() : $"Message delivery failed in address {Address}";
                 Post(new DeliveryFailure(delivery, message), new PostOptions(Address).ResponseFor(delivery));
             }
             catch (Exception ex)
@@ -155,30 +168,29 @@ public class MessageService : IMessageService
 
     private IMessageDelivery ScheduleNotify(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.Target);
+        // During shutdown, only allow ShutdownRequest and DisposeRequest through.
+        // All other messages (including DeliveryFailure) are dropped to prevent endless cascades.
+        if (hub.RunLevel >= MessageHubRunLevel.DisposeHostedHubs
+            && delivery.Message is not ShutdownRequest and not DisposeRequest)
+        {
+            logger.LogDebug("Dropping message {MessageType} (ID: {MessageId}) in {Address} - hub is shutting down (RunLevel={RunLevel})",
+                delivery.Message.GetType().Name, delivery.Id, Address, hub.RunLevel);
+            return delivery.Failed("Hub is shutting down");
+        }
 
         logger.LogDebug("Buffering message {MessageType} (ID: {MessageId}) in {Address}",
             delivery.Message.GetType().Name, delivery.Id, Address);
-
-        logger.LogTrace("MESSAGE_FLOW: POSTING_TO_DELIVERY_PIPELINE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
 
         // Always buffer to the main buffer - deferral logic will be handled in NotifyAsync
         // based on whether the message is actually targeted at this hub
         buffer.Post(() => NotifyAsync(delivery, cancellationToken));
 
-        logger.LogTrace("MESSAGE_FLOW: SCHEDULE_NOTIFY_END | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Result: Forwarded",
-            delivery.Message.GetType().Name, Address, delivery.Id);
         return delivery.Forwarded();
     }
 
     private async Task<IMessageDelivery> NotifyAsync(IMessageDelivery delivery, CancellationToken cancellationToken)
     {
         var name = GetMessageType(delivery);
-        logger.LogDebug(
-            "MESSAGE_FLOW: NOTIFY_START | {MessageType} | Hub: {Address} | MessageId: {MessageId} | Target: {Target}",
-            name, Address, delivery.Id, delivery.Target);
 
         if (delivery.State != MessageDeliveryState.Submitted)
             return delivery;
@@ -187,17 +199,32 @@ public class MessageService : IMessageService
         // For all other messages, wait for parent to be ready before routing
         if (ParentHub is not null)
         {
-            if (delivery.Target is HostedAddress ha && hub.Address.Equals(ha.Address) &&
-                ha.Host.Equals(ParentHub.Address))
-                delivery = delivery.WithTarget(ha.Address);
+            if (delivery.Target?.Host != null && hub.Address.Equals(delivery.Target) &&
+                delivery.Target.Host.Equals(ParentHub.Address))
+                delivery = delivery.WithTarget(delivery.Target with { Host = null });
         }
 
 
-        // Add current address to routing path (only if not already present to handle deferred messages)
-        if (!delivery.RoutingPath.Contains(hub.Address))
-            delivery = delivery.AddToRoutingPath(hub.Address);
+        // Compare target to hub address, ignoring the Host part (path tracking info)
+        var targetWithoutHost = delivery.Target is null ? null : (delivery.Target with { Host = null });
+        var isOnTarget = delivery.Target is null || (targetWithoutHost?.Equals(hub.Address) ?? false);
 
-        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+        // Detect routing loops: if this hub already processed this message and it's NOT on target,
+        // the message is bouncing between hubs with no valid destination.
+        if (delivery.RoutingPath.Contains(hub.Address))
+        {
+            if (!isOnTarget)
+            {
+                logger.LogWarning("Routing loop detected for {MessageType} (ID: {MessageId}) in {Address} targeting {Target} - failing message",
+                    name, delivery.Id, Address, delivery.Target);
+                return delivery.Failed($"Routing loop: no hub found for target {delivery.Target}");
+            }
+            // On-target re-visit is legitimate (e.g. deferred messages)
+        }
+        else
+        {
+            delivery = delivery.AddToRoutingPath(hub.Address);
+        }
 
         // Only defer messages that are targeted at this hub
         // Messages being routed through should not be deferred
@@ -228,35 +255,46 @@ public class MessageService : IMessageService
             bool shouldDefer = !gates.IsEmpty;
             if (shouldDefer)
             {
-                lock (gateStateLock)
+                // System messages like ShutdownRequest must never be deferred - they are critical
+                // for disposal and would cause deadlocks if deferred behind closed gates
+                if (delivery.Message is ShutdownRequest or DisposeRequest)
                 {
-                    shouldDefer = !gates.IsEmpty;
-                    if (shouldDefer)
+                    logger.LogDebug(
+                        "Allowing system message {MessageType} (ID: {MessageId}) through all gates for hub {Address}",
+                        delivery.Message.GetType().Name, delivery.Id, Address);
+                    shouldDefer = false;
+                }
+                else
+                {
+                    lock (gateStateLock)
                     {
-                        // Check all gate predicates
-                        foreach (var (gateName, allowDuringInit) in gates)
+                        shouldDefer = !gates.IsEmpty;
+                        if (shouldDefer)
                         {
-                            if (allowDuringInit(delivery))
+                            // Check all gate predicates
+                            foreach (var (gateName, allowDuringInit) in gates)
                             {
-                                logger.LogDebug(
-                                    "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
-                                    delivery.Message.GetType().Name, delivery.Id, gateName, Address);
-                                shouldDefer = false;
-                                break;
+                                if (allowDuringInit(delivery))
+                                {
+                                    logger.LogDebug(
+                                        "Allowing message {MessageType} (ID: {MessageId}) through gate '{GateName}' for hub {Address}",
+                                        delivery.Message.GetType().Name, delivery.Id, gateName, Address);
+                                    shouldDefer = false;
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    // If we still need to defer, post to deferred buffer and return
-                    if (shouldDefer)
-                    {
-                        logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
-                            delivery.Message.GetType().Name, delivery.Id, Address);
-                        deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
-                        return delivery.Forwarded();
+                        // If we still need to defer, post to deferred buffer and return
+                        if (shouldDefer)
+                        {
+                            logger.LogDebug("Deferring on-target message {MessageType} (ID: {MessageId}) in {Address}",
+                                delivery.Message.GetType().Name, delivery.Id, Address);
+                            deferredBuffer.Post(() => ProcessDeferredMessage(delivery, cancellationToken));
+                            return delivery.Forwarded();
+                        }
                     }
                 }
-
             }
 
             logger.LogTrace(
@@ -296,7 +334,9 @@ public class MessageService : IMessageService
         if (!delivery.RoutingPath.Contains(hub.Address))
             delivery = delivery.AddToRoutingPath(hub.Address);
 
-        var isOnTarget = delivery.Target is null || delivery.Target.Equals(hub.Address);
+        // Compare target to hub address, ignoring the Host part (path tracking info)
+        var deferredTargetWithoutHost = delivery.Target is null ? null : (delivery.Target with { Host = null });
+        var isOnTarget = delivery.Target is null || (deferredTargetWithoutHost?.Equals(hub.Address) ?? false);
 
         // Skip deferral check - we're reprocessing after gates opened
         if (isOnTarget)
@@ -317,7 +357,27 @@ public class MessageService : IMessageService
         return delivery;
     }
 
-    private readonly CancellationTokenSource cancellationTokenSource = new();
+    private volatile CancellationTokenSource cancellationTokenSource = new();
+
+    public void CancelExecution()
+    {
+        try
+        {
+            var old = cancellationTokenSource;
+            cancellationTokenSource = new CancellationTokenSource();
+            if (!old.IsCancellationRequested)
+            {
+                logger.LogDebug("Cancelling execution pipeline for hub {Address}", Address);
+                old.Cancel();
+            }
+            old.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed, ignore
+        }
+    }
+
     private IMessageDelivery ScheduleExecution(IMessageDelivery delivery)
     {
         logger.LogTrace("MESSAGE_FLOW: SCHEDULE_EXECUTION_START | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
@@ -339,10 +399,16 @@ public class MessageService : IMessageService
                 // Add timeout for disposal-related messages to prevent hangs
                 if (!isDisposing || delivery.Message is ShutdownRequest)
                 {
-
-                    delivery = await hub.HandleMessageAsync(delivery, cancellationTokenSource.Token);
-                    if (delivery.State == MessageDeliveryState.Ignored)
-                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
+                    // ShutdownRequest uses CancellationToken.None so disposal can't be cancelled
+                    // by CancelExecution() — other handlers CAN be cancelled to unblock the pipeline
+                    var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
+                    delivery = await hub.HandleMessageAsync(delivery, token);
+                    // Compare target without Host since Host tracks routing path
+                    var ignoredTargetWithoutHost = delivery.Target is not null ? delivery.Target with { Host = null } : null;
+                    if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
+                                            && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
+                                            && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
+                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}: {delivery.Message}"));
                 }
                 else
                 {
@@ -392,15 +458,32 @@ public class MessageService : IMessageService
 
 
     private static readonly HashSet<Type> ExcludedFromLogging = [typeof(ShutdownRequest)];
+
+    private static bool ShouldLogMessage(object message)
+    {
+        var messageType = message.GetType();
+
+        // Check static exclusion list
+        if (ExcludedFromLogging.Contains(messageType))
+            return false;
+
+        // Check for [PreventLogging] attribute on the message type
+        if (messageType.GetCustomAttribute<PreventLoggingAttribute>(inherit: true) != null)
+            return false;
+
+        return true;
+    }
+
     public IMessageDelivery? Post<TMessage>(TMessage message, PostOptions opt)
     {
         lock (locker)
         {
             if (message == null)
                 return null;
+
             var ret = PostImpl(message, opt);
-            if (!ExcludedFromLogging.Contains(message.GetType()))
-                logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
+            if (ShouldLogMessage(message))
+                logger.LogDebug("Posting message {Delivery} (ID: {MessageId}) in {Address}",
                     JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
             return ret;
         }
@@ -466,7 +549,7 @@ public class MessageService : IMessageService
     public async ValueTask DisposeAsync()
     {
         var totalStopwatch = Stopwatch.StartNew();
-        logger.LogInformation("Starting disposal of message service in {Address}", Address);
+        logger.LogDebug("Starting disposal of message service in {Address}", Address);
         // Open all remaining initialization gates to release any buffered messages
         foreach (var gateName in gates.Keys.ToArray())
         {
@@ -491,35 +574,37 @@ public class MessageService : IMessageService
 
         // Complete the buffers to stop accepting new messages
         var bufferStopwatch = Stopwatch.StartNew();
-        logger.LogDebug("Completing buffers for message service in {Address}", Address);
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Completing buffers (bufferCount={bufferCount}, deferredCount={deferredCount})",
+            Address, buffer.Count, deferredBuffer.Count);
         buffer.Complete();
         deferredBuffer.Complete();
         executionBuffer.Complete();
-        logger.LogDebug("Buffers completed in {elapsed}ms for {Address}", bufferStopwatch.ElapsedMilliseconds, Address);
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Buffers completed in {elapsed}ms", Address, bufferStopwatch.ElapsedMilliseconds);
 
         var deliveryStopwatch = Stopwatch.StartNew();
         try
         {
-            logger.LogDebug("Awaiting finishing deliveries in {Address}", Address);
-            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting deliveryAction.Completion (isCompleted={isCompleted})",
+                Address, deliveryAction.Completion.IsCompleted);
+            using var deliveryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             await deliveryAction.Completion.WaitAsync(deliveryTimeout.Token);
-            logger.LogDebug("Deliveries completed successfully in {elapsed}ms for {Address}",
-                deliveryStopwatch.ElapsedMilliseconds, Address);
+            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion done in {elapsed}ms",
+                Address, deliveryStopwatch.ElapsedMilliseconds);
         }
         catch (OperationCanceledException)
         {
-            logger.LogError("Delivery completion timed out after 5 seconds ({elapsed}ms) in {Address}",
-                deliveryStopwatch.ElapsedMilliseconds, Address);
+            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion TIMED OUT after {elapsed}ms",
+                Address, deliveryStopwatch.ElapsedMilliseconds);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error during delivery completion after {elapsed}ms in {Address}",
-                deliveryStopwatch.ElapsedMilliseconds, Address);
+            logger.LogDebug("[DISPOSE-TRACE] {address}: deliveryAction.Completion ERROR after {elapsed}ms: {error}",
+                Address, deliveryStopwatch.ElapsedMilliseconds, ex.Message);
         }
 
         // Don't wait for execution completion during disposal as this disposal itself
         // runs as an execution and might cause deadlocks waiting for itself
-        logger.LogDebug("Skipping execution completion wait during disposal for {Address}", Address);
+        logger.LogDebug("[DISPOSE-TRACE] {address}: Skipping executionBlock.Completion wait", Address);
 
         // Complete the startup task if it's still pending
         try
@@ -535,7 +620,7 @@ public class MessageService : IMessageService
         }
 
         totalStopwatch.Stop();
-        logger.LogInformation("Finished disposing message service in {Address} - total disposal time: {elapsed}ms",
+        logger.LogDebug("Finished disposing message service in {Address} - total disposal time: {elapsed}ms",
             Address, totalStopwatch.ElapsedMilliseconds);
     }
 

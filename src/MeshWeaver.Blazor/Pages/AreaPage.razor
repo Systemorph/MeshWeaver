@@ -1,4 +1,6 @@
-﻿@page "/area/{addressType}/{addressId}/{Area}/{**Id}"
+@* Routes for area pages - entire path is matched against registered namespace patterns *@
+@* The :nonfile constraint prevents matching static file paths like _content, _framework, etc. *@
+@page "/area/{*Path:nonfile}"
 @using MeshWeaver.Blazor.Layouts
 @layout EmptyLayout
 
@@ -6,7 +8,18 @@
 <PageTitle>@PageTitle</PageTitle>
 <div class="area-page-container @(IsContentReady ? "content-ready" : "content-loading")" data-area-loaded="@(IsContentReady ? "true" : "false")">
     <CascadingValue Value="@Mode" Name="ThemeMode">
-        <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+        @if (Resolution is null)
+        {
+            <div class="error-container">
+                <h2>Page Not Found</h2>
+                <p>The path '<strong>@Path</strong>' does not match any registered address pattern.</p>
+                <p>Please double-check the url you have entered.</p>
+            </div>
+        }
+        else
+        {
+            <LayoutAreaView ViewModel="@ViewModel" Top="true" />
+        }
     </CascadingValue>
 </div>
 

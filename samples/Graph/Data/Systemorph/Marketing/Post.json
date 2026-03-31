@@ -1,0 +1,18 @@
+{
+  "id": "Post",
+  "namespace": "Systemorph/Marketing",
+  "name": "Post",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A social media post for LinkedIn, X, or Instagram",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "Systemorph/Marketing",
+    "displayName": "Post",
+    "icon": "/static/storage/content/Systemorph/Marketing/icons/share.svg",
+    "description": "A social media post for LinkedIn, X, or Instagram",
+    "configuration": "config => config.WithContentType<Post>()"
+  }
+}

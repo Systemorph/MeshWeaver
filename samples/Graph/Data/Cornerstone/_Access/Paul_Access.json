@@ -1,0 +1,17 @@
+{
+  "id": "Paul_Access",
+  "namespace": "Cornerstone/_Access",
+  "name": "Paul Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Paul",
+    "displayName": "Paul Martinez",
+    "roles": [
+      {
+        "role": "Editor"
+      }
+    ]
+  }
+}

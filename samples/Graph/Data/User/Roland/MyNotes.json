@@ -1,0 +1,14 @@
+{
+  "id": "MyNotes",
+  "namespace": "User/Roland",
+  "name": "My Notes",
+  "nodeType": "Markdown",
+  "description": "A personal space for ideas, notes, and drafts",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "title": "My Notes",
+    "content": "# My Notes\n\nThis is your personal space. Use it to capture ideas, write drafts, or organize your thoughts.\n\n## Getting started\n\n- **Edit this page** to make it your own \u2014 click the pencil icon above\n- **Create sub-pages** to organize content into topics\n- **Use the chat** at the top of your dashboard to ask questions or brainstorm with the AI assistant\n\n## Tips\n\n- Pages support rich **Markdown** with code blocks, tables, diagrams (Mermaid), and math (MathJax)\n- You can link to other nodes by referencing their path: `@path/to/node`\n- Collaborate with others by sharing your page's URL"
+  }
+}

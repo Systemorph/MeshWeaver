@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="Memex.Portal.Monolith/Memex.Portal.Monolith.csproj" />
+  <Project Path="Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
+  <Folder Name="aspire">
+    <Project Path="aspire/Memex.AppHost/Memex.AppHost.csproj" />
+    <Project Path="aspire/Memex.Portal.Distributed/Memex.Portal.Distributed.csproj" />
+    <Project Path="aspire/Memex.Database.Migration/Memex.Database.Migration.csproj" />
+    <Project Path="aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
+  </Folder>
+</Solution>

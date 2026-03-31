@@ -1,0 +1,18 @@
+{
+  "id": "EUR-TECH_RISK-PROF",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Technology Risk → Professional Liability (40%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-TECH_RISK-PROF",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "TECH_RISK",
+    "localLineOfBusinessName": "Technology Risk",
+    "groupLineOfBusiness": "PROF",
+    "groupLineOfBusinessName": "Professional Liability",
+    "percentage": 0.4
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

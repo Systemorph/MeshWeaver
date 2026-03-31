@@ -1,0 +1,23 @@
+{
+  "id": "FOLIG",
+  "namespace": "Northwind/Customer",
+  "name": "Folies gourmandes",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Folies gourmandes - Lille, France",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "FOLIG",
+    "companyName": "Folies gourmandes",
+    "contactName": "Martine Ranc\u00e9",
+    "contactTitle": "Assistant Sales Agent",
+    "city": "Lille",
+    "region": "",
+    "postalCode": "59000",
+    "country": "France",
+    "phone": "20.16.10.16",
+    "fax": "20.16.10.17"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "Systemorph",
+  "name": "Systemorph",
+  "nodeType": "Organization",
+  "description": "The company behind MeshWeaver",
+  "icon": "/static/storage/content/Systemorph/logo_t.png",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "Organization",
+    "name": "Systemorph",
+    "description": "Systemorph Cloud",
+    "website": "https://systemorph.cloud",
+    "logo": "/static/storage/content/Systemorph/logo_t.png",
+    "location": "Switzerland",
+    "email": "cloud@systemorph.com",
+    "isVerified": true
+  }
+}

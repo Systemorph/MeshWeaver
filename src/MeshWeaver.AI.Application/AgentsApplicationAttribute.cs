@@ -8,7 +8,7 @@ namespace MeshWeaver.AI.Application;
 /// <summary>
 /// Mesh node attribute for the Agents application
 /// </summary>
-public class AgentsApplicationAttribute : MeshNodeAttribute
+public class AgentsApplicationAttribute : MeshNodeProviderAttribute
 {
     public override IEnumerable<MeshNode> Nodes =>
     [

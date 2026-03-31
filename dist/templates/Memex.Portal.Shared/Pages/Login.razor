@@ -1,0 +1,91 @@
+@page "/login"
+@using MeshWeaver.Blazor.Portal.Authentication
+@inject IAuthenticationNavigationService AuthNavService
+@inject NavigationManager Navigation
+
+<PageTitle>Sign In - Memex Portal</PageTitle>
+
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <h1>Sign in to Memex</h1>
+            <p class="login-subtitle">Choose your preferred sign-in method</p>
+        </div>
+
+        @if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
+                @ErrorMessage
+            </FluentMessageBar>
+        }
+
+        <FluentStack Orientation="Orientation.Vertical" VerticalGap="12">
+            @foreach (var provider in Providers)
+            {
+                var url = GetProviderLoginUrl(provider.Name);
+                var cssClass = $"provider-btn provider-{provider.Name.ToLowerInvariant()}";
+                <button class="@cssClass" @onclick="() => Navigation.NavigateTo(url, forceLoad: true)">
+                    <span class="provider-icon">@GetProviderIcon(provider.Name)</span>
+                    <span>Continue with @(provider.DisplayName ?? provider.Name)</span>
+                </button>
+            }
+
+            @if (ShowDevLogin)
+            {
+                <div class="divider">
+                    <span>Developer Mode</span>
+                </div>
+                <button class="provider-btn provider-dev" @onclick="NavigateToDevLogin">
+                    <span class="provider-icon">&#x1F6E0;&#xFE0F;</span>
+                    <span>Developer Login</span>
+                </button>
+            }
+        </FluentStack>
+    </div>
+</div>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? ErrorMessage { get; set; }
+
+    private IReadOnlyList<ExternalProviderConfig> Providers { get; set; } = [];
+    private bool ShowDevLogin { get; set; }
+
+    private void NavigateToDevLogin()
+    {
+        var url = ReturnUrl != null ? $"/dev/login?ReturnUrl={Uri.EscapeDataString(ReturnUrl)}" : "/dev/login";
+        Navigation.NavigateTo(url, forceLoad: true);
+    }
+
+    protected override void OnInitialized()
+    {
+        if (AuthNavService is AuthenticationNavigationService navService)
+        {
+            Providers = navService.GetAvailableProviders();
+            ShowDevLogin = navService.IsDevMode;
+        }
+    }
+
+    private string GetProviderLoginUrl(string providerName)
+    {
+        var url = $"/auth/login?provider={Uri.EscapeDataString(providerName)}";
+        if (ReturnUrl != null)
+            url += $"&returnUrl={Uri.EscapeDataString(ReturnUrl)}";
+        return url;
+    }
+
+    private static string GetProviderIcon(string provider)
+    {
+        return provider.ToLowerInvariant() switch
+        {
+            "microsoft" => "\U0001faaa",
+            "google" => "\U0001f310",
+            "linkedin" => "\U0001f4bc",
+            "apple" => "\U0001f34e",
+            _ => "\U0001f511"
+        };
+    }
+}

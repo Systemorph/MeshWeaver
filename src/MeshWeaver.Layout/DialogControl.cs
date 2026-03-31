@@ -47,7 +47,33 @@ public record DialogControl
         => this with { Content = content };
 
     /// <summary>
-    /// Whether the dialog can be closed with the X button
+    /// Actions to display in the dialog footer (e.g., Cancel + Create buttons).
+    /// Typically a horizontal stack with buttons.
+    /// When set, replaces the default Close button in the footer.
+    /// </summary>
+    internal object? Actions { get; init; }
+
+    /// <summary>
+    /// Actions area rendered in the dialog footer.
+    /// </summary>
+    public NamedAreaControl ActionsArea { get; init; } =
+        new($"{DialogArea}/{nameof(ActionsArea)}");
+
+    /// <summary>
+    /// Whether dialog actions have been set.
+    /// Used by the Blazor view to determine footer rendering.
+    /// </summary>
+    public bool HasActions { get; init; }
+
+    /// <summary>
+    /// Sets the actions to display in the dialog footer.
+    /// </summary>
+    public DialogControl WithActions(object actions)
+        => this with { Actions = actions, HasActions = true };
+
+    /// <summary>
+    /// Whether the dialog shows a Close button in the footer.
+    /// When true, adds a Close button that dismisses the dialog.
     /// </summary>
     public object? IsClosable { get; init; }
 
@@ -57,7 +83,7 @@ public record DialogControl
     public object? Size { get; init; } = "M";
 
     /// <summary>
-    /// Callback when dialog is closed
+    /// Callback when dialog is closed (via Close button)
     /// </summary>
     internal Func<DialogCloseActionContext, Task>? CloseAction { get; init; }
 
@@ -67,7 +93,7 @@ public record DialogControl
     public DialogControl WithTitle(object? title) => this with { Title = title };
 
     /// <summary>
-    /// Sets whether the dialog is closable
+    /// Sets whether the dialog shows a Close button
     /// </summary>
     public DialogControl WithClosable(object? closable) => this with { IsClosable = closable };
 
@@ -77,12 +103,12 @@ public record DialogControl
     public DialogControl WithSize(object? size) => this with { Size = size };
 
     /// <summary>
-    /// Sets the close action for the dialog
+    /// Sets the close action for the dialog (called when Close button is clicked)
     /// </summary>
     public DialogControl WithCloseAction(Func<DialogCloseActionContext, Task> onClose) => this with { CloseAction = onClose };
 
     /// <summary>
-    /// Sets the close action for the dialog
+    /// Sets the close action for the dialog (called when Close button is clicked)
     /// </summary>
     public DialogControl WithCloseAction(Action<DialogCloseActionContext> onClose) =>
         WithCloseAction(c =>
@@ -99,10 +125,16 @@ public record DialogControl
         if (Content is UiControl contentControl)
         {
             var renderedContent = host.RenderArea(GetContextForArea(context, nameof(ContentArea)), contentControl, ret.Store);
-            return renderedContent with { Updates = ret.Updates.Concat(renderedContent.Updates) };
+            ret = renderedContent with { Updates = ret.Updates.Concat(renderedContent.Updates) };
         }
 
-        // Otherwise, return as-is for non-UiControl content (strings, etc.)
+        // If Actions are set, render them in the ActionsArea for the dialog footer
+        if (Actions is UiControl actionsControl)
+        {
+            var renderedActions = host.RenderArea(GetContextForArea(context, nameof(ActionsArea)), actionsControl, ret.Store);
+            ret = renderedActions with { Updates = ret.Updates.Concat(renderedActions.Updates) };
+        }
+
         return ret;
     }
 

@@ -1,0 +1,296 @@
+using System;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using FluentAssertions.Extensions;
+using MeshWeaver.Data;
+using MeshWeaver.Domain;
+using MeshWeaver.Fixture;
+using MeshWeaver.Hosting.Persistence;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// Dedicated tests for MeshNodeTypeSource functionality.
+/// Tests persistence, loading, and synchronization of MeshNode data.
+/// With the simplified architecture, content ONLY lives inside MeshNode.Content.
+/// </summary>
+public class MeshNodeTypeSourceTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private InMemoryPersistenceService _persistence = null!;
+    private static readonly JsonSerializerOptions JsonOptions = new();
+
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
+    {
+        _persistence = new InMemoryPersistenceService();
+
+        return conf
+            .WithServices(services => services.AddInMemoryPersistence(_persistence))
+            .WithRoutes(forward => forward
+                .RouteAddressToHostedHub(HostType, AddUpdateHandler)
+                .RouteAddressToHostedHub(ClientType, ConfigureClient));
+    }
+
+    private MessageHubConfiguration AddUpdateHandler(MessageHubConfiguration c)
+        => c.WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest);
+
+    private async Task<IMessageDelivery> HandleUpdateNodeRequest(
+        IMessageHub hub, IMessageDelivery<UpdateNodeRequest> request, CancellationToken ct)
+    {
+        var node = request.Message.Node;
+        await _persistence.SaveNodeAsync(node, JsonOptions, ct);
+        hub.Post(UpdateNodeResponse.Ok(node), o => o.ResponseFor(request));
+        return request.Processed();
+    }
+
+    private IMessageHub GetHostWithHandler(string hostId, Func<MessageHubConfiguration, MessageHubConfiguration> config)
+        => Mesh.GetHostedHub(new Address(HostType, hostId), c => AddUpdateHandler(config(c)));
+
+    protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
+    {
+        return AddUpdateHandler(base.ConfigureHost(configuration)
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration);
+
+    private string GetHubPath(string hostId = "1") => $"{HostType}/{hostId}";
+
+    [HubFact]
+    public async Task MeshNodeTypeSource_LoadsNodeFromPersistence()
+    {
+        // Arrange - Save a node to persistence
+        var hubPath = GetHubPath("load-test");
+        var content = new TestContent { Id = "1", Title = "Test Item", Notes = "Test notes" };
+        var node = MeshNode.FromPath(hubPath) with
+        {
+            Name = "Test Node",
+            Icon = "Star",
+            Category = "Testing",
+            NodeType = "test",
+            Content = content
+        };
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+
+        // Act - Start a hub for that path
+        var host = GetHostWithHandler("load-test", c => c
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Assert - MeshNode should be loaded with correct properties
+        var meshNodeStream = workspace.GetStream<MeshNode>();
+        var loadedNodes = await meshNodeStream!
+            .Where(nodes => nodes?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        loadedNodes.Should().NotBeNull();
+        var loadedNode = loadedNodes.FirstOrDefault();
+        loadedNode.Should().NotBeNull();
+        loadedNode!.Name.Should().Be("Test Node");
+        loadedNode.Icon.Should().Be("Star");
+        loadedNode.Category.Should().Be("Testing");
+        loadedNode.Content.Should().NotBeNull();
+    }
+
+    [HubFact]
+    public async Task MeshNodeTypeSource_PersistsChanges()
+    {
+        // Arrange
+        var hubPath = GetHubPath("persist-test");
+        var content = new TestContent { Id = "1", Title = "Original", Notes = "Original notes" };
+        var node = MeshNode.FromPath(hubPath) with
+        {
+            Name = "Original Name",
+            NodeType = "test",
+            Content = content
+        };
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+
+        var host = GetHostWithHandler("persist-test", c => c
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Wait for initial load
+        var meshNodeStream = workspace.GetStream<MeshNode>();
+        await meshNodeStream!
+            .Where(nodes => nodes?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Act - Update the node via workspace
+        var updatedNode = node with
+        {
+            Name = "Updated Name"
+        };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+
+        // Wait for the update to be reflected in the stream (reactive query)
+        await meshNodeStream!
+            .Where(nodes => nodes?.FirstOrDefault()?.Name == "Updated Name")
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
+
+        // Assert - Changes should be persisted
+        var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        persistedNode.Should().NotBeNull();
+        persistedNode!.Name.Should().Be("Updated Name");
+    }
+
+    [HubFact]
+    public async Task MeshNodeTypeSource_UpdatesContentInMeshNode()
+    {
+        // Arrange
+        var hubPath = GetHubPath("sync-test");
+        var content = new TestContent { Id = "1", Title = "Initial Title", Notes = "Initial notes" };
+        var node = MeshNode.FromPath(hubPath) with
+        {
+            Name = "Node Name",
+            NodeType = "test",
+            Content = content
+        };
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+
+        var host = GetHostWithHandler("sync-test", c => c
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Wait for initial load - content is inside MeshNode.Content
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
+            .Where(items => items?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Act - Update MeshNode with new content
+        var currentNode = nodes.First();
+        var updatedContent = new TestContent { Id = "1", Title = "Synced Title", Notes = "Synced notes" };
+        var updatedNode = currentNode with
+        {
+            Content = updatedContent,
+            Name = "Synced Title"
+        };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+
+        // Wait for the update to be reflected in the stream (reactive query)
+        await nodeStream!
+            .Where(items => items?.FirstOrDefault()?.Name == "Synced Title")
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
+
+        // Assert - MeshNode properties should be persisted
+        var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        persistedNode.Should().NotBeNull();
+        persistedNode!.Name.Should().Be("Synced Title");
+    }
+
+    [HubFact]
+    public async Task MeshNodeTypeSource_HandlesTransientState()
+    {
+        // Arrange - Create a transient node
+        var hubPath = GetHubPath("transient-test");
+        var content = new TestContent { Id = "1", Title = "Transient Item", Notes = "Draft" };
+        var node = MeshNode.FromPath(hubPath) with
+        {
+            Name = "Transient Node",
+            State = MeshNodeState.Transient,
+            NodeType = "test",
+            Content = content
+        };
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+
+        var host = GetHostWithHandler("transient-test", c => c
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Act - Load and verify state
+        var meshNodeStream = workspace.GetStream<MeshNode>();
+        var loadedNodes = await meshNodeStream!
+            .Where(nodes => nodes?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Assert
+        var loadedNode = loadedNodes.First();
+        loadedNode.State.Should().Be(MeshNodeState.Transient);
+    }
+
+    [HubFact]
+    public async Task MeshNodeTypeSource_PreservesNodeTypeOnUpdate()
+    {
+        // Arrange
+        var hubPath = GetHubPath("nodetype-test");
+        var content = new TestContent { Id = "1", Title = "Test", Notes = "Notes" };
+        var node = MeshNode.FromPath(hubPath) with
+        {
+            Name = "Test Node",
+            NodeType = "ACME/Project/Todo",
+            Content = content
+        };
+        await _persistence.SaveNodeAsync(node, JsonOptions);
+
+        var host = GetHostWithHandler("nodetype-test", c => c
+            .AddMeshDataSource(ds => ds.WithContentType<TestContent>()));
+
+        var workspace = host.GetWorkspace();
+
+        // Wait for initial load - content is inside MeshNode
+        var nodeStream = workspace.GetStream<MeshNode>();
+        var nodes = await nodeStream!
+            .Where(items => items?.Any() == true)
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Act - Update MeshNode
+        var currentNode = nodes.First();
+        var updatedContent = new TestContent { Id = "1", Title = "Updated Title", Notes = "Notes" };
+        var updatedNode = currentNode with { Content = updatedContent, Name = "Updated Title" };
+        workspace.RequestChange(DataChangeRequest.Update([updatedNode]), null, null);
+
+        // Wait for the update to be reflected in the stream (reactive query)
+        await nodeStream!
+            .Where(items => items?.FirstOrDefault()?.Name == "Updated Title")
+            .Timeout(5.Seconds())
+            .FirstAsync();
+
+        // Wait for debounced persistence flush (200ms debounce + buffer)
+        await Task.Delay(300);
+
+        // Assert - NodeType should be preserved
+        var persistedNode = await _persistence.GetNodeAsync(hubPath, JsonOptions);
+        persistedNode.Should().NotBeNull();
+        persistedNode!.NodeType.Should().Be("ACME/Project/Todo");
+    }
+}
+
+/// <summary>
+/// Test content type for MeshNodeTypeSource tests.
+/// </summary>
+public record TestContent
+{
+    [Key]
+    public string Id { get; init; } = "";
+
+    [MeshNodeProperty("Name")]
+    public string Title { get; init; } = "";
+
+    public string Notes { get; init; } = "";
+}

@@ -1,10 +1,10 @@
-﻿// In an appropriate extensions class (e.g., ArticleConfigurationExtensions.cs)
-
-using Azure.Storage.Blobs;
+﻿using Azure.Storage.Blobs;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Azure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace MeshWeaver.Hosting.AzureBlob;
 
@@ -13,9 +13,16 @@ public static class ArticleConfigurationExtensions
     public static IServiceCollection AddAzureBlob(
         this IServiceCollection services)
     {
-        return services
-            .AddKeyedSingleton<IStreamProviderFactory, AzureBlobStreamProviderFactory>(
-                AzureBlobStreamProviderFactory.SourceType);
+        // Register the stream provider factory for AzureBlob source type
+        services.AddKeyedSingleton<IStreamProviderFactory, AzureBlobStreamProviderFactory>(
+            AzureBlobStreamProviderFactory.SourceType);
+
+        // Register fallback factory only if IAzureClientFactory is not already registered.
+        // This allows Aspire's AddAzureBlobClient to take precedence when available,
+        // while falling back to connection string configuration for non-Aspire scenarios.
+        services.TryAddSingleton<IAzureClientFactory<BlobServiceClient>, FallbackBlobServiceClientFactory>();
+
+        return services;
     }
     public static MessageHubConfiguration AddAzureBlob(
         this MessageHubConfiguration config) =>
@@ -81,6 +88,27 @@ public class AzureBlobStreamProviderFactory(IServiceProvider serviceProvider) : 
         var clientName = config.Settings.GetValueOrDefault("ClientName", "default");
         var blobServiceClient = factory.CreateClient(clientName);
 
-        return Task.FromResult<IStreamProvider>(new AzureBlobStreamProvider(blobServiceClient, containerName));
+        var basePath = config.BasePath ?? config.Settings?.GetValueOrDefault("BasePath") ?? "";
+        return Task.FromResult<IStreamProvider>(new AzureBlobStreamProvider(blobServiceClient, containerName, basePath));
+    }
+}
+
+/// <summary>
+/// Fallback factory that creates BlobServiceClient from connection string configuration.
+/// Used when IAzureClientFactory is not registered (e.g., non-Aspire scenarios).
+/// Reads connection string from Graph:ConnectionString configuration section.
+/// </summary>
+public class FallbackBlobServiceClientFactory(IConfiguration configuration) : IAzureClientFactory<BlobServiceClient>
+{
+    public BlobServiceClient CreateClient(string name)
+    {
+        var connectionString = configuration.GetSection("Graph")["ConnectionString"];
+        if (string.IsNullOrEmpty(connectionString))
+        {
+            throw new InvalidOperationException(
+                "Graph:ConnectionString is required for AzureBlob content collections when IAzureClientFactory<BlobServiceClient> is not registered. " +
+                "Either configure the connection string in appsettings.json, or use Aspire's AddAzureBlobClient to register the Azure client factory.");
+        }
+        return new BlobServiceClient(connectionString);
     }
 }

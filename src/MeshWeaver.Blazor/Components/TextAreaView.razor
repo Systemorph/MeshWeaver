@@ -4,7 +4,7 @@
 <FluentTextArea @bind-Value="Value" Placeholder="@Placeholder" Label="@Label" Autofocus="@AutoFocus"
     Disabled="@Disabled" Immediate="@Immediate" ImmediateDelay="@ImmediateDelay" Style="@Style" Class="@Class"
     Readonly="@Readonly" Required="@Required" Size="@Size" MinLength="@MinLength" MaxLength="@MaxLength" Rows="@Rows"
-    Cols="@Cols" Resize="@Resize">
+    Cols="@Cols" Resize="@Resize" @onfocusout="OnBlur">
     @if (IconStart is not null)
     {
         <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />

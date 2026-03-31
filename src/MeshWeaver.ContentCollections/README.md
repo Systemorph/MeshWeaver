@@ -24,13 +24,13 @@ MeshWeaver.Articles is a specialized component of the MeshWeaver ecosystem that 
       "Name": "Documentation",
       "DisplayName": "Documentation",
       "DefaultAddress": "app/Documentation",
-      "BasePath": "../../modules/Documentation/MeshWeaver.Documentation/Markdown"
+      "BasePath": "../../samples/Documentation/MeshWeaver.Documentation/Markdown"
     },
     {
       "Name": "Northwind",
       "DisplayName": "Northwind",
       "DefaultAddress": "app/Northwind",
-      "BasePath": "../../modules/Northwind/MeshWeaver.Northwind.ViewModel/Markdown"
+      "BasePath": "../../samples/Northwind/MeshWeaver.Northwind.ViewModel/Markdown"
     }
   ]
 }

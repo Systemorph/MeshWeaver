@@ -1,0 +1,65 @@
+@page "/search"
+@using MeshWeaver.Layout
+@using MeshWeaver.Blazor.Components
+@using MeshWeaver.Messaging
+@using Microsoft.FluentUI.AspNetCore.Components
+@inject IMessageHub Hub
+
+<PageTitle>Search - Memex</PageTitle>
+
+<div style="max-width: 1400px; margin: 0 auto; padding: 24px; width: 100%;">
+    <MeshSearchView ViewModel="@searchControl" />
+</div>
+
+@code {
+    /// <summary>Visible query — editable in the search box.</summary>
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? Query { get; set; }
+
+    /// <summary>Hidden query parts — always appended. Supports multiple ?hq=...&amp;hq=... values.</summary>
+    [SupplyParameterFromQuery(Name = "hq")]
+    public string[]? HiddenQueries { get; set; }
+
+    /// <summary>Namespace scope for search.</summary>
+    [SupplyParameterFromQuery(Name = "ns")]
+    public string? Namespace { get; set; }
+
+    /// <summary>Render mode: Flat, Grouped, Hierarchical.</summary>
+    [SupplyParameterFromQuery(Name = "mode")]
+    public string? Mode { get; set; }
+
+    /// <summary>Max items per section (default 50).</summary>
+    [SupplyParameterFromQuery(Name = "limit")]
+    public int? Limit { get; set; }
+
+    private MeshSearchControl searchControl = new();
+
+    protected override void OnParametersSet()
+    {
+        var control = Controls.MeshSearch
+            .WithVisibleQuery(Query ?? "")
+            .WithPlaceholder("Search... (e.g. nodeType:Thread, namespace:ACME scope:descendants)")
+            .WithSectionCounts(true)
+            .WithCollapsibleSections(true)
+            .WithItemLimit(Limit ?? 50);
+
+        var hiddenQuery = HiddenQueries != null
+            ? string.Join(" ", HiddenQueries.Where(q => !string.IsNullOrWhiteSpace(q)))
+            : null;
+        if (!string.IsNullOrWhiteSpace(hiddenQuery))
+            control = control.WithHiddenQuery(hiddenQuery);
+
+        if (!string.IsNullOrWhiteSpace(Namespace))
+            control = control.WithNamespace(Namespace);
+
+        var renderMode = Mode?.ToLowerInvariant() switch
+        {
+            "flat" => MeshSearchRenderMode.Flat,
+            "hierarchical" => MeshSearchRenderMode.Hierarchical,
+            _ => MeshSearchRenderMode.Grouped
+        };
+        control = control.WithRenderMode(renderMode);
+
+        searchControl = control;
+    }
+}

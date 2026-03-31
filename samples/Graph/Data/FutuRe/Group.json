@@ -1,0 +1,18 @@
+{
+  "id": "Group",
+  "namespace": "FutuRe",
+  "name": "FutuRe Group",
+  "nodeType": "FutuRe/BusinessUnit",
+  "category": "Business Units",
+  "description": "FutuRe Group holding company — consolidated group reporting in CHF",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "BusinessUnit",
+    "id": "Group",
+    "name": "FutuRe Group",
+    "description": "FutuRe Group holding company. Consolidates results from Europe Reinsurance (EUR), Americas Insurance (USD), and Asia Reinsurance (JPY) into group reporting currency (CHF).",
+    "currency": "CHF",
+    "region": "Global"
+  }
+}

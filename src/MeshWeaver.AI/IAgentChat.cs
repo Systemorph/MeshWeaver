@@ -6,8 +6,20 @@ namespace MeshWeaver.AI;
 
 public interface IAgentChat
 {
-    void SetContext(AgentContext applicationContext);
+    void SetContext(AgentContext? applicationContext);
+
+    /// <summary>Sets the currently selected agent by name.</summary>
+    /// <param name="agentName">The name/ID of the agent to use</param>
+    void SetSelectedAgent(string? agentName);
+
     Task ResumeAsync(ChatConversation conversation);
+
+    /// <summary>
+    /// Returns an ordered list of agents for the current context.
+    /// The first agent is the recommended default for the current context.
+    /// Order: context-matching agents first, then default agents by path depth, then others.
+    /// </summary>
+    Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync();
 
     /// <summary>Sends chat messages and returns the response.</summary>
     /// <param name="messages">The sequence of chat messages to send.</param>
@@ -29,16 +41,55 @@ public interface IAgentChat
         IReadOnlyCollection<ChatMessage> messages,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Delegates a task to another agent.</summary>
-    /// <param name="agentName">The name of the agent to delegate to</param>
-    /// <param name="message">The message or task to send to the agent</param>
-    /// <param name="askUserFeedback">Whether to ask for user feedback before proceeding</param>
-    /// <returns>A task that represents the delegation operation</returns>
-    string Delegate(string agentName, string message, bool askUserFeedback = false);
+    /// <summary>Sets the current thread ID for conversation persistence.</summary>
+    /// <param name="threadId">The thread identifier</param>
+    void SetThreadId(string threadId);
+
+    /// <summary>
+    /// Sets the persistent thread ID for server-side conversation history.
+    /// When set and using a persistent factory, the agent session links to this server-managed thread.
+    /// </summary>
+    void SetPersistentThreadId(string? persistentId) { }
+
+    /// <summary>
+    /// Sets attachment paths whose content will be loaded and included in the next message.
+    /// Attachments are cleared after use.
+    /// </summary>
+    void SetAttachments(IReadOnlyList<string>? paths) { }
 
     /// <summary>Displays a layout area in the chat as a visual component.</summary>
     /// <param name="layoutAreaControl">The layout area control</param>
     void DisplayLayoutArea(LayoutAreaControl layoutAreaControl);
 
+    /// <summary>
+    /// Requests a handoff to a target agent. The target agent takes over the shared thread.
+    /// </summary>
+    void RequestHandoff(HandoffRequest request) { }
+
     AgentContext? Context { get; }
+
+    /// <summary>
+    /// Current execution context (thread path, response message ID).
+    /// Set by ThreadExecution during streaming, used by delegation tools for sub-thread persistence.
+    /// </summary>
+    ThreadExecutionContext? ExecutionContext => null;
+
+    /// <summary>
+    /// Path of the last delegation sub-thread created. Consumed by ThreadExecution
+    /// after each delegation tool call completes.
+    /// </summary>
+    string? LastDelegationPath { get => null; set { } }
+
+    /// <summary>
+    /// Callback to update delegation status on the parent execution context.
+    /// Set by ThreadExecution, called by delegation tools to forward sub-agent progress.
+    /// </summary>
+    Action<string>? UpdateDelegationStatus { get => null; set { } }
+
+    /// <summary>
+    /// Callback to forward tool call entries from sub-threads to the parent's tool call log.
+    /// Called during delegation polling when new tool calls are detected on sub-threads.
+    /// </summary>
+    Action<ToolCallEntry>? ForwardToolCall { get => null; set { } }
+
 }

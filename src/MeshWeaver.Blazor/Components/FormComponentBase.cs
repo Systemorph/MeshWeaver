@@ -28,6 +28,10 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
     protected bool Readonly { get; set; }
     protected bool Required { get; set; }
 
+    // Sync state tracking to prevent race conditions between local edits and stream feedback
+    private TValue? lastSyncedValue;
+    private TValue? currentLocalValue;
+    private bool hasPendingLocalChanges;
 
     private Subject<TValue>? valueUpdateSubject;
 
@@ -36,11 +40,24 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         get => data;
         set
         {
-
             var needsUpdate = !EqualityComparer<TValue>.Default.Equals(this.data, value);
             this.data = value;
             if (needsUpdate)
-                if (DataPointer is not null && this.data is not null) UpdatePointer(this.data, DataPointer);
+            {
+                // Track that we have local changes pending sync
+                currentLocalValue = value;
+                hasPendingLocalChanges = true;
+
+                // NOTE: We no longer call UpdatePointer immediately here.
+                // The pointer update is now handled via the debounced valueUpdateSubject.
+                // This prevents the race condition where:
+                // 1. User types "H", UpdatePointer("H") sends to stream
+                // 2. User types "e", UpdatePointer("He") sends to stream
+                // 3. Stream echoes "H" back, overwriting "He" and losing characters
+
+                // Push value to debounce subject (which will call UpdatePointer after debounce)
+                valueUpdateSubject?.OnNext(value!);
+            }
         }
     }
 
@@ -66,21 +83,79 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         valueUpdateSubject = new();
 
         AddBinding(valueUpdateSubject
-            .Debounce(TimeSpan.FromMilliseconds(DebounceWindow))
+            .ThrottleImmediate(TimeSpan.FromMilliseconds(DebounceWindow))
             .DistinctUntilChanged()
-            .Skip(1)
-            .Subscribe(x => { if (DataPointer is not null) UpdatePointer(ConvertToData(x)!, DataPointer); })
+            .Subscribe(x =>
+            {
+                if (DataPointer is not null)
+                {
+                    // Skip if value hasn't changed since last sync
+                    if (EqualityComparer<TValue>.Default.Equals(x, lastSyncedValue))
+                        return;
+
+                    lastSyncedValue = x;
+                    // Keep hasPendingLocalChanges=true — only cleared when the echo
+                    // of this sync arrives (in ShouldApplyExternalUpdate). This prevents
+                    // stale echoes from older syncs from overwriting the current value.
+                    UpdatePointer(ConvertToData(x)!, DataPointer);
+                }
+            })
         );
-        DataBind(ViewModel.Data, x => x.data, ConversionToValue!);
+        DataBind(ViewModel.Data, x => x.data, ConversionToValueWithFilter!);
+    }
+
+    /// <summary>
+    /// Wraps ConversionToValue with filtering to prevent stale stream feedback from overwriting local changes.
+    /// </summary>
+    private TValue? ConversionToValueWithFilter(object v, TValue defaultValue)
+    {
+        var convertedValue = ConversionToValue(v, defaultValue);
+
+        // Check if we should apply this external update
+        if (!ShouldApplyExternalUpdate(convertedValue))
+        {
+            // Return current local value to prevent overwriting
+            return data;
+        }
+
+        // Update sync state when external update is applied
+        lastSyncedValue = convertedValue;
+        currentLocalValue = convertedValue;
+        hasPendingLocalChanges = false;
+
+        return convertedValue;
+    }
+
+    /// <summary>
+    /// Determines whether an external update (from stream) should be applied.
+    /// Returns false if the update is an echo of our own sync or if we have pending local changes.
+    /// When the echo of our last sync arrives, clears the pending flag so subsequent
+    /// genuine external updates can be applied.
+    /// </summary>
+    private bool ShouldApplyExternalUpdate(TValue? value)
+    {
+        // Echo of what we last synced — don't apply (duplicate) but confirm the sync
+        if (EqualityComparer<TValue>.Default.Equals(value, lastSyncedValue))
+        {
+            hasPendingLocalChanges = false;
+            return false;
+        }
+
+        // Still waiting for our sync echo — reject stale external values
+        if (hasPendingLocalChanges)
+            return false;
+
+        return true;
     }
 
     protected virtual TValue? ConversionToValue(object v, TValue defaultValue)
     {
         if (v is JsonElement je)
         {
-            return je.ValueKind == JsonValueKind.Undefined
-                ? default
-                : je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
+            // Handle undefined and null JSON values - return default (null for nullable types)
+            if (je.ValueKind == JsonValueKind.Undefined || je.ValueKind == JsonValueKind.Null)
+                return default;
+            return je.Deserialize<TValue>(Stream!.Hub.JsonSerializerOptions);
         }
 
         // Handle specific conversions
@@ -130,9 +205,18 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
             return typedValue;
         }
 
+        // Handle null values - return default for nullable types
+        if (v is null)
+        {
+            return default;
+        }
+
         try
         {
-            return (TValue)Convert.ChangeType(v, typeof(TValue));
+            // Handle nullable types - Convert.ChangeType doesn't support them directly
+            var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+            var converted = Convert.ChangeType(v, targetType);
+            return (TValue)converted;
         }
         catch
         {
@@ -149,5 +233,10 @@ public abstract class FormComponentBase<TViewModel, TView, TValue> : BlazorView<
         return !Equals(data, v);
     }
 
-
+    protected virtual void OnBlur()
+    {
+        if (Stream is null || ViewModel is not { IsBlurable: true })
+            return;
+        Stream.Hub.Post(new BlurEvent(Area, Stream.StreamId), o => o.WithTarget(Stream.Owner));
+    }
 }

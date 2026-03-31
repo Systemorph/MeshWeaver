@@ -1,0 +1,18 @@
+{
+  "id": "EUR-LIABILITY-CAS",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Liability → Casualty (70%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-LIABILITY-CAS",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "LIABILITY",
+    "localLineOfBusinessName": "Liability",
+    "groupLineOfBusiness": "CAS",
+    "groupLineOfBusinessName": "Casualty",
+    "percentage": 0.7
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

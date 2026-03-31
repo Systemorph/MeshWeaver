@@ -2,17 +2,20 @@
 @inherits SkinnedView<NavMenuControl, NavMenuSkin, NavMenuView>
 
 <div class="navmenu">
-    <div class="navmenu-toggle-container">
-        <!-- Bind the checkbox's checked state to Expanded -->
-        <input type="checkbox"
-               title="Menu expand/collapse toggle"
-               id="navmenu-toggle"
-               class="navmenu-icon"
-               @bind="Expanded" />
-        <label for="navmenu-toggle" class="navmenu-icon">
-            <FluentIcon Value="@(new Size20.Navigation())" Color="Color.Neutral" />
-        </label>
-    </div>
+    @if (Collapsible)
+    {
+        <div class="navmenu-toggle-container">
+            <!-- Bind the checkbox's checked state to Expanded -->
+            <input type="checkbox"
+                   title="Menu expand/collapse toggle"
+                   id="navmenu-toggle"
+                   class="navmenu-icon"
+                   @bind="Expanded" />
+            <label for="navmenu-toggle" class="navmenu-icon">
+                <FluentIcon Value="@(new Size20.Navigation())" Color="Color.Neutral" />
+            </label>
+        </div>
+    }
     <nav class="sitenav @(Expanded ? "expanded" : "collapsed")" aria-labelledby="main-menu">
         <FluentNavMenu Id="main-menu"
                        Title="Main menu"

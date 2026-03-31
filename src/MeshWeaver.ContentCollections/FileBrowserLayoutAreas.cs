@@ -32,6 +32,7 @@ public static class FileBrowserLayoutAreas
         {
             fileBrowser = fileBrowser
                 .WithCollectionConfiguration(collectionConfig)
+                .WithCollectionInfo(collectionConfig.SourceType, collectionConfig.BasePath, collectionConfig.Settings)
                 .CreatePath();
         }
 

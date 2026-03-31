@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .bg { fill: #ebf3fc; }
+    .nf { fill: #0f6cbd; }
+    .accent { fill: #0e4775; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="24" height="24" rx="4"/>
+  <!-- Document border (outer) -->
+  <rect class="accent" x="3.25" y="1.25" width="17.5" height="21.5" rx="2.75"/>
+  <!-- Document fill (inner) -->
+  <rect class="wh" x="4.75" y="2.75" width="14.5" height="18.5" rx="1.25"/>
+  <!-- Title lines -->
+  <rect class="nf" x="7" y="5" width="10" height="1.5" rx="0.5" opacity="0.3"/>
+  <rect class="nf" x="7" y="8" width="7" height="1.5" rx="0.5" opacity="0.2"/>
+  <!-- Mini bar chart -->
+  <rect class="nf" x="7" y="14" width="3" height="5" rx="0.5"/>
+  <rect class="nf" x="11" y="11" width="3" height="8" rx="0.5" opacity="0.8"/>
+  <rect class="nf" x="15" y="13" width="3" height="6" rx="0.5" opacity="0.6"/>
+</svg>

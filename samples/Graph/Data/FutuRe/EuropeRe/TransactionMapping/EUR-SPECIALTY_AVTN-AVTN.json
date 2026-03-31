@@ -1,0 +1,18 @@
+{
+  "id": "EUR-SPECIALTY_AVTN-AVTN",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Specialty & Aviation → Aviation (30%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-SPECIALTY_AVTN-AVTN",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "SPECIALTY_AVTN",
+    "localLineOfBusinessName": "Specialty & Aviation",
+    "groupLineOfBusiness": "AVTN",
+    "groupLineOfBusinessName": "Aviation",
+    "percentage": 0.3
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

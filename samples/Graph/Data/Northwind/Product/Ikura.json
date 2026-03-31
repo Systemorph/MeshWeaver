@@ -1,0 +1,23 @@
+{
+  "id": "Ikura",
+  "namespace": "Northwind/Product",
+  "name": "Ikura",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Ikura - 12 - 200 ml jars",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 10,
+    "productName": "Ikura",
+    "supplierId": 4,
+    "categoryId": 8,
+    "quantityPerUnit": "12 - 200 ml jars",
+    "unitPrice": 31.0,
+    "unitsInStock": 31,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

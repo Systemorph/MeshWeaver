@@ -1,0 +1,21 @@
+{
+  "id": "For\u00eats_d\u00e9rables",
+  "namespace": "Northwind/Supplier",
+  "name": "For\u00eats d'\u00e9rables",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "For\u00eats d'\u00e9rables - Ste-Hyacinthe, Canada",
+  "icon": "/static/NodeTypeIcons/truck.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 29,
+    "companyName": "For\u00eats d'\u00e9rables",
+    "contactName": "Chantal Goulet",
+    "contactTitle": "Accounting Manager",
+    "city": "Ste-Hyacinthe",
+    "region": "Qu\u00e9bec",
+    "country": "Canada",
+    "phone": "(514) 555-2955"
+  }
+}

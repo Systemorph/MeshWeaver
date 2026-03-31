@@ -1,0 +1,348 @@
+@page "/create"
+@using System.Text.RegularExpressions
+@using MeshWeaver.Blazor.Portal.Chat
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Mesh.Security
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
+@namespace MeshWeaver.Blazor.Portal.Pages
+@inject IMessageHub Hub
+@inject IMeshService MeshService
+@inject INavigationService NavigationService
+
+<PageTitle>Create Node</PageTitle>
+
+<div class="create-page" style="padding: 24px; max-width: 600px; margin: 0 auto; width: 100%;">
+    <div style="display: flex; align-items: center; gap: 16px; margin-bottom: 24px;">
+        <a href="@BackHref" style="display: flex; align-items: center; text-decoration: none; color: var(--neutral-foreground-rest); padding: 4px;">
+            <FluentIcon Value="@(new Icons.Regular.Size20.ArrowLeft())" />
+        </a>
+        <h1 style="margin: 0;">Create New</h1>
+    </div>
+
+    @if (isLoading)
+    {
+        <FluentProgressRing />
+    }
+    else
+    {
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+
+            @* 1. Name *@
+            <div>
+                <FluentTextField @bind-Value="NodeName"
+                                 Label="Name *"
+                                 Placeholder="Enter a name..."
+                                 Immediate="true"
+                                 AutoComplete="off"
+                                 Style="width: 100%;" />
+            </div>
+
+            @* 2. Id (auto-populated from name, kebab-case) *@
+            <div>
+                <FluentTextField @bind-Value="nodeId"
+                                 Label="Id"
+                                 Placeholder="Auto-generated from name..."
+                                 Immediate="true"
+                                 AutoComplete="off"
+                                 Style="width: 100%;" />
+                <div style="font-size: 12px; color: var(--neutral-foreground-hint); margin-top: 4px;">
+                    @if (!string.IsNullOrEmpty(EffectiveId))
+                    {
+                        <span>Path: <strong>@ComputedPath</strong></span>
+                    }
+                    else
+                    {
+                        <span>Auto-generated from name (e.g. "My Article" becomes "my-article")</span>
+                    }
+                </div>
+            </div>
+
+            @* 3. Type — MeshNodeAutocomplete searching NodeType nodes *@
+            <div>
+                <label style="font-weight: 600; display: block; margin-bottom: 4px;">Type *</label>
+                <MeshNodeAutocomplete
+                    Options="@typePickerOptions"
+                    SelectedItem="@selectedTypeItem"
+                    SelectedItemChanged="@OnTypeChanged" />
+            </div>
+
+            @* 4. Location — MeshNodeAutocomplete *@
+            <div>
+                <label style="font-weight: 600; display: block; margin-bottom: 4px;">Location *</label>
+                <MeshNodeAutocomplete
+                    Options="@locationOptions"
+                    SelectedItem="@selectedLocation"
+                    SelectedItemChanged="@OnLocationChanged"
+                    FilterByCreatableType="@(selectedTypeItem?.Path)" />
+                @if (selectedLocation != null)
+                {
+                    <div style="font-size: 12px; color: var(--neutral-foreground-hint); margin-top: 4px;">
+                        Creating in: <strong>@selectedLocation.Path</strong>
+                    </div>
+                }
+            </div>
+
+            @* Action buttons *@
+            <div style="display: flex; gap: 12px; margin-top: 8px;">
+                <FluentButton Appearance="Appearance.Accent"
+                              OnClick="CreateNodeAsync"
+                              Disabled="@(!CanCreate)">
+                    @if (isCreating)
+                    {
+                        <FluentProgressRing Style="width: 16px; height: 16px; margin-right: 8px;" />
+                    }
+                    Create
+                </FluentButton>
+                <FluentAnchor Appearance="Appearance.Neutral" Href="@BackHref">
+                    Cancel
+                </FluentAnchor>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <FluentMessageBar Intent="MessageIntent.Error" Style="margin-top: 16px;">
+                    @errorMessage
+                </FluentMessageBar>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "namespace")]
+    public string? NamespaceParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "type")]
+    public string? TypeParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "types")]
+    public string? TypesParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "namespaces")]
+    public string? NamespacesParam { get; set; }
+
+    [SupplyParameterFromQuery(Name = "parent")]
+    public string? ParentParam { get; set; }
+
+    /// <summary>Pipe-separated queries for the type picker (e.g. "namespace: nodeType:NodeType|path:X nodeType:NodeType scope:ancestors").</summary>
+    [SupplyParameterFromQuery(Name = "nodeTypeQueries")]
+    public string? NodeTypeQueriesParam { get; set; }
+
+    /// <summary>Pipe-separated queries for the location picker.</summary>
+    [SupplyParameterFromQuery(Name = "namespaceQueries")]
+    public string? NamespaceQueriesParam { get; set; }
+
+    // State
+    private QuerySuggestion? selectedTypeItem;
+    private MeshNodeAutocompleteOptions typePickerOptions = new();
+    private QuerySuggestion? selectedLocation;
+    private MeshNodeAutocompleteOptions locationOptions = new();
+
+    private bool isLoading = true;
+    private bool isCreating;
+    private string? errorMessage;
+
+    // Form
+    private string nodeName = "";
+    private string nodeId = "";
+    private string lastAutoId = "";
+
+    private bool CanCreate => !isCreating
+        && !string.IsNullOrWhiteSpace(nodeName)
+        && selectedTypeItem != null
+        && selectedLocation != null;
+
+    private string NodeName
+    {
+        get => nodeName;
+        set
+        {
+            nodeName = value;
+            var generated = GenerateIdFromName(value);
+            if (string.IsNullOrEmpty(nodeId) || nodeId == lastAutoId)
+            {
+                lastAutoId = generated;
+                nodeId = generated;
+            }
+        }
+    }
+
+    private string EffectiveId => !string.IsNullOrWhiteSpace(nodeId) ? nodeId.Trim() : GenerateIdFromName(nodeName);
+
+    private string ComputedPath
+    {
+        get
+        {
+            var ns = selectedLocation?.Path ?? "";
+            var id = EffectiveId;
+            if (string.IsNullOrEmpty(id)) return "";
+            return string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadOptionsAsync();
+    }
+
+    private async Task LoadOptionsAsync()
+    {
+        isLoading = true;
+        try
+        {
+            var meshConfig = Hub.ServiceProvider.GetService<MeshConfiguration>();
+            var nodeTypeService = Hub.ServiceProvider.GetService<INodeTypeService>();
+
+            var defaultNs = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace ?? "";
+
+            // --- Type picker: queries for NodeType nodes ---
+            var typeQueries = !string.IsNullOrEmpty(NodeTypeQueriesParam)
+                ? NodeTypeQueriesParam.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : new[]
+                {
+                    "namespace: nodeType:NodeType",
+                    string.IsNullOrEmpty(defaultNs) ? null : $"path:{defaultNs} nodeType:NodeType scope:ancestors"
+                }.Where(q => q != null).Cast<string>().ToArray();
+
+            typePickerOptions = new MeshNodeAutocompleteOptions
+            {
+                Queries = typeQueries,
+                Placeholder = "Select type...",
+                SearchPlaceholder = "Search node types...",
+                Limit = 20,
+                PanelWidth = "100%"
+            };
+
+            // Pre-select type: from ?type= param, or default to Markdown
+            var defaultType = TypeParam ?? "Markdown";
+            await PreSelectAsync(defaultType, v => selectedTypeItem = v);
+
+            // --- Location picker: queries for namespaces ---
+            var nsQueries = !string.IsNullOrEmpty(NamespaceQueriesParam)
+                ? NamespaceQueriesParam.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : null;
+
+            locationOptions = new MeshNodeAutocompleteOptions
+            {
+                Queries = nsQueries, // null = use AutocompleteAsync (default)
+                Placeholder = "Select location...",
+                SearchPlaceholder = "Type to search...",
+                Limit = 15,
+                FilterByCreatableType = selectedTypeItem?.NodeType,
+                PanelWidth = "100%"
+            };
+
+            // Pre-select location from default namespace
+            if (!string.IsNullOrEmpty(defaultNs))
+                await PreSelectAsync(defaultNs, v => selectedLocation = v);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to load: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void OnTypeChanged(QuerySuggestion? type)
+    {
+        selectedTypeItem = type;
+        // Update location filter when type changes
+        locationOptions.FilterByCreatableType = type?.Path;
+    }
+
+    private void OnLocationChanged(QuerySuggestion? location)
+    {
+        selectedLocation = location;
+    }
+
+    private async Task PreSelectAsync(string path, Action<QuerySuggestion> setter)
+    {
+        try
+        {
+            var node = await MeshService.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
+            if (node != null)
+                setter(new QuerySuggestion(node.Path, node.Name ?? node.Id, node.NodeType, 1.0, node.Icon));
+            else
+                setter(new QuerySuggestion(path, path, null, 1.0));
+        }
+        catch
+        {
+            setter(new QuerySuggestion(path, path, null, 1.0));
+        }
+    }
+
+    private string BackHref
+    {
+        get
+        {
+            var backPath = NamespaceParam ?? ParentParam ?? NavigationService.CurrentNamespace;
+            return !string.IsNullOrEmpty(backPath) ? $"/{backPath}" : "/";
+        }
+    }
+
+    private async Task CreateNodeAsync()
+    {
+        if (selectedTypeItem == null || string.IsNullOrWhiteSpace(nodeName) || selectedLocation == null)
+            return;
+
+        isCreating = true;
+        errorMessage = null;
+
+        try
+        {
+            var id = EffectiveId;
+            var ns = selectedLocation.Path;
+            var typePath = selectedTypeItem.Path;
+            var meshConfig = Hub.ServiceProvider.GetService<MeshConfiguration>();
+
+            string nodePath;
+            if (meshConfig?.IsSatelliteNodeType(typePath) == true)
+            {
+                var typeSegment = $"_{typePath}";
+                nodePath = string.IsNullOrEmpty(ns) ? $"{typeSegment}/{id}" : $"{ns}/{typeSegment}/{id}";
+            }
+            else
+            {
+                nodePath = string.IsNullOrEmpty(ns) ? id : $"{ns}/{id}";
+            }
+
+            var node = MeshNode.FromPath(nodePath) with
+            {
+                Name = nodeName.Trim(),
+                NodeType = typePath,
+                DesiredId = id
+            };
+
+            await MeshService.CreateNodeAsync(node);
+            NavigationService.NavigateTo($"/{nodePath}/Edit");
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message.Contains("Access denied") || ex.Message.Contains("Unauthorized")
+                ? "You do not have permission to create nodes in this namespace."
+                : $"Failed to create node: {ex.Message}";
+        }
+        finally
+        {
+            isCreating = false;
+        }
+    }
+
+    private static string GenerateIdFromName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "";
+
+        var words = Regex.Split(name.Trim(), @"[\s_]+")
+            .Where(w => !string.IsNullOrEmpty(w))
+            .Select(w => Regex.Replace(w, @"[^a-zA-Z0-9\-]", "").ToLowerInvariant())
+            .Where(w => !string.IsNullOrEmpty(w));
+
+        return string.Join("-", words);
+    }
+}

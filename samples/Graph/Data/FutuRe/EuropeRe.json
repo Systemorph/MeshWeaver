@@ -1,0 +1,18 @@
+{
+  "id": "EuropeRe",
+  "namespace": "FutuRe",
+  "name": "FutuRe Europe Reinsurance",
+  "nodeType": "FutuRe/BusinessUnit",
+  "category": "Business Units",
+  "description": "European reinsurance operations headquartered in Zurich",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "BusinessUnit",
+    "id": "EuropeRe",
+    "name": "FutuRe Europe Reinsurance",
+    "description": "European reinsurance operations covering treaty and facultative business across EMEA markets. Headquartered in Zurich with offices in London, Paris, and Munich.\n\n**Data Products:**\n- [Local Lines of Business](/FutuRe/EuropeRe/LineOfBusiness) — 8 LoBs in EUR\n- [Analysis Cube](/FutuRe/EuropeRe/Analysis/AnnualReport) — Local P&L aggregation\n- [Mapping Rules](/FutuRe/EuropeRe/TransactionMapping/MappingRules) — Maps local LoBs to 10 Group LoBs\n\n**Data Flow:** Cashflows → Lines of Business → Analysis Cube → [Transaction Mapping](/FutuRe/TransactionMapping) → Group Consolidation",
+    "currency": "EUR",
+    "region": "EMEA"
+  }
+}

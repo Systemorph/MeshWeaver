@@ -1,10 +1,68 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 
 namespace MeshWeaver.Layout.Domain;
 
 public static class LayoutHelperExtensions
 {
+    /// <summary>
+    /// Creates an observable view from a data stream with a loading placeholder.
+    /// </summary>
+    /// <typeparam name="T">The type of entities in the stream.</typeparam>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="viewFactory">Factory function to create the view from the data.</param>
+    /// <param name="loadingTitle">Title to display while loading.</param>
+    /// <returns>An observable UI control that updates when data changes.</returns>
+    public static IObservable<UiControl?> StreamView<T>(
+        this LayoutAreaHost host,
+        Func<IReadOnlyCollection<T>, LayoutAreaHost, UiControl?> viewFactory,
+        string loadingTitle)
+    {
+        return host.Workspace
+            .GetStream<T>()!
+            .Select(items => viewFactory(items ?? Array.Empty<T>(), host))
+            .StartWith(Controls.Markdown($"# {loadingTitle}\n\n*Loading {loadingTitle.ToLower()}...*"));
+    }
+
+    /// <summary>
+    /// Creates an observable view from a data stream with a custom loading control.
+    /// </summary>
+    /// <typeparam name="T">The type of entities in the stream.</typeparam>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="viewFactory">Factory function to create the view from the data.</param>
+    /// <param name="loadingControl">Control to display while loading.</param>
+    /// <returns>An observable UI control that updates when data changes.</returns>
+    public static IObservable<UiControl?> StreamView<T>(
+        this LayoutAreaHost host,
+        Func<IReadOnlyCollection<T>, LayoutAreaHost, UiControl?> viewFactory,
+        UiControl loadingControl)
+    {
+        return host.Workspace
+            .GetStream<T>()!
+            .Select(items => viewFactory(items ?? Array.Empty<T>(), host))
+            .StartWith(loadingControl);
+    }
+
+    /// <summary>
+    /// Creates an observable view from a data stream without passing the host to the factory.
+    /// </summary>
+    /// <typeparam name="T">The type of entities in the stream.</typeparam>
+    /// <param name="host">The layout area host.</param>
+    /// <param name="viewFactory">Factory function to create the view from the data.</param>
+    /// <param name="loadingTitle">Title to display while loading.</param>
+    /// <returns>An observable UI control that updates when data changes.</returns>
+    public static IObservable<UiControl?> StreamView<T>(
+        this LayoutAreaHost host,
+        Func<IReadOnlyCollection<T>, UiControl?> viewFactory,
+        string loadingTitle)
+    {
+        return host.Workspace
+            .GetStream<T>()!
+            .Select(items => viewFactory(items ?? Array.Empty<T>()))
+            .StartWith(Controls.Markdown($"# {loadingTitle}\n\n*Loading {loadingTitle.ToLower()}...*"));
+    }
+
     public static EntityStoreAndUpdates ConfigBasedRenderer<TControl>(this LayoutAreaHost host,
         RenderingContext context,
         EntityStore store,

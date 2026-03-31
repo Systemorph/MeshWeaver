@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output)
 {
-    [Fact]
+    [Fact(Timeout = 30000)]
     public async Task PingPong()
     {
         var client = await GetClientAsync();
@@ -23,5 +23,30 @@ public class OrleansMeshTests(ITestOutputHelper output) : OrleansTestBase(output
         response.Should().NotBeNull();
         response.Message.Should().BeOfType<PingResponse>();
     }
-}
 
+    [Theory(Timeout = 30000)]
+    [InlineData("HubFactory")]
+    [InlineData("Kernel")]
+    public async Task HubWorksAfterDisposal(string id)
+    {
+        var client = await GetClientAsync();
+        var address = AddressExtensions.CreateAppAddress(id);
+
+        var response = await client
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
+                , new CancellationTokenSource(20.Seconds()).Token
+            );
+        response.Should().NotBeNull();
+        response.Message.Should().BeOfType<PingResponse>();
+
+        client.Post(new DisposeRequest(), o => o.WithTarget(address));
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        response = await client
+            .AwaitResponse(new PingRequest(), o => o.WithTarget(address)
+                , new CancellationTokenSource(20.Seconds()).Token
+            );
+        response.Should().NotBeNull();
+        response.Message.Should().BeOfType<PingResponse>();
+    }
+}

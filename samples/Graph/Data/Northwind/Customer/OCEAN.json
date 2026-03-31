@@ -1,0 +1,23 @@
+{
+  "id": "OCEAN",
+  "namespace": "Northwind/Customer",
+  "name": "Oc\u00e9ano Atl\u00e1ntico Ltda.",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Oc\u00e9ano Atl\u00e1ntico Ltda. - Buenos Aires, Argentina",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "OCEAN",
+    "companyName": "Oc\u00e9ano Atl\u00e1ntico Ltda.",
+    "contactName": "Yvonne Moncada",
+    "contactTitle": "Sales Agent",
+    "city": "Buenos Aires",
+    "region": "",
+    "postalCode": "1010",
+    "country": "Argentina",
+    "phone": "(1) 135-5333",
+    "fax": "(1) 135-5535"
+  }
+}

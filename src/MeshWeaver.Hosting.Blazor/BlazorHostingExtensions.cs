@@ -1,13 +1,19 @@
-﻿using MeshWeaver.Blazor;
+﻿using System.Text.Json;
+using MeshWeaver.Blazor;
+using MeshWeaver.Blazor.AI;
 using MeshWeaver.Blazor.Infrastructure;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Mesh;
+using MeshWeaver.Blazor.Services;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Components.Server.Circuits;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace MeshWeaver.Hosting.Blazor;
@@ -20,65 +26,24 @@ public static class BlazorHostingExtensions
                 .AddContentService()
                 .AddFluentUIComponents()
                 .AddScoped<PortalApplication>()
-                .Configure<RouteOptions>(options =>
-                    options.ConstraintMap.Add("addresstype", typeof(AddressTypeRouteConstraint)))
+                .AddScoped<INavigationService, NavigationService>()
+                .AddScoped<IMenuItemsProvider, MenuItemsProvider>()
+                .AddScoped<CircuitAccessHandler>()
+                .AddScoped<CircuitHandler>(sp => sp.GetRequiredService<CircuitAccessHandler>())
+                .AddMeshMcp()
             )
             .ConfigureHub(hub => hub.AddBlazor(clientConfig));
 
     public static void MapMeshWeaver(this WebApplication app)
     {
-        app.MapStaticContent(app.Services.GetRequiredService<IMessageHub>());
-        app.MapHubStaticContent(app.Services.GetRequiredService<IMessageHub>());
+        app.MapStaticContent(app.Services);
         app.UseMiddleware<UserContextMiddleware>();
 
         // Thumbnail preview stub (returns 501 until implemented)
-        app.MapGet("/layout-preview/{area}", (string area) =>
-        {
-            return Results.StatusCode(StatusCodes.Status501NotImplemented);
-        });
+        app.MapGet("/layout-preview/{area}", (string area) => Results.StatusCode(StatusCodes.Status501NotImplemented));
 
         //app.MapRazorComponents<ApplicationPage>();
     }
-    private static void MapStaticContent(this IEndpointRouteBuilder app, IMessageHub hub)
-        => app.MapGet("/static/{collection}/{**path}", async (HttpContext context, string collection, string path) =>
-        {
-            var contentService = hub.ServiceProvider.GetRequiredService<PortalApplication>().Hub.ServiceProvider
-                .GetRequiredService<IContentService>();
-            var stream = await contentService.GetContentAsync(collection, path);
-
-            if (stream is null)
-            {
-                return Results.NotFound("File not found");
-            }
-
-            // Determine content type based on file extension
-            //var contentType = "application/octet-stream";
-            var contentType = GetContentType(path);
-
-            // Configure caching headers
-
-            if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
-            {
-                var cacheDuration = TimeSpan.FromDays(30);
-                context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
-                context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
-
-                //Add ETag for cache
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms);
-                ms.Position = 0;
-                var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
-                context.Response.Headers.ETag = $"\"{hash}\"";
-                return Results.File(ms.ToArray(), contentType, Path.GetFileName(path));
-            }
-
-            // Return the stream directly without loading it all into memory
-            return Results.Stream(
-                    stream,
-                    contentType,
-                    Path.GetFileName(path),
-                    enableRangeProcessing: true);
-        });
 
     private static string GetContentType(string path)
     {
@@ -132,80 +97,238 @@ public static class BlazorHostingExtensions
         return textTypes.Contains(contentType) || contentType.StartsWith("text/");
     }
 
-    private static void MapHubStaticContent(this IEndpointRouteBuilder app, IMessageHub mainHub)
-        => app.MapGet("/{addressType:addresstype}/{addressId}/static/{collection}/{**path}",
-            async (HttpContext context, string addressType, string addressId, string collection, string path) =>
+    /// <summary>
+    /// Maps static content endpoint supporting two path patterns:
+    /// 1. /static/{collection}/{filePath} - when first segment is a known collection (e.g., content, attachments)
+    /// 2. /static/{address}/{collection}/{filePath} - when first segment is an address
+    ///
+    /// The endpoint first checks if the first segment matches a registered collection name.
+    /// If yes, serves from the mesh hub's content service directly.
+    /// If no, uses address-based resolution via IMeshCatalog.ResolvePath.
+    /// </summary>
+    private static void MapStaticContent(this IEndpointRouteBuilder app, IServiceProvider services)
+    {
+        // Collection configuration cache: key = "prefix/collection"
+        var collectionCache = new System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig>();
+        // Lazy resolution of IMessageHub to avoid circular dependency during startup
+        IMessageHub? mainHub = null;
+
+        app.MapGet("/static/{**path}",
+            async (HttpContext context, string path) =>
         {
+            // Resolve hub on first request
+            mainHub ??= services.GetRequiredService<IMessageHub>();
+
+            if (string.IsNullOrEmpty(path))
+            {
+                return Results.NotFound("Path is required");
+            }
+
             try
             {
-                var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+                var pathParts = path.Split('/');
+                if (pathParts.Length < 2)
+                {
+                    return Results.NotFound("Invalid path format. Expected: /static/{collection}/{filePath} or /static/{address}/{collection}/{filePath}");
+                }
 
-                // Get content service directly from the target hub
-                var contentService = portal.ServiceProvider.GetService<IContentService>();
-                if (contentService is null)
+                var firstSegment = pathParts[0];
+
+                // Decode collection name: '~' is used as escape for '/' in collection names
+                var decodedFirstSegment = DecodeCollectionName(firstSegment);
+
+                // Check if first segment is a known collection name
+                var contentService = mainHub.ServiceProvider.GetService<IContentService>();
+                var knownCollection = contentService?.GetCollectionConfig(decodedFirstSegment);
+
+                if (knownCollection != null)
+                {
+                    // Pattern 1: /static/{collection}/{filePath}
+                    var collectionName = decodedFirstSegment;
+                    var filePath = string.Join("/", pathParts.Skip(1));
+
+                    return await ServeFromCollection(context, mainHub, collectionName, filePath, collectionCache);
+                }
+
+                // Pattern 2: /static/{address}/{collection}/{filePath}
+                // Resolve address from path using score-based matching
+                var pathResolver = mainHub.ServiceProvider.GetRequiredService<IPathResolver>();
+                var resolution = await pathResolver.ResolvePathAsync(path);
+
+                if (resolution == null)
+                {
+                    return Results.NotFound("No matching address found for path");
+                }
+
+                // Parse remainder: first segment is collection, rest is file path
+                if (string.IsNullOrEmpty(resolution.Remainder))
+                {
+                    return Results.NotFound("Collection and file path are required");
+                }
+
+                var remainderParts = resolution.Remainder.Split('/');
+                if (remainderParts.Length < 2)
+                {
+                    return Results.NotFound("Invalid path format. Expected: /static/{address}/{collection}/{filePath}");
+                }
+
+                // Decode collection name: '~' is used as escape for '/' (e.g., "Submissions@Microsoft~2026")
+                var addressCollectionName = DecodeCollectionName(remainderParts[0]);
+                var addressFilePath = string.Join("/", remainderParts.Skip(1));
+
+                if (string.IsNullOrEmpty(addressFilePath))
+                {
+                    return Results.NotFound("File path is required");
+                }
+
+                var targetAddress = (Address)resolution.Prefix;
+                var qualifiedCollectionName = $"{resolution.Prefix}/{addressCollectionName}";
+
+                // Get or fetch collection configuration from target hub
+                if (!collectionCache.TryGetValue(qualifiedCollectionName, out var collectionConfig))
+                {
+                    var collectionResponse = await mainHub.AwaitResponse(
+                        new GetDataRequest(new ContentCollectionReference([addressCollectionName])),
+                        o => o.WithTarget(targetAddress),
+                        context.RequestAborted);
+
+                    IReadOnlyCollection<ContentCollectionConfig>? configs;
+                    if (collectionResponse?.Message?.Data is JsonElement jsonElement)
+                    {
+                        configs = jsonElement.EnumerateArray()
+                            .Select(e => new ContentCollectionConfig
+                            {
+                                Name = e.TryGetProperty("name", out var nameProp) ? nameProp.GetString() ?? "" : "",
+                                SourceType = e.TryGetProperty("sourceType", out var typeProp) ? typeProp.GetString() ?? "" : "",
+                                BasePath = e.TryGetProperty("basePath", out var pathProp) ? pathProp.GetString() : null
+                            })
+                            .ToArray();
+                    }
+                    else
+                    {
+                        configs = collectionResponse?.Message?.Data as IReadOnlyCollection<ContentCollectionConfig>;
+                    }
+                    var sourceConfig = configs?.FirstOrDefault(c => c.Name == addressCollectionName);
+
+                    if (sourceConfig == null)
+                    {
+                        return Results.NotFound($"Content collection '{addressCollectionName}' not found at {resolution.Prefix}");
+                    }
+
+                    collectionConfig = sourceConfig with
+                    {
+                        Name = qualifiedCollectionName,
+                        Address = targetAddress
+                    };
+
+                    collectionCache.TryAdd(qualifiedCollectionName, collectionConfig);
+                }
+
+                // Get content service from portal
+                var portal = mainHub.ServiceProvider.GetRequiredService<PortalApplication>().Hub;
+                var portalContentService = portal.ServiceProvider.GetService<IContentService>();
+                if (portalContentService is null)
                 {
                     return Results.NotFound("Content service not configured");
                 }
 
-                contentService.AddConfiguration(new ContentCollectionConfig()
-                {
-                    Name = collection,
-                    SourceType = HubStreamProviderFactory.SourceType,
-                    Address = portal.TypeRegistry.MapAddress(addressType, addressId)
-                });
+                portalContentService.AddConfiguration(collectionConfig);
 
-                // Get or initialize the collection by name
-                var contentCollection = await contentService.GetCollectionAsync(collection, context.RequestAborted);
-
+                var contentCollection = await portalContentService.GetCollectionAsync(qualifiedCollectionName, context.RequestAborted);
                 if (contentCollection == null)
                 {
-                    return Results.NotFound($"Content collection '{collection}' not found");
+                    return Results.NotFound($"Content collection '{addressCollectionName}' not found");
                 }
 
-                // Get stream directly from the collection
-                var stream = await contentCollection.GetContentAsync(path, context.RequestAborted);
-                if (stream == null)
-                {
-                    return Results.NotFound("File not found");
-                }
-
-                var contentType = GetContentType(path);
-                var fileName = Path.GetFileName(path);
-
-                // Check if download is requested via query parameter
-                var isDownload = context.Request.Query.ContainsKey("download");
-                if (isDownload)
-                {
-                    context.Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
-                }
-
-                // Configure caching headers for small files
-                if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
-                {
-                    var cacheDuration = TimeSpan.FromDays(30);
-                    context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
-                    context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
-
-                    // Add ETag for cache
-                    using var ms = new MemoryStream();
-                    await stream.CopyToAsync(ms, context.RequestAborted);
-                    ms.Position = 0;
-                    var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
-                    context.Response.Headers.ETag = $"\"{hash}\"";
-                    return Results.File(ms.ToArray(), contentType, fileName);
-                }
-
-                // Return the stream directly without loading it all into memory
-                return Results.Stream(
-                    stream,
-                    contentType,
-                    fileName,
-                    enableRangeProcessing: true);
+                return await ServeFile(context, contentCollection, addressFilePath);
             }
             catch (Exception ex)
             {
                 return Results.Problem($"Error retrieving static content: {ex.Message}");
             }
         });
+    }
+
+    /// <summary>
+    /// Serves a file from a known collection (pattern: /static/{collection}/{filePath}).
+    /// </summary>
+    private static async Task<IResult> ServeFromCollection(
+        HttpContext context,
+        IMessageHub hub,
+        string collectionName,
+        string filePath,
+        System.Collections.Concurrent.ConcurrentDictionary<string, ContentCollectionConfig> _)
+    {
+        if (string.IsNullOrEmpty(filePath))
+        {
+            return Results.NotFound("File path is required");
+        }
+
+        var contentService = hub.ServiceProvider.GetService<IContentService>();
+        if (contentService is null)
+        {
+            return Results.NotFound("Content service not configured");
+        }
+
+        var contentCollection = await contentService.GetCollectionAsync(collectionName, context.RequestAborted);
+        if (contentCollection == null)
+        {
+            return Results.NotFound($"Content collection '{collectionName}' not found");
+        }
+
+        return await ServeFile(context, contentCollection, filePath);
+    }
+
+    /// <summary>
+    /// Serves a file from a content collection with proper caching headers.
+    /// </summary>
+    private static async Task<IResult> ServeFile(HttpContext context, ContentCollection contentCollection, string filePath)
+    {
+        var stream = await contentCollection.GetContentAsync(filePath, context.RequestAborted);
+        if (stream == null)
+        {
+            return Results.NotFound("File not found");
+        }
+
+        var contentType = GetContentType(filePath);
+        var fileName = Path.GetFileName(filePath);
+
+        // Check if download is requested via query parameter
+        var isDownload = context.Request.Query.ContainsKey("download");
+        if (isDownload)
+        {
+            context.Response.Headers.ContentDisposition = $"attachment; filename=\"{fileName}\"";
+        }
+
+        // Configure caching headers for small files
+        if (stream.Length < 10_000_000) // Only compute hash for files smaller than 10MB
+        {
+            var cacheDuration = TimeSpan.FromDays(30);
+            context.Response.Headers.CacheControl = $"public, max-age={cacheDuration.TotalSeconds}, immutable";
+            context.Response.Headers.Expires = DateTime.UtcNow.AddDays(30).ToString("R");
+
+            // Add ETag for cache
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, context.RequestAborted);
+            ms.Position = 0;
+            var hash = Convert.ToBase64String(System.Security.Cryptography.SHA256.HashData(ms.ToArray()));
+            context.Response.Headers.ETag = $"\"{hash}\"";
+            return Results.File(ms.ToArray(), contentType, fileName);
+        }
+
+        // Return the stream directly without loading it all into memory
+        return Results.Stream(
+            stream,
+            contentType,
+            fileName,
+            enableRangeProcessing: true);
+    }
+
+    /// <summary>
+    /// Decodes a collection name from a URL by replacing '~' back to '/'.
+    /// Collection names with slashes (e.g., "Submissions@Microsoft/2026") are encoded
+    /// with '~' in URLs to avoid path parsing issues.
+    /// </summary>
+    private static string DecodeCollectionName(string encodedName) => encodedName.Replace("~", "/");
 
 }

@@ -66,11 +66,10 @@ public static class AreaUrlExtractor
                 {
                     var uri = new Uri(url);
                     // Extract the path after the hostname (e.g., "app/Northwind/AnnualReportSummary")
+                    // This is already in the correct format: addressType/addressId/areaName
+                    // No need to prepend "area" as area is the default keyword
                     var originalPath = uri.AbsolutePath.TrimStart('/');
-
-                    // Construct new URL with "area" prepended: "area/app/Northwind/AnnualReportSummary"
-                    var areaPath = $"area/{originalPath}";
-                    var areaUrl = $"{baseUrl}/{areaPath}";
+                    var areaUrl = $"{baseUrl}/{originalPath}";
 
                     areaUrls.Add(areaUrl);
                     Console.WriteLine($"  {url} -> {areaUrl}");

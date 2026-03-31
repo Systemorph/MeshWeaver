@@ -3,7 +3,7 @@
 @using Microsoft.Extensions.DependencyInjection
 @inherits BlazorView<FileBrowserControl,FileBrowserView>
 
-<FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" Embed="@true"></FileBrowser>
+<FileBrowser Address="Stream?.Owner" CollectionName="@Collection" CurrentPath="@Path" CreatePath="@PathCreation" TopLevelPath="@TopLevelPath" CollectionConfiguration="@CollectionConfiguration" IsReadOnly="@IsReadOnly" Embed="@true"></FileBrowser>
 
 @code
 {
@@ -11,7 +11,11 @@
     private string? Path;
     private bool PathCreation;
     private string? TopLevelPath;
+    private bool IsReadOnly;
     private ContentCollectionConfig? CollectionConfiguration;
+    private string? SourceType;
+    private string? CollectionBasePath;
+    private string? CollectionSettings;
 
     protected override void BindData()
     {
@@ -21,26 +25,41 @@
         DataBind(ViewModel.PathCreation, x => x.PathCreation);
         DataBind(ViewModel.TopLevelPath, x => x.TopLevelPath);
         DataBind(ViewModel.CollectionConfiguration, x => x.CollectionConfiguration);
+        DataBind(ViewModel.ReadOnly, x => x.IsReadOnly);
+        DataBind(ViewModel.SourceType, x => x.SourceType);
+        DataBind(ViewModel.CollectionBasePath, x => x.CollectionBasePath);
+        DataBind(ViewModel.CollectionSettings, x => x.CollectionSettings);
     }
 
     protected override async Task OnParametersSetAsync()
     {
         await base.OnParametersSetAsync();
 
+        // Reconstruct CollectionConfiguration from string properties if it didn't survive serialization
+        if (CollectionConfiguration is null && !string.IsNullOrEmpty(SourceType) && !string.IsNullOrEmpty(Collection))
+        {
+            var settings = string.IsNullOrEmpty(CollectionSettings)
+                ? new Dictionary<string, string>()
+                : CollectionSettings.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(kv => kv.Split('=', 2))
+                    .Where(kv => kv.Length == 2)
+                    .ToDictionary(kv => kv[0], kv => kv[1]);
+
+            CollectionConfiguration = new ContentCollectionConfig
+            {
+                Name = Collection,
+                SourceType = SourceType,
+                BasePath = CollectionBasePath,
+                IsEditable = true,
+                Settings = settings
+            };
+        }
+
         if (CollectionConfiguration is not null && Collection is not null)
         {
-            await InitializeCollectionIfNeededAsync();
+            var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
+            contentService.AddConfiguration(CollectionConfiguration);
+            await contentService.GetCollectionAsync(Collection, CancellationToken.None);
         }
-    }
-
-    private async Task InitializeCollectionIfNeededAsync()
-    {
-        if (Collection is null && CollectionConfiguration is null)
-            return;
-
-        var contentService = Hub.ServiceProvider.GetRequiredService<IContentService>();
-
-        // Initialize the collection - the service handles everything
-        await contentService.GetCollectionAsync(Collection ?? CollectionConfiguration!.Name, CancellationToken.None);
     }
 }

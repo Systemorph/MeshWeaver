@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <pattern id="bob-pattern" patternUnits="userSpaceOnUse" width="16" height="16">
+      <rect width="16" height="16" fill="#059669"/>
+      <rect x="0" y="0" width="8" height="8" fill="#10B981"/>
+      <rect x="8" y="8" width="8" height="8" fill="#10B981"/>
+    </pattern>
+    <clipPath id="bob-clip">
+      <circle cx="64" cy="64" r="60"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#bob-pattern)"/>
+  <g clip-path="url(#bob-clip)">
+    <!-- Head -->
+    <circle cx="64" cy="42" r="20" fill="#D4A574"/>
+    <!-- Hair (short) -->
+    <ellipse cx="64" cy="30" rx="18" ry="10" fill="#1F2937"/>
+    <!-- Face -->
+    <circle cx="64" cy="44" r="18" fill="#D4A574"/>
+    <!-- Eyes -->
+    <circle cx="57" cy="42" r="2.5" fill="#1F2937"/>
+    <circle cx="71" cy="42" r="2.5" fill="#1F2937"/>
+    <!-- Eyebrows -->
+    <path d="M53 38 L61 38" stroke="#1F2937" stroke-width="2" stroke-linecap="round"/>
+    <path d="M67 38 L75 38" stroke="#1F2937" stroke-width="2" stroke-linecap="round"/>
+    <!-- Smile -->
+    <path d="M58 50 Q64 54 70 50" stroke="#1F2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <!-- Body/Shoulders (t-shirt style) -->
+    <ellipse cx="64" cy="95" rx="32" ry="28" fill="#34D399"/>
+    <!-- T-shirt collar -->
+    <path d="M54 76 Q64 82 74 76" stroke="#059669" stroke-width="3" fill="none"/>
+  </g>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#059669" stroke-width="4"/>
+</svg>

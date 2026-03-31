@@ -1,0 +1,98 @@
+/* Side panel container */
+.side-panel,
+.side-panel * {
+    box-sizing: border-box;
+}
+
+.side-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-height: 100%;
+    width: 100%;
+    min-width: 0;
+    overflow: visible;
+    background-color: var(--neutral-layer-1);
+    color: var(--neutral-foreground-rest);
+    margin: 0;
+    padding: 0;
+}
+
+.side-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 20px;
+    border-bottom: 1px solid var(--neutral-stroke-divider);
+    background-color: var(--neutral-layer-2);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1000;
+    min-height: 48px;
+}
+
+.side-panel-title-area {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.side-panel-menu-button {
+    flex-shrink: 0;
+}
+
+.side-panel-title {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--neutral-foreground-rest);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.side-panel-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.side-panel-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Hide the thread full-page header when rendered inside the side panel */
+::deep .thread-full-header {
+    display: none !important;
+}
+
+.side-panel-history-fullscreen {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+}
+
+/* FluentUI button styling */
+.side-panel-actions fluent-button {
+    min-width: auto;
+    padding: 8px;
+}
+
+.side-panel-actions fluent-button:hover {
+    background-color: var(--neutral-fill-secondary-hover);
+}
+
+.side-panel-actions fluent-button:focus-visible {
+    outline: 2px solid var(--accent-fill-rest);
+    outline-offset: 2px;
+}

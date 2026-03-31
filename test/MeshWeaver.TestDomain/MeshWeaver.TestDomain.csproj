@@ -4,7 +4,6 @@
     <IsTestProject>false</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MeshWeaver.DataCubes\MeshWeaver.DataCubes.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,18 @@
+{
+  "id": "Platform",
+  "namespace": "MeshWeaver",
+  "name": "Platform",
+  "nodeType": "Markdown",
+  "category": "Planning",
+  "description": "Platform roadmap, feature planning, and prioritization for MeshWeaver development",
+  "icon": "/static/NodeTypeIcons/rocket.svg",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "MarkdownDocument",
+    "title": "MeshWeaver Platform",
+    "iconName": "Rocket",
+    "logo": "data:image/svg+xml,%3Csvg viewBox='0 0 48 48' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='plat' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%239c27b0'/%3E%3Cstop offset='100%25' stop-color='%236a1b9a'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='48' height='48' rx='8' fill='url(%23plat)'/%3E%3Cpath d='M24 8c-2 0-4 2-4 4v8l-6 10h20l-6-10v-8c0-2-2-4-4-4z' fill='white'/%3E%3Ccircle cx='24' cy='38' r='4' fill='white'/%3E%3Cpath d='M18 30h12' stroke='%239c27b0' stroke-width='2'/%3E%3C/svg%3E",
+    "content": "# MeshWeaver Platform\n\nThis section is dedicated to planning and prioritizing the future development of the MeshWeaver platform.\n\n## Purpose\n\nThe Platform area will be used to:\n- Track feature requests and enhancements\n- Plan development roadmaps\n- Prioritize upcoming work\n- Document design decisions\n- Coordinate release planning\n\n## Coming Soon\n\nThis area is under development. Future content will include:\n\n### Roadmap\n- Planned features and capabilities\n- Release timeline and milestones\n- Integration priorities\n\n### Feature Planning\n- Feature specifications\n- Technical design documents\n- Implementation considerations\n\n### Prioritization\n- Feature voting and feedback\n- Priority matrices\n- Resource allocation\n\n---\n\n*Check back soon for updates on platform development plans.*"
+  }
+}

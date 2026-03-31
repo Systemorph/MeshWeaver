@@ -1,0 +1,23 @@
+{
+  "id": "P\u00e2t\u00e9_chinois",
+  "namespace": "Northwind/Product",
+  "name": "P\u00e2t\u00e9 chinois",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "P\u00e2t\u00e9 chinois - 24 boxes x 2 pies",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 55,
+    "productName": "P\u00e2t\u00e9 chinois",
+    "supplierId": 25,
+    "categoryId": 6,
+    "quantityPerUnit": "24 boxes x 2 pies",
+    "unitPrice": 24.0,
+    "unitsInStock": 115,
+    "unitsOnOrder": 0,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}

@@ -11,8 +11,8 @@ public delegate IMessageDelivery SyncDelivery(IMessageDelivery request);
 public delegate bool DeliveryFilter<in TMessage>(IMessageDelivery<TMessage> request);
 public delegate bool DeliveryFilter(IMessageDelivery request);
 
-public delegate Task<IMessageDelivery> AsyncRouteDelivery<in TAddress>(TAddress routeAddress, IMessageDelivery request, CancellationToken cancellationToken);
-public delegate IMessageDelivery SyncRouteDelivery<in TAddress>(TAddress routeAddress, IMessageDelivery request);
+public delegate Task<IMessageDelivery> AsyncRouteDelivery(Address routeAddress, IMessageDelivery request, CancellationToken cancellationToken);
+public delegate IMessageDelivery SyncRouteDelivery(Address routeAddress, IMessageDelivery request);
 
 public interface IMessageHandler<in TMessage>
 {

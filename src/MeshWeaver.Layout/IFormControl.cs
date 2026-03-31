@@ -61,4 +61,14 @@ public interface IFormControl : IUiControl
     /// Placeholder to be put in the control.
     /// </summary>
     object? Placeholder { get; init; }
+
+    /// <summary>
+    /// Whether the control has a blur action.
+    /// </summary>
+    bool IsBlurable { get; }
+
+    /// <summary>
+    /// Callback invoked when the control loses focus.
+    /// </summary>
+    object? OnBlur { get; }
 }

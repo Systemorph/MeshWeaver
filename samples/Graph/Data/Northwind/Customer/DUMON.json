@@ -1,0 +1,23 @@
+{
+  "id": "DUMON",
+  "namespace": "Northwind/Customer",
+  "name": "Du monde entier",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Du monde entier - Nantes, France",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "DUMON",
+    "companyName": "Du monde entier",
+    "contactName": "Janine Labrune",
+    "contactTitle": "Owner",
+    "city": "Nantes",
+    "region": "",
+    "postalCode": "44000",
+    "country": "France",
+    "phone": "40.67.88.88",
+    "fax": "40.67.89.89"
+  }
+}

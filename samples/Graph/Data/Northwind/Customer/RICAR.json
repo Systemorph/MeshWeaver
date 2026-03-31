@@ -1,0 +1,23 @@
+{
+  "id": "RICAR",
+  "namespace": "Northwind/Customer",
+  "name": "Ricardo Adocicados",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Ricardo Adocicados - Rio de Janeiro, Brazil",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "RICAR",
+    "companyName": "Ricardo Adocicados",
+    "contactName": "Janete Limeira",
+    "contactTitle": "Assistant Sales Agent",
+    "city": "Rio de Janeiro",
+    "region": "RJ",
+    "postalCode": "02389-890",
+    "country": "Brazil",
+    "phone": "(21) 555-3412",
+    "fax": ""
+  }
+}

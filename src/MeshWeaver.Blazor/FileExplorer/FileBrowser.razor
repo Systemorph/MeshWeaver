@@ -24,7 +24,7 @@
                         @foreach (var folder in CurrentPath!.Split('/').Where(p => !string.IsNullOrEmpty(p)))
                         {
                             accumulatedPath += '/' + folder;
-                            if (accumulatedPath.TrimStart('/').Length > (TopLevelPath.TrimStart('/').Length))
+                            if (accumulatedPath.TrimStart('/').Length > ((TopLevelPath ?? "").TrimStart('/').Length))
                             {
                                 if (Embed)
                                 {
@@ -46,26 +46,29 @@
             <FluentSpacer></FluentSpacer>
             @if (Collection is not null)
             {
-                <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
                 <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowDownload())" Text="Download" Disabled="@(!SelectedItems.Any())" OnClick="DownloadSelectedAsync">Download</FluentButton>
-                <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
-                <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
-                if (ShowNewArticle)
+                @if (!IsReadOnly)
                 {
-                    <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.Add())" Text="Add Folder" OnClick="AddFolderAsync">New Folder</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.BinRecycle())" Text="Delete" Disabled="@(!SelectedItems.Any())" OnClick="DeleteAsync">Delete</FluentButton>
+                    <FluentButton IconStart="@(new Icons.Regular.Size20.ArrowUpload())" Text="Upload" Id="MyUploadStream">Upload</FluentButton>
+                    <FluentInputFile @ref="@myFileByStream"
+                                     AnchorId="MyUploadStream"
+                                     DragDropZoneVisible="false"
+                                     Mode="InputFileMode.Stream"
+                                     Multiple="true"
+                                     MaximumFileSize="@(20 * 1024 * 1024)"
+                                     ProgressPercentChanged="@(p => progressPercent = p)"
+                                     OnFileUploaded="@OnFileUploadedAsync"
+                                     OnCompleted="@OnCompleted" />
+                    if (ShowNewArticle)
+                    {
+                        <FluentButton IconStart="@(new Icons.Regular.Size20.New())" Text="New Article" OnClick="NewArticleAsync">New Article</FluentButton>
+                    }
                 }
             }
         </div>
     </FluentToolbar>
-    <FluentInputFile @ref="@myFileByStream"
-                     AnchorId="MyUploadStream"
-                     DragDropZoneVisible="false"
-                     Mode="InputFileMode.Stream"
-                     Multiple="true"
-                     MaximumFileSize="@(20 * 1024 * 1024)"
-                     ProgressPercentChanged="@(p => progressPercent = p)"
-                     OnFileUploaded="@OnFileUploadedAsync"
-                     OnCompleted="@OnCompleted" />
 
     <FluentProgress Min="0" Max="100" Value="@progressPercent" Visible="@(progressPercent > 0)" />
     <FluentLabel Alignment="HorizontalAlignment.Center">

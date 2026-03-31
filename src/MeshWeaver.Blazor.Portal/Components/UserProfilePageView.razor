@@ -1,0 +1,29 @@
+@inherits BlazorView<UserProfileControl, UserProfilePageView>
+@using MeshWeaver.Layout
+@using Microsoft.FluentUI.AspNetCore.Components
+
+<div class="user-profile-page">
+    <div class="profile-header">
+        <div class="profile-avatar">
+            @if (!string.IsNullOrEmpty(ViewModel?.Icon))
+            {
+                <img src="@ViewModel.Icon" alt="" class="avatar-img" />
+            }
+            else
+            {
+                <FluentPersona Initials="@GetInitials()" ImageSize="64px" />
+            }
+        </div>
+        <div class="profile-info">
+            <div class="profile-name">@(ViewModel?.DisplayName ?? "User")</div>
+            @if (!string.IsNullOrEmpty(ViewModel?.Email))
+            {
+                <div class="profile-detail">@ViewModel.Email</div>
+            }
+            @if (!string.IsNullOrEmpty(ViewModel?.Bio))
+            {
+                <div class="profile-bio">@ViewModel.Bio</div>
+            }
+        </div>
+    </div>
+</div>

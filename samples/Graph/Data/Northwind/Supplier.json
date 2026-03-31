@@ -1,0 +1,19 @@
+{
+  "id": "Supplier",
+  "namespace": "Northwind",
+  "name": "Supplier",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Supplier master data with contact information and location",
+  "icon": "/static/NodeTypeIcons/truck.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Supplier",
+    "namespace": "Northwind",
+    "displayName": "Supplier",
+    "iconName": "Truck",
+    "description": "Supplier master data with contact information and location",
+    "configuration": "config => config.WithContentType<SupplierContent>().AddDefaultLayoutAreas().AddLayout(layout => layout.AddSupplierNodeLayoutAreas())"
+  }
+}

@@ -29,15 +29,15 @@ public class ImportValidationTest(ITestOutputHelper output) : HubTestBase(output
             );
     }
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration conf)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration conf)
     {
-        return base.ConfigureRouter(conf).WithHostedHub(
-                new TestDomain.ImportAddress(),
+        return base.ConfigureMesh(conf).WithHostedHub(
+                TestDomain.TestImportAddress.Create(),
                 config =>
                     config
                         .AddData(data =>
                             data.AddHubSource(
-                                new HostAddress(),
+                                CreateHostAddress(),
                                 source =>
                                     source
                                         .ConfigureCategory(TestDomain.ContractDomain)
@@ -91,7 +91,7 @@ SystemName,FoundationYear,ContractType
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
@@ -125,7 +125,7 @@ FR,France";
         var importRequest = new ImportRequest(Content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(1000.Seconds()).Token
@@ -155,7 +155,7 @@ DoubleValue,Country
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -189,7 +189,7 @@ A,B";
         var importRequest = new ImportRequest(content) { Format = "Test1", SaveLog = true };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -222,7 +222,7 @@ Blue,FR";
         var importRequest = new ImportRequest(content) { Format = "Test2" };
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token

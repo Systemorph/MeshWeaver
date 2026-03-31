@@ -17,6 +17,8 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 {
     protected TestCluster Cluster { get; private set; } = null!;
 
+    protected static Address CreateClientAddress(string? id = null) => new Address("client", id ?? "1");
+
     public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
@@ -37,7 +39,7 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
 
     protected async Task<IMessageHub> GetClientAsync(Func<MessageHubConfiguration, MessageHubConfiguration>? config = null)
     {
-        var client = ClientMesh.ServiceProvider.CreateMessageHub(new ClientAddress(), config ?? ConfigureClient);
+        var client = ClientMesh.ServiceProvider.CreateMessageHub(CreateClientAddress(), config ?? ConfigureClient);
         await Cluster.Client.ServiceProvider.GetRequiredService<IRoutingService>()
             .RegisterStreamAsync(client.Address, client.DeliverMessage);
         return client;
@@ -55,7 +57,6 @@ public abstract class OrleansTestBase(ITestOutputHelper output) : TestBase(outpu
             await Cluster.DisposeAsync();
         await base.DisposeAsync();
     }
-    protected record ClientAddress(string? Id = null) : Address("client", Id ?? "1");
 
 
 }

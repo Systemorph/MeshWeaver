@@ -1,4 +1,4 @@
-﻿using MeshWeaver.Layout;
+using MeshWeaver.Layout;
 
 namespace MeshWeaver.GridModel;
 

@@ -2,5 +2,6 @@
 
 @foreach (var area in ViewModel.Areas)
 {
-    <DispatchView ViewModel="@area" Stream="@Stream" Area="@area.GetArea()" />
+    var resolvedArea = string.IsNullOrEmpty(area.GetArea()) ? $"{Area}/{area.Id}" : area.GetArea();
+    <DispatchView ViewModel="@(area with { Area = resolvedArea })" Stream="@Stream" Area="@resolvedArea" />
 }

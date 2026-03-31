@@ -1,0 +1,241 @@
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using Microsoft.Extensions.DependencyInjection
+@using System.IO.Compression
+@inject NavigationManager NavigationManager
+@inherits BlazorView<NodeImportControl, NodeImportView>
+
+<div class="node-import-view" style="max-width: 800px;">
+    <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
+        @if (IsFileMode)
+        {
+            <text>Upload file(s) to import into the mesh.</text>
+        }
+        else
+        {
+            <text>Upload a ZIP file containing MeshNodes to import into the mesh.</text>
+        }
+    </p>
+
+    @if (!IsImporting && ImportResult == null)
+    {
+        <div style="margin-bottom: 16px;">
+            <FluentCheckbox @bind-Value="@ForceReimport" Label="Force re-import (overwrite existing data)" />
+        </div>
+
+        @if (!IsFileMode)
+        {
+            <div style="margin-bottom: 16px;">
+                <FluentCheckbox @bind-Value="@RemoveMissing" Label="Delete superfluous nodes (remove nodes in target not present in source)" />
+            </div>
+        }
+
+        <div style="margin-bottom: 16px;">
+            <FluentButton Id="node-import-upload" Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                          IconStart="@(new Icons.Regular.Size16.ArrowUpload())">
+                @(IsFileMode ? "Select File" : "Select ZIP File")
+            </FluentButton>
+        </div>
+
+        <FluentInputFile @ref="@inputFile"
+                         AnchorId="node-import-upload"
+                         DragDropZoneVisible="false"
+                         Mode="InputFileMode.Stream"
+                         Multiple="@IsFileMode"
+                         Accept="@AcceptFilter"
+                         MaximumFileSize="@(500 * 1024 * 1024)"
+                         OnFileUploaded="@OnFileUploadedAsync"
+                         OnCompleted="@OnUploadCompletedAsync" />
+    }
+
+    @if (IsImporting)
+    {
+        <FluentProgress Min="0" Max="100" Value="@ProgressPercent" Visible="true" />
+        <p style="margin-top: 8px; color: var(--neutral-foreground-hint);">@ProgressMessage</p>
+    }
+
+    @if (ImportResult != null)
+    {
+        <FluentCard Style="padding: 16px; margin-top: 16px;">
+            @if (ImportResult.Success)
+            {
+                <h3 style="color: var(--success); margin: 0 0 12px 0;">Import Complete</h3>
+                <p><strong>Nodes imported:</strong> @ImportResult.NodesImported</p>
+                <p><strong>Nodes skipped:</strong> @ImportResult.NodesSkipped</p>
+                <p><strong>Nodes removed:</strong> @ImportResult.NodesRemoved</p>
+                <p><strong>Time:</strong> @ImportResult.Elapsed.TotalSeconds.ToString("F1")s</p>
+            }
+            else
+            {
+                <h3 style="color: var(--error); margin: 0 0 12px 0;">Import Failed</h3>
+                <p>@ImportResult.Error</p>
+            }
+        </FluentCard>
+
+        <div style="margin-top: 16px; display: flex; gap: 8px;">
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent" OnClick="@Reset">Import Another</FluentButton>
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral" OnClick="@GoBack">Overview</FluentButton>
+        </div>
+    }
+
+    @if (ErrorMessage != null)
+    {
+        <FluentCard Style="padding: 16px; margin-top: 16px; border-left: 4px solid var(--error);">
+            <p style="color: var(--error); margin: 0;">@ErrorMessage</p>
+        </FluentCard>
+    }
+</div>
+
+@code
+{
+    private FluentInputFile inputFile = default!;
+    private string? TargetPath;
+    private string? ImportMode;
+    private bool ForceReimport;
+    private bool RemoveMissing;
+    private bool IsImporting;
+    private int ProgressPercent;
+    private string ProgressMessage = "";
+    private ImportNodesResponse? ImportResult;
+    private string? ErrorMessage;
+
+    private bool IsFileMode => ImportMode == "file";
+    private string AcceptFilter => IsFileMode ? ".md,.json,.yaml,.yml,.txt,.csv,.xml,.html" : ".zip";
+
+    protected override void BindData()
+    {
+        base.BindData();
+        TargetPath = ViewModel?.TargetPath;
+        ImportMode = ViewModel?.Mode;
+        ForceReimport = ViewModel?.Force ?? false;
+        RemoveMissing = ViewModel?.RemoveMissing ?? false;
+    }
+
+    private async Task OnFileUploadedAsync(FluentInputFileEventArgs file)
+    {
+        if (file.Stream == null)
+            return;
+
+        IsImporting = true;
+        ErrorMessage = null;
+        ImportResult = null;
+        ProgressPercent = 10;
+        ProgressMessage = IsFileMode ? "Uploading file..." : "Uploading ZIP file...";
+        StateHasChanged();
+
+        string? tempDir = null;
+        try
+        {
+            tempDir = Path.Combine(Path.GetTempPath(), "meshweaver-import-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(tempDir);
+
+            if (IsFileMode)
+            {
+                // File mode: save the uploaded file directly to the temp directory
+                var fileName = file.Name ?? "imported-file";
+                var destPath = Path.Combine(tempDir, fileName);
+                await using (var fs = File.Create(destPath))
+                {
+                    await file.Stream.CopyToAsync(fs);
+                }
+
+                ProgressPercent = 60;
+                ProgressMessage = "Importing file...";
+                StateHasChanged();
+            }
+            else
+            {
+                // ZIP mode: save as temp zip, extract
+                var tempZip = Path.GetTempFileName();
+                try
+                {
+                    await using (var fs = File.Create(tempZip))
+                    {
+                        await file.Stream.CopyToAsync(fs);
+                    }
+
+                    ProgressPercent = 40;
+                    ProgressMessage = "Extracting ZIP file...";
+                    StateHasChanged();
+
+                    ZipFile.ExtractToDirectory(tempZip, tempDir);
+                }
+                finally
+                {
+                    try { File.Delete(tempZip); } catch { }
+                }
+
+                ProgressPercent = 60;
+                ProgressMessage = "Importing nodes...";
+                StateHasChanged();
+            }
+
+            // Call import service
+            var importService = Hub.ServiceProvider.GetService<IMeshImportService>();
+            if (importService == null)
+            {
+                ErrorMessage = "Import service is not available.";
+                IsImporting = false;
+                return;
+            }
+
+            ImportResult = await importService.ImportNodesAsync(
+                tempDir,
+                TargetPath,
+                ForceReimport,
+                removeMissing: RemoveMissing,
+                onProgress: (nodes, partitions, currentPath) =>
+                {
+                    ProgressPercent = Math.Min(60 + (nodes + partitions) % 40, 99);
+                    ProgressMessage = $"Importing... {nodes} nodes ({currentPath})";
+                    InvokeAsync(StateHasChanged);
+                },
+                ct: CancellationToken.None);
+
+            ProgressPercent = 100;
+            ProgressMessage = "Done!";
+        }
+        catch (InvalidDataException)
+        {
+            ErrorMessage = "The uploaded file is not a valid ZIP archive.";
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = $"Import failed: {ex.Message}";
+        }
+        finally
+        {
+            IsImporting = false;
+
+            // Clean up temp directory
+            if (tempDir != null)
+            {
+                try { Directory.Delete(tempDir, true); } catch { }
+            }
+
+            StateHasChanged();
+        }
+    }
+
+    private Task OnUploadCompletedAsync(IEnumerable<FluentInputFileEventArgs> files)
+    {
+        return Task.CompletedTask;
+    }
+
+    private void Reset()
+    {
+        ImportResult = null;
+        ErrorMessage = null;
+        IsImporting = false;
+        ProgressPercent = 0;
+        ProgressMessage = "";
+    }
+
+    private void GoBack()
+    {
+        var backUrl = string.IsNullOrEmpty(TargetPath)
+            ? "/Overview"
+            : $"/{TargetPath}/Overview";
+        NavigationManager.NavigateTo(backUrl);
+    }
+}

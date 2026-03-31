@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <style>
+    .bg { fill: #f5f5f5; }
+    .fg { fill: #616161; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="24" height="24" rx="4"/>
+  <!-- Price tag -->
+  <path class="fg" d="M10 4 L20 4 L20 20 L10 20 L4 12 Z"/>
+  <!-- Tag hole -->
+  <circle class="wh" cx="9" cy="12" r="1.5"/>
+  <!-- Dollar sign -->
+  <text class="wh" x="15" y="15" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="8" font-weight="bold" text-anchor="middle">$</text>
+</svg>

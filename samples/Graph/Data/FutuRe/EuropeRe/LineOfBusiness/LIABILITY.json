@@ -1,0 +1,18 @@
+{
+  "id": "LIABILITY",
+  "namespace": "FutuRe/EuropeRe/LineOfBusiness",
+  "name": "Liability",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "General, products, and employers liability combined with professional indemnity",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "LIABILITY",
+    "displayName": "Liability",
+    "description": "Comprehensive liability insurance combining general third-party liability, products liability, and employers liability with professional indemnity coverages. European liability markets differ from US casualty in tort law frameworks, with shorter limitation periods and generally lower damages awards. However, cross-border exposures and EU product safety regulations create complex multinational program requirements. This local line consolidates both traditional casualty and professional liability risks.",
+    "order": 4,
+    "productExamples": "General liability, Products liability, Employers liability, Professional indemnity, Environmental liability, Recall insurance"
+  }
+}

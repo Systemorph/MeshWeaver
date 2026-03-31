@@ -1,0 +1,116 @@
+@inherits RadzenViewBase<MeshWeaver.Layout.Pivot.PivotGridControl, RadzenPivotGridView>
+@using System.Collections
+
+<HeadContent>
+    <link rel="stylesheet" href="_content/Radzen.Blazor/css/@(GetRadzenTheme()).css" />
+</HeadContent>
+
+<CascadingValue Value="@themeService">
+    @if (Configuration != null && RawData != null && DataItemType != null)
+    {
+        @RenderPivotGrid()
+    }
+</CascadingValue>
+
+@code {
+    private RenderFragment RenderPivotGrid() => builder =>
+    {
+        // Configuration is guaranteed non-null here due to the null check in the template
+        var config = Configuration!;
+
+        var componentType = typeof(RadzenPivotDataGrid<>).MakeGenericType(DataItemType!);
+        builder.OpenComponent(0, componentType);
+        builder.AddAttribute(1, "Data", RawData);
+        builder.AddAttribute(2, "AllowPaging", ShowPager);
+        builder.AddAttribute(3, "PageSize", PageSize);
+        builder.AddAttribute(4, "ShowColumnsTotals", config.ShowColumnTotals);
+        builder.AddAttribute(5, "ShowRowsTotals", config.ShowRowTotals);
+        builder.AddAttribute(6, "AllowDrillDown", config.AllowDrillDown);
+        builder.AddAttribute(7, "AllowSorting", config.AllowSorting);
+        builder.AddAttribute(8, "AllowFiltering", config.AllowFiltering);
+        builder.AddAttribute(9, "AllowFieldsPicking", config.AllowFieldsPicking);
+        builder.AddAttribute(10, "Style", Style);
+
+        // Add Columns - only dimensions selected for columns
+        builder.AddAttribute(12, "Columns", (RenderFragment)(columnsBuilder =>
+        {
+            var index = 0;
+
+            foreach (var dim in config.ColumnDimensions)
+            {
+                var availableDim = config.AvailableDimensions.FirstOrDefault(d => d.Field == dim.Field);
+                if (availableDim == null) continue;
+
+                columnsBuilder.OpenComponent(index++, typeof(RadzenPivotColumn<>).MakeGenericType(DataItemType!));
+                columnsBuilder.AddAttribute(index++, "Title", availableDim.DisplayName);
+                columnsBuilder.AddAttribute(index++, "Width", availableDim.Width);
+                columnsBuilder.AddAttribute(index++, "Property", availableDim.Field);
+                columnsBuilder.AddAttribute(index++, "Filterable", availableDim.Filterable);
+                columnsBuilder.AddAttribute(index++, "Sortable", availableDim.Sortable);
+
+                // Data-bind to the actual SortOrder from the dimension (only if set)
+                if (dim.SortOrder.HasValue)
+                {
+                    columnsBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(dim.SortOrder.Value));
+                }
+
+                columnsBuilder.CloseComponent();
+            }
+        }));
+
+        // Add Rows - selected row dimensions with sort order
+        builder.AddAttribute(13, "Rows", (RenderFragment)(rowsBuilder =>
+        {
+            var index = 0;
+
+            foreach (var dim in config.RowDimensions)
+            {
+                rowsBuilder.OpenComponent(index++, typeof(RadzenPivotRow<>).MakeGenericType(DataItemType!));
+                rowsBuilder.AddAttribute(index++, "Title", dim.DisplayName);
+                rowsBuilder.AddAttribute(index++, "Property", dim.Field);
+                rowsBuilder.AddAttribute(index++, "Filterable", dim.Filterable);
+                rowsBuilder.AddAttribute(index++, "Sortable", dim.Sortable);
+
+                // Data-bind to the actual SortOrder from the dimension (only if set)
+                if (dim.SortOrder.HasValue)
+                {
+                    rowsBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(dim.SortOrder.Value));
+                }
+
+                rowsBuilder.CloseComponent();
+            }
+        }));
+
+        // Add Aggregates - all available aggregates with proper selection
+        builder.AddAttribute(14, "Aggregates", (RenderFragment)(aggregatesBuilder =>
+        {
+            var index = 0;
+            foreach (var agg in config.AvailableAggregates)
+            {
+                aggregatesBuilder.OpenComponent(index++, typeof(RadzenPivotAggregate<>).MakeGenericType(DataItemType!));
+                aggregatesBuilder.AddAttribute(index++, "Title", agg.DisplayName);
+                aggregatesBuilder.AddAttribute(index++, "Property", agg.Field);
+
+                // Get configuration from selected aggregates if it exists
+                var selectedAgg = config.Aggregates.FirstOrDefault(a => a.Field == agg.Field);
+                var function = selectedAgg?.Function ?? agg.Function;
+                var format = selectedAgg?.Format ?? agg.Format;
+                var textAlign = selectedAgg?.TextAlign ?? agg.TextAlign;
+
+                aggregatesBuilder.AddAttribute(index++, "Aggregate", GetAggregateFunction(function));
+                aggregatesBuilder.AddAttribute(index++, "FormatString", format);
+                aggregatesBuilder.AddAttribute(index++, "TextAlign", MapTextAlign(textAlign));
+
+                // Set SortOrder for selected aggregates (only if set)
+                if (selectedAgg?.SortOrder.HasValue == true)
+                {
+                    aggregatesBuilder.AddAttribute(index++, "SortOrder", MapSortOrder(selectedAgg.SortOrder.Value));
+                }
+
+                aggregatesBuilder.CloseComponent();
+            }
+        }));
+
+        builder.CloseComponent();
+    };
+}

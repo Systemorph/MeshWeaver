@@ -1,0 +1,23 @@
+/* Style menu item links inside the dropdown */
+::deep .dropdown-menu .menu-item-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: background-color 0.1s ease;
+}
+
+::deep .dropdown-menu .menu-item-link:hover {
+    background-color: var(--neutral-fill-stealth-hover);
+    text-decoration: none;
+    color: var(--neutral-foreground-rest);
+}
+
+::deep .dropdown-menu .menu-item-link:active {
+    background-color: var(--neutral-fill-stealth-active);
+}

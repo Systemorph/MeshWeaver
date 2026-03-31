@@ -1,0 +1,16 @@
+{
+  "id": "EUR",
+  "namespace": "FutuRe/Currency",
+  "name": "Euro",
+  "nodeType": "FutuRe/Currency",
+  "isPersistent": true,
+  "content": {
+    "$type": "Currency",
+    "id": "EUR",
+    "name": "Euro",
+    "symbol": "€",
+    "decimalPlaces": 2,
+    "order": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

@@ -1,0 +1,23 @@
+{
+  "id": "REGGC",
+  "namespace": "Northwind/Customer",
+  "name": "Reggiani Caseifici",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Reggiani Caseifici - Reggio Emilia, Italy",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "REGGC",
+    "companyName": "Reggiani Caseifici",
+    "contactName": "Maurizio Moroni",
+    "contactTitle": "Sales Associate",
+    "city": "Reggio Emilia",
+    "region": "",
+    "postalCode": "42100",
+    "country": "Italy",
+    "phone": "0522-556721",
+    "fax": "0522-556722"
+  }
+}

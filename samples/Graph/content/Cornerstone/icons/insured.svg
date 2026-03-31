@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .bg { fill: #f5f5f5; }
+    .fg { fill: #616161; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="24" height="24" rx="4"/>
+  <!-- Shield -->
+  <path class="fg" d="M12 2 L20 6 V12 C20 17 16 20 12 22 C8 20 4 17 4 12 V6 Z"/>
+  <!-- Checkmark (filled path, no stroke) -->
+  <path class="wh" d="M7.12 11.18 C6.63 11.67 6.63 12.45 7.12 12.94 L9.94 15.76 C10.43 16.25 11.21 16.25 11.7 15.76 L16.88 10.58 C17.37 10.09 17.37 9.31 16.88 8.82 C16.39 8.33 15.61 8.33 15.12 8.82 L10.82 13.12 L8.88 11.18 C8.39 10.69 7.61 10.69 7.12 11.18 Z"/>
+</svg>

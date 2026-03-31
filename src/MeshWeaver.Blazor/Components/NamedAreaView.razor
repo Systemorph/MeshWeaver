@@ -1,14 +1,15 @@
 @inherits BlazorView<NamedAreaControl, NamedAreaView>
+@using MeshWeaver.Layout
 @using HorizontalAlignment = Microsoft.FluentUI.AspNetCore.Components.HorizontalAlignment
 @using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
 @using VerticalAlignment = Microsoft.FluentUI.AspNetCore.Components.VerticalAlignment
 
-@if (PageTitle is not null)
+@if (Top && PageTitle is not null)
 {
     <PageTitle>@PageTitle</PageTitle>
 }
 
-@if (MetaAttributes is not null)
+@if (Top && MetaAttributes is not null)
 {
     <HeadContent>
         @foreach (var kvp in @MetaAttributes)
@@ -18,20 +19,49 @@
     </HeadContent>
 }
 
-@if (ShowProgress && RootControl == null)
+@if (ShowProgress && RootControl == null && SpinnerType != SpinnerType.None)
 {
-    <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
-        Orientation="Orientation.Vertical">
-        <h3>@ProgressMessage</h3>
-        <FluentProgressRing style="width: 102px; height: 102px;" />
-    </FluentStack>
+    @if (SpinnerType == SpinnerType.Skeleton)
+    {
+        <div class="skeleton-placeholder">
+            @if (!string.IsNullOrEmpty(ProgressMessage))
+            {
+                <span style="font-size: 0.75rem; opacity: 0.45; letter-spacing: 0.02em;">@ProgressMessage</span>
+            }
+            <div class="skeleton-line" style="width: 35%;"></div>
+            <div class="skeleton-line" style="width: 80%;"></div>
+            <div class="skeleton-line" style="width: 55%;"></div>
+        </div>
+    }
+    else
+    {
+        <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
+            Orientation="Orientation.Vertical" Style="@(Top ? "min-height: 100vh; min-height: 100dvh;" : "padding: 12px 0;")">
+            @if (!string.IsNullOrEmpty(ProgressMessage))
+            {
+                <span style="@(Top ? "font-size: 1.17em; font-weight: bold;" : "font-size: 0.85em; color: var(--neutral-foreground-hint, #666);")">@ProgressMessage</span>
+            }
+            @if (SpinnerType == SpinnerType.Dots)
+            {
+                <div class="dots-spinner">
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                    <span class="dot"></span>
+                </div>
+            }
+            else
+            {
+                <FluentProgressRing style="width: 40px; height: 40px;" />
+            }
+        </FluentStack>
+    }
 }
 @if (@RootControl != null)
 {
     <DispatchView ViewModel="@RootControl" Stream="@Stream" Area="@Area" />
 
     @* Signal for thumbnail generator when LayoutAreas catalog has loaded *@
-    @if (Area.ToString() == "LayoutAreas")
+    @if (Area?.ToString() == "LayoutAreas")
     {
         <script>
             // Signal that the LayoutAreas catalog has finished loading

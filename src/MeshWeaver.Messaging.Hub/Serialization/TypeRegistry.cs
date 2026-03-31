@@ -29,8 +29,9 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeof(Uri),
         typeof(byte[]),
         typeof(RawJson),
+        typeof(Nullable<>),
         typeof(MessageDelivery<>),
-        typeof(HostedAddress),
+        typeof(Address),
         typeof(HeartbeatEvent),
         typeof(DeliveryFailure),
         typeof(DisposeRequest)
@@ -83,10 +84,29 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         typeDefinition = typeByName.GetValueOrDefault(name);
         if (typeDefinition != null)
             return true;
+        // Handle nullable syntax (e.g., "Int32?" -> Nullable<Int32>)
+        if (name.EndsWith('?'))
+        {
+            var underlyingName = name[..^1];
+            if (TryGetType(underlyingName, out var underlyingDef) && underlyingDef != null)
+            {
+                var nullableType = typeof(Nullable<>).MakeGenericType(underlyingDef.Type);
+                typeDefinition = new TypeDefinition(nullableType, name, keyFunctionBuilder);
+                return true;
+            }
+            return false;
+        }
         if (name.Contains('[') && name.EndsWith(']'))
         {
             var typeName = name.Substring(0, name.IndexOf('['));
             var baseType = GetTypeDefinition(typeName)?.Type;
+
+            // If not found with full name, try without namespace (e.g., "System.Nullable`1" -> "Nullable`1")
+            if (baseType == null && typeName.Contains('.'))
+            {
+                var shortName = typeName.Substring(typeName.LastIndexOf('.') + 1);
+                baseType = GetTypeDefinition(shortName)?.Type;
+            }
 
             if (baseType == null)
                 return false;
@@ -166,7 +186,7 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
                 }
             }
             typeName =
-                $"{FormatType(genericTypeDefinition)}[{string.Join(',', genericTypeArguments)}]";
+                $"{GetOrAddType(genericTypeDefinition)}[{string.Join(',', genericTypeArguments)}]";
             return true;
         }
 
@@ -180,6 +200,10 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
     {
         if (nameByType.TryGetValue(type, out var typeName))
             return typeName;
+
+        // Check parent registry for already registered type name
+        if (parent?.TryGetCollectionName(type, out var parentTypeName) == true && parentTypeName != null)
+            return parentTypeName;
 
         typeName = defaultName ?? FormatType(type);
         typeByName[typeName] = new(type, typeName, keyFunctionBuilder);
@@ -242,14 +266,19 @@ internal class TypeRegistry(ITypeRegistry? parent) : ITypeRegistry
         // Check if the type is already registered with a name (e.g., basic types like "Int32")
         if (nameByType.TryGetValue(mainType, out var registeredName))
             return registeredName;
-            
+
         var mainTypeName = (mainType.FullName ?? mainType.Name).Replace('\u002B', '.');
         if (!mainType.IsGenericType || mainType.IsGenericTypeDefinition)
             return mainTypeName;
 
+        // Handle nullable types specially BEFORE checking parent registry
         var typeDefinition = mainType.GetGenericTypeDefinition();
         if (typeDefinition == typeof(Nullable<>))
             return FormatType(mainType.GetGenericArguments()[0]) + "?";
+
+        // Check parent registry for already registered type name (after nullable handling)
+        if (parent?.TryGetCollectionName(mainType, out var parentTypeName) == true && parentTypeName != null)
+            return parentTypeName;
 
         var text =
             $"{GetOrAddType(typeDefinition)}[{string.Join(',', mainType.GetGenericArguments().Select(valueType => GetOrAddType(valueType)))}]";

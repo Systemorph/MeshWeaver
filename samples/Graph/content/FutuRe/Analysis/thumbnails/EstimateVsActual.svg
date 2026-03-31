@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #f0f6ff; }
+    .nf { fill: #616161; }
+    .af { fill: #1B6EC2; }
+  </style>
+  <rect class="bg" width="140" height="79" rx="8"/>
+  <!-- Chart frame -->
+  <rect class="nf" x="9" y="7" width="122" height="64" rx="5"/>
+  <rect class="bg" x="11" y="9" width="118" height="60" rx="3"/>
+  <!-- Axis -->
+  <rect class="nf" x="20" y="56" width="100" height="1" rx="0.5" opacity="0.3"/>
+  <!-- Grouped bars: estimate (solid) vs actual (lighter) -->
+  <rect class="af" x="22" y="28" width="6" height="28" rx="1"/>
+  <rect class="af" x="30" y="32" width="6" height="24" rx="1" opacity="0.4"/>
+  <rect class="af" x="42" y="22" width="6" height="34" rx="1"/>
+  <rect class="af" x="50" y="26" width="6" height="30" rx="1" opacity="0.4"/>
+  <rect class="af" x="62" y="30" width="6" height="26" rx="1"/>
+  <rect class="af" x="70" y="28" width="6" height="28" rx="1" opacity="0.4"/>
+  <rect class="af" x="82" y="18" width="6" height="38" rx="1"/>
+  <rect class="af" x="90" y="22" width="6" height="34" rx="1" opacity="0.4"/>
+  <rect class="af" x="102" y="26" width="6" height="30" rx="1"/>
+  <rect class="af" x="110" y="24" width="6" height="32" rx="1" opacity="0.4"/>
+  <!-- Legend -->
+  <rect class="af" x="30" y="12" width="6" height="3" rx="1"/>
+  <rect class="nf" x="38" y="12" width="16" height="3" rx="1" opacity="0.4"/>
+  <rect class="af" x="62" y="12" width="6" height="3" rx="1" opacity="0.4"/>
+  <rect class="nf" x="70" y="12" width="14" height="3" rx="1" opacity="0.4"/>
+</svg>

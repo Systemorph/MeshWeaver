@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Text;
 using MeshWeaver.Domain;
@@ -17,6 +18,7 @@ public static class DataModelLayoutArea
     /// <param name="host"></param>
     /// <param name="context"></param>
     /// <returns></returns>
+    [Browsable(false)]
     public static UiControl DataModel(LayoutAreaHost host, RenderingContext context)
     {
         var _ = context; // currently unused
@@ -195,7 +197,7 @@ public static class DataModelLayoutArea
             navigationIcons += $" <a href=\"/{host.Hub.Address}/DataModel/{bt.Name}\" title=\"Base: {bt.Name}\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🔝</a>";
         if (!string.IsNullOrWhiteSpace(typeDef.CollectionName))
             navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDef.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
-        
+
         var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{type.Name}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
         sb.AppendLine(titleWithNav);
         if (!string.IsNullOrWhiteSpace(typeSummary))
@@ -229,7 +231,7 @@ public static class DataModelLayoutArea
             {
                 var origin = x.IsInherited ? "↑" : "•";
                 var name = x.Prop.Name;
-                var typeMd = GetPropertyTypeCell(host,  x.Prop, x.TypeName);
+                var typeMd = GetPropertyTypeCell(host, x.Prop, x.TypeName);
                 var from = x.IsInherited ? x.Declaring : "this";
                 var summary = string.IsNullOrWhiteSpace(x.Summary) ? "" : x.Summary.Replace("\n", " ").Replace("|", "\\|");
                 sb.AppendLine($"| {origin} | **{name}** | {typeMd} | {from} | {summary} |");
@@ -319,7 +321,7 @@ public static class DataModelLayoutArea
         return isNullable ? baseName + "?" : baseName;
     }
 
-    private static string GetPropertyTypeCell(LayoutAreaHost host,  PropertyInfo property,
+    private static string GetPropertyTypeCell(LayoutAreaHost host, PropertyInfo property,
         string displayName)
     {
         // Determine underlying type for nullables

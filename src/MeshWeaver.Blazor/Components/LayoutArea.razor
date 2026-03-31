@@ -1,3 +1,5 @@
+@using MeshWeaver.Mesh.Services
+@inject INavigationService NavigationService
 
 <LayoutAreaView ViewModel="@ViewModel" Top="@Top"/>
 
@@ -19,4 +21,14 @@
             ProgressMessage = ProgressMessage
         };
 
+    protected override void OnParametersSet()
+    {
+        // Only top-level LayoutArea should set the namespace.
+        // Embedded areas (e.g. comment Overview in CollaborativeMarkdownView)
+        // must not overwrite the page-level namespace.
+        if (Top && !string.IsNullOrEmpty(Address))
+        {
+            NavigationService.SetCurrentNamespace(Address);
+        }
+    }
 }

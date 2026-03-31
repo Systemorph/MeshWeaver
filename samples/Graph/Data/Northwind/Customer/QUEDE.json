@@ -1,0 +1,23 @@
+{
+  "id": "QUEDE",
+  "namespace": "Northwind/Customer",
+  "name": "Que Del\u00edcia",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Que Del\u00edcia - Rio de Janeiro, Brazil",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "QUEDE",
+    "companyName": "Que Del\u00edcia",
+    "contactName": "Bernardo Batista",
+    "contactTitle": "Accounting Manager",
+    "city": "Rio de Janeiro",
+    "region": "RJ",
+    "postalCode": "02389-673",
+    "country": "Brazil",
+    "phone": "(21) 555-4252",
+    "fax": "(21) 555-4545"
+  }
+}

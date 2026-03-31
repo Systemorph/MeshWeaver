@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Logging;
 using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Mesh;
+using MeshWeaver.Blazor.Services;
 using MeshWeaver.Messaging;
 using Microsoft.JSInterop;
 
@@ -13,12 +15,13 @@ namespace MeshWeaver.Blazor.Components;
 public partial class LayoutAreaView
 {
     [Inject] protected IJSRuntime JsRuntime { get; set; } = null!;
+    [Inject] private IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
 
     private IWorkspace Workspace => Hub.GetWorkspace();
 
 
     private NamedAreaControl NamedArea =>
-        new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage };
+        new(Area) { ShowProgress = showProgress, ProgressMessage = progressMessage, SpinnerType = ViewModel.SpinnerType };
 
     public override async Task SetParametersAsync(ParameterView parameters)
     {
@@ -26,13 +29,17 @@ public partial class LayoutAreaView
         BindViewModel();
         if (AreaStream is not null
             && (!AreaStream.Reference.Equals(ViewModel.Reference) ||
-                !AreaStream.Owner.Equals(ViewModel.Address)))
+                !AreaStream.Owner.Equals(Address)))
         {
+            Logger.LogDebug("LayoutAreaView disposing stale stream for {Address}/{Reference} (parameters changed)",
+                ViewModel.Address, ViewModel.Reference);
             AreaStream.Dispose();
             AreaStream = null;
         }
 
-        BindStream();
+        // Only bind stream when already in interactive mode (not during prerender)
+        if (IsNotPreRender)
+            BindStream();
     }
     private bool showProgress;
     private string? progressMessage;
@@ -70,12 +77,24 @@ public partial class LayoutAreaView
         if (IsNotPreRender)
         {
             if (AreaStream != null)
+            {
+                Logger.LogDebug("LayoutAreaView disposing stream for {Area} (contentLoaded={ContentLoaded})",
+                    Area, IsContentLoaded);
                 AreaStream.Dispose();
+            }
             if (DialogStream != null)
                 DialogStream.Dispose();
+            if (MenuStream != null)
+                MenuStream.Dispose();
+        }
+        else
+        {
+            Logger.LogDebug("LayoutAreaView disposed during prerender for {Area} — stream was never bound",
+                Area);
         }
         AreaStream = null;
         DialogStream = null;
+        MenuStream = null;
         await base.DisposeAsync();
     }
 
@@ -83,31 +102,69 @@ public partial class LayoutAreaView
     {
         AreaStream?.Dispose();
         DialogStream?.Dispose();
+        MenuStream?.Dispose();
         AreaStream = null;
         DialogStream = null;
+        MenuStream = null;
     }
     private void BindStream()
     {
         if (AreaStream is null)
         {
-            //Logger.LogDebug("Disposing old stream for {Owner} and {Reference}", AreaStream.Owner, AreaStream.Reference);
-            //AreaStream.Dispose();
             Logger.LogDebug("Acquiring stream for {Owner} and {Reference}", Address!, ViewModel.Reference);
             AreaStream = Address!.Equals(Workspace.Hub.Address)
                 ? Workspace.GetStream(ViewModel.Reference)!.Reduce(new JsonPointerReference("/"))
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address!, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
+            // Only monitor menu from the top-level (main page) LayoutAreaView.
+            // Side panel LayoutAreaViews must not overwrite the main page's node menu.
+            if (Top)
+            {
+                MenuStream = SetupMenuAreaMonitoring(AreaStream!);
+                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value)));
+            }
         }
-
     }
 
     private ISynchronizationStream<JsonElement>? DialogStream { get; set; }
+    private ISynchronizationStream<JsonElement>? MenuStream { get; set; }
 
     private ISynchronizationStream<JsonElement>? SetupDialogAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
     {
         return areaStream.Reduce(
             new JsonPointerReference(LayoutAreaReference.GetControlPointer(DialogControl.DialogArea)));
+    }
+
+    private ISynchronizationStream<JsonElement>? SetupMenuAreaMonitoring(ISynchronizationStream<JsonElement> areaStream)
+    {
+        return areaStream.Reduce(
+            new JsonPointerReference(LayoutAreaReference.GetControlPointer(MenuControl.MenuArea)));
+    }
+
+    private void OnMenuStreamChanged(JsonElement menuData)
+    {
+        try
+        {
+            if (IsNotPreRender)
+            {
+                if (menuData.ValueKind != JsonValueKind.Null && menuData.ValueKind != JsonValueKind.Undefined)
+                {
+                    var menuControl = menuData.Deserialize<MenuControl>(Hub.JsonSerializerOptions);
+                    if (menuControl?.Items != null)
+                    {
+                        MenuItemsProvider.Update(menuControl.Items);
+                        return;
+                    }
+                }
+
+                MenuItemsProvider.Update([]);
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Error processing menu stream change");
+        }
     }
 
     private void OnDialogStreamChanged(JsonElement dialogData)
@@ -143,15 +200,17 @@ public partial class LayoutAreaView
         }
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        base.OnAfterRender(firstRender);
+        await base.OnAfterRenderAsync(firstRender);
         if (firstRender)
         {
             IsNotPreRender = true;
             // If we're now rendered and we don't have a stream yet, bind it
             if (AreaStream == null)
             {
+                Logger.LogDebug("LayoutAreaView first interactive render — binding stream for {Area} ({Address}/{Reference})",
+                    Area, Address, ViewModel?.Reference);
                 BindStream();
                 StateHasChanged();
             }

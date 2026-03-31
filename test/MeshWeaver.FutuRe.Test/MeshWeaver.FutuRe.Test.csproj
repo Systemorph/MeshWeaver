@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{d7a2e1f3-8c4b-4e9d-b5a6-3f1c2d8e7a9b}</ProjectGuid>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pre-copy samples/Graph for tests -->
+    <Content Include="..\..\samples\Graph\**">
+      <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Include mesh node source files for compile-time unit testing -->
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\_Source\FutuReDataCube.cs" Link="MeshNodeSources\FutuReDataCube.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\TransactionMapping\_Source\TransactionMapping.cs" Link="MeshNodeSources\TransactionMapping.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\LineOfBusiness\_Source\LineOfBusiness.cs" Link="MeshNodeSources\LineOfBusiness.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\ExchangeRate\_Source\ExchangeRate.cs" Link="MeshNodeSources\ExchangeRate.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\BusinessUnit\_Source\BusinessUnit.cs" Link="MeshNodeSources\BusinessUnit.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\AmountType\_Source\AmountType.cs" Link="MeshNodeSources\AmountType.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\Currency\_Source\Currency.cs" Link="MeshNodeSources\Currency.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\Country\_Source\Country.cs" Link="MeshNodeSources\Country.cs" />
+    <Compile Include="..\..\samples\Graph\Data\FutuRe\GroupAnalysis\_Source\FutuReDataLoader.cs" Link="MeshNodeSources\FutuReDataLoader.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith\MeshWeaver.Hosting.Monolith.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Layout\MeshWeaver.Layout.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Messaging.Hub\MeshWeaver.Messaging.Hub.csproj" />
+  </ItemGroup>
+</Project>

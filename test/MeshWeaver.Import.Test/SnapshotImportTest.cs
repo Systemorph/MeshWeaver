@@ -17,7 +17,7 @@ namespace MeshWeaver.Import.Test;
 
 public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
 {
-    private static readonly Address ImportAddress = new TestDomain.ImportAddress();
+    private static readonly Address ImportAddress = TestDomain.TestImportAddress.Create();
     protected override MessageHubConfiguration ConfigureHost(
         MessageHubConfiguration configuration
     ) =>
@@ -28,16 +28,16 @@ public class SnapshotImportTest(ITestOutputHelper output) : HubTestBase(output)
                 )
             );
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
     {
-        return base.ConfigureRouter(configuration)
+        return base.ConfigureMesh(configuration)
             .WithHostedHub(
-                new TestDomain.ImportAddress(),
+                TestDomain.TestImportAddress.Create(),
                 config =>
                     config
                         .AddData(data =>
                             data.AddHubSource(
-                                new HostAddress(),
+                                CreateHostAddress(),
                                 source => source.ConfigureCategory(TestDomain.TestRecordsDomain)
                             )
                         )
@@ -62,7 +62,7 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token
@@ -85,7 +85,7 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -99,7 +99,7 @@ SystemName,DisplayName
         ret.Should().HaveCount(1);
         ret.Should().ContainSingle().Which.Number.Should().Be(5);
 
-        var ret2 = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count == 1);
+        var ret2 = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 1);
         ret2.Should().HaveCount(1);
         ret2.Should().ContainSingle().Which.Number.Should().Be(5);
     }
@@ -120,7 +120,7 @@ B4,B,4
         var importRequest = new ImportRequest(content1);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 //, new CancellationTokenSource(10.Seconds()).Token
@@ -143,7 +143,7 @@ SystemName,DisplayName
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -173,7 +173,7 @@ SystemName2,DisplayName2
         importRequest = new ImportRequest(content3);
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -206,7 +206,7 @@ B4,B,4
         var importRequest = new ImportRequest(content);
         var importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -214,7 +214,7 @@ B4,B,4
         );
         importResponse.Message.Log.Status.Should().Be(ActivityStatus.Succeeded);
 
-        var ret = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count >= 4);
+        var ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count >= 4);
 
         ret.Should().HaveCount(4);
 
@@ -226,7 +226,7 @@ SystemName,DisplayName,Number
         importRequest = new ImportRequest(content2) { UpdateOptions = new() { Snapshot = true } };
         importResponse = await client.AwaitResponse(
             importRequest,
-            o => o.WithTarget(new TestDomain.ImportAddress()),
+            o => o.WithTarget(TestDomain.TestImportAddress.Create()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -239,7 +239,7 @@ SystemName,DisplayName,Number
             new CancellationTokenSource(5.Seconds()).Token
         ).Token);
 
-        ret = await GetDataAsync<MyRecord>(new HostAddress(), x => x.Count == 0);
+        ret = await GetDataAsync<MyRecord>(CreateHostAddress(), x => x.Count == 0);
 
         ret.Should().BeEmpty();
     }
@@ -250,7 +250,7 @@ SystemName,DisplayName,Number
         TimeSpan? timeout = null)
     {
         timeout ??= 10.Seconds();
-        var hub = Router.GetHostedHub(address);
+        var hub = Mesh.GetHostedHub(address);
         var workspace = hub.ServiceProvider.GetRequiredService<IWorkspace>();
         return await workspace
             .GetObservable<TData>()

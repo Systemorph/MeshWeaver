@@ -1,0 +1,18 @@
+{
+  "id": "AME-SPECIALTY_AVTN_US-AVTN",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Specialty & Aviation → Aviation (50%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-SPECIALTY_AVTN_US-AVTN",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "SPECIALTY_AVTN_US",
+    "localLineOfBusinessName": "Specialty & Aviation",
+    "groupLineOfBusiness": "AVTN",
+    "groupLineOfBusinessName": "Aviation",
+    "percentage": 0.5
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

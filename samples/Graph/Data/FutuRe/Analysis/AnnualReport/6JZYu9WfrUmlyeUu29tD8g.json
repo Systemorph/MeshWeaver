@@ -1,0 +1,16 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g",
+  "path": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g",
+  "name": "Can you check if you have the necessary informatio...",
+  "nodeType": "Thread",
+  "icon": "/static/NodeTypeIcons/chat.svg",
+  "lastModified": "2026-03-09T15:06:10.891224+00:00",
+  "version": 2,
+  "state": "Active",
+  "content": {
+    "$type": "Thread",
+    "parentPath": "FutuRe/Analysis/AnnualReport",
+    "primaryNodePath": "FutuRe/Analysis/AnnualReport"
+  }
+}

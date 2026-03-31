@@ -4,17 +4,51 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Patch;
 using Json.Pointer;
-using Microsoft.Extensions.DependencyInjection;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Completion;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.Completion;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging;
-using MeshWeaver.Layout.Views;
 using MeshWeaver.Layout.Serialization;
+using MeshWeaver.Layout.Views;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout;
+
+/// <summary>
+/// Equality comparer for JsonElement that compares by content (raw JSON text).
+/// This is needed because JsonElement's default equality is reference-based,
+/// causing DistinctUntilChanged to fail.
+/// </summary>
+public class JsonElementContentComparer : IEqualityComparer<JsonElement>
+{
+    public static readonly JsonElementContentComparer Instance = new();
+
+    public bool Equals(JsonElement x, JsonElement y)
+    {
+        // Both undefined
+        if (x.ValueKind == JsonValueKind.Undefined && y.ValueKind == JsonValueKind.Undefined)
+            return true;
+
+        // One undefined
+        if (x.ValueKind == JsonValueKind.Undefined || y.ValueKind == JsonValueKind.Undefined)
+            return false;
+
+        // Compare by raw JSON text
+        return x.GetRawText() == y.GetRawText();
+    }
+
+    public int GetHashCode(JsonElement obj)
+    {
+        if (obj.ValueKind == JsonValueKind.Undefined)
+            return 0;
+        return obj.GetRawText().GetHashCode();
+    }
+}
 
 public static class LayoutExtensions
 {
@@ -29,22 +63,41 @@ public static class LayoutExtensions
             var typeRegistry = config.TypeRegistry;
             config = config
                 .WithInitialization(h => h.ServiceProvider.GetRequiredService<IUiControlService>())
-                .WithServices(services => services.AddScoped<IUiControlService, UiControlService>())
+                .WithServices(services => services
+                    .AddScoped<IUiControlService, UiControlService>()
+                    .AddScoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>())
+                .WithHandler<GetDataRequest>(HandleLayoutAreasRequest)
                 .AddData(data =>
                 {
-                    return data.Configure(reduction =>
-                        reduction
-                            .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
-                                reference is not LayoutAreaReference layoutArea
-                                    ? null
-                                    : new LayoutAreaHost(
-                                            workspace,
-                                            layoutArea,
-                                            workspace.Hub.ServiceProvider
-                                                .GetRequiredService<IUiControlService>(),
-                                            configuration!)
-                                        .GetStream()
-                            )
+                    // Register the area: prefix resolver for UnifiedReference (only if not already registered)
+                    // This handles paths like "area:areaName" or "area:areaName/areaId" or "area:areaName?queryParams"
+                    if (!data.UnifiedReferenceResolvers.ContainsKey("area"))
+                    {
+                        data = data.WithUnifiedReference("area", CreateAreaPathStream);
+                    }
+                    // Register the layoutAreas: prefix resolver for UnifiedReference
+                    if (!data.UnifiedReferenceResolvers.ContainsKey("layoutAreas"))
+                    {
+                        data = data.WithUnifiedReference("layoutAreas", (workspace, _) =>
+                            CreateLayoutAreasStream(workspace));
+                    }
+
+                    return data.Configure(reduction => reduction
+                        .AddWorkspaceReferenceStream<EntityStore>((workspace, reference, configuration) =>
+                            reference is not LayoutAreaReference layoutArea
+                                ? null
+                                : new LayoutAreaHost(
+                                        workspace,
+                                        layoutArea,
+                                        workspace.Hub.ServiceProvider
+                                            .GetRequiredService<IUiControlService>(),
+                                        configuration!)
+                                    .GetStream()
+                        )
+                        .AddWorkspaceReferenceStream<object>((workspace, reference, _) =>
+                            reference is not LayoutAreasReference
+                                ? null
+                                : CreateLayoutAreasStream(workspace))
                     );
                 }).AddLayoutTypes()
                 .WithSerialization(serialization => serialization.WithOptions(options =>
@@ -62,10 +115,16 @@ public static class LayoutExtensions
     }
 
 
-    internal static LayoutDefinition GetLayoutDefinition(this IMessageHub hub) =>
-        hub
-            .Configuration.GetListOfLambdas()
-            .Aggregate(CreateDefaultLayoutConfiguration(hub), (x, y) => y.Invoke(x));
+    internal static LayoutDefinition GetLayoutDefinition(this IMessageHub hub)
+    {
+        var lambdas = hub.Configuration.GetListOfLambdas();
+        System.Diagnostics.Debug.WriteLine($"GetLayoutDefinition for hub {hub.Address}: {lambdas.Count} layout lambdas");
+        Console.WriteLine($"[GetLayoutDefinition] Hub {hub.Address}: {lambdas.Count} layout lambdas");
+        var result = lambdas.Aggregate(CreateDefaultLayoutConfiguration(hub), (x, y) => y.Invoke(x));
+        System.Diagnostics.Debug.WriteLine($"GetLayoutDefinition for hub {hub.Address}: LayoutDefinition has {result.Count} renderers");
+        Console.WriteLine($"[GetLayoutDefinition] Hub {hub.Address}: LayoutDefinition has {result.Count} renderers");
+        return result;
+    }
 
     private static LayoutDefinition CreateDefaultLayoutConfiguration(IMessageHub hub)
     {
@@ -79,7 +138,10 @@ public static class LayoutExtensions
         ?? [(Func<LayoutDefinition, LayoutDefinition>)(layout => layout.AddStandardViews())];
 
     private static LayoutDefinition AddStandardViews(this LayoutDefinition layout)
-        => layout.AddLayoutAreaCatalog();
+        => layout
+            .AddLayoutAreaCatalog()
+            .AddDataReferenceView();
+    // Note: $Content area is handled by ContentLayoutArea.UnifiedContent from AddContentCollections()
 
     public static MessageHubConfiguration AddLayoutTypes(
         this MessageHubConfiguration configuration
@@ -92,7 +154,7 @@ public static class LayoutExtensions
                             (typeof(IUiControl).IsAssignableFrom(t)
                              || typeof(Skin).IsAssignableFrom(t)
                              || typeof(StreamMessage).IsAssignableFrom(t))
-                        //&& !t.IsAbstract
+                    //&& !t.IsAbstract
                     )
             )
             .WithTypes(
@@ -101,6 +163,7 @@ public static class LayoutExtensions
                 typeof(Option), // this is not a control
                 typeof(Option<>), // this is not a control
                 typeof(ContextProperty), // this is not a control
+                typeof(LayoutAreasReference),
                 typeof(GetLayoutAreasRequest),
                 typeof(LayoutAreasResponse),
                 typeof(DataGridCellClick)
@@ -120,15 +183,22 @@ public static class LayoutExtensions
     )
     {
         var first = true;
-        var collection = referencePointer.First();
-        var idString = referencePointer.Skip(1).FirstOrDefault();
-        var id = idString == null ? null : JsonSerializer.Deserialize<object>(idString, stream.Hub.JsonSerializerOptions);
+        var collection = referencePointer.GetSegment(0).ToString();
+        var idString = referencePointer.SegmentCount == 1 ? null : referencePointer.GetSegment(1).ToString();
+        // RFC 6901 unescape: ~1 -> / and ~0 -> ~ (order matters)
+        var unescapedIdString = idString?.Replace("~1", "/").Replace("~0", "~");
+        // Deserialize the id as string directly to ensure consistent comparison
+        var id =
+            unescapedIdString == null ? null :
+                unescapedIdString == string.Empty ? string.Empty
+                : JsonSerializer.Deserialize<string>(unescapedIdString, stream.Hub.JsonSerializerOptions);
 
         return stream
+            .Synchronize() // Ensure thread-safety for the 'first' closure variable
             .Where(i =>
                 first
                 || i.Updates.Any(
-                    p => p.Collection == collection && (p.Id == null || id == null || p.Id.Equals(id)))
+                    p => p.Collection == collection && (p.Id == null || id == null || MatchesId(p.Id, id)))
                 )
             .Select(i =>
                 {
@@ -139,6 +209,22 @@ public static class LayoutExtensions
                         : evaluated.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!;
                 }
             );
+    }
+
+    private static bool MatchesId(object? updateId, string? targetId)
+    {
+        if (updateId == null || targetId == null)
+            return true;
+
+        // Handle JsonElement comparison
+        if (updateId is JsonElement je)
+        {
+            return je.ValueKind == JsonValueKind.String
+                ? je.GetString() == targetId
+                : je.ToString() == targetId;
+        }
+
+        return updateId.ToString() == targetId;
     }
 
     public static IObservable<object?> GetControlStream(
@@ -152,6 +238,50 @@ public static class LayoutExtensions
                 ?.Instances
                 .GetValueOrDefault(area)
         ).Where(x => x is not null);
+
+    /// <summary>
+    /// Gets the first available control from the areas collection.
+    /// Used when no specific area is requested (default area case).
+    /// </summary>
+    public static IObservable<UiControl?> GetFirstControlStream(
+        this ISynchronizationStream<EntityStore>? synchronizationItems
+    ) =>
+        synchronizationItems!.Select(i =>
+            i.Value?
+                .Collections
+                .GetValueOrDefault(LayoutAreaReference.Areas)
+                ?.Instances
+                .Values
+                .OfType<UiControl>()
+                .FirstOrDefault()
+        ).Where(x => x is not null);
+
+    /// <summary>
+    /// Gets the first available control from the areas collection (JsonElement stream).
+    /// Used when no specific area is requested (default area case).
+    /// </summary>
+    public static IObservable<UiControl?> GetFirstControlStream(
+        this ISynchronizationStream<JsonElement> synchronizationItems
+    ) =>
+        synchronizationItems
+            .Select(i =>
+            {
+                // Navigate to /areas and get the first property value
+                if (i.Value.ValueKind != JsonValueKind.Object)
+                    return null;
+                if (!i.Value.TryGetProperty(LayoutAreaReference.Areas, out var areas))
+                    return null;
+                if (areas.ValueKind != JsonValueKind.Object)
+                    return null;
+
+                // Get the first property (first area)
+                using var enumerator = areas.EnumerateObject();
+                if (!enumerator.MoveNext())
+                    return null;
+
+                return enumerator.Current.Value.Deserialize<UiControl>(synchronizationItems.Hub.JsonSerializerOptions);
+            })
+            .Where(x => x is not null);
 
     public static IObservable<object?> GetControlStream(
         this IMessageHub hub,
@@ -180,11 +310,11 @@ public static class LayoutExtensions
     public static async Task<TData> GetDataAsync<TData>(
         this ISynchronizationStream<EntityStore>? synchronizationItems,
         string id
-    ) 
+    )
     {
         if (synchronizationItems == null)
             throw new ArgumentNullException(nameof(synchronizationItems));
-        
+
         return await synchronizationItems.GetDataStream<TData>(id).FirstAsync(x => x != null);
     }
 
@@ -209,9 +339,44 @@ public static class LayoutExtensions
         string id
     ) => stream.Reduce(new EntityReference(LayoutAreaReference.Data, id))!
         .Where(x => x.Value != null)
-        .Select(x => (T)x.Value!)
-        .DistinctUntilChanged()
+        .Select(x => ConvertDataValue<T>(x.Value!, stream.Hub.JsonSerializerOptions))
+        .DistinctUntilChangedWithJsonSupport()
     ;
+
+    /// <summary>
+    /// DistinctUntilChanged that properly handles JsonElement by comparing content.
+    /// </summary>
+    private static IObservable<T> DistinctUntilChangedWithJsonSupport<T>(this IObservable<T> source)
+    {
+        // For JsonElement, use content-based comparison
+        if (typeof(T) == typeof(JsonElement))
+        {
+            return source.DistinctUntilChanged((IEqualityComparer<T>)(object)JsonElementContentComparer.Instance);
+        }
+        return source.DistinctUntilChanged();
+    }
+
+    private static T ConvertDataValue<T>(object value, JsonSerializerOptions options)
+    {
+        // Direct cast if already the right type
+        if (value is T t)
+            return t;
+
+        // Handle JsonNode to JsonElement conversion
+        if (typeof(T) == typeof(JsonElement) && value is JsonNode node)
+            return (T)(object)JsonSerializer.SerializeToElement(node, options);
+
+        // Handle JsonElement to other types via deserialization
+        if (value is JsonElement je)
+            return je.Deserialize<T>(options)!;
+
+        // Handle arbitrary object to JsonElement conversion (e.g., Todo -> JsonElement)
+        if (typeof(T) == typeof(JsonElement))
+            return (T)(object)JsonSerializer.SerializeToElement(value, options);
+
+        // Fallback: try direct cast (may throw if incompatible)
+        return (T)value;
+    }
 
 
     public static void SetData(
@@ -269,8 +434,8 @@ public static class LayoutExtensions
                 x.Value.ValueKind == JsonValueKind.Undefined
                     ? default!
                     : x.Value.Deserialize<T>(stream.Hub.JsonSerializerOptions)!
-            ); 
-    
+            );
+
     public static MessageHubConfiguration AddLayoutClient(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
@@ -293,7 +458,7 @@ public static class LayoutExtensions
     public static MessageHubConfiguration AddViews(
         this MessageHubConfiguration config,
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration) =>
-        config.Set(config.GetConfigurationFunctions().Add(configuration ?? 
+        config.Set(config.GetConfigurationFunctions().Add(configuration ??
                                                           (x => x)));
 
     internal static ImmutableList<
@@ -331,4 +496,122 @@ public static class LayoutExtensions
 
     internal static bool IsVisible(this LayoutAreaDefinition l)
         => !l.Area.StartsWith("$") && l.IsInvisible != true;
+
+    /// <summary>
+    /// Creates a stream for area: unified reference paths.
+    /// Path format: areaName[/areaId...] or areaName?queryParams
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateAreaPathStream(
+        IWorkspace workspace,
+        string? remainingPath)
+    {
+        if (string.IsNullOrEmpty(remainingPath))
+            return null;
+
+        string areaName;
+        string? areaId = null;
+
+        // Check for ? separator (query params as area id)
+        var queryIndex = remainingPath.IndexOf('?');
+        if (queryIndex > 0)
+        {
+            areaName = remainingPath[..queryIndex];
+            areaId = remainingPath[(queryIndex + 1)..];
+        }
+        else
+        {
+            // Check for / separator - areaId is everything after the first /
+            var slashIndex = remainingPath.IndexOf('/');
+            if (slashIndex > 0)
+            {
+                areaName = remainingPath[..slashIndex];
+                areaId = remainingPath[(slashIndex + 1)..];
+            }
+            else
+            {
+                areaName = remainingPath;
+            }
+        }
+
+        var layoutAreaRef = new LayoutAreaReference(areaName) { Id = areaId };
+        // LayoutAreaReference returns ISynchronizationStream<EntityStore>, cast to object
+        return (ISynchronizationStream<object>?)workspace.GetStream(layoutAreaRef, null);
+    }
+
+    /// <summary>
+    /// Creates a stream that returns the list of available layout areas.
+    /// Used by the layoutAreas: unified reference prefix.
+    /// </summary>
+    private static ISynchronizationStream<object>? CreateLayoutAreasStream(IWorkspace workspace)
+    {
+        var uiControlService = workspace.Hub.ServiceProvider.GetService<IUiControlService>();
+        if (uiControlService == null)
+            return null;
+
+        var reference = new LayoutAreasReference();
+        var streamIdentity = new StreamIdentity(workspace.Hub.Address, "layoutAreas");
+        var stream = new SynchronizationStream<object>(
+            streamIdentity,
+            workspace.Hub,
+            reference,
+            workspace.ReduceManager.ReduceTo<object>(),
+            c => c
+        );
+
+        // Use FromAsync to allow the hub's message processing to handle the value
+        // before the observable sequence completes
+        var observable = Observable.FromAsync(_ =>
+        {
+            var areas = uiControlService.LayoutDefinition
+                .AreaDefinitions
+                .Values
+                .Where(l => l.IsVisible())
+                .ToList();
+            return Task.FromResult((object)areas);
+        });
+
+        stream.RegisterForDisposal(
+            observable
+                .Select(value => new ChangeItem<object>(value, stream.StreamId, workspace.Hub.Version))
+                .Where(x => x.Value != null)
+                .DistinctUntilChanged()
+                .Synchronize()
+                .Subscribe(stream)
+        );
+
+        return stream;
+    }
+
+    /// <summary>
+    /// Handles GetDataRequest for layoutAreas: prefix directly, bypassing the
+    /// Observable/SynchronizationStream/FirstAsync chain that can race.
+    /// AreaDefinitions are immutable and fully known at config time.
+    /// </summary>
+    private static Task<IMessageDelivery> HandleLayoutAreasRequest(
+        IMessageHub hub,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        // Only handle UnifiedReference with "layoutAreas:" prefix
+        if (request.Message.Reference is not UnifiedReference uRef
+            || !uRef.Path.StartsWith("layoutAreas", StringComparison.OrdinalIgnoreCase))
+            return Task.FromResult<IMessageDelivery>(request); // Pass through to next handler
+
+        var uiControlService = hub.ServiceProvider.GetService<IUiControlService>();
+        if (uiControlService == null)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = "Layout not configured" },
+                o => o.ResponseFor(request));
+            return Task.FromResult(request.Processed());
+        }
+
+        var areas = uiControlService.LayoutDefinition
+            .AreaDefinitions
+            .Values
+            .Where(l => l.IsVisible())
+            .ToList();
+
+        hub.Post(new GetDataResponse(areas, hub.Version), o => o.ResponseFor(request));
+        return Task.FromResult(request.Processed());
+    }
 }

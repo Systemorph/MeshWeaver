@@ -1,0 +1,46 @@
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@inject IPathResolver PathResolver
+@inject IMeshService MeshQuery
+
+<a href="@Href" class="ucr-link" title="@Tooltip" data-raw-path="@Path">@DisplayText</a>
+
+@code {
+    [Parameter]
+    public string? Path { get; set; }
+
+    [Parameter]
+    public string? Href { get; set; }
+
+    [Parameter]
+    public string? DisplayText { get; set; }
+
+    private string? Name { get; set; }
+
+    private string Tooltip => !string.IsNullOrEmpty(Name)
+        ? Name
+        : Path ?? "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrEmpty(Path))
+            return;
+
+        try
+        {
+            var resolution = await PathResolver.ResolvePathAsync(Path);
+            if (resolution != null)
+            {
+                var node = await MeshQuery.QueryAsync<MeshNode>($"path:{resolution.Prefix}").FirstOrDefaultAsync();
+                if (node != null)
+                {
+                    Name = node.Name;
+                }
+            }
+        }
+        catch
+        {
+            // Silent failure - tooltip will just show the path
+        }
+    }
+}

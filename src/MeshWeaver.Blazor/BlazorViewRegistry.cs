@@ -1,21 +1,25 @@
 ﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using MeshWeaver.Blazor.Articles;
-using MeshWeaver.Data;
-using Microsoft.DotNet.Interactive.Formatting;
-using MeshWeaver.Domain;
-using MeshWeaver.Layout;
-using MeshWeaver.Layout.Client;
-using MeshWeaver.Layout.DataGrid;
-using MeshWeaver.Messaging;
-using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 using MeshWeaver.Blazor.Components;
+using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.FileExplorer;
 using MeshWeaver.ContentCollections;
-using MeshWeaver.Mesh;
+using MeshWeaver.Data;
+using MeshWeaver.Domain;
+using MeshWeaver.Graph;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Catalog;
+using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Views;
+using MeshWeaver.Markdown;
+using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
+using Microsoft.DotNet.Interactive.Formatting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using static MeshWeaver.Layout.Client.LayoutClientConfiguration;
 
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Blazor")]
 namespace MeshWeaver.Blazor;
@@ -27,11 +31,21 @@ public static class BlazorViewRegistry
         Func<LayoutClientConfiguration, LayoutClientConfiguration>? configuration = null
     ) => config
         .AddData()
-        .AddLayoutClient(c => 
+        .AddLayoutClient(c =>
             (configuration ?? (x => x))
-            .Invoke(c.WithView((i,s,a) => DefaultFormatting(c.Hub, i, s, a))))
+            .Invoke(c.WithView((i, s, a) => DefaultFormatting(c.Hub, i, s, a))))
         .AddMeshTypes()
+        .AddMarkdownTypes()
     ;
+
+    /// <summary>
+    /// Registers Markdown-related types for JSON serialization.
+    /// </summary>
+    private static MessageHubConfiguration AddMarkdownTypes(this MessageHubConfiguration config)
+    {
+        config.TypeRegistry.WithType(typeof(MarkdownContent), nameof(MarkdownContent));
+        return config;
+    }
     #region Standard Formatting
     private static ViewDescriptor? DefaultFormatting(
         IMessageHub hub,
@@ -40,52 +54,84 @@ public static class BlazorViewRegistry
         string area
     )
     {
-        if (instance is not UiControl control)
-            return null;
-
-        control = control.PopSkin(out var skin);
-        if (skin != null)
-            return MapSkinnedView(control, stream, area, skin);
-
-        var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-
-        return control switch
+        try
         {
-            LayoutAreaControl layoutArea
-                => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
-            HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
-            LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
-            NavLinkControl link => StandardView<NavLinkControl,NavLink>(link, stream, area),
-            //PropertyControl property => StandardView<PropertyControl, PropertyColumnView>(property, stream, area),
-            MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
-            DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
-            IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
-            NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
-            TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
-            TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
-            RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type?.ToString() ?? throw new ArgumentException($"Cannot find type {radioGroup.Type} for radio group.")) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
-            DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
-            ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
-            ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
-            SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
-            ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
-            IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
-            BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
-            FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream,area),
-            ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
-            CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
-            ItemTemplateControl itemTemplate
-                => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
-            MarkdownControl markdown => StandardView<MarkdownControl, MarkdownView>(markdown, stream, area),
-            NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
-            SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
-            ArticleControl article => StandardView<ArticleControl, ArticleView>(article, stream, area),
-            ArticleCatalogControl articleCatalog => StandardView<ArticleCatalogControl, ArticleCatalogView>(articleCatalog, stream, area),
-            ArticleCatalogItemControl articleCatalogItem => StandardView<ArticleCatalogItemControl, ArticleCatalogItemView>(articleCatalogItem, stream, area),
-            LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
-            RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
-            _ => DelegateToDotnetInteractive(instance, stream, area),
-        };
+            if (instance is not UiControl control)
+                return null;
+
+            control = control.PopSkin(out var skin);
+            if (skin != null)
+                return MapSkinnedView(control, stream, area, skin);
+
+            var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
+
+            return control switch
+            {
+                LayoutAreaControl layoutArea
+                    => StandardView<LayoutAreaControl, LayoutAreaView>(layoutArea, stream, area),
+                HtmlControl html => StandardView<HtmlControl, HtmlView>(html, stream, area),
+                LabelControl label => StandardView<LabelControl, Label>(label, stream, area),
+                NavLinkControl link => StandardView<NavLinkControl, NavLink>(link, stream, area),
+                //PropertyControl property => StandardView<PropertyControl, PropertyColumnView>(property, stream, area),
+                MenuItemControl menu => StandardView<MenuItemControl, MenuItemView>(menu, stream, area),
+                DataGridControl dataGrid => StandardView<DataGridControl, DataGridView>(dataGrid, stream, area),
+                CatalogControl catalog => StandardView<CatalogControl, CatalogView>(catalog, stream, area),
+                IContainerControl container => StandardView<IContainerControl, ContainerView>(container, stream, area),
+                NumberFieldControl number => StandardView(number, typeof(NumberFieldView<>).MakeGenericType(typeRegistry.GetType(number.Type.ToString()!) ?? throw new InvalidOperationException($"Type not found: {number.Type}")), stream, area),
+                TextFieldControl textbox => StandardView<TextFieldControl, TextFieldView>(textbox, stream, area),
+                TextAreaControl textbox => StandardView<TextAreaControl, TextAreaView>(textbox, stream, area),
+                RadioGroupControl radioGroup => StandardView(radioGroup, typeof(RadioGroupView<>).MakeGenericType(typeRegistry.GetType(radioGroup.Type?.ToString() ?? throw new ArgumentException($"Cannot find type {radioGroup.Type} for radio group.")) ?? throw new InvalidOperationException($"Type not found: {radioGroup.Type}")), stream, area),
+                DateTimeControl dateTime => StandardView<DateTimeControl, DateTimeView>(dateTime, stream, area),
+                ComboboxControl combobox => StandardView<ComboboxControl, Combobox>(combobox, stream, area),
+                ListboxControl listbox => StandardView<ListboxControl, Listbox>(listbox, stream, area),
+                SelectControl select => StandardView<SelectControl, SelectView>(select, stream, area),
+                ButtonControl button => StandardView<ButtonControl, ButtonView>(button, stream, area),
+                IconControl icon => StandardView<IconControl, IconView>(icon, stream, area),
+                BadgeControl badge => StandardView<BadgeControl, BadgeView>(badge, stream, area),
+                FileBrowserControl fileBrowser => StandardView<FileBrowserControl, FileBrowserView>(fileBrowser, stream, area),
+                NodeImportControl nodeImport => StandardView<NodeImportControl, NodeImportView>(nodeImport, stream, area),
+                NodeExportControl nodeExport => StandardView<NodeExportControl, NodeExportView>(nodeExport, stream, area),
+                ProgressControl progress => StandardView<ProgressControl, ProgressView>(progress, stream, area),
+                CheckBoxControl checkbox => StandardView<CheckBoxControl, Checkbox>(checkbox, stream, area),
+                SwitchControl switchCtrl => StandardView<SwitchControl, Switch>(switchCtrl, stream, area),
+                ItemTemplateControl itemTemplate
+                    => StandardView<ItemTemplateControl, ItemTemplate>(itemTemplate, stream, area),
+                CollaborativeMarkdownControl collaborativeMarkdown => StandardView<CollaborativeMarkdownControl, CollaborativeMarkdownView>(collaborativeMarkdown, stream, area),
+                CodeEditorControl codeEditor => StandardView<CodeEditorControl, CodeEditorView>(codeEditor, stream, area),
+                DiffEditorControl diffEditor => StandardView<DiffEditorControl, DiffEditorView>(diffEditor, stream, area),
+                MarkdownControl markdown => StandardView<MarkdownControl, Components.MarkdownView>(markdown, stream, area),
+                MarkdownEditorControl markdownEditor => StandardView<MarkdownEditorControl, MarkdownEditorView>(markdownEditor, stream, area),
+                NamedAreaControl namedView => StandardView<NamedAreaControl, NamedAreaView>(namedView, stream, area),
+                SpacerControl spacer => StandardView<SpacerControl, SpacerView>(spacer, stream, area),
+                LayoutAreaDefinitionControl layoutAreaDefinition => StandardView<LayoutAreaDefinitionControl, LayoutAreaDefinitionView>(layoutAreaDefinition, stream, area),
+                RedirectControl redirect => StandardView<RedirectControl, RedirectView>(redirect, stream, area),
+                SearchBoxControl searchBox => StandardView<SearchBoxControl, SearchBoxView>(searchBox, stream, area),
+                MeshNodePickerControl picker => StandardView<MeshNodePickerControl, MeshNodePickerView>(picker, stream, area),
+                MeshNodeCollectionControl collection => StandardView<MeshNodeCollectionControl, MeshNodeCollectionView>(collection, stream, area),
+                MeshSearchControl meshSearch => StandardView<MeshSearchControl, MeshSearchView>(meshSearch, stream, area),
+                MeshNodeCardControl card => StandardView<MeshNodeCardControl, MeshNodeCardView>(card, stream, area),
+                AppearanceControl appearance => StandardView<AppearanceControl, AppearanceView>(appearance, stream, area),
+                ThreadMessageBubbleControl bubble => StandardView<ThreadMessageBubbleControl, ThreadMessageBubbleView>(bubble, stream, area),
+                _ => DelegateToDotnetInteractive(instance, stream, area),
+            };
+        }
+        catch (Exception ex)
+        {
+            var logger = hub.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(BlazorViewRegistry));
+            logger.LogError(ex, "Error rendering control {ControlType} in area {Area}", instance.GetType().Name, area);
+
+            var errorHtml = Controls.Html(
+                $"<div style=\"color: var(--error); padding: 8px; border: 1px solid var(--error); border-radius: 4px; margin: 4px;\">" +
+                $"<strong>Rendering error:</strong> {System.Web.HttpUtility.HtmlEncode(ex.Message)}</div>"
+            );
+            return new ViewDescriptor(
+                typeof(HtmlView),
+                ImmutableDictionary<string, object?>
+                    .Empty.Add(ViewModel, errorHtml)
+                    .Add(nameof(Stream), stream)
+                    .Add(nameof(Area), area)
+            );
+        }
     }
 
 
@@ -112,7 +158,6 @@ public static class BlazorViewRegistry
             TabSkin tab => StandardSkinnedView<TabView>(tab, stream, area, control),
             TabsSkin tabs => StandardSkinnedView<TabsView>(tabs, stream, area, control),
             SplitterPaneSkin splitter => StandardSkinnedView<SplitterPane>(splitter, stream, area, control),
-            ArticleCatalogSkin articleCatalog => StandardSkinnedView<ArticleCatalogView>(articleCatalog, stream, area, control),
             MenuItemSkin menuItem => StandardSkinnedView<MenuItemView>(menuItem, stream, area, control),
             _ => throw new NotSupportedException($"Skin {skin.GetType().Name} is not supported.")
         };

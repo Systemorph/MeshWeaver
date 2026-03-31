@@ -180,7 +180,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource =>
+                data.AddHubSource(CreateHostAddress(), dataSource =>
                     dataSource
                         .WithType<SerializationTestData>()
                         .WithType<NestedData>()
@@ -201,14 +201,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}"); var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}"); var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify all expected properties exist
@@ -239,12 +239,12 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         var statusProperty = properties.GetProperty("status");
@@ -273,12 +273,12 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson); var createdAtProperty = properties.GetProperty("createdAt");
         GetPropertyType(properties, "createdAt").Should().Be("string");
         createdAtProperty.GetProperty("format").GetString().Should().Be("date-time");
@@ -296,13 +296,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which; var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which; var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // NullableNumber should be present in properties - System.Text.Json handles nullable types
@@ -329,12 +329,12 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson); var tagsProperty = properties.GetProperty("tags");
         GetPropertyType(properties, "tags").Should().Be("array");
     }
@@ -351,7 +351,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -385,7 +385,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([testData]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -418,15 +418,15 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(typeName);
-        schemaResponse.Schema.Should().Be("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(typeName);
+        schemaInfo.Schema.Should().Be("{}");
     }
 
     /// <summary>
@@ -441,7 +441,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -473,7 +473,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update([updatedData]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -504,13 +504,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify polymorphic properties exist
@@ -545,13 +545,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify base properties
@@ -575,13 +575,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify inherited properties from BaseShape
@@ -606,13 +606,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify inherited properties
@@ -640,7 +640,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -684,7 +684,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { container }),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -739,13 +739,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // SerializationTestData is a regular record, not polymorphic, so it may not have $type
@@ -780,14 +780,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
 
         // Verify oneOf property exists for potential inheritors
         if (schemaJson.RootElement.TryGetProperty("oneOf", out var oneOfProperty))
@@ -819,14 +819,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify $type property exists for the container itself
@@ -855,13 +855,13 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token);        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Schema.Should().NotBe("{}");
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Schema.Should().NotBe("{}");
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         var properties = FindPropertiesInSchema(schemaJson);
 
         // Verify that actual XML documentation is being read, not generic fallbacks
@@ -907,17 +907,17 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
 
         // Output the schema for debugging
         Output.WriteLine("Generated Schema:");
-        Output.WriteLine(schemaResponse.Schema);
+        Output.WriteLine(schemaInfo.Schema);
 
         // This test is for debugging - always pass        Assert.True(true);
     }    /// <summary>
@@ -1174,7 +1174,7 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         // act - get all registered types
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -1211,14 +1211,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var actualSchema = schemaResponse.Schema;
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var actualSchema = schemaInfo.Schema;
 
         // Output for debugging
         Output.WriteLine("Actual Schema Structure:");
@@ -1248,14 +1248,14 @@ public class SerializationAndSchemaTest(ITestOutputHelper output) : HubTestBase(
         {
             // act
             var response = await client.AwaitResponse(
-                new GetSchemaRequest(typeName),
-                o => o.WithTarget(new ClientAddress()),
+                new GetDataRequest(new SchemaReference(typeName)),
+                o => o.WithTarget(CreateClientAddress()),
                 new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
             );
 
             // assert
-            var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-            Output.WriteLine($"Type: {typeName} => Schema: {schemaResponse.Schema}");
+            var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+            Output.WriteLine($"Type: {typeName} => Schema: {schemaInfo.Schema}");
         }
 
         // This test always passes - it's just for debugging

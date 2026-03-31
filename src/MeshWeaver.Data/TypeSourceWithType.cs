@@ -1,4 +1,5 @@
-﻿using MeshWeaver.Domain;
+﻿using MeshWeaver.Data.Validation;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
 
@@ -53,4 +54,68 @@ public abstract record TypeSourceWithType<T, TTypeSource>(IWorkspace Workspace, 
     public TTypeSource WithKey<TProp>(Func<T, TProp> keyFunc)
         => WithKey(new KeyFunction(o => keyFunc.Invoke((T)o)!, typeof(TProp)));
 
+    /// <summary>
+    /// Adds an access restriction for this type using async evaluation.
+    /// </summary>
+    /// <param name="restriction">Async restriction delegate to evaluate</param>
+    /// <param name="name">Optional name for logging/debugging</param>
+    /// <returns>Updated type source with the restriction added</returns>
+    public TTypeSource WithAccessRestriction(
+        AccessRestrictionDelegate restriction,
+        string? name = null)
+    {
+        return This with
+        {
+            AccessRestrictions = AccessRestrictions.Add(new AccessRestrictionEntry(restriction, name))
+        };
+    }
+
+    /// <summary>
+    /// Adds a strongly-typed access restriction for row-level operations.
+    /// The entity is cast to T before being passed to the restriction.
+    /// </summary>
+    /// <param name="restriction">Strongly-typed restriction function</param>
+    /// <param name="name">Optional name for logging/debugging</param>
+    /// <returns>Updated type source with the restriction added</returns>
+    /// <example>
+    /// <code>
+    /// .WithType&lt;OwnedEntity&gt;(type => type
+    ///     .WithTypedAccessRestriction((action, entity, ctx) =>
+    ///         action == "Read" || entity.OwnerId == ctx.UserContext?.ObjectId,
+    ///         "OwnerOnly"))
+    /// </code>
+    /// </example>
+    public TTypeSource WithTypedAccessRestriction(
+        Func<string, T, AccessRestrictionContext, CancellationToken, bool> restriction,
+        string? name = null)
+    {
+        return WithAccessRestriction(
+            (action, ctx, accessCtx, ct) =>
+            {
+                if (ctx is T instance)
+                    return Task.FromResult(restriction(action, instance, accessCtx, ct));
+                return Task.FromResult(true); // Allow if not the right type (shouldn't happen for instance-level checks)
+            },
+            name);
+    }
+
+    /// <summary>
+    /// Adds a strongly-typed async access restriction for row-level operations.
+    /// </summary>
+    /// <param name="restriction">Strongly-typed async restriction function</param>
+    /// <param name="name">Optional name for logging/debugging</param>
+    /// <returns>Updated type source with the restriction added</returns>
+    public TTypeSource WithTypedAccessRestriction(
+        Func<string, T, AccessRestrictionContext, CancellationToken, Task<bool>> restriction,
+        string? name = null)
+    {
+        return WithAccessRestriction(
+            async (action, ctx, accessCtx, ct) =>
+            {
+                if (ctx is T instance)
+                    return await restriction(action, instance, accessCtx, ct);
+                return true;
+            },
+            name);
+    }
 }

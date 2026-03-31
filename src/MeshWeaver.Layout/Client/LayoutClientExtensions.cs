@@ -33,7 +33,7 @@ public static class LayoutClientExtensions
                     var patch = stream.GetPatch(value, reference, dataContext, ci);
                     var updated = patch?.Apply(ci) ?? ci;
 
-                    return stream.ToChangeItem(ci, updated, patch!, stream.StreamId);
+                    return stream.ToChangeItem(ci, updated, patch!, stream.ClientId);
                 },
                     ex =>
                     {
@@ -101,8 +101,21 @@ public static class LayoutClientExtensions
         if (value is null)
             return default;
 
+        // Handle nullable value types
+        var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+
         // Use Convert.ChangeType for flexible conversion
-        return (T?)Convert.ChangeType(value, typeof(T));
+        if (typeof(T).IsValueType)
+        {
+            // For nullable value types, convert to underlying type first
+            if (targetType != typeof(T))
+            {
+                var converted = Convert.ChangeType(value, targetType);
+                return (T?)converted;
+            }
+            return (T?)value;
+        }
+        return (T?)Convert.ChangeType(value, targetType);
     }
     private static T? GetDataBoundValue<T>(this ISynchronizationStream<JsonElement> stream, string pointer, string? dataContext = null)
     {
@@ -135,7 +148,10 @@ public static class LayoutClientExtensions
         if (pointer.StartsWith('/'))
             return pointer.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(dataContext))
-            return $"/{pointer}";
+            return string.IsNullOrEmpty(pointer) ? "/" : $"/{pointer}";
+        // Handle empty pointer - bind to the dataContext itself without trailing slash
+        if (string.IsNullOrEmpty(pointer))
+            return dataContext.TrimEnd('/');
         return $"{dataContext}/{pointer.TrimEnd('/')}";
     }
 
@@ -198,7 +214,9 @@ public static class LayoutClientExtensions
         }
 
         // Fall back to Convert.ChangeType for non-numeric types
-        return (T?)Convert.ChangeType(value, typeof(T));
+        // Use targetType (underlying type for nullables) since Convert.ChangeType doesn't support nullable types
+        var converted = Convert.ChangeType(value, targetType);
+        return (T?)converted;
     }
 
     private static bool IsNumericType(Type type)
@@ -329,16 +347,19 @@ public static class LayoutClientExtensions
     {
         try
         {
-            var response = await stream.Hub.AwaitResponse(
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var delivery = stream.Hub.Post(
                 new DataChangeRequest { Updates = [data.Submit()] },
-                o => o.WithTarget(stream.Owner));
-            if (response.Message.Status == DataChangeStatus.Committed)
+                o => o.WithTarget(stream.Owner))!;
+            var callbackResponse = await stream.Hub.RegisterCallback(delivery, (d, _) => Task.FromResult(d), cts.Token);
+            var responseMsg = ((IMessageDelivery<DataChangeResponse>)callbackResponse).Message;
+            if (responseMsg.Status == DataChangeStatus.Committed)
             {
                 data.Confirm();
-                return response.Message.Log;
+                return responseMsg.Log;
             }
             else
-                return response.Message.Log;
+                return responseMsg.Log;
         }
         catch (Exception e)
         {

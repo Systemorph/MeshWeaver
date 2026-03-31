@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+    .sf { fill: #ffffff; }
+  </style>
+  <!-- Background -->
+  <rect class="bg" width="140" height="79" rx="8"/>
+
+  <!-- Stacked cards behind (back to front) -->
+  <!-- Card 3 (farthest): rect x=30 y=12 w=80 h=12 rx=2 stroke-width=1.5 opacity=0.4 -->
+  <g opacity="0.4">
+    <rect class="nf" x="29.25" y="11.25" width="81.5" height="13.5" rx="2.75"/>
+    <rect class="sf" x="30.75" y="12.75" width="78.5" height="10.5" rx="1.25"/>
+  </g>
+  <!-- Card 2: rect x=26 y=22 w=88 h=12 rx=2 stroke-width=1.5 opacity=0.6 -->
+  <g opacity="0.6">
+    <rect class="nf" x="25.25" y="21.25" width="89.5" height="13.5" rx="2.75"/>
+    <rect class="sf" x="26.75" y="22.75" width="86.5" height="10.5" rx="1.25"/>
+  </g>
+  <!-- Card 1 (closest behind): rect x=22 y=32 w=96 h=12 rx=2 stroke-width=1.5 opacity=0.8 -->
+  <g opacity="0.8">
+    <rect class="nf" x="21.25" y="31.25" width="97.5" height="13.5" rx="2.75"/>
+    <rect class="sf" x="22.75" y="32.75" width="94.5" height="10.5" rx="1.25"/>
+  </g>
+
+  <!-- Main inbox card: rect x=18 y=42 w=104 h=24 rx=3 stroke-width=2 -->
+  <rect class="nf" x="17" y="41" width="106" height="26" rx="4"/>
+  <rect class="bg" x="19" y="43" width="102" height="22" rx="2"/>
+  <!-- Text line 1: M26 50h60 sw=1.5 round -->
+  <rect class="nf" x="26" y="49.25" width="60" height="1.5" rx="0.75"/>
+  <!-- Text line 2: M26 58h40 sw=1.5 round opacity=0.6 -->
+  <rect class="nf" x="26" y="57.25" width="40" height="1.5" rx="0.75" opacity="0.6"/>
+
+  <!-- Unassigned indicator (already filled) -->
+  <circle class="af" cx="108" cy="50" r="8"/>
+  <text x="108" y="54" text-anchor="middle" font-family="'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, 'Helvetica Neue', sans-serif" font-size="10" font-weight="bold" fill="white">?</text>
+</svg>

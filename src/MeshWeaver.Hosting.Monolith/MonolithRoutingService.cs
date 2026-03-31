@@ -1,12 +1,14 @@
 ﻿using System.Collections.Concurrent;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Hosting.Monolith;
 
-public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
+internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
@@ -28,37 +30,63 @@ public class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingServ
 
 
     protected override async Task<IMessageDelivery> RouteImplAsync(
-        IMessageDelivery delivery, 
-        MeshNode? node, 
+        IMessageDelivery delivery,
+        MeshNode? node,
         Address address,
         CancellationToken cancellationToken)
     {
         if (streams.TryGetValue(address, out var stream))
             return await stream.Invoke(delivery, cancellationToken);
 
-        if (node == null)
+        var hub = await CreateHubAsync(node, address);
+        if (hub is null)
         {
-            logger.LogWarning("No node found for address {Address}", address);
-            return delivery.Failed($"No node found for address {address}");
+            var isShuttingDown = Mesh.Disposal is not null;
+            string errorMessage;
+            if (isShuttingDown)
+                errorMessage = $"Mesh is shutting down, cannot route to {address}";
+            else if (node is null)
+                errorMessage = $"No node found for address {address}";
+            else
+                errorMessage = $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType ?? "null"}). Ensure the node type is registered via AddGraph() or a custom builder extension.";
+
+            logger.LogWarning("No route found for {MessageType} → {Address}. Node: {NodePath}, NodeType: {NodeType}, Sender: {Sender}, ShuttingDown: {ShuttingDown}",
+                delivery.Message.GetType().Name, address, node?.Path, node?.NodeType, delivery.Sender, isShuttingDown);
+
+            // Post DeliveryFailure response so AwaitResponse callers get an exception.
+            // Guard: don't post DeliveryFailure for DeliveryFailure messages or during shutdown.
+            if (delivery.Message is not DeliveryFailure && Mesh.RunLevel < MessageHubRunLevel.DisposeHostedHubs)
+            {
+                Mesh.Post(
+                    new DeliveryFailure(delivery)
+                    {
+                        ErrorType = isShuttingDown ? ErrorType.Failed : ErrorType.NotFound,
+                        Message = errorMessage
+                    }, o => o.ResponseFor(delivery)
+                );
+            }
+            return delivery.Failed(errorMessage);
         }
 
-        var hub = CreateHub(node, address);
-        if (hub is null)
-            return delivery;
-
-        hub.DeliverMessage(delivery); 
+        hub.DeliverMessage(delivery);
         return delivery.Forwarded(hub.Address);
     }
 
-    private IMessageHub CreateHub(MeshNode node, Address address)
+    private async Task<IMessageHub?> CreateHubAsync(MeshNode? node, Address address)
     {
-        if (node.HubConfiguration is not null)
-        {
-            var hub = Mesh.GetHostedHub(address, node.HubConfiguration);
-            if(hub is not null)
-                hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
-            return hub!;
-        }
-        return null!;
+        if (Mesh.Disposal is not null || node is null)
+            return null;
+
+        var hubFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeHubFactory>();
+        node = await hubFactory.ResolveHubConfigurationAsync(node);
+
+        if (node.HubConfiguration is null)
+            throw new InvalidOperationException(
+                $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType}). " +
+                $"Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
+
+        var hub = Mesh.GetHostedHub(address, node.HubConfiguration!);
+        hub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
+        return hub;
     }
 }

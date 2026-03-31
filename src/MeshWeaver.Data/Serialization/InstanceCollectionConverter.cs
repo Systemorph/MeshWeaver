@@ -4,7 +4,6 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Json.More;
 using MeshWeaver.Domain;
-using MeshWeaver.Messaging.Serialization;
 
 namespace MeshWeaver.Data.Serialization;
 
@@ -15,12 +14,41 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
 
     private JsonNode Serialize(InstanceCollection instances, JsonSerializerOptions options)
     {
-        return new JsonObject(
-            instances.Instances.Select(x => new KeyValuePair<string, JsonNode?>(
-                JsonSerializer.Serialize(x.Key, options),
-                JsonSerializer.SerializeToNode(x.Value, options)
-            ))
-        );
+        var jsonObject = new JsonObject();
+
+        // $type MUST be the first property — STJ polymorphic deserializer requires it
+        if (instances.CollectionName != null)
+        {
+            jsonObject[CollectionProperty] = instances.CollectionName;
+        }
+
+        foreach (var x in instances.Instances)
+        {
+            jsonObject[ConvertKeyToString(x.Key, options)] =
+                JsonSerializer.SerializeToNode(x.Value, options);
+        }
+
+        return jsonObject;
+    }
+
+    /// <summary>
+    /// Converts a key object to a string for use as a JSON property name.
+    /// For simple types (string, numbers), just use ToString().
+    /// For complex types (tuples), serialize as JSON.
+    /// </summary>
+    private static string ConvertKeyToString(object key, JsonSerializerOptions options)
+    {
+        return JsonSerializer.Serialize(key, options);
+    }
+
+    /// <summary>
+    /// Converts a JSON property name string back to a key object.
+    /// For simple types (string, numbers), parse directly.
+    /// For complex types (tuples), deserialize from JSON.
+    /// </summary>
+    private static object ConvertStringToKey(string keyString, Type keyType, JsonSerializerOptions options)
+    {
+        return JsonSerializer.Deserialize(keyString, keyType, options) ?? keyString;
     }
 
     public override InstanceCollection? Read(
@@ -34,18 +62,20 @@ public class InstanceCollectionConverter(ITypeRegistry typeRegistry)
         if (obj == null)
             return null;
         var collection = obj[CollectionProperty]?.ToString();
-        var type = collection == null 
-            ? typeof(object)
-            : typeRegistry.GetKeyFunction(collection)?.KeyType 
-              ?? typeof(object);
+        var keyFunction = collection == null ? null : typeRegistry.GetKeyFunction(collection);
+        var type = keyFunction?.KeyType ?? typeof(string);  // Default to string, not object
+
         return new InstanceCollection
         {
-            Instances = obj.Where(i => i.Key != CollectionProperty )
-                .Select(i => new KeyValuePair<object, object>(
-                    JsonSerializer.Deserialize(i.Key, type, options) ?? i.Key,
-                    i.Value.Deserialize<object>(options) ?? new object()
-                ))
-                .ToImmutableDictionary()
+            Instances = obj.Where(i => i.Key != CollectionProperty)
+                .Select(i =>
+                {
+                    var deserializedKey = ConvertStringToKey(i.Key, type, options);
+                    var deserializedValue = i.Value.Deserialize<object>(options) ?? new object();
+                    return new KeyValuePair<object, object>(deserializedKey, deserializedValue);
+                })
+                .ToImmutableDictionary(),
+            CollectionName = collection
         };
     }
 

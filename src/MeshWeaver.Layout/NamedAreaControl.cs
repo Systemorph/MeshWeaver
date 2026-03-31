@@ -18,6 +18,11 @@
         public object? ProgressMessage { get; init; }
 
         /// <summary>
+        /// Gets or initializes the spinner type. Defaults to Ring.
+        /// </summary>
+        public SpinnerType SpinnerType { get; init; } = SpinnerType.Ring;
+
+        /// <summary>
         /// Sets the area of the named area control.
         /// </summary>
         /// <param name="area">The area to set.</param>
@@ -32,5 +37,13 @@
         /// <returns>A new <see cref="NamedAreaControl"/> instance with the specified display area.</returns>
         public NamedAreaControl WithProgressMessage(object progressMessage)
             => this with { ProgressMessage = progressMessage };
+
+        /// <summary>
+        /// Sets the spinner type for the loading indicator.
+        /// </summary>
+        /// <param name="spinnerType">The spinner type to use.</param>
+        /// <returns>A new <see cref="NamedAreaControl"/> instance with the specified spinner type.</returns>
+        public NamedAreaControl WithSpinnerType(SpinnerType spinnerType)
+            => this with { SpinnerType = spinnerType };
     }
 }

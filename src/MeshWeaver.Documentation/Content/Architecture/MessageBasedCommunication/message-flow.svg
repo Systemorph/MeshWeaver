@@ -1,0 +1,95 @@
+<svg viewBox="0 0 800 380" width="800" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .bg { fill: #f8fafc; }
+    .title { fill: #666; }
+    .cloud-zone { fill: #e3f2fd; stroke: #1976d2; }
+    .cloud-label { fill: #1565c0; }
+    .cloud-hub { fill: #1976d2; }
+    .onprem-zone { fill: #e8f5e9; stroke: #388e3c; }
+    .onprem-label { fill: #2e7d32; }
+    .onprem-hub { fill: #388e3c; }
+    .bus { fill: #7c4dff; }
+    .arrow-blue { stroke: #1976d2; fill: none; }
+    .arrow-green { stroke: #388e3c; fill: none; }
+    .marker-blue { fill: #1976d2; }
+    .marker-green { fill: #388e3c; }
+    .step { fill: #9c27b0; }
+    .legend-box { fill: #f8fafc; stroke: #e0e0e0; }
+    .legend-text { fill: #666; }
+    .legend-blue { fill: #1565c0; }
+    .legend-green { fill: #2e7d32; }
+
+    [data-theme="dark"] .bg { fill: #1e1e2e; }
+    [data-theme="dark"] .title { fill: #a6adc8; }
+    [data-theme="dark"] .cloud-zone { fill: #1e3a5f; stroke: #89b4fa; }
+    [data-theme="dark"] .cloud-label { fill: #89b4fa; }
+    [data-theme="dark"] .cloud-hub { fill: #3b82f6; }
+    [data-theme="dark"] .onprem-zone { fill: #1a3d2e; stroke: #a6e3a1; }
+    [data-theme="dark"] .onprem-label { fill: #a6e3a1; }
+    [data-theme="dark"] .onprem-hub { fill: #22c55e; }
+    [data-theme="dark"] .bus { fill: #a78bfa; }
+    [data-theme="dark"] .arrow-blue { stroke: #89b4fa; }
+    [data-theme="dark"] .arrow-green { stroke: #a6e3a1; }
+    [data-theme="dark"] .marker-blue { fill: #89b4fa; }
+    [data-theme="dark"] .marker-green { fill: #a6e3a1; }
+    [data-theme="dark"] .step { fill: #c084fc; }
+    [data-theme="dark"] .legend-box { fill: #1e1e2e; stroke: #45475a; }
+    [data-theme="dark"] .legend-text { fill: #a6adc8; }
+    [data-theme="dark"] .legend-blue { fill: #89b4fa; }
+    [data-theme="dark"] .legend-green { fill: #a6e3a1; }
+  </style>
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path class="marker-blue" d="M0,0 L0,6 L9,3 z"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path class="marker-green" d="M0,0 L0,6 L9,3 z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="800" height="380"/>
+  <text class="title" x="400" y="25" text-anchor="middle" font-family="Arial" font-size="16" font-weight="bold">Cross-Environment Message Flow</text>
+
+  <!-- Cloud Zone -->
+  <ellipse class="cloud-zone" cx="180" cy="150" rx="140" ry="100" stroke-width="3"/>
+  <text class="cloud-label" x="180" y="70" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold">Cloud (Azure / AWS)</text>
+  <rect class="cloud-hub" x="130" y="110" width="100" height="60" rx="8"/>
+  <text x="180" y="135" text-anchor="middle" font-family="Arial" font-size="12" fill="white" font-weight="bold">Hub A</text>
+  <text x="180" y="155" text-anchor="middle" font-family="Arial" font-size="10" fill="white" opacity="0.9">Sender</text>
+
+  <!-- On-Premise Zone -->
+  <ellipse class="onprem-zone" cx="620" cy="150" rx="140" ry="100" stroke-width="3"/>
+  <text class="onprem-label" x="620" y="70" text-anchor="middle" font-family="Arial" font-size="14" font-weight="bold">On-Premise</text>
+  <rect class="onprem-hub" x="570" y="110" width="100" height="60" rx="8"/>
+  <text x="620" y="135" text-anchor="middle" font-family="Arial" font-size="12" fill="white" font-weight="bold">Hub B</text>
+  <text x="620" y="155" text-anchor="middle" font-family="Arial" font-size="10" fill="white" opacity="0.9">Handler</text>
+
+  <!-- Message Bus -->
+  <rect class="bus" x="340" y="120" width="120" height="60" rx="8"/>
+  <text x="400" y="145" text-anchor="middle" font-family="Arial" font-size="11" fill="white" font-weight="bold">Message</text>
+  <text x="400" y="162" text-anchor="middle" font-family="Arial" font-size="11" fill="white" font-weight="bold">Bus</text>
+
+  <!-- Arrows -->
+  <path class="arrow-blue" d="M230 130 C280 130, 300 140, 340 140" stroke-width="3" marker-end="url(#arrowBlue)"/>
+  <path class="arrow-blue" d="M460 140 C500 140, 520 130, 570 130" stroke-width="3" marker-end="url(#arrowBlue)"/>
+  <path class="arrow-green" d="M570 160 C520 160, 500 170, 460 170" stroke-width="3" marker-end="url(#arrowGreen)"/>
+  <path class="arrow-green" d="M340 170 C300 170, 280 160, 230 160" stroke-width="3" marker-end="url(#arrowGreen)"/>
+
+  <!-- Step Numbers -->
+  <circle class="step" cx="285" cy="115" r="12"/>
+  <text x="285" y="119" text-anchor="middle" font-family="Arial" font-size="10" fill="white" font-weight="bold">1</text>
+  <circle class="step" cx="515" cy="115" r="12"/>
+  <text x="515" y="119" text-anchor="middle" font-family="Arial" font-size="10" fill="white" font-weight="bold">2</text>
+  <circle class="step" cx="515" cy="185" r="12"/>
+  <text x="515" y="189" text-anchor="middle" font-family="Arial" font-size="10" fill="white" font-weight="bold">3</text>
+  <circle class="step" cx="285" cy="185" r="12"/>
+  <text x="285" y="189" text-anchor="middle" font-family="Arial" font-size="10" fill="white" font-weight="bold">4</text>
+
+  <!-- Legend -->
+  <rect class="legend-box" x="50" y="270" width="700" height="100" rx="8" stroke-width="1"/>
+  <text class="legend-text" x="100" y="295" font-family="Arial" font-size="11"><tspan class="legend-blue" font-weight="bold">1.</tspan> Hub A sends request to Message Bus</text>
+  <text class="legend-text" x="100" y="315" font-family="Arial" font-size="11"><tspan class="legend-blue" font-weight="bold">2.</tspan> Message Bus delivers to Hub B</text>
+  <text class="legend-text" x="450" y="295" font-family="Arial" font-size="11"><tspan class="legend-green" font-weight="bold">3.</tspan> Hub B handles, processes, produces output</text>
+  <text class="legend-text" x="450" y="315" font-family="Arial" font-size="11"><tspan class="legend-green" font-weight="bold">4.</tspan> Response flows back via Message Bus</text>
+  <text class="legend-text" x="400" y="355" text-anchor="middle" font-family="Arial" font-size="10" font-style="italic">Single-threaded processing per hub ensures predictable execution order</text>
+</svg>

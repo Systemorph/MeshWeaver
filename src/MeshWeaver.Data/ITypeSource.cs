@@ -1,8 +1,10 @@
-﻿using MeshWeaver.Domain;
+﻿using System.Collections.Immutable;
+using MeshWeaver.Data.Validation;
+using MeshWeaver.Domain;
 
 namespace MeshWeaver.Data;
 
-public interface ITypeSource 
+public interface ITypeSource
 {
     ITypeDefinition TypeDefinition { get; }
     ITypeSource WithInitialData(
@@ -27,6 +29,12 @@ public interface ITypeSource
     InstanceCollection Update(ChangeItem<EntityStore> changeItem);
 
     string CollectionName { get; }
+
+    /// <summary>
+    /// Access restrictions specific to this type.
+    /// Evaluated after global restrictions.
+    /// </summary>
+    ImmutableList<AccessRestrictionEntry> AccessRestrictions { get; }
 }
 
 public interface IPartitionedTypeSource : ITypeSource

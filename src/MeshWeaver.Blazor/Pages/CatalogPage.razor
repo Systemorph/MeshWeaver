@@ -1,0 +1,234 @@
+@page "/catalog"
+@page "/catalog/{*Namespace}"
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
+@using Fluent = Microsoft.FluentUI.AspNetCore.Components
+@inject IMeshService MeshQuery
+@inject NavigationManager NavigationManager
+@inject IMessageHub Hub
+
+<FluentDesignTheme @bind-Mode="@Mode" StorageName="theme" />
+
+<PageTitle>Catalog - @(string.IsNullOrEmpty(Namespace) ? "Root" : Namespace)</PageTitle>
+
+<div class="catalog-page">
+    <div class="catalog-header">
+        <h1>@(string.IsNullOrEmpty(Namespace) ? "Catalog" : Namespace)</h1>
+        @if (!string.IsNullOrEmpty(Query))
+        {
+            <FluentLabel Typo="Fluent.Typography.Body" Class="catalog-query">Query: @Query</FluentLabel>
+        }
+    </div>
+
+    @if (IsLoading)
+    {
+        <FluentProgressRing />
+    }
+    else if (Nodes.Count == 0)
+    {
+        <FluentLabel Typo="Fluent.Typography.Body" Style="color: var(--neutral-foreground-hint);">No items found.</FluentLabel>
+    }
+    else
+    {
+        <FluentGrid Spacing="3" Justify="Fluent.JustifyContent.FlexStart">
+            @foreach (var node in Nodes)
+            {
+                <FluentGridItem xs="12" sm="6" md="4" lg="3">
+                    <FluentCard Class="catalog-card" @onclick="() => NavigateTo(node.Path)">
+                        <div class="catalog-card-content">
+                            @if (!string.IsNullOrEmpty(GetImageUrl(node)))
+                            {
+                                @if (GetImageUrl(node)!.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    <div class="catalog-card-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)GetImageUrl(node)!)</div>
+                                }
+                                else
+                                {
+                                    <img src="@GetImageUrl(node)" alt="@node.Name" class="catalog-card-image" />
+                                }
+                            }
+                            else
+                            {
+                                <div class="catalog-card-placeholder">
+                                    <span>@GetInitial(node)</span>
+                                </div>
+                            }
+                            <div class="catalog-card-text">
+                                <FluentLabel Typo="Fluent.Typography.Body" Weight="Fluent.FontWeight.Bold">@(node.Name ?? node.Id)</FluentLabel>
+                            </div>
+                        </div>
+                    </FluentCard>
+                </FluentGridItem>
+            }
+        </FluentGrid>
+    }
+</div>
+
+<style>
+    .catalog-page {
+        padding: 24px;
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+
+    .catalog-header {
+        margin-bottom: 24px;
+    }
+
+    .catalog-header h1 {
+        margin: 0 0 8px 0;
+    }
+
+    .catalog-query {
+        color: var(--neutral-foreground-hint);
+    }
+
+    .catalog-card {
+        padding: var(--design-unit) calc(var(--design-unit) * 3);
+        cursor: pointer;
+        transition: box-shadow 0.2s ease;
+        min-width: 280px;
+    }
+
+    .catalog-card:hover {
+        box-shadow: var(--elevation-shadow-card-active);
+    }
+
+    .catalog-card-content {
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 12px;
+        min-height: 60px;
+    }
+
+    .catalog-card-image {
+        width: 48px;
+        height: 48px;
+        border-radius: 8px;
+        object-fit: cover;
+        flex-shrink: 0;
+    }
+
+    .catalog-card-placeholder {
+        width: 48px;
+        height: 48px;
+        border-radius: 8px;
+        background: var(--accent-fill-rest);
+        color: var(--foreground-on-accent-rest);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 18px;
+        flex-shrink: 0;
+    }
+
+    .catalog-card-text {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .catalog-card-description {
+        color: var(--neutral-foreground-hint);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+</style>
+
+@code {
+    private DesignThemeModes Mode { get; set; }
+
+    [Parameter]
+    public string? Namespace { get; set; }
+
+    [SupplyParameterFromQuery(Name = "q")]
+    public string? Query { get; set; }
+
+    private List<MeshNode> Nodes { get; set; } = new();
+    private bool IsLoading { get; set; } = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadNodesAsync();
+    }
+
+    private async Task LoadNodesAsync()
+    {
+        IsLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            // Build query string
+            var queryParts = new List<string>();
+
+            // Add namespace filter
+            if (!string.IsNullOrEmpty(Namespace))
+            {
+                queryParts.Add($"namespace:{Namespace}");
+            }
+
+            // Add user query
+            if (!string.IsNullOrEmpty(Query))
+            {
+                queryParts.Add(Query);
+            }
+
+            var fullQuery = string.Join(" ", queryParts);
+
+            // Execute query
+            Nodes = await MeshQuery.QueryAsync<MeshNode>(fullQuery).ToListAsync();
+        }
+        catch
+        {
+            Nodes = new List<MeshNode>();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private void NavigateTo(string path)
+    {
+        NavigationManager.NavigateTo($"/{path}");
+    }
+
+    private string GetInitial(MeshNode node)
+    {
+        var name = node.Name ?? node.Id;
+        return !string.IsNullOrEmpty(name) ? name[0].ToString().ToUpper() : "?";
+    }
+
+    private string Truncate(string text, int maxLength)
+    {
+        return text.Length > maxLength ? text.Substring(0, maxLength - 3) + "..." : text;
+    }
+
+    private string? GetImageUrl(MeshNode node)
+    {
+        if (node.Content == null)
+            return null;
+
+        // Try JsonElement first
+        if (node.Content is System.Text.Json.JsonElement jsonElement)
+        {
+            if (jsonElement.TryGetProperty("avatar", out var avatarProp) && avatarProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return avatarProp.GetString();
+            if (jsonElement.TryGetProperty("Avatar", out var avatarPascalProp) && avatarPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return avatarPascalProp.GetString();
+            if (jsonElement.TryGetProperty("logo", out var logoProp) && logoProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return logoProp.GetString();
+            if (jsonElement.TryGetProperty("Logo", out var logoPascalProp) && logoPascalProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                return logoPascalProp.GetString();
+        }
+
+        return null;
+    }
+}

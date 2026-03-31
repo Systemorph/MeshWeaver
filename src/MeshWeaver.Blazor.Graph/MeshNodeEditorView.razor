@@ -1,0 +1,99 @@
+@using Microsoft.Extensions.Logging
+@using Microsoft.Extensions.DependencyInjection
+@inherits BlazorView<MeshNodeEditorControl, MeshNodeEditorView>
+
+<div class="mesh-node-editor" style="width: 100%; padding: 16px;">
+    @if (_isLoading)
+    {
+        <FluentProgressRing />
+    }
+    else if (_node == null)
+    {
+        <FluentMessageBar Title="Not Found" Intent="MessageIntent.Error">
+            Node not found at path: @ViewModel.NodePath
+        </FluentMessageBar>
+    }
+    else
+    {
+        <div class="editor-section metadata-section" style="margin-bottom: 24px;">
+            <h3>Metadata</h3>
+
+            <div class="path-editor" style="display: flex; gap: 8px; align-items: center; margin-bottom: 16px;">
+                <FluentTextField Label="Parent Path" Value="@_parentPath" ReadOnly="true" Style="flex: 1;" />
+                <span style="font-size: 18px;">/</span>
+                <FluentTextField Label="Name Segment" @bind-Value="_lastSegment" Style="flex: 1;" />
+            </div>
+
+            <div class="metadata-fields" style="display: flex; flex-direction: column; gap: 12px;">
+                <FluentTextField Label="Display Name" @bind-Value="_name" Style="width: 100%;" />
+            </div>
+
+            <div style="margin-top: 16px;">
+                <FluentButton Appearance="FluentAppearance.Accent" OnClick="SaveMetadataAsync" Disabled="_isSaving">
+                    @(_isSaving ? "Saving..." : "Save Metadata")
+                </FluentButton>
+            </div>
+
+            @if (!string.IsNullOrEmpty(_metadataMessage))
+            {
+                <FluentMessageBar Title="@(_metadataSuccess ? "Success" : "Error")"
+                                  Intent="@(_metadataSuccess ? MessageIntent.Success : MessageIntent.Error)"
+                                  Style="margin-top: 12px;">
+                    @_metadataMessage
+                </FluentMessageBar>
+            }
+        </div>
+
+        <div class="editor-section content-section">
+            <h3>Content</h3>
+
+            @if (_nodeType == "story")
+            {
+                <div style="height: 400px; border: 1px solid var(--neutral-stroke-rest);">
+                    <MonacoEditorView @ref="_monacoEditor"
+                                      Value="@_contentText"
+                                      ValueChanged="OnContentChanged"
+                                      Height="400px"
+                                      MaxHeight="400px"
+                                      Placeholder="Enter story content in Markdown..." />
+                </div>
+            }
+            else if (_nodeType == "article")
+            {
+                <div style="height: 400px; border: 1px solid var(--neutral-stroke-rest);">
+                    <MonacoEditorView @ref="_monacoEditor"
+                                      Value="@_contentText"
+                                      ValueChanged="OnContentChanged"
+                                      Height="400px"
+                                      MaxHeight="400px"
+                                      Placeholder="Enter article with YAML frontmatter..."
+                                      CompletionProvider="@GetArticleCompletionProvider()" />
+                </div>
+            }
+            else
+            {
+                <FluentMessageBar Intent="MessageIntent.Info">
+                    Content editing is only supported for Story and Article node types.
+                </FluentMessageBar>
+            }
+
+            @if (_nodeType == "story" || _nodeType == "article")
+            {
+                <div style="margin-top: 16px;">
+                    <FluentButton Appearance="FluentAppearance.Accent" OnClick="SaveContentAsync" Disabled="_isSaving">
+                        @(_isSaving ? "Saving..." : "Save Content")
+                    </FluentButton>
+                </div>
+
+                @if (!string.IsNullOrEmpty(_contentMessage))
+                {
+                    <FluentMessageBar Title="@(_contentSuccess ? "Success" : "Error")"
+                                      Intent="@(_contentSuccess ? MessageIntent.Success : MessageIntent.Error)"
+                                      Style="margin-top: 12px;">
+                        @_contentMessage
+                    </FluentMessageBar>
+                }
+            }
+        </div>
+    }
+</div>

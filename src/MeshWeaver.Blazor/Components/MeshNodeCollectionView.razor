@@ -1,0 +1,110 @@
+@using MeshWeaver.Mesh
+@using MeshWeaver.Graph
+@inherits BlazorView<MeshWeaver.Layout.MeshNodeCollectionControl, MeshNodeCollectionView>
+@inject NavigationManager NavigationManager
+@inject MeshWeaver.Mesh.Services.IMeshService MeshQuery
+
+<div class="mesh-node-collection" style="@Style">
+    @if (_isLoading)
+    {
+        <FluentProgressRing Style="margin: 8px;" />
+    }
+    else if (_items.Count == 0 && !(ViewModel?.ShowAdd ?? true))
+    {
+        <div style="color: var(--neutral-foreground-hint); padding: 8px;">No items.</div>
+    }
+    else
+    {
+        @foreach (var node in _items)
+        {
+            var capturedNode = node;
+            var initial = GetInitial(node);
+            var imageUrl = GetImageUrl(node);
+            var entries = GetSubEntries(node);
+
+            <div class="mesh-node-collection-item" @onclick="() => NavigateToItem(capturedNode.Path)">
+                @if (!string.IsNullOrEmpty(imageUrl))
+                {
+                    @if (imageUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div class="mesh-node-collection-avatar" style="background: transparent; padding: 2px;">@((MarkupString)imageUrl)</div>
+                    }
+                    else if (!imageUrl.Contains('/') && !imageUrl.StartsWith("data:"))
+                    {
+                        <div class="mesh-node-collection-avatar" style="background: transparent; font-size: 24px;">@imageUrl</div>
+                    }
+                    else if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div style="--icon-url: url('@imageUrl')" class="mesh-node-collection-avatar-icon"></div>
+                    }
+                    else
+                    {
+                        <img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-collection-avatar-img" />
+                    }
+                }
+                else
+                {
+                    <div class="mesh-node-collection-avatar">@initial</div>
+                }
+                <div class="mesh-node-collection-info">
+                    <div class="mesh-node-collection-name">@(node.Name ?? node.Id)</div>
+                    @if (entries != null && entries.Count > 0)
+                    {
+                        <div class="mesh-node-collection-chips">
+                            @foreach (var entry in entries)
+                            {
+                                var capturedEntry = entry;
+                                <span class="mesh-node-collection-chip @(entry.IsDenied ? "denied" : "")">
+                                    @entry.Label
+                                    @if (ViewModel?.Deletable == true)
+                                    {
+                                        <button type="button" class="mesh-node-collection-chip-x"
+                                                @onclick="() => RemoveSubEntry(capturedNode, capturedEntry.Index)"
+                                                @onclick:stopPropagation="true">×</button>
+                                    }
+                                </span>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mesh-node-collection-type">@(node.NodeType ?? "")</div>
+                    }
+                </div>
+                @if (ViewModel?.Deletable == true)
+                {
+                    <button type="button" class="mesh-node-collection-delete" @onclick="() => DeleteItem(capturedNode.Path)" @onclick:stopPropagation="true">
+                        <FluentIcon Value="@(new Icons.Regular.Size16.Delete())" />
+                    </button>
+                }
+            </div>
+        }
+    }
+
+    @if (ViewModel?.ShowAdd == true && ViewModel.IsClickable)
+    {
+        <button type="button" class="mesh-node-collection-add" @onclick="OnAddClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Add())" />
+        </button>
+    }
+</div>
+
+@code {
+    private static string GetInitial(MeshNode node)
+    {
+        var name = node.Name ?? node.Id;
+        return !string.IsNullOrEmpty(name) ? name[0].ToString().ToUpper() : "?";
+    }
+
+    private static string? GetImageUrl(MeshNode node)
+    {
+        if (node.Content is System.Text.Json.JsonElement json)
+        {
+            if (json.TryGetProperty("avatar", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.String) return a.GetString();
+            if (json.TryGetProperty("Avatar", out var A) && A.ValueKind == System.Text.Json.JsonValueKind.String) return A.GetString();
+            if (json.TryGetProperty("logo", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
+            if (json.TryGetProperty("Logo", out var L) && L.ValueKind == System.Text.Json.JsonValueKind.String) return L.GetString();
+        }
+        return MeshNodeImageHelper.ResolveNodeIcon(node);
+    }
+}

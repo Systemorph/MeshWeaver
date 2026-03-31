@@ -1,0 +1,256 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using FluentAssertions;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using Xunit;
+
+namespace MeshWeaver.Hosting.PostgreSql.Test;
+
+[Collection("PostgreSql")]
+public class QueryTests
+{
+    private readonly PostgreSqlFixture _fixture;
+    private readonly JsonSerializerOptions _options = new();
+
+    public QueryTests(PostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    private async Task SeedTestDataAsync()
+    {
+        await _fixture.CleanDataAsync();
+        var adapter = _fixture.StorageAdapter;
+
+        await adapter.WriteAsync(new MeshNode("Story1", "ACME/Project")
+        {
+            Name = "Story One",
+            NodeType = "Story",
+            Content = JsonSerializer.Deserialize<object>("""{"status":"Open","priority":"High"}""", _options)
+        }, _options, TestContext.Current.CancellationToken);
+
+        await adapter.WriteAsync(new MeshNode("Story2", "ACME/Project")
+        {
+            Name = "Story Two",
+            NodeType = "Story",
+            Content = JsonSerializer.Deserialize<object>("""{"status":"Closed","priority":"Low"}""", _options)
+        }, _options, TestContext.Current.CancellationToken);
+
+        await adapter.WriteAsync(new MeshNode("Alice", "ACME/Team")
+        {
+            Name = "Alice",
+            NodeType = "Person"
+        }, _options, TestContext.Current.CancellationToken);
+
+        await adapter.WriteAsync(new MeshNode("Project", "Contoso")
+        {
+            Name = "Contoso Project",
+            NodeType = "Project"
+        }, _options, TestContext.Current.CancellationToken);
+
+        // Grant Anonymous Read access so query tests work without explicit userId
+        var ac = _fixture.AccessControl;
+        await ac.GrantAsync("ACME", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
+        await ac.GrantAsync("Contoso", "Anonymous", "Read", isAllow: true, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task QueryByNodeType()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Story");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Should().AllSatisfy(n => n.NodeType.Should().Be("Story"));
+    }
+
+    [Fact]
+    public async Task QueryWithPathScope_Children()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("namespace:ACME/Project");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Select(n => n.Id).Should().BeEquivalentTo("Story1", "Story2");
+    }
+
+    [Fact]
+    public async Task QueryWithPathScope_Descendants()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("path:ACME scope:descendants");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        // ACME/Project/Story1, ACME/Project/Story2, ACME/Team/Alice
+        results.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task QueryWithPathScope_Exact()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(1);
+        ((MeshNode)results[0]).Id.Should().Be("Story1");
+    }
+
+    [Fact]
+    public async Task QueryWithPathScope_Subtree()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        // First add a node at ACME itself
+        await _fixture.StorageAdapter.WriteAsync(new MeshNode("ACME")
+        {
+            Name = "ACME Corp",
+            NodeType = "Organization"
+        }, _options, TestContext.Current.CancellationToken);
+
+        var request = MeshQueryRequest.FromQuery("path:ACME scope:subtree");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        // ACME + ACME/Project/Story1, ACME/Project/Story2, ACME/Team/Alice
+        results.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public async Task QueryWithPathScope_Ancestors()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+
+        // Add ancestor nodes for ACME/Project/Story1
+        await _fixture.StorageAdapter.WriteAsync(new MeshNode("ACME")
+        {
+            Name = "ACME Corp",
+            NodeType = "Organization"
+        }, _options, TestContext.Current.CancellationToken);
+        await _fixture.StorageAdapter.WriteAsync(new MeshNode("Project", "ACME")
+        {
+            Name = "ACME Project",
+            NodeType = "Project"
+        }, _options, TestContext.Current.CancellationToken);
+
+        var request = MeshQueryRequest.FromQuery("path:ACME/Project/Story1 scope:ancestors");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        // Ancestors: ACME, ACME/Project (NOT Story1 itself)
+        results.Should().HaveCount(2);
+        results.Cast<MeshNode>().Select(n => n.Path).Should()
+            .BeEquivalentTo("ACME", "ACME/Project");
+    }
+
+    [Fact]
+    public async Task QueryWithLimit()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = new MeshQueryRequest { Query = "nodeType:Story", Limit = 1 };
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task QueryWithSkip()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = new MeshQueryRequest
+        {
+            Query = "nodeType:Story sort:name",
+            Skip = 1,
+            Limit = 10
+        };
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(1);
+        ((MeshNode)results[0]).Name.Should().Be("Story Two");
+    }
+
+    [Fact]
+    public async Task QueryWithSort()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Story sort:name");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(2);
+        ((MeshNode)results[0]).Name.Should().Be("Story One");
+        ((MeshNode)results[1]).Name.Should().Be("Story Two");
+    }
+
+    [Fact]
+    public async Task QueryWithSortDescending()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = MeshQueryRequest.FromQuery("nodeType:Story sort:name-desc");
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(2);
+        ((MeshNode)results[0]).Name.Should().Be("Story Two");
+        ((MeshNode)results[1]).Name.Should().Be("Story One");
+    }
+
+    [Fact]
+    public async Task QueryWithDefaultPathFallsBackToChildren()
+    {
+        await SeedTestDataAsync();
+        var query = new PostgreSqlMeshQuery(_fixture.StorageAdapter);
+        var request = new MeshQueryRequest
+        {
+            Query = "nodeType:Story",
+            DefaultPath = "ACME/Project"
+        };
+
+        var results = new List<object>();
+        await foreach (var item in query.QueryAsync(request, _options, TestContext.Current.CancellationToken))
+            results.Add(item);
+
+        results.Should().HaveCount(2);
+    }
+}

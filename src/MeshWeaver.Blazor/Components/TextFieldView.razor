@@ -1,6 +1,6 @@
 @inherits InputBase<TextFieldControl,TextFieldView, string>
 
-<FluentTextField 
+<FluentTextField
     @bind-Value="Value"
     Placeholder="@Placeholder"
     Label="@Label"
@@ -15,7 +15,8 @@
     Required="@Required"
     Size="@Size"
     MinLength="@MinLength"
-    MaxLength="@MaxLength">
+    MaxLength="@MaxLength"
+    @onfocusout="OnBlur">
     @if (IconStart is not null)
     {
         <FluentIcon Value="@IconStart.ToFluentIcon()" Slot="start" />
@@ -25,7 +26,7 @@
         <FluentIcon Value="@IconEnd.ToFluentIcon()" Slot="end" />
     }
 </FluentTextField>
-    
+
 @code
 {
     private string? Autocomplete { get; set; }
@@ -34,9 +35,6 @@
     {
         base.BindData();
 
-        if (ViewModel != null)  
-        {  
-           DataBind(ViewModel.Autocomplete, x => x.Autocomplete);  
-        }
+        DataBind(ViewModel.Autocomplete, x => x.Autocomplete, defaultValue:"Off");
     }
 }

@@ -1,0 +1,19 @@
+{
+  "id": "TransactionMapping",
+  "namespace": "FutuRe",
+  "name": "Transaction Mapping",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Maps local BU lines of business to group lines with percentage splits. SLOs: change requests 90 days before year-start, actuarial review within 15 business days, annual updates effective Jan 1.",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "TransactionMapping",
+    "namespace": "FutuRe",
+    "displayName": "Transaction Mapping",
+    "iconName": "ArrowSplit",
+    "description": "Maps local LoB to group LoB with percentage split.\n\n**SLOs:**\n- **Change request deadline:** 90 days before fiscal year start\n- **Approval cycle:** Actuarial review within 15 business days\n- **Update frequency:** Annual, effective January 1\n- **Owner:** Group Chief Actuary\n\n**Mapping Rules by BU:**\n- [EuropeRe Mapping Rules](/FutuRe/EuropeRe/TransactionMapping/MappingRules) — 13 split rules across 8 local LoBs\n- [AmericasIns Mapping Rules](/FutuRe/AmericasIns/TransactionMapping/MappingRules) — 14 split rules across 8 local LoBs\n- [AsiaRe Mapping Rules](/FutuRe/AsiaRe/TransactionMapping/MappingRules) — 8 split rules across 8 local LoBs",
+    "configuration": "config => config.WithContentType<TransactionMapping>()"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

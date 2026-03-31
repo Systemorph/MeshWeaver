@@ -1,0 +1,18 @@
+{
+  "id": "COMMERCIAL",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Commercial Lines",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Multi-peril commercial package policies covering property, liability, and inland marine risks for businesses",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "COMMERCIAL",
+    "displayName": "Commercial Lines",
+    "description": "Broad commercial insurance combining property, general liability, and inland marine under package policies for small-to-large enterprises across the Americas. Includes Business Owners Policies (BOP) for SMEs, Commercial Package Policies (CPP) for mid-market, and manuscript programs for large accounts. Property covers buildings, contents, business income, and extra expense. General liability provides premises, products, and completed operations coverage. Inland marine handles contractors equipment, builders risk, and goods in transit domestically.",
+    "order": 3,
+    "productExamples": "Business Owners Policy, Commercial Package, Builders risk, Contractors equipment, Business income, Inland marine"
+  }
+}

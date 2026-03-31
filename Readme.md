@@ -100,7 +100,68 @@ Templates are versioned alongside MeshWeaver releases. To update to the latest t
 ```bash
 dotnet new uninstall MeshWeaver.ProjectTemplates
 dotnet new install MeshWeaver.ProjectTemplates
-``` 
+```
+
+## Development Setup
+
+### GitHub MCP Server (for Claude Code Users)
+
+This repository includes a GitHub MCP (Model Context Protocol) server configuration that enables AI-assisted development with Claude Code.
+
+#### Prerequisites
+
+- [Claude Code](https://code.claude.com/) installed
+- Node.js and npm installed
+- GitHub account with repository access
+
+#### Setup Instructions
+
+1. **Create a GitHub Personal Access Token**
+   - Visit https://github.com/settings/tokens
+   - Click "Generate new token" → "Generate new token (classic)"
+   - Give it a descriptive name (e.g., "Claude Code MCP")
+   - Select required scopes:
+     - `repo` - Full control of private repositories
+     - `read:org` - Read org and team membership (if working with organization repos)
+   - Click "Generate token" and copy the token
+
+2. **Configure the Token**
+
+   Add the token to your shell profile (`~/.zshrc` or `~/.bashrc`):
+   ```bash
+   export GITHUB_PERSONAL_ACCESS_TOKEN="your_token_here"
+   ```
+
+   Then reload your shell:
+   ```bash
+   source ~/.zshrc  # or ~/.bashrc
+   ```
+
+3. **Enable the MCP Server**
+
+   When you first start Claude Code in this repository, you'll be prompted to enable the GitHub MCP server. Select "use this MCP server" to enable it.
+
+4. **Verify Connection**
+
+   In Claude Code, run `/mcp` to verify the GitHub server is connected.
+
+#### What Can You Do?
+
+With the GitHub MCP server enabled, you can ask Claude to:
+- List and create issues
+- View and create pull requests
+- Search repository contents
+- Get repository information
+- Manage labels and milestones
+
+Example prompts:
+- "List all open issues in this repository"
+- "Create an issue titled 'Add feature X'"
+- "Show me recent pull requests"
+
+#### Configuration File
+
+The MCP server configuration is defined in `.mcp.json` at the repository root. Team members automatically inherit this configuration when they pull the repository - they only need to set their personal access token.
 
 ## Core Components
 

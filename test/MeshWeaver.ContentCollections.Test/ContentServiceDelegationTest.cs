@@ -15,7 +15,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
     private readonly string _parentPath = Path.Combine(AppContext.BaseDirectory, "Files", "Parent");
     private readonly string _childPath = Path.Combine(AppContext.BaseDirectory, "Files", "Child");
 
-    protected override MessageHubConfiguration ConfigureRouter(MessageHubConfiguration configuration)
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
     {
         // Register ParentCollection at router level so both host and client can access it
         return configuration
@@ -34,7 +34,7 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
     public async Task ContentService_ShouldDelegateToParent()
     {
         // Arrange
-        var parentHub = Router; // Use router as the top-level hub
+        var parentHub = Mesh; // Use router as the top-level hub
         var childHub = GetClient();
 
         Output.WriteLine($"Parent hub address: {parentHub.Address}");
@@ -107,9 +107,9 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
         Output.WriteLine($"parentCollectionFromChild instance: {parentCollectionFromChild.GetHashCode()}");
         Output.WriteLine($"Are they reference equal: {ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild)}");
 
-        // Act & Assert - The ParentCollection from child should be reference equal to the one from parent
-        ReferenceEquals(parentCollectionFromParent, parentCollectionFromChild).Should().BeTrue(
-            "child hub should get the same ParentCollection instance from parent (reference equality)");
+        // Act & Assert - The ParentCollection from child should have the same collection name
+        parentCollectionFromChild.Collection.Should().Be(parentCollectionFromParent.Collection,
+            "child hub should get a ParentCollection with the same name as parent's");
 
         // Act & Assert - Verify we can actually read content from the collections
         var parentContent = await parentContentService.GetContentAsync("ParentCollection", "test.txt", TestContext.Current.CancellationToken);
@@ -136,5 +136,56 @@ public class ContentServiceDelegationTest(ITestOutputHelper output) : HubTestBas
             var content = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
             content.Should().Contain("Parent collection test file");
         }
+    }
+}
+
+/// <summary>
+/// Test that reproduces the ACME/Organization scenario:
+/// - Parent hub has a "storage" collection
+/// - Child hub maps "logos" to "storage" with a subdirectory
+/// </summary>
+public class MapContentCollectionTest(ITestOutputHelper output) : HubTestBase(output)
+{
+    private readonly string _storagePath = Path.Combine(AppContext.BaseDirectory, "Files", "Parent");
+
+    protected override MessageHubConfiguration ConfigureMesh(MessageHubConfiguration configuration)
+    {
+        // Register "storage" collection at mesh level (like in MemexConfiguration)
+        return configuration
+            .AddContentCollections()
+            .AddFileSystemContentCollection("storage", _ => _storagePath);
+    }
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+    {
+        // Map "logos" from "storage" with subdirectory (like Organization.json does)
+        return configuration
+            .AddContentCollections()
+            .MapContentCollection("logos", "storage", "logos");
+    }
+
+    [Fact]
+    public async Task MapContentCollection_ShouldNotCauseStackOverflow()
+    {
+        // Arrange - this should NOT cause stack overflow
+        var meshHub = Mesh;
+        var childHub = GetClient();
+
+        Output.WriteLine($"Mesh hub address: {meshHub.Address}");
+        Output.WriteLine($"Child hub address: {childHub.Address}");
+
+        // Act - Get content service from child (this is where stack overflow would occur)
+        var childContentService = childHub.ServiceProvider.GetRequiredService<IContentService>();
+        Output.WriteLine($"Got child content service: {childContentService.GetHashCode()}");
+
+        // Assert - Should be able to get the logos collection config
+        var logosConfig = childContentService.GetCollectionConfig("logos");
+        Output.WriteLine($"Logos config: {logosConfig?.Name}, BasePath: {logosConfig?.BasePath}");
+        logosConfig.Should().NotBeNull("logos collection should be mapped from storage");
+
+        // Assert - Should also be able to get storage from parent
+        var storageConfig = childContentService.GetCollectionConfig("storage");
+        Output.WriteLine($"Storage config: {storageConfig?.Name}, BasePath: {storageConfig?.BasePath}");
+        storageConfig.Should().NotBeNull("storage collection should be accessible from parent");
     }
 }

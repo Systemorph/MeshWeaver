@@ -1,0 +1,59 @@
+@using MeshWeaver.Layout
+@using MeshWeaver.Mesh.Services
+@inject IPathResolver PathResolver
+
+@* Uses the Thumbnail layout area from MeshNodeView - same as catalog *@
+@if (IsLoading)
+{
+    <div class="ucr-reference-loading">Loading...</div>
+}
+else if (ResolvedViewModel != null)
+{
+    <LayoutAreaView ViewModel="@ResolvedViewModel" />
+}
+else
+{
+    <div class="ucr-reference-error">Could not resolve: @Path</div>
+}
+
+@code {
+    [Parameter]
+    public string? Path { get; set; }
+
+    private bool IsLoading { get; set; } = true;
+    private LayoutAreaControl? ResolvedViewModel { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (string.IsNullOrEmpty(Path))
+        {
+            IsLoading = false;
+            return;
+        }
+
+        IsLoading = true;
+        ResolvedViewModel = null;
+
+        try
+        {
+            var resolution = await PathResolver.ResolvePathAsync(Path);
+            if (resolution != null)
+            {
+                // Use the Thumbnail layout area - same control as catalog
+                ResolvedViewModel = new LayoutAreaControl(
+                    (Messaging.Address)resolution.Prefix,
+                    new Data.LayoutAreaReference("Thumbnail")
+                );
+            }
+        }
+        catch
+        {
+            // Silent failure - will show error message
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+}

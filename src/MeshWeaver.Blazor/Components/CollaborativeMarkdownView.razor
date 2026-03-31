@@ -1,0 +1,245 @@
+@using MeshWeaver.Blazor
+@using MeshWeaver.Layout
+@using MeshWeaver.Markdown
+@using MeshWeaver.Mesh
+@using Microsoft.Extensions.Logging
+@namespace MeshWeaver.Blazor.Components
+@inherits BlazorView<CollaborativeMarkdownControl, CollaborativeMarkdownView>
+
+<style>
+    /* CSS Custom Properties — must be non-scoped since :root can't be in .razor.css */
+    :root {
+        --annotation-comment-bg: #fff8c5;
+        --annotation-comment-border: #d4a72c;
+        --annotation-comment-dot: #bf8700;
+        --annotation-insert-bg: #dafbe1;
+        --annotation-insert-border: #22863a;
+        --annotation-insert-color: #22863a;
+        --annotation-delete-bg: #ffebe9;
+        --annotation-delete-border: #cf222e;
+        --annotation-delete-color: #cf222e;
+        --annotation-delete-text: #656d76;
+        --annotation-active-border: #0969da;
+        --annotation-active-bg: rgba(9, 105, 218, 0.08);
+        --annotation-comment-label-bg: #fffbeb;
+        --annotation-comment-label-color: #78350f;
+        --annotation-insert-label-bg: #ecfdf5;
+        --annotation-insert-label-color: #064e3b;
+        --annotation-delete-label-bg: #fef2f2;
+        --annotation-delete-label-color: #7f1d1d;
+        --annotation-border-separator: rgba(0, 0, 0, 0.1);
+    }
+    [data-theme="dark"] {
+        --annotation-comment-bg: rgba(187, 128, 9, 0.15);
+        --annotation-comment-border: #d29922;
+        --annotation-comment-dot: #d29922;
+        --annotation-insert-bg: rgba(46, 160, 67, 0.15);
+        --annotation-insert-border: #3fb950;
+        --annotation-insert-color: #3fb950;
+        --annotation-delete-bg: rgba(248, 81, 73, 0.15);
+        --annotation-delete-border: #f85149;
+        --annotation-delete-color: #f85149;
+        --annotation-delete-text: #8b949e;
+        --annotation-active-border: #58a6ff;
+        --annotation-active-bg: rgba(56, 139, 253, 0.15);
+        --annotation-comment-label-bg: #451a03;
+        --annotation-comment-label-color: #fef3c7;
+        --annotation-insert-label-bg: #064e3b;
+        --annotation-insert-label-color: #d1fae5;
+        --annotation-delete-label-bg: #7f1d1d;
+        --annotation-delete-label-color: #fee2e2;
+        --annotation-border-separator: rgba(255, 255, 255, 0.1);
+    }
+    @@media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+            --annotation-comment-bg: rgba(187, 128, 9, 0.15);
+            --annotation-comment-border: #d29922;
+            --annotation-comment-dot: #d29922;
+            --annotation-insert-bg: rgba(46, 160, 67, 0.15);
+            --annotation-insert-border: #3fb950;
+            --annotation-insert-color: #3fb950;
+            --annotation-delete-bg: rgba(248, 81, 73, 0.15);
+            --annotation-delete-border: #f85149;
+            --annotation-delete-color: #f85149;
+            --annotation-delete-text: #8b949e;
+            --annotation-active-border: #58a6ff;
+            --annotation-active-bg: rgba(56, 139, 253, 0.15);
+            --annotation-comment-label-bg: #451a03;
+            --annotation-comment-label-color: #fef3c7;
+            --annotation-insert-label-bg: #064e3b;
+            --annotation-insert-label-color: #d1fae5;
+            --annotation-delete-label-bg: #7f1d1d;
+            --annotation-delete-label-color: #fee2e2;
+            --annotation-border-separator: rgba(255, 255, 255, 0.1);
+        }
+    }
+</style>
+
+<div class="collab-md-container @ViewModeClass" @ref="containerRef">
+    @* View mode toolbar — only shown when document has annotations *@
+    @if (HasAnnotations || HasCommentAnnotations)
+    {
+        <div class="collab-md-toolbar">
+            @if (HasAnnotations)
+            {
+                <FluentSelect TOption="string"
+                              Value="@CurrentViewMode"
+                              ValueChanged="@OnViewModeChanged"
+                              Label="View"
+                              Style="min-width: 140px;">
+                    <FluentOption Value="Markup">Markup</FluentOption>
+                    <FluentOption Value="HideMarkup">Hide Markup</FluentOption>
+                    <FluentOption Value="Original">Original</FluentOption>
+                </FluentSelect>
+            }
+
+            @if (HasCommentAnnotations)
+            {
+                <FluentSelect TOption="string"
+                              Value="@CurrentCommentFilter"
+                              ValueChanged="@OnCommentFilterChanged"
+                              Label="Comments"
+                              Style="min-width: 160px;">
+                    <FluentOption Value="Unresolved">Unresolved</FluentOption>
+                    <FluentOption Value="All">All Comments</FluentOption>
+                    <FluentOption Value="None">No Comments</FluentOption>
+                </FluentSelect>
+            }
+
+            @if (BoundCanEdit && HasAnnotations)
+            {
+                <div class="collab-md-toolbar-separator"></div>
+
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                              OnClick="@OnAcceptAll"
+                              Style="color: var(--annotation-insert-border); font-size: 0.85rem;">Accept All</FluentButton>
+                <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Stealth"
+                              OnClick="@OnRejectAll"
+                              Style="color: var(--annotation-delete-border); font-size: 0.85rem;">Reject All</FluentButton>
+            }
+        </div>
+    }
+
+    @* Split layout: content + annotation cards *@
+    <div class="collab-md-split @(HasSideAnnotations ? "with-sidebar" : "")">
+        <div class="collab-md-content markdown-annotations-container markdown-body" data-theme="@Mode.ToString().ToLower()" style="background-color: var(--neutral-layer-1);" @ref="contentRef">
+            @((RenderFragment)RenderContentHtml)
+        </div>
+
+        @if (HasSideAnnotations)
+        {
+            <div class="collab-md-sidebar annotations-column" @onclick:stopPropagation="true">
+                @foreach (var ann in FilteredAnnotations)
+                {
+                    @if (ann.Type == AnnotationType.Comment)
+                    {
+                        var comment = GetCommentData(ann.Id);
+                        <div class="annotation-card annotation-for-@ann.Id annotation-type-comment @(IsResolved(ann.Id) ? "resolved" : "") @(activeAnnotationId == ann.Id ? "active" : "")"
+                             @onclick="() => HighlightAnnotation(ann.Id)">
+                            @if (comment != null)
+                            {
+                                <div class="comment-header">
+                                    <span class="comment-author">@comment.Author</span>
+                                    <span class="comment-time">@FormatTimeAgo(comment.CreatedAt)</span>
+                                    <div class="comment-actions">
+                                        @if (!IsResolved(ann.Id))
+                                        {
+                                            <button class="btn-resolve" title="Resolve" @onclick="() => ResolveComment(ann.Id)" @onclick:stopPropagation="true">&#x2713;</button>
+                                        }
+                                        <button class="btn-delete" title="Delete" @onclick="() => DeleteComment(ann.Id)" @onclick:stopPropagation="true">&#x2715;</button>
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(ann.HighlightedText))
+                                {
+                                    <div class="comment-quote">"@Truncate(ann.HighlightedText, 60)"</div>
+                                }
+                                @if (!string.IsNullOrEmpty(comment.Text))
+                                {
+                                    <div class="comment-text">@comment.Text</div>
+                                }
+                            }
+                            else
+                            {
+                                <span class="comment-placeholder">Loading...</span>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        @* Track changes — compact card with accept/reject *@
+                        <div class="annotation-card annotation-for-@ann.Id annotation-type-@ann.Type.ToString().ToLowerInvariant() @(activeAnnotationId == ann.Id ? "active" : "")"
+                             @onclick="() => HighlightAnnotation(ann.Id)">
+                            <div class="collab-md-card-header">
+                                <div class="collab-md-card-meta">
+                                    @if (!string.IsNullOrEmpty(ann.Author))
+                                    {
+                                        <span class="collab-md-author">@ann.Author</span>
+                                    }
+                                    <span class="collab-md-time">@GetTypeLabel(ann.Type)@(!string.IsNullOrEmpty(ann.Date) ? $" · {ann.Date}" : "")</span>
+                                </div>
+                                @if (BoundCanEdit)
+                                {
+                                    <div class="collab-md-card-actions">
+                                        <button class="btn-accept" title="Accept" @onclick="() => OnAcceptChange(ann.Id)" @onclick:stopPropagation="true">✓</button>
+                                        <button class="btn-reject" title="Reject" @onclick="() => OnRejectChange(ann.Id)" @onclick:stopPropagation="true">✗</button>
+                                    </div>
+                                }
+                            </div>
+                            @if (!string.IsNullOrEmpty(ann.HighlightedText))
+                            {
+                                <div class="collab-md-quote @(ann.Type == AnnotationType.Insert ? "quote-insert" : "quote-delete")">
+                                    "@Truncate(ann.HighlightedText, 60)"
+                                </div>
+                            }
+                        </div>
+                    }
+                }
+            </div>
+        }
+    </div>
+
+    @if (string.IsNullOrWhiteSpace(_processedHtml))
+    {
+        <p style="color: var(--neutral-foreground-hint); font-style: italic;">No content yet. Click Edit to add content.</p>
+    }
+
+    @* Comment input dialog — appears when user selects text and clicks Comment *@
+    @if (_showCommentInput)
+    {
+        <div class="comment-input-overlay" @onclick="CancelSelectionComment">
+            <div class="comment-input-dialog" @onclick:stopPropagation="true">
+                <div class="comment-input-header">Add Comment</div>
+                @if (!string.IsNullOrEmpty(_pendingSelectionText))
+                {
+                    <div class="comment-input-quote">&ldquo;@Truncate(_pendingSelectionText, 120)&rdquo;</div>
+                }
+                <textarea class="comment-input-textarea" @bind="_pendingCommentText" @bind:event="oninput" placeholder="Write your comment..." rows="3"></textarea>
+                <div class="comment-input-actions">
+                    <button class="comment-btn comment-btn-cancel" @onclick="CancelSelectionComment">Cancel</button>
+                    <button class="comment-btn comment-btn-submit" @onclick="SubmitSelectionComment">Add Comment</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* Bottom page comment section *@
+    @if (!string.IsNullOrEmpty(BoundNodePath))
+    {
+        <div class="page-comment-section">
+            @if (_showPageCommentInput)
+            {
+                <div class="page-comment-form">
+                    <textarea class="comment-input-textarea" @bind="_pageCommentText" @bind:event="oninput" placeholder="Write your comment..." rows="3"></textarea>
+                    <div class="comment-input-actions">
+                        <button class="comment-btn comment-btn-cancel" @onclick="CancelPageComment">Cancel</button>
+                        <button class="comment-btn comment-btn-submit" @onclick="SubmitPageComment">Add Comment</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button class="add-page-comment-btn" @onclick="StartPageComment">+ Add Comment</button>
+            }
+        </div>
+    }
+</div>

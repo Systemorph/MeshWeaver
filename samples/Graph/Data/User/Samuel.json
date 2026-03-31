@@ -1,0 +1,13 @@
+{
+  "id": "Samuel",
+  "namespace": "User",
+  "name": "Samuel Glauser",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "User",
+    "email": "sglauser@systemorph.com",
+    "bio": "Software engineer and MeshWeaver contributor."
+  }
+}

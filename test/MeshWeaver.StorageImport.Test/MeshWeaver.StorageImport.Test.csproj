@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Pre-copy samples/Graph/Data for import tests -->
+    <Content Include="..\..\samples\Graph\Data\**">
+      <Link>SamplesData\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- Overlay Doc/ data from embedded Documentation source -->
+    <Content Include="..\..\src\MeshWeaver.Documentation\Data\**\*.*">
+      <Link>SamplesData\Doc\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>

@@ -42,6 +42,5 @@ app.StartPortalApplication();
 ```
 
 ## See Also
-- [MeshWeaver.Blazor.AgGrid](../MeshWeaver.Blazor.AgGrid/README.md)
-- [MeshWeaver.Blazor.ChartJs](../MeshWeaver.Blazor.ChartJs/README.md)
+- [MeshWeaver.Blazor.Radzen](../MeshWeaver.Blazor.Radzen/README.md)
 - [Main MeshWeaver documentation](../../Readme.md) 

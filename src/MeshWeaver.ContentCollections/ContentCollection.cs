@@ -1,6 +1,4 @@
-﻿using System.Collections.Immutable;
-using System.Reactive.Linq;
-using System.Text;
+﻿using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -50,11 +48,6 @@ public class ContentCollection : IDisposable
             .Select(x => x.Value);
 
 
-    public IObservable<IEnumerable<object>> GetMarkdown(ArticleCatalogOptions _)
-        => markdownStream.Where(x => x.Value != null)
-            .Select(x => x.Value!.Instances.Values);
-
-
     public Task<Stream?> GetContentAsync(string path, CancellationToken ct = default)
         => provider.GetStreamAsync(path, ct);
 
@@ -66,19 +59,6 @@ public class ContentCollection : IDisposable
         markdownStream.Dispose();
     }
 
-    protected ImmutableDictionary<string, Author> Authors { get; private set; } = ImmutableDictionary<string, Author>.Empty;
-
-    protected ImmutableDictionary<string, Author> AdaptAuthorUrls(ImmutableDictionary<string, Author> authors)
-    {
-        return authors.Select(x =>
-            new KeyValuePair<string, Author>(
-                x.Key,
-                x.Value with
-                {
-                    ImageUrl = ContentCollectionsExtensions.AdaptResourceUrl(x.Value.ImageUrl, Collection, Address)
-                })).ToImmutableDictionary();
-    }
-
     public Task<IReadOnlyCollection<FolderItem>> GetFoldersAsync(string path)
         => provider.GetFoldersAsync(path);
 
@@ -87,14 +67,6 @@ public class ContentCollection : IDisposable
 
     public Task SaveFileAsync(string path, string fileName, Stream openReadStream)
         => provider.SaveFileAsync(path, fileName, openReadStream);
-
-    public async Task SaveArticleAsync(Article article)
-    {
-        var markdown = article.ConvertToMarkdown();
-        var utfEncoding = new UTF8Encoding(false);
-        await using var memoryStream = new MemoryStream(utfEncoding.GetBytes(markdown));
-        await SaveFileAsync(article.Path, "", memoryStream);
-    }
 
     public async Task<IReadOnlyCollection<CollectionItem>> GetCollectionItemsAsync(string currentPath)
     {
@@ -111,14 +83,17 @@ public class ContentCollection : IDisposable
 
     public virtual async Task<InstanceCollection> InitializeAsync(CancellationToken ct)
     {
-        var loadedAuthors = await provider.LoadAuthorsAsync(ct);
-        Authors = AdaptAuthorUrls(loadedAuthors);
-        var ret = new InstanceCollection(
-            await provider.GetStreamsAsync(MarkdownFilter, ct)
-                .SelectAwait(async tuple => await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct))
-                .Where(x => x is not null)
-                .ToDictionaryAsync(x => (object)(x!.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? x.Path[..^3] : x.Path), x => (object)x!, cancellationToken: ct)
-        );
+        var parsedArticles = new Dictionary<object, object>();
+        await foreach (var tuple in provider.GetStreamsAsync(MarkdownFilter, ct).WithCancellation(ct))
+        {
+            var article = await ParseArticleAsync(tuple.Stream, tuple.Path, tuple.LastModified, ct);
+            if (article is not null)
+            {
+                var key = (object)(article.Path.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? article.Path[..^3] : article.Path);
+                parsedArticles[key] = article;
+            }
+        }
+        var ret = new InstanceCollection(parsedArticles);
         markdownStream.OnNext(new(ret, markdownStream.StreamId, Hub.Version));
         AttachMonitor();
         return ret;
@@ -153,7 +128,6 @@ public class ContentCollection : IDisposable
             path,
             lastModified,
             content,
-            Authors,
             Address
         );
     }
@@ -197,6 +171,7 @@ public class ContentCollection : IDisposable
         { ".webp", "image/webp" },
         { ".ico", "image/x-icon" },
         { ".json", "application/json" },
+        { ".csv", "text/csv" },
         { ".pdf", "application/pdf" },
         { ".woff", "font/woff" },
         { ".woff2", "font/woff2" },

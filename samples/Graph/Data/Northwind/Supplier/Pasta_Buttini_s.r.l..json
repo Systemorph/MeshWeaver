@@ -1,0 +1,21 @@
+{
+  "id": "Pasta_Buttini_s.r.l.",
+  "namespace": "Northwind/Supplier",
+  "name": "Pasta Buttini s.r.l.",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Pasta Buttini s.r.l. - Salerno, Italy",
+  "icon": "/static/NodeTypeIcons/truck.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 26,
+    "companyName": "Pasta Buttini s.r.l.",
+    "contactName": "Giovanni Giudici",
+    "contactTitle": "Order Administrator",
+    "city": "Salerno",
+    "region": "",
+    "country": "Italy",
+    "phone": "(089) 6547665"
+  }
+}

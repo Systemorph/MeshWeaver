@@ -1,0 +1,16 @@
+{
+  "id": "US",
+  "namespace": "FutuRe/Country",
+  "name": "United States",
+  "nodeType": "FutuRe/Country",
+  "isPersistent": true,
+  "content": {
+    "$type": "Country",
+    "id": "US",
+    "name": "United States",
+    "alpha3Code": "USA",
+    "region": "Americas",
+    "order": 0
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

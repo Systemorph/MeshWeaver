@@ -65,7 +65,7 @@ public static class SerializationExtensions
 
     private static IEnumerable<JsonConverter> GetStandardConverters(IMessageHub hub)
     {
-        yield return new AddressConverter(hub.TypeRegistry);
+        yield return new AddressConverter();
         yield return new ObjectPolymorphicConverter(hub.TypeRegistry);
         yield return new MessageDeliveryConverter(hub.TypeRegistry);
         yield return new ReadOnlyCollectionConverterFactory();

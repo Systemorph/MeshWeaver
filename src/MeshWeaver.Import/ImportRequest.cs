@@ -31,7 +31,7 @@ public record ImportRequest : IRequest<ImportResponse>
 
     public string MimeType { get; init; }
 
-    public string Format { get; init; } = ImportFormat.Default;
+    public string? Format { get; init; }
 
     /// <summary>
     /// Optional import configuration. When provided, this configuration will be used instead of the Format string.
@@ -59,10 +59,6 @@ public record ImportRequest : IRequest<ImportResponse>
     /// <summary>Content of the source to be imported, e.g. a string (shipping the entire content) or a file name (together with StreamType = File)</summary>
     public Source Source { get; init; }
 
-    public void Deconstruct(out Source Source)
-    {
-        Source = this.Source;
-    }
 }
 
 public record ImportResponse(long Version, ActivityLog Log);

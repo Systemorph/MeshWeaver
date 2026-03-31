@@ -1,0 +1,141 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@inherits LayoutComponentBase
+@inject IDialogService DialogService
+
+<div class="layout @(IsSidePanelVisible ? $"panel-visible panel-position-{SidePanelPositionValue.ToString().ToLower()}" : "")"
+    style="@(IsNavMenuOpen ? "overflow: hidden;" : string.Empty)">
+    <div class="meshweaver-icon">
+        <FluentAnchor Appearance="Appearance.Stealth" Href="/" Class="logo" title="MeshWeaver" aria-label="MeshWeaver">
+            <MeshWeaverLogo></MeshWeaverLogo>
+        </FluentAnchor>
+    </div>
+
+    @if (ViewportInformation.IsDesktop)
+    {
+        <FluentHeader>
+            <FluentAnchor Appearance="Appearance.Stealth" Href="https://www.meshweaver.cloud" Class="logo">
+                MESHWEAVER
+            </FluentAnchor>
+            <FluentSpacer />
+            <div class="links">
+                <div class="search-container">
+                    <SearchBar />
+                </div>
+                @* Node menu (Cube icon) *@
+                <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
+                    @foreach (var menuItem in FlattenMenuItems(GetVisibleMenuItems()))
+                    {
+                        var item = menuItem;
+                        @if (item.Area == "_separator")
+                        {
+                            <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                        }
+                        else
+                        {
+                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                @if (!string.IsNullOrEmpty(item.Icon))
+                                {
+                                    if (IsEmoji(item.Icon))
+                                    {
+                                        <span style="margin-right: 8px;">@item.Icon</span>
+                                    }
+                                    else
+                                    {
+                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                    }
+                                }
+                                @item.Label
+                            </FluentMenuItem>
+                        }
+                    }
+                </FluentMenu>
+                <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"
+                    Title="Node menu" aria-label="Node menu"
+                    OnClick="@ToggleNodeMenu">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Cube())" Color="Color.FillInverse" />
+                </FluentButton>
+                @HeaderLinks
+            </div>
+            <div class="notifications">
+                <NotificationCenter />
+            </div>
+            <div class="side-panel-toggle">
+                <FluentButton BackgroundColor="transparent" OnClick="ToggleSidePanel" Title="Chat">
+                    <FluentIcon Value="@(new Icons.Regular.Size20.Chat())" Color="Color.Neutral" />
+                </FluentButton>
+            </div>
+            <UserProfile />
+        </FluentHeader>
+
+        @DesktopNavMenu
+    }
+    else
+    {
+        <FluentHeader>
+            <FluentSpacer />
+
+            <UserProfile />
+            <FluentButton
+                IconEnd="@(IsNavMenuOpen ? new Icons.Regular.Size24.Dismiss() : new Icons.Regular.Size24.Navigation())"
+                Title="Menu" Appearance="Appearance.Stealth" BackgroundColor="transparent"
+                OnClick="@ToggleNavMenu" Class="navigation-button" />
+        </FluentHeader>
+
+        @MobileNavMenu
+    }
+
+    <div class="messagebar-container">
+        <FluentMessageBarProvider Section="@MessageBarSection" Class="top-messagebar" />
+    </div>
+
+    <FluentDialogProvider />
+    <FluentTooltipProvider />
+    <FluentMenuProvider />
+    <FluentToastProvider MaxToastCount="10" />
+    <FluentKeyCodeProvider />
+
+    @* Main content area — splitter always rendered to preserve side panel component state.
+       When closed, inline styles collapse the second pane to zero. *@
+    <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
+                         Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
+                         Class="body-splitter"
+                         BarSize="@(IsSidePanelVisible ? "8" : "0")">
+        <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? MainPaneSize : "100%")" Min="100px" Collapsible="false">
+            <div class="body-content">
+                <FluentToastProvider MaxToastCount="3" Timeout="5000" />
+                @Body
+            </div>
+        </FluentMultiSplitterPane>
+        <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? SidePanelPaneSize : "0")"
+                                  Min="@(IsSidePanelVisible ? "250px" : "0")"
+                                  Max="@(IsSidePanelVisible ? "85%" : "0")"
+                                  Collapsible="false"
+                                  Resizable="@IsSidePanelVisible"
+                                  Style="@(IsSidePanelVisible ? "" : "display:none")">
+            <div class="side-panel-wrapper">
+                <SidePanel @key="@("side-panel-singleton")" OnCloseRequested="ToggleSidePanel">
+                    <ChildContent>
+                        @if (sidePanelViewModel != null)
+                        {
+                            @* Resolved content — render via LayoutAreaView (same as main page) *@
+                            <LayoutAreaView @key="@SidePanelState.ContentPath"
+                                            ViewModel="@sidePanelViewModel"
+                                            Area="@($"sidepanel-{SidePanelState.ContentPath}")" />
+                        }
+                        else
+                        {
+                            @* New chat — no thread yet *@
+                            <ThreadChatView @key="@sidePanelContentKey" ViewModel="@GetSidePanelControl()" />
+                        }
+                    </ChildContent>
+                </SidePanel>
+            </div>
+        </FluentMultiSplitterPane>
+    </FluentMultiSplitter>
+
+    <div id="blazor-error-ui">
+        An unhandled error has occurred.
+        <a href="" class="reload">Try reloading the page.</a>
+        <a class="dismiss">🗙</a>
+    </div>
+</div>

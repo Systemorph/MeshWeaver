@@ -1,0 +1,16 @@
+{
+  "id": "CH",
+  "namespace": "FutuRe/Country",
+  "name": "Switzerland",
+  "nodeType": "FutuRe/Country",
+  "isPersistent": true,
+  "content": {
+    "$type": "Country",
+    "id": "CH",
+    "name": "Switzerland",
+    "alpha3Code": "CHE",
+    "region": "EMEA",
+    "order": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

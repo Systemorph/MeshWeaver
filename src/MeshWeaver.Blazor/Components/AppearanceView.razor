@@ -1,0 +1,136 @@
+@using Orientation = Microsoft.FluentUI.AspNetCore.Components.Orientation
+@using Microsoft.FluentUI.AspNetCore.Components.Extensions
+@inherits BlazorView<AppearanceControl, AppearanceView>
+
+<div style="max-width: 500px;">
+    <FluentDesignTheme @ref="theme"
+                       @bind-Mode="@ThemeMode"
+                       @bind-OfficeColor="@OfficeColor"
+                       CustomColor="@CustomHexColor"
+                       Direction="@Direction"
+                       StorageName="theme" />
+
+    <FluentStack Orientation="Orientation.Vertical" VerticalGap="0">
+        <FluentSelect Label="Theme"
+                      Width="100%"
+                      Style="margin-bottom: 30px;"
+                      Items="@AllModes"
+                      @bind-SelectedOption="@ThemeMode" />
+
+        <FluentSelect Label="Preset Color"
+                      Style="margin-bottom: 16px;"
+                      Width="100%"
+                      Items="@(OfficeColorUtilities.AllColors.Cast<OfficeColor?>())"
+                      Height="200px"
+                      SelectedOption="@OfficeColor"
+                      SelectedOptionChanged="@((OfficeColor? c) => OnOfficeColorChanged(c))">
+            <OptionTemplate>
+                <FluentStack>
+                    <FluentIcon Value="@(new Icons.Filled.Size20.RectangleLandscape())"
+                                Color="Color.Custom"
+                                CustomColor="@GetCustomColor(@context)" />
+                    <FluentLabel>@context</FluentLabel>
+                </FluentStack>
+            </OptionTemplate>
+        </FluentSelect>
+
+        <FluentTextField Label="Custom Color (hex)"
+                         Style="margin-bottom: 30px;"
+                         Placeholder="#0F6CBD"
+                         Value="@customColorInput"
+                         ValueChanged="@OnCustomColorChanged" />
+
+        <FluentSwitch Label="Direction"
+                      Style="margin-bottom: 30px;"
+                      CheckedMessage="Left to Right"
+                      UncheckedMessage="Right to Left"
+                      Value="@ltr"
+                      ValueChanged="HandleDirectionChanged" />
+
+        <FluentLabel>
+            These values are persisted in LocalStorage and will be recovered during your next visits.
+        </FluentLabel>
+
+        <FluentDivider Style="width: 100%; margin: 1rem 0" />
+
+        <FluentButton OnClick="@ResetSiteAsync">Reset settings</FluentButton>
+
+        @if (!string.IsNullOrEmpty(status))
+        {
+            <p style="margin-top: 1rem;">
+                <em><strong>@status</strong></em>
+            </p>
+        }
+    </FluentStack>
+</div>
+
+@code
+{
+    private string? status;
+    private bool ltr = true;
+    private FluentDesignTheme? theme;
+    private string? customColorInput;
+
+    private DesignThemeModes ThemeMode { get; set; }
+    private OfficeColor? OfficeColor { get; set; }
+    private string? CustomHexColor { get; set; }
+    private LocalizationDirection? Direction { get; set; }
+
+    private static IEnumerable<DesignThemeModes> AllModes => Enum.GetValues<DesignThemeModes>();
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            ltr = !Direction.HasValue || Direction.Value == LocalizationDirection.LeftToRight;
+        }
+    }
+
+    private void OnOfficeColorChanged(OfficeColor? color)
+    {
+        OfficeColor = color;
+        CustomHexColor = null;
+        customColorInput = null;
+    }
+
+    private void OnCustomColorChanged(string? value)
+    {
+        customColorInput = value;
+        if (!string.IsNullOrWhiteSpace(value) && value.StartsWith('#') && (value.Length == 4 || value.Length == 7))
+        {
+            CustomHexColor = value;
+            OfficeColor = null;
+        }
+        else if (string.IsNullOrWhiteSpace(value))
+        {
+            CustomHexColor = null;
+        }
+    }
+
+    private void HandleDirectionChanged(bool isLeftToRight)
+    {
+        ltr = isLeftToRight;
+        Direction = isLeftToRight ? LocalizationDirection.LeftToRight : LocalizationDirection.RightToLeft;
+    }
+
+    private Task ResetSiteAsync()
+    {
+        theme?.ClearLocalStorageAsync();
+        OfficeColor = OfficeColorUtilities.GetRandom();
+        CustomHexColor = null;
+        customColorInput = null;
+        ThemeMode = DesignThemeModes.System;
+        status = "Settings reset!";
+        return Task.CompletedTask;
+    }
+
+    private static string? GetCustomColor(OfficeColor? color)
+    {
+        return color switch
+        {
+            null => OfficeColorUtilities.GetRandom().ToAttributeValue(),
+            Microsoft.FluentUI.AspNetCore.Components.OfficeColor.Default => "#036ac4",
+            _ => color.ToAttributeValue(),
+        };
+    }
+}

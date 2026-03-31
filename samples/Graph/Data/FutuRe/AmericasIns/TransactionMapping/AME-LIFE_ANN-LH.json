@@ -1,0 +1,18 @@
+{
+  "id": "AME-LIFE_ANN-LH",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Life & Annuity → Life & Health (100%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-LIFE_ANN-LH",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "LIFE_ANN",
+    "localLineOfBusinessName": "Life & Annuity",
+    "groupLineOfBusiness": "LH",
+    "groupLineOfBusinessName": "Life & Health",
+    "percentage": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

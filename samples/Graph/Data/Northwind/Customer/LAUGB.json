@@ -1,0 +1,23 @@
+{
+  "id": "LAUGB",
+  "namespace": "Northwind/Customer",
+  "name": "Laughing Bacchus Wine Cellars",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Laughing Bacchus Wine Cellars - Vancouver, Canada",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "LAUGB",
+    "companyName": "Laughing Bacchus Wine Cellars",
+    "contactName": "Yoshi Tannamuri",
+    "contactTitle": "Marketing Assistant",
+    "city": "Vancouver",
+    "region": "BC",
+    "postalCode": "V3F 2K1",
+    "country": "Canada",
+    "phone": "(604) 555-3392",
+    "fax": "(604) 555-7293"
+  }
+}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none">
+  <path d="M24 4L6 14v16c0 8.837 8.059 16 18 16s18-7.163 18-16V14L24 4z" fill="#1B6EC2" opacity="0.15"/>
+  <path d="M24 4L6 14v16c0 8.837 8.059 16 18 16s18-7.163 18-16V14L24 4z" stroke="#1B6EC2" stroke-width="2" fill="none"/>
+  <path d="M24 12l-10 6v10c0 5.523 4.477 10 10 10s10-4.477 10-10V18l-10-6z" fill="#1B6EC2" opacity="0.3"/>
+  <text x="24" y="31" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="12" fill="#1B6EC2">FR</text>
+</svg>

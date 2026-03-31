@@ -1,0 +1,16 @@
+{
+  "id": "AGRI",
+  "namespace": "FutuRe/LineOfBusiness",
+  "name": "Agricultural",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Agricultural insurance covering crop, livestock, forestry, and weather-indexed risks",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "AGRI",
+    "displayName": "Agricultural",
+    "description": "Agricultural insurance protects farmers, agribusinesses, and food supply chains against weather-related perils, pest damage, disease outbreaks, and market price fluctuations. Crop insurance is the largest segment, often supported by government subsidy programs. Livestock insurance covers mortality and disease in animal husbandry. Index-based weather insurance uses parametric triggers tied to rainfall, temperature, or satellite vegetation indices rather than traditional loss adjustment. Agricultural reinsurance helps manage the high correlation of weather-driven losses across geographic regions."
+  }
+}

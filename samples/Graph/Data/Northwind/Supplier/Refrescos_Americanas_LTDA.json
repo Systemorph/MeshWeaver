@@ -1,0 +1,21 @@
+{
+  "id": "Refrescos_Americanas_LTDA",
+  "namespace": "Northwind/Supplier",
+  "name": "Refrescos Americanas LTDA",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Refrescos Americanas LTDA - Sao Paulo, Brazil",
+  "icon": "/static/NodeTypeIcons/truck.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 10,
+    "companyName": "Refrescos Americanas LTDA",
+    "contactName": "Carlos Diaz",
+    "contactTitle": "Marketing Manager",
+    "city": "Sao Paulo",
+    "region": "",
+    "country": "Brazil",
+    "phone": "(11) 555 4640"
+  }
+}

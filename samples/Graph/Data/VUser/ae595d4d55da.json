@@ -1,0 +1,16 @@
+{
+  "$type": "MeshNode",
+  "id": "ae595d4d55da",
+  "namespace": "VUser",
+  "path": "VUser/ae595d4d55da",
+  "name": "Guest",
+  "nodeType": "VUser",
+  "lastModified": "2026-02-26T10:02:58.882574+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "AccessObject",
+    "id": "ae595d4d55da",
+    "name": "Guest",
+    "isVirtual": true
+  }
+}

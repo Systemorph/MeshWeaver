@@ -1,0 +1,16 @@
+{
+  "id": "CapitalCost",
+  "namespace": "FutuRe/AmountType",
+  "name": "Capital Cost",
+  "nodeType": "FutuRe/AmountType",
+  "isPersistent": true,
+  "content": {
+    "$type": "AmountType",
+    "systemName": "CapitalCost",
+    "displayName": "Capital Cost",
+    "order": 4,
+    "sign": -1,
+    "hasActuals": false
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

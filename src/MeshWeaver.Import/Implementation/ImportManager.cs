@@ -28,7 +28,7 @@ public class ImportManager
         logger?.LogDebug("ImportManager constructor completed for hub {HubAddress}", hub.Address);
     }
 
-    public Task<IMessageDelivery> HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
+    public async Task<IMessageDelivery> HandleImportRequest(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
     {
         // Create cancellation token with timeout if specified in the import request
         var cancellationTokenSource = request.Message.Timeout.HasValue
@@ -37,7 +37,80 @@ public class ImportManager
 
         // Combine the provided cancellation token with our timeout token
         using var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, cancellationTokenSource.Token);
-        return DoImport(request, combined.Token);
+        var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
+        var importActivity = activity.StartSubActivity(ActivityCategory.Import);
+        try
+        {
+
+            activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+
+            var imported = await ImportInstancesAsync(request.Message, importActivity, combined.Token);
+            importActivity.Complete(log =>
+            {
+                if (log.HasErrors())
+                {
+                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+                    return;
+                }
+
+                // Collect all objects to save
+                var objectsToSave = imported.Collections.Values.SelectMany(x => x.Instances.Values).ToList();
+
+                if (objectsToSave.Count == 0)
+                {
+                    var reason = request.Message.Configuration is null
+                        ? (request.Message.Format is null
+                            ? "No format nor configuration is specified."
+                            : $"Is the format {request.Message.Format} correct for this file?")
+                        : "Is the provided configuration correct?";
+                    activity.LogWarning("Import {ImportId} for {RequestId} resulted in no objects to save. Did you omit specifying configuration or format?", activity.Id, request.Id);
+                    activity.Complete();
+                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+                    return;
+                }
+                Configuration.Workspace.RequestChange(
+                    DataChangeRequest.Update(
+                        objectsToSave.ToArray(),
+                        null,
+                        request.Message.UpdateOptions),
+                    activity,
+                    request
+                );
+
+                // Check if ImportConfiguration should be saved
+                if (request.Message.Configuration != null)
+                {
+                    var configToSave = TryGetSaveableConfiguration(request.Message.Configuration, activity);
+                    if (configToSave != null)
+                    {
+                        Configuration.Workspace.RequestChange(
+                            DataChangeRequest.Update([configToSave]),
+                            activity,
+                            request
+                        );
+                        activity.LogInformation("Including ImportConfiguration in save operation: {ConfigType}", configToSave.GetType().Name);
+                    }
+                }
+
+                activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
+
+                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
+            });
+            return request.Processed();
+
+        }
+        catch (Exception e)
+        {
+            importActivity.LogError(e.Message);
+            importActivity.Complete();
+
+            activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
+            FinishWithException(request, e, activity);
+
+            return request.Failed(e.Message);
+        }
+
+
     }
 
     private void FailImport(Exception exception, IMessageDelivery<ImportRequest> request)
@@ -55,15 +128,6 @@ public class ImportManager
         activity.Complete(ActivityStatus.Failed, log => Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request)));
     }
 
-    private async Task<IMessageDelivery> DoImport(
-        IMessageDelivery<ImportRequest> request,
-        CancellationToken cancellationToken
-    )
-    {
-
-        await ImportImpl(request, cancellationToken);
-        return request.Processed();
-    }
 
     private void FinishWithException(IMessageDelivery request, Exception e,
         Activity activity)
@@ -80,46 +144,33 @@ public class ImportManager
     }
 
 
-    private async Task ImportImpl(IMessageDelivery<ImportRequest> request, CancellationToken cancellationToken)
+
+    private ImportConfiguration? TryGetSaveableConfiguration(ImportConfiguration configuration, Activity activity)
     {
-        var activity = new Activity(ActivityCategory.Import, Hub, autoClose: false);
-        var importActivity = activity.StartSubActivity(ActivityCategory.Import);
-        try
+        // Check if the exact type is mapped to the data context
+        var configType = configuration.GetType();
+        var typeSource = Workspace.DataContext.GetTypeSource(configType);
+
+        if (typeSource != null)
         {
+            activity.LogInformation("ImportConfiguration type {ConfigType} is mapped to data context", configType.Name);
+            return configuration;
+        }
 
-            activity.LogInformation("Starting import {ActivityId} for request {RequestId}", activity.Id, request.Id);
-
-            var imported = await ImportInstancesAsync(request.Message, importActivity, cancellationToken);
-            importActivity.Complete(log =>
+        // Check if the base type (ImportConfiguration) is mapped
+        var baseType = typeof(ImportConfiguration);
+        if (configType != baseType)
+        {
+            typeSource = Workspace.DataContext.GetTypeSource(baseType);
+            if (typeSource != null)
             {
-                if (log.HasErrors())
-                {
-                    Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-                    return;
-                }
-                Configuration.Workspace.RequestChange(
-                    DataChangeRequest.Update(
-                        imported.Collections.Values.SelectMany(x => x.Instances.Values).ToArray(),
-                        null,
-                        request.Message.UpdateOptions),
-                    activity,
-                    request
-                );
-                activity.LogInformation("Finished import {ActivityId} for request {RequestId}", activity.Id, request.Id);
-
-                Hub.Post(new ImportResponse(Hub.Version, log), o => o.ResponseFor(request));
-
-            });
-
+                activity.LogInformation("Base type ImportConfiguration is mapped to data context, saving as base type");
+                return configuration;
+            }
         }
-        catch (Exception e)
-        {
-            importActivity.LogError(e.Message);
-            importActivity.Complete();
 
-            activity.LogError("Import {ImportId} for {RequestId} failed with exception: {Exception}", activity.Id, request.Id, e.Message);
-            FinishWithException(request, e, activity);
-        }
+        activity.LogDebug("ImportConfiguration type {ConfigType} is not mapped to data context, skipping save", configType.Name);
+        return null;
     }
 
     public async Task<EntityStore> ImportInstancesAsync(
@@ -265,7 +316,7 @@ public class ImportManager
         );
         activity?.LogInformation("Read data set with {Tables} tables. Will import in format {Format}", dataSet.Tables.Count, format);
 
-        format ??= importRequest.Format;
+        format ??= importRequest.Format ?? ImportFormat.Default;
 
         if (format == null)
             throw new ImportException("Format not specified.");

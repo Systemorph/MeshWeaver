@@ -15,8 +15,24 @@ public static class ViewModelExtensions
         {
             FluentIcons.Provider =>
                 new IconInfo { Name = icon.Id, Size = (IconSize)icon.Size, Variant = (IconVariant)icon.Variant }.GetInstance(),
+            CustomIcons.Provider => CreateCustomIcon(icon),
             _ => null
         };
+
+    private static Microsoft.FluentUI.AspNetCore.Components.Icon? CreateCustomIcon(Icon icon)
+    {
+        var svgContent = CustomIcons.GetSvgContent(icon.Id);
+        if (string.IsNullOrEmpty(svgContent))
+            return null;
+
+        // Extract the path/content from SVG for FluentUI Icon
+        // FluentUI Icon expects SVG inner content (path, rect, etc.)
+        return new Microsoft.FluentUI.AspNetCore.Components.Icon(
+            icon.Id,
+            IconVariant.Regular,
+            IconSize.Size20,
+            svgContent);
+    }
 
 
     internal static UiControl? GetControl(this ISynchronizationStream<JsonElement> stream, ChangeItem<JsonElement> item, string area)

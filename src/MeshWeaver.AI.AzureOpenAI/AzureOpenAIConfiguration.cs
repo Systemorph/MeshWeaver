@@ -8,7 +8,7 @@ public class AzureOpenAIConfiguration
     /// <summary>
     /// The Azure OpenAI endpoint URL
     /// </summary>
-    public string? Url { get; set; }
+    public string? Endpoint { get; set; }
 
     /// <summary>
     /// The API key for authentication
@@ -19,4 +19,9 @@ public class AzureOpenAIConfiguration
     /// Available models/deployment names
     /// </summary>
     public string[] Models { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Display order in model dropdown (lower = first)
+    /// </summary>
+    public int Order { get; set; } = 0;
 }

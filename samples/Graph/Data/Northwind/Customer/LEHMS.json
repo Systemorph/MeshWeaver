@@ -1,0 +1,23 @@
+{
+  "id": "LEHMS",
+  "namespace": "Northwind/Customer",
+  "name": "Lehmanns Marktstand",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Lehmanns Marktstand - Frankfurt a.M., Germany",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "LEHMS",
+    "companyName": "Lehmanns Marktstand",
+    "contactName": "Renate Messner",
+    "contactTitle": "Sales Representative",
+    "city": "Frankfurt a.M.",
+    "region": "",
+    "postalCode": "60528",
+    "country": "Germany",
+    "phone": "069-0245984",
+    "fax": "069-0245874"
+  }
+}

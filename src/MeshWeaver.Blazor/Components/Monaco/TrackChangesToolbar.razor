@@ -1,0 +1,168 @@
+@using Microsoft.FluentUI.AspNetCore.Components
+@using MeshWeaver.Markdown.Collaboration
+
+<div class="track-changes-toolbar">
+    <div class="toolbar-section">
+        <span class="toolbar-label">Track Changes</span>
+        @if (TrackedChanges.Count > 0)
+        {
+            <span class="toolbar-count">@(currentChangeIndex + 1)/@TrackedChanges.Count</span>
+        }
+    </div>
+
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
+
+    <div class="toolbar-section">
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Accept current change"
+                       Disabled="@(string.IsNullOrEmpty(currentChangeId))"
+                       OnClick="@OnAcceptClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Checkmark())" Color="Color.Success" Slot="start" />
+            Accept
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Reject current change"
+                       Disabled="@(string.IsNullOrEmpty(currentChangeId))"
+                       OnClick="@OnRejectClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Error" Slot="start" />
+            Reject
+        </FluentButton>
+    </div>
+
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
+
+    <div class="toolbar-section">
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Previous change"
+                       Disabled="@(TrackedChanges.Count == 0)"
+                       OnClick="@OnPreviousChangeClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.ChevronUp())" />
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Next change"
+                       Disabled="@(TrackedChanges.Count == 0)"
+                       OnClick="@OnNextChangeClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.ChevronDown())" />
+        </FluentButton>
+    </div>
+
+    <FluentDivider Role="DividerRole.Presentation" Orientation="FluentOrientation.Vertical" />
+
+    <div class="toolbar-section">
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Accept all changes"
+                       Disabled="@(TrackedChanges.Count == 0)"
+                       OnClick="@OnAcceptAllClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.CheckmarkCircle())" Color="Color.Success" Slot="start" />
+            Accept All
+        </FluentButton>
+
+        <FluentButton Appearance="FluentAppearance.Lightweight"
+                       Title="Reject all changes"
+                       Disabled="@(TrackedChanges.Count == 0)"
+                       OnClick="@OnRejectAllClick">
+            <FluentIcon Value="@(new Icons.Regular.Size16.DismissCircle())" Color="Color.Error" Slot="start" />
+            Reject All
+        </FluentButton>
+    </div>
+</div>
+
+@code {
+    private string? currentChangeId;
+    private int currentChangeIndex = -1;
+
+    [Parameter]
+    public string DocumentId { get; set; } = "";
+
+    [Parameter]
+    public List<TrackedChange> TrackedChanges { get; set; } = new();
+
+    [Parameter]
+    public EventCallback<string> OnAcceptChange { get; set; }
+
+    [Parameter]
+    public EventCallback<string> OnRejectChange { get; set; }
+
+    [Parameter]
+    public EventCallback OnAcceptAll { get; set; }
+
+    [Parameter]
+    public EventCallback OnRejectAll { get; set; }
+
+    /// <summary>
+    /// Callback to navigate the editor to a specific change marker ID.
+    /// </summary>
+    [Parameter]
+    public EventCallback<string> OnNavigateToChange { get; set; }
+
+    private async Task OnAcceptClick()
+    {
+        if (!string.IsNullOrEmpty(currentChangeId))
+        {
+            await OnAcceptChange.InvokeAsync(currentChangeId);
+        }
+    }
+
+    private async Task OnRejectClick()
+    {
+        if (!string.IsNullOrEmpty(currentChangeId))
+        {
+            await OnRejectChange.InvokeAsync(currentChangeId);
+        }
+    }
+
+    private async Task OnAcceptAllClick()
+    {
+        await OnAcceptAll.InvokeAsync();
+    }
+
+    private async Task OnRejectAllClick()
+    {
+        await OnRejectAll.InvokeAsync();
+    }
+
+    private async Task OnPreviousChangeClick()
+    {
+        if (TrackedChanges.Count == 0) return;
+
+        currentChangeIndex--;
+        if (currentChangeIndex < 0)
+            currentChangeIndex = TrackedChanges.Count - 1;
+
+        await NavigateToCurrentChange();
+    }
+
+    private async Task OnNextChangeClick()
+    {
+        if (TrackedChanges.Count == 0) return;
+
+        currentChangeIndex++;
+        if (currentChangeIndex >= TrackedChanges.Count)
+            currentChangeIndex = 0;
+
+        await NavigateToCurrentChange();
+    }
+
+    private async Task NavigateToCurrentChange()
+    {
+        if (currentChangeIndex >= 0 && currentChangeIndex < TrackedChanges.Count)
+        {
+            var change = TrackedChanges[currentChangeIndex];
+            currentChangeId = change.Id;
+            await OnNavigateToChange.InvokeAsync(change.MarkerId);
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Sets the currently selected change for accept/reject operations.
+    /// </summary>
+    public void SetCurrentChange(string changeId)
+    {
+        currentChangeId = changeId;
+        currentChangeIndex = TrackedChanges.FindIndex(c => c.Id == changeId);
+        StateHasChanged();
+    }
+}

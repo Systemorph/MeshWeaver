@@ -1,0 +1,18 @@
+{
+  "id": "EUR-MOTOR-CAS",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Motor → Casualty (100%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-MOTOR-CAS",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "MOTOR",
+    "localLineOfBusinessName": "Motor",
+    "groupLineOfBusiness": "CAS",
+    "groupLineOfBusinessName": "Casualty",
+    "percentage": 1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

@@ -4,6 +4,7 @@ using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Messaging;
 
@@ -70,7 +71,6 @@ public record MessageHubConfiguration
     protected internal ImmutableList<Func<IMessageHub, CancellationToken, Task>> BuildupActions { get; init; } = ImmutableList<Func<IMessageHub, CancellationToken, Task>>.Empty;
     protected internal ImmutableList<Action<IMessageHub>> SyncBuildupActions { get; init; } = [];
 
-
     internal IMessageHub HubInstance { get; set; } = null!;
 
     public MessageHubConfiguration RegisterForDisposal(Action<IMessageHub> disposeAction)
@@ -93,8 +93,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithHostedHub(Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> configuration)
         =>
-            this.WithTypes(address.GetType())
-                .WithRoutes(f => f.RouteAddress<Address>((a, d) =>
+            this.WithRoutes(f => f.RouteAddress(address.Type, (a, d) =>
         {
             if (!address.Equals(a))
                 return d;
@@ -145,15 +144,20 @@ public record MessageHubConfiguration
         };
     }
 
-    private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery) => delivery.Target == null || delivery.Target.Equals(hub.Address);
+    private static bool DefaultFilter(IMessageHub hub, IMessageDelivery delivery)
+    {
+        if (delivery.Target == null)
+            return true;
+        // Compare without Host since Host tracks routing path, not destination
+        var targetWithoutHost = delivery.Target with { Host = null };
+        return targetWithoutHost.Equals(hub.Address);
+    }
 
     public MessageHubConfiguration WithInitialization(Action<IMessageHub> action) => this with
     {
         SyncBuildupActions = SyncBuildupActions.Add(action)
     };
     public MessageHubConfiguration WithInitialization(Func<IMessageHub, CancellationToken, Task> action) => this with { BuildupActions = BuildupActions.Add(action) };
-
-
 
     protected void CreateServiceProvider(IMessageHub? parent)
     {
@@ -172,14 +176,19 @@ public record MessageHubConfiguration
         // TODO V10: Check whether this address is already built in hosted hubs collection, if not build. (18.01.2024, Roland Buergi)
         var parentHub = ParentServiceProvider?.GetService<ParentMessageHub>()?.Value;
         CreateServiceProvider(parentHub);
+
         var parentHubs = ParentServiceProvider?.GetService<HostedHubsCollection>();
 
         HubInstance = ServiceProvider.GetRequiredService<IMessageHub>();
         parentHubs?.Add(HubInstance);
 
-        // Execute synchronous initialization actions immediately after hub creation
+        // Execute synchronous initialization actions BEFORE starting message processing
+        // This ensures services like Workspace/DataContext are fully configured before any messages arrive
         foreach (var initAction in SyncBuildupActions)
             initAction(HubInstance);
+
+        // Start message processing after SyncBuildupActions complete
+        ((MessageHub)HubInstance).StartMessageProcessing();
 
         return HubInstance;
     }
@@ -193,13 +202,36 @@ public record MessageHubConfiguration
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
+        var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
         return syncPipeline.AddPipeline((d, next) =>
         {
-            var context = userService?.Context;
+            // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
+            if (d.AccessContext is not null)
+                return next(d);
+
+            // Context = per-request AsyncLocal (delivery pipeline).
+            // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler).
+            var context = userService?.Context ?? userService?.CircuitContext;
             if (context is not null)
                 d = d.SetAccessContext(context);
+            else
+            {
+                // Hub-to-hub: identify as the hub itself using its full address path
+                var hubAddress = syncPipeline.Hub.Address;
+                d = d.SetAccessContext(new AccessContext
+                {
+                    ObjectId = hubAddress.ToFullString(),
+                    Name = hubAddress.ToString()
+                });
+            }
+            logger?.LogDebug(
+                "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
+                syncPipeline.Hub.Address,
+                d.Message?.GetType().Name ?? "(null)",
+                d.AccessContext?.ObjectId ?? "(no-context)",
+                userService?.Context?.ObjectId ?? "(null)",
+                userService?.CircuitContext?.ObjectId ?? "(null)");
             return next(d);
-
         });
     }
     internal ImmutableList<Func<AsyncPipelineConfig, AsyncPipelineConfig>> DeliveryPipeline { get; set; }
@@ -233,15 +265,24 @@ public record MessageHubConfiguration
     /// </summary>
     /// <param name="deferred">Whether to defer initialization (default: true)</param>
     /// <returns>Updated configuration</returns>
-    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) => this with { DeferredInitialization = deferred };
+    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) =>
+        this with { DeferredInitialization = deferred };
 
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
+        var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
-            userService?.SetContext(d.AccessContext);
+            var accessContext = d.AccessContext;
+            logger?.LogDebug(
+                "DeliveryPipeline: hub={Hub}, message={MessageType}, user={User}, sender={Sender}",
+                asyncPipeline.Hub.Address,
+                d.Message?.GetType().Name ?? "(null)",
+                accessContext?.ObjectId ?? "(no-context)",
+                d.Sender);
+            userService?.SetContext(accessContext);
             try
             {
                 return await next.Invoke(d, ct);
@@ -259,7 +300,9 @@ public record MessageHubConfiguration
 
     public MessageHubConfiguration WithType<T>(string? name = null)
     {
-        TypeRegistry.WithType(typeof(T), name ?? typeof(T).FullName!);
+        var typeName = name ?? typeof(T).FullName!;
+        System.Diagnostics.Debug.WriteLine($"MessageHubConfiguration.WithType<{typeof(T).Name}>({typeName}): TypeRegistry hashCode={TypeRegistry.GetHashCode()}");
+        TypeRegistry.WithType(typeof(T), typeName);
         return this;
     }
     public MessageHubConfiguration WithType(Type type, string? name = null)
@@ -267,6 +310,7 @@ public record MessageHubConfiguration
         TypeRegistry.WithType(type, name ?? type.FullName!);
         return this;
     }
+
 }
 
 public record AsyncPipelineConfig

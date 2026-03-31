@@ -1,0 +1,117 @@
+.monaco-editor-container {
+    width: 100%;
+    min-width: 0; /* Critical: allow shrinking in flex containers */
+    max-width: 100%; /* Prevent overflow */
+    border: none;
+    overflow: visible; /* Changed from hidden - allow Monaco autocomplete to overflow */
+    background: transparent;
+    position: relative;
+}
+
+.monaco-editor-container.with-border {
+    border: 1px solid var(--neutral-stroke-rest, #d1d1d1);
+    border-radius: 4px;
+    background: var(--neutral-layer-1, #ffffff);
+    padding: 4px 8px;
+}
+
+/* Focus state for bordered containers */
+.monaco-editor-container.with-border:focus-within {
+    border-color: var(--accent-fill-rest, #0078d4);
+    box-shadow: 0 0 0 1px var(--accent-fill-rest, #0078d4);
+}
+
+/* Dark mode support using CSS custom properties */
+/* FluentDesignTheme sets data-theme on body, so we need to target body[data-theme] */
+:global(body[data-theme="dark"]) .monaco-editor-container.with-border,
+:global([data-theme="dark"]) .monaco-editor-container.with-border,
+:global(.dark) .monaco-editor-container.with-border,
+:global(.fluent-dark) .monaco-editor-container.with-border {
+    border-color: var(--neutral-stroke-rest, #505050);
+    background: var(--neutral-layer-1, #2d2d2d);
+}
+
+:global(body[data-theme="dark"]) .monaco-editor-container.with-border:focus-within,
+:global([data-theme="dark"]) .monaco-editor-container.with-border:focus-within,
+:global(.dark) .monaco-editor-container.with-border:focus-within,
+:global(.fluent-dark) .monaco-editor-container.with-border:focus-within {
+    border-color: var(--accent-fill-rest, #479ef5);
+    box-shadow: 0 0 0 1px var(--accent-fill-rest, #479ef5);
+}
+
+/* Note: Removed @media (prefers-color-scheme: dark) fallback because it responds to OS settings,
+   not app theme. Use [data-theme] selectors above which are controlled by the app. */
+
+/* Ensure the editor fills its container */
+::deep .monaco-editor-view {
+    width: 100% !important;
+    height: 100% !important;
+    min-height: 60px;
+}
+
+::deep .monaco-editor-view .monaco-editor {
+    width: 100% !important;
+    height: 100% !important;
+    overflow: visible !important;
+}
+
+::deep .monaco-editor-view .overflow-guard {
+    width: 100% !important;
+    height: 100% !important;
+    overflow: visible !important;
+}
+
+/* Monaco editor background - transparent to inherit from parent */
+::deep .monaco-editor-view .monaco-editor,
+::deep .monaco-editor-view .monaco-editor-background,
+::deep .monaco-editor-view .monaco-editor .margin {
+    background-color: transparent !important;
+}
+
+/* Remove Monaco's internal borders and frames */
+::deep .monaco-editor-view .monaco-editor {
+    border: none !important;
+    outline: none !important;
+}
+
+::deep .monaco-editor-view .monaco-editor .overflow-guard {
+    border: none !important;
+}
+
+/* Remove any focus outlines from Monaco - parent container handles focus styling */
+::deep .monaco-editor-view .monaco-editor:focus,
+::deep .monaco-editor-view .monaco-editor:focus-within {
+    outline: none !important;
+}
+
+::deep .monaco-editor-view .monaco-editor .inputarea {
+    outline: none !important;
+    border: none !important;
+}
+
+/* Selected text styling 
+::deep .monaco-editor-view .monaco-editor .selected-text {
+    background-color: var(--accent-fill-rest) !important;
+    opacity: 0.3;
+}
+
+/* Hide scrollbars but allow scrolling
+::deep .monaco-editor-view .monaco-scrollable-element > .scrollbar {
+    display: none !important;
+}*/
+
+/* Note: Suggest widget styles are applied globally via JavaScript
+   because FixedOverflowWidgets renders the widget outside the component's DOM tree */
+
+/* Placeholder styling */
+::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint, #767676) !important;
+    font-family: var(--body-font, "Segoe UI", sans-serif);
+    font-size: 14px;
+    padding-left: 2px;
+}
+
+:global(body[data-theme="dark"]) ::deep .monaco-placeholder,
+:global([data-theme="dark"]) ::deep .monaco-placeholder {
+    color: var(--neutral-foreground-hint, #9a9a9a) !important;
+}

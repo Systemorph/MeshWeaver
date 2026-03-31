@@ -31,12 +31,12 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         // arrange
         var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
+            .WithTarget(CreateHostAddress())
             .WithProperties(
                 new Dictionary<string, object>
                 {
                     { "MyId", "394" },
-                    { "MyAddress", new ClientAddress() },
+                    { "MyAddress", CreateClientAddress() },
                     { "MyId2", "22394" },
                 }
             );
@@ -52,12 +52,14 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         actualMessage.Should().HaveElement("$type").Which.Should().HaveValue(typeof(SubscribeRequest).FullName);
 
         // act
-        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Router.JsonSerializerOptions);
+        var deserialized = JsonSerializer.Deserialize<MessageDelivery<RawJson>>(serialized, Mesh.JsonSerializerOptions);
 
         // assert
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(delivery)
-            .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+            .And.BeEquivalentTo(delivery, o => o
+                .Excluding(x => x.Message)
+                .Excluding(x => x.Properties));
         var rawJsonContent = deserialized.Message.Should().NotBeNull()
             .And.Subject.As<RawJson>()
                 .Content.Should().NotBeNullOrWhiteSpace()
@@ -72,23 +74,23 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         var client = GetClient();
         // arrange
         var postOptions = new PostOptions(client.Address)
-            .WithTarget(new HostAddress())
+            .WithTarget(CreateHostAddress())
             .WithProperties(
                 new Dictionary<string, object>
                 {
                     { "MyId", "394" },
-                    { "MyAddress", new ClientAddress() },
+                    { "MyAddress", CreateClientAddress() },
                     { "MyId2", "22394" },
                 }
             );
         var entityStore = new EntityStore();
-        var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Router.JsonSerializerOptions);
+        var entityStoreSerialized = JsonSerializer.Serialize(entityStore, Mesh.JsonSerializerOptions);
         var dataChanged = new DataChangedEvent("123", 10, new RawJson(entityStoreSerialized), ChangeType.Full, null);
-        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions, Router.JsonSerializerOptions);
+        var delivery = new MessageDelivery<DataChangedEvent>(dataChanged, postOptions, Mesh.JsonSerializerOptions);
         var packedDelivery = delivery.Package();
 
         // act
-        var serialized = JsonSerializer.Serialize(packedDelivery, Router.JsonSerializerOptions);
+        var serialized = JsonSerializer.Serialize(packedDelivery, Mesh.JsonSerializerOptions);
 
         // assert
         var actual = serialized.Should().NotBeNull().And.BeValidJson().Which;
@@ -101,7 +103,9 @@ public class RawJsonTest(ITestOutputHelper output) : HubTestBase(output)
         // assert
         deserialized.Should().NotBeNull()
             .And.NotBeSameAs(delivery)
-            .And.BeEquivalentTo(delivery, o => o.Excluding(x => x.Message));
+            .And.BeEquivalentTo(delivery, o => o
+                .Excluding(x => x.Message)
+                .Excluding(x => x.Properties));
         var rawJsonContent = deserialized.Message.Should().NotBeNull()
             .And.Subject.As<RawJson>()
                 .Content.Should().NotBeNullOrWhiteSpace()

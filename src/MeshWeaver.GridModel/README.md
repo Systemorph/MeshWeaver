@@ -91,7 +91,7 @@ var gridControl = new GridControl(gridData);
 
 ## UI Implementations
 This library provides the model definitions and controls, but does not include any UI rendering capabilities. For UI rendering, use one of the following implementations:
-- [MeshWeaver.Blazor.AgGrid](../MeshWeaver.Blazor.AgGrid/README.md) - Blazor implementation using AG Grid
+- [MeshWeaver.Blazor.Radzen](../MeshWeaver.Blazor.Radzen/README.md) - Blazor implementation using Radzen DataGrid (MIT licensed, fully open source)
 
 ## Related Projects
 - [MeshWeaver.Layout](../MeshWeaver.Layout/README.md) - Core layout and UI control system

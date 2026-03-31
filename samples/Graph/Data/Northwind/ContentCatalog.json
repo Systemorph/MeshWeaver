@@ -1,0 +1,19 @@
+{
+  "id": "ContentCatalog",
+  "namespace": "Northwind",
+  "name": "Content Catalog",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A catalog of articles and documentation content",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "ContentCatalog",
+    "namespace": "Northwind",
+    "displayName": "Content Catalog",
+    "iconName": "Document",
+    "description": "A catalog of articles and documentation content",
+    "configuration": "config => config.AddDefaultLayoutAreas().AddMarkdownViews()"
+  }
+}

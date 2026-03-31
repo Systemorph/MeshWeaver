@@ -1,0 +1,121 @@
+@using MeshWeaver.Layout.Catalog
+@using MeshWeaver.Mesh
+@inherits FormComponentBase<MeshNodePickerControl, MeshNodePickerView, string>
+
+<div class="mesh-node-picker">
+    @if (Label != null)
+    {
+        <FluentLabel Weight="Microsoft.FluentUI.AspNetCore.Components.FontWeight.Bold" Style="margin-bottom: 4px;">@Label</FluentLabel>
+    }
+
+    @if (!string.IsNullOrEmpty(Value) && _selectedNode != null && !_isSearchOpen)
+    {
+        <div class="mesh-node-picker-selected" @onclick="OpenSearch">
+            <div class="mesh-node-picker-selected-card">
+                @{ var selInitial = GetInitial(_selectedNode); }
+                @RenderAvatar(_selectedNode, selInitial)
+                <div class="mesh-node-picker-info">
+                    <div class="mesh-node-picker-name">@(_selectedNode.Name ?? _selectedNode.Id)</div>
+                    <div class="mesh-node-picker-type">@(_selectedNode.NodeType ?? "")</div>
+                </div>
+            </div>
+            <button type="button" class="mesh-node-picker-clear" @onclick="ClearSelection" @onclick:stopPropagation="true">
+                <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" />
+            </button>
+        </div>
+    }
+    else
+    {
+        <input @ref="_textFieldElement"
+               type="text"
+               class="mesh-node-picker-input"
+               value="@_searchText"
+               @oninput="OnSearchInput"
+               placeholder="@(Placeholder ?? "Search...")"
+               disabled="@Disabled"
+               autocomplete="off"
+               @onfocus="OpenSearch" />
+    }
+
+    @if (_isSearchOpen)
+    {
+        <div class="mesh-node-picker-overlay" @onclick="CloseSearch"></div>
+        <div class="mesh-node-picker-dropdown">
+            @if (_isLoading)
+            {
+                <FluentProgressRing Style="margin: 16px auto; display: block;" />
+            }
+            else if (_results.Count == 0)
+            {
+                <div class="mesh-node-picker-empty">No items found.</div>
+            }
+            else
+            {
+                @if (!string.IsNullOrEmpty(ViewModel?.EmptyOptionLabel))
+                {
+                    var isEmptySelected = string.IsNullOrEmpty(Value);
+                    <div class="mesh-node-picker-item @(isEmptySelected ? "mesh-node-picker-item-selected" : "")"
+                         @onclick="ClearSelection">
+                        <div class="mesh-node-picker-avatar" style="background: var(--neutral-stroke-rest); color: var(--neutral-foreground-hint);">
+                            <FluentIcon Value="@(new Icons.Regular.Size16.Globe())" />
+                        </div>
+                        <div class="mesh-node-picker-item-info">
+                            <div class="mesh-node-picker-item-name">@ViewModel.EmptyOptionLabel</div>
+                            <div class="mesh-node-picker-item-type">No namespace</div>
+                        </div>
+                    </div>
+                }
+                @foreach (var node in _results)
+                {
+                    var isSelected = node.Path == Value;
+                    var initial = GetInitial(node);
+                    var imageUrl = GetImageUrl(node);
+                    <div class="mesh-node-picker-item @(isSelected ? "mesh-node-picker-item-selected" : "")"
+                         @onclick="() => SelectNode(node)">
+                        @RenderAvatar(node, initial)
+                        <div class="mesh-node-picker-item-info">
+                            <div class="mesh-node-picker-item-name">@(node.Name ?? node.Id)</div>
+                            <div class="mesh-node-picker-item-type">@(node.NodeType ?? "")</div>
+                        </div>
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private static string GetInitial(MeshNode node)
+    {
+        var name = node.Name ?? node.Id;
+        return !string.IsNullOrEmpty(name) ? name[0].ToString().ToUpper() : "?";
+    }
+
+    private string? GetImageUrl(MeshNode node)
+    {
+        if (node.Content is System.Text.Json.JsonElement json)
+        {
+            if (json.TryGetProperty("avatar", out var a) && a.ValueKind == System.Text.Json.JsonValueKind.String) return a.GetString();
+            if (json.TryGetProperty("Avatar", out var A) && A.ValueKind == System.Text.Json.JsonValueKind.String) return A.GetString();
+            if (json.TryGetProperty("logo", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
+            if (json.TryGetProperty("Logo", out var L) && L.ValueKind == System.Text.Json.JsonValueKind.String) return L.GetString();
+        }
+        return MeshNodeImageHelper.ResolveNodeIcon(node);
+    }
+
+    private RenderFragment RenderAvatar(MeshNode node, string initial)
+    {
+        var imageUrl = GetImageUrl(node);
+        if (!string.IsNullOrEmpty(imageUrl))
+        {
+            if (imageUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                return @<div class="mesh-node-picker-avatar" style="background: transparent; font-size: 20px; padding: 2px;">@((MarkupString)imageUrl)</div>;
+            if (!imageUrl.Contains('/') && !imageUrl.StartsWith("data:"))
+                return @<div class="mesh-node-picker-avatar" style="background: transparent; font-size: 24px;">@imageUrl</div>;
+            if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                return @<div style="--icon-url: url('@imageUrl')" class="mesh-node-picker-avatar-icon"></div>;
+            return @<img src="@imageUrl" alt="@(node.Name ?? node.Id)" class="mesh-node-picker-avatar-img" />;
+        }
+        return @<div class="mesh-node-picker-avatar">@initial</div>;
+    }
+}

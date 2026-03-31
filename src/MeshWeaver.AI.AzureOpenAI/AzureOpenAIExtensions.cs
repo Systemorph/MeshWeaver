@@ -12,6 +12,17 @@ public static class AzureOpenAIExtensions
     /// </summary>
     public static IServiceCollection AddAzureOpenAI(this IServiceCollection services)
     {
-        return services.AddSingleton<IAgentChatFactory, AzureOpenAIChatCompletionAgentChatFactory>();
+        return services.AddSingleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>();
+    }
+
+    /// <summary>
+    /// Adds Azure OpenAI services with configuration action.
+    /// </summary>
+    public static IServiceCollection AddAzureOpenAI(
+        this IServiceCollection services,
+        Action<AzureOpenAIConfiguration> configure)
+    {
+        services.Configure(configure);
+        return services.AddSingleton<IChatClientFactory, AzureOpenAIChatClientAgentFactory>();
     }
 }

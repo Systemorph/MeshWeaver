@@ -1,20 +1,52 @@
-@using Microsoft.JSInterop
 @inherits BlazorView<MarkdownControl, MarkdownView>
 
 <HeadContent>
     <FluentDesignTheme StorageName="theme" @bind-Mode="@Mode" />
-    @if (Mode == DesignThemeModes.Light)
-    {
-        <link href="_content/MeshWeaver.Blazor/css/github.min.css" rel="stylesheet" />
-    }
-    else
-    {
-        <link href="_content/MeshWeaver.Blazor/css/github-dark.min.css" rel="stylesheet" />
-    }
-
+    <style>
+        :root {
+            --annotation-comment-bg: #fff8c5;
+            --annotation-comment-border: #d4a72c;
+            --annotation-insert-bg: #dafbe1;
+            --annotation-insert-border: #22863a;
+            --annotation-insert-color: #22863a;
+            --annotation-delete-bg: #ffebe9;
+            --annotation-delete-border: #cf222e;
+            --annotation-delete-color: #cf222e;
+            --annotation-delete-text: #656d76;
+            --annotation-active-border: #0969da;
+            --annotation-active-bg: rgba(9, 105, 218, 0.08);
+        }
+        [data-theme="dark"] {
+            --annotation-comment-bg: rgba(187, 128, 9, 0.15);
+            --annotation-comment-border: #d29922;
+            --annotation-insert-bg: rgba(46, 160, 67, 0.15);
+            --annotation-insert-border: #3fb950;
+            --annotation-insert-color: #3fb950;
+            --annotation-delete-bg: rgba(248, 81, 73, 0.15);
+            --annotation-delete-border: #f85149;
+            --annotation-delete-color: #f85149;
+            --annotation-delete-text: #8b949e;
+            --annotation-active-border: #58a6ff;
+            --annotation-active-bg: rgba(56, 139, 253, 0.15);
+        }
+        @@media (prefers-color-scheme: dark) {
+            :root:not([data-theme="light"]) {
+                --annotation-comment-bg: rgba(187, 128, 9, 0.15);
+                --annotation-comment-border: #d29922;
+                --annotation-insert-bg: rgba(46, 160, 67, 0.15);
+                --annotation-insert-border: #3fb950;
+                --annotation-insert-color: #3fb950;
+                --annotation-delete-bg: rgba(248, 81, 73, 0.15);
+                --annotation-delete-border: #f85149;
+                --annotation-delete-color: #f85149;
+                --annotation-delete-text: #8b949e;
+                --annotation-active-border: #58a6ff;
+                --annotation-active-bg: rgba(56, 139, 253, 0.15);
+            }
+        }
+    </style>
 </HeadContent>
 
-<article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="@Style">
+<article class="markdown-body" data-theme="@Mode.ToString().ToLower()" style="background-color: var(--neutral-layer-1); @Style">
     @((RenderFragment)RenderHtml)
 </article>
-

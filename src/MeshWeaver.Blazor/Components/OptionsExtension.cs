@@ -4,7 +4,7 @@ namespace MeshWeaver.Blazor.Components;
 
 public static class OptionsExtension
 {
-    public record Option(object? Item, string? Text, string? ItemString, Type ItemType);
+    public record Option(object? Item, string? Text, string? ItemString, Type ItemType, string? Icon = null);
 
     internal static string? MapToString(object? instance, Type itemType) =>
         instance == null || IsDefault((dynamic)instance)

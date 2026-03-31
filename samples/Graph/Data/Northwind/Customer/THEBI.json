@@ -1,0 +1,23 @@
+{
+  "id": "THEBI",
+  "namespace": "Northwind/Customer",
+  "name": "The Big Cheese",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "The Big Cheese - Portland, USA",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "THEBI",
+    "companyName": "The Big Cheese",
+    "contactName": "Liz Nixon",
+    "contactTitle": "Marketing Manager",
+    "city": "Portland",
+    "region": "OR",
+    "postalCode": "97201",
+    "country": "USA",
+    "phone": "(503) 555-3612",
+    "fax": ""
+  }
+}

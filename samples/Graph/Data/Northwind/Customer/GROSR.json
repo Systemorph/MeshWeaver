@@ -1,0 +1,23 @@
+{
+  "id": "GROSR",
+  "namespace": "Northwind/Customer",
+  "name": "GROSELLA-Restaurante",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "GROSELLA-Restaurante - Caracas, Venezuela",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "GROSR",
+    "companyName": "GROSELLA-Restaurante",
+    "contactName": "Manuel Pereira",
+    "contactTitle": "Owner",
+    "city": "Caracas",
+    "region": "DF",
+    "postalCode": "1081",
+    "country": "Venezuela",
+    "phone": "(2) 283-2951",
+    "fax": "(2) 283-3397"
+  }
+}

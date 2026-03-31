@@ -1,0 +1,18 @@
+{
+  "id": "MOTOR",
+  "namespace": "FutuRe/EuropeRe/LineOfBusiness",
+  "name": "Motor",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Private and commercial motor vehicle insurance across European markets",
+  "icon": "/static/storage/content/FutuRe/EuropeRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "MOTOR",
+    "displayName": "Motor",
+    "description": "Motor insurance covering third-party liability (compulsory in all EU markets), own damage (comprehensive/collision), and supplementary coverages such as legal protection and roadside assistance. Commercial motor includes fleet policies for corporate vehicle pools. The European motor market is highly regulated with Solvency II capital requirements and cross-border portability under the Motor Insurance Directive.",
+    "order": 2,
+    "productExamples": "Motor third-party liability, Comprehensive own damage, Fleet insurance, Legal protection, Roadside assistance"
+  }
+}

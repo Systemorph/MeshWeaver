@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
@@ -116,12 +117,14 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     {
         if (isDisposed || value == null)
         {
-            logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} to {Value} because the stream is disposed or value is null. IsDisposed={IsDisposed}", StreamId, value, isDisposed);
+            if (isDisposed)
+                logger.LogWarning("[SYNC_STREAM] Not setting {StreamId} — stream is disposed", StreamId);
+            else
+                logger.LogDebug("[SYNC_STREAM] Skipping null value for {StreamId}", StreamId);
             return;
         }
 
         var valuesEqual = current is not null && Equals(current.Value, value.Value);
-
 
         if (current is not null && valuesEqual)
         {
@@ -161,7 +164,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
     public void OnError(Exception error)
     {
         if (!Store.IsDisposed)
-            Store.OnError(error);
+        {
+            logger.LogWarning(error, "[SYNC_STREAM] OnError for {StreamId} (Reference={Reference}, Owner={Owner})", StreamId, Reference, Owner);
+            try
+            {
+                Store.OnError(error);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "[SYNC_STREAM] Exception from Store.OnError propagation for {StreamId}", StreamId);
+            }
+            // Always fault startup and open gate, even if Store.OnError throws
+            Hub.FailStartup(error);
+            Hub.OpenGate(SynchronizationGate);
+        }
+        else
+        {
+            logger.LogWarning("[SYNC_STREAM] OnError skipped for {StreamId} - Store is disposed", StreamId);
+        }
     }
 
     public void RegisterForDisposal(IDisposable disposable) => Hub
@@ -196,6 +216,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         this.Host = Host;
         this.Configuration = configuration?.Invoke(new StreamConfiguration<TStream>(this)) ?? new StreamConfiguration<TStream>(this);
 
+        // Store subscriber in Properties for easy access via Get<Address>
+        if (Configuration.Subscriber != null)
+            Set(nameof(SubscribeRequest.Subscriber), Configuration.Subscriber);
 
         this.ReduceManager = ReduceManager;
         this.StreamIdentity = StreamIdentity;
@@ -204,7 +227,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         logger = Host.ServiceProvider.GetRequiredService<ILogger<SynchronizationStream<TStream>>>();
         logger.LogDebug("Creating Synchronization Stream {StreamId} for Host {Host} and {StreamIdentity} and {Reference}", StreamId, Host.Address, StreamIdentity, Reference);
 
-        Hub = Host.GetHostedHub(new SynchronizationAddress(ClientId), ConfigureSynchronizationHub);
+        Hub = Host.GetHostedHub(SynchronizationAddress.Create(ClientId), ConfigureSynchronizationHub);
     }
 
     private MessageHubConfiguration ConfigureSynchronizationHub(MessageHubConfiguration config)
@@ -212,8 +235,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         config = config
             .WithTypes(
                 typeof(EntityStore),
-                typeof(JsonElement),
-                typeof(SynchronizationAddress)
+                typeof(JsonElement)
             )
             .WithHandler<DataChangedEvent>((hub, delivery) =>
                 {
@@ -228,6 +250,24 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             ).WithHandler<DataChangeRequest>((hub, delivery) =>
                 {
                     hub.GetWorkspace().RequestChange(delivery.Message, null, delivery);
+                    return delivery.Processed();
+                }
+            ).WithHandler<GetDataResponse>((_, delivery) =>
+                {
+                    var response = delivery.Message;
+                    if (response.Error is { } error)
+                    {
+                        logger.LogWarning("Stream {StreamId} subscription rejected: {Error}", StreamId, error);
+                        OnError(new UnauthorizedAccessException(
+                            $"Subscription to {StreamIdentity.Owner} for {Reference} failed: {error}"));
+                    }
+                    return delivery.Processed();
+                }
+            ).WithHandler<DeliveryFailure>((_, delivery) =>
+                {
+                    var failure = delivery.Message;
+                    logger.LogWarning("Stream {StreamId} received DeliveryFailure: {Message}", StreamId, failure.Message);
+                    OnError(new DeliveryFailureException(failure));
                     return delivery.Processed();
                 }
             ).WithHandler<UnsubscribeRequest>((hub, delivery) =>
@@ -269,11 +309,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                 return request.Processed();
             })
             .WithInitialization(InitializeAsync)
-            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest || d.Message is DataChangedEvent);
+            .WithInitializationGate(SynchronizationGate, d => d.Message is SetCurrentRequest or DeliveryFailure or GetDataResponse || d.Message is DataChangedEvent { ChangeType: ChangeType.Full });
 
         // Apply deferred initialization if configured
         if (Configuration.DeferredInitialization)
+        {
             config = config.WithDeferredInitialization();
+            if (Configuration.DeferredGateName != null && Configuration.DeferredGatePredicate != null)
+                config = config.WithInitializationGate(Configuration.DeferredGateName, Configuration.DeferredGatePredicate);
+        }
 
         return config;
     }
@@ -299,7 +343,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
         if (Hub.Disposal is not null)
         {
-            logger.LogWarning("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
+            logger.LogDebug("[SYNC_STREAM] UpdateStream skipped for {StreamId} - hub is disposing", StreamId);
             return;
         }
 
@@ -314,7 +358,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
                     currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
                     StreamId,
                     Host.Version));
-
+                Set(currentJson);
             }
             catch (Exception ex)
             {
@@ -329,11 +373,22 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
             (currentJson, var patch) = delivery.Message.UpdateJsonElement(currentJson, hub.JsonSerializerOptions);
             try
             {
-                SetCurrent(hub, this.ToChangeItem(Current!.Value!,
+                var changeItem = this.ToChangeItem(Current!.Value!,
                     currentJson.Value,
                     patch,
-                    delivery.Message.ChangedBy ?? ClientId));
+                    delivery.Message.ChangedBy ?? ClientId);
 
+                // PatchFunction may be null for single-object streams (e.g. MeshNodeReference).
+                // Fall back to full deserialization of the patched JSON.
+                changeItem ??= new ChangeItem<TStream>(
+                    currentJson.Value.Deserialize<TStream>(Host.JsonSerializerOptions)!,
+                    delivery.Message.ChangedBy ?? ClientId,
+                    StreamId,
+                    ChangeType.Patch,
+                    delivery.Message.Version,
+                    null);
+
+                SetCurrent(hub, changeItem);
             }
             catch (Exception ex)
             {
@@ -355,6 +410,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
 
     public string StreamId { get; } = Guid.NewGuid().AsString();
     public string ClientId => Configuration.ClientId;
+    public string? Identity { get; init; }
 
 
     internal StreamConfiguration<TStream> Configuration { get; }
@@ -391,8 +447,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>
         });
     }
 
+    [PreventLogging]
     public record UpdateStreamRequest([property: JsonIgnore] Func<TStream?, CancellationToken, Task<ChangeItem<TStream>?>> UpdateAsync, [property: JsonIgnore] Func<Exception, Task> ExceptionCallback);
 
+    [PreventLogging]
     public record SetCurrentRequest(ChangeItem<TStream> Value);
 
 }
@@ -403,6 +461,14 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     internal string ClientId { get; init; } = Guid.NewGuid().AsString();
     public StreamConfiguration<TStream> WithClientId(string streamId) =>
         this with { ClientId = streamId };
+
+    /// <summary>
+    /// The address of the subscriber (client/portal) that subscribed to this stream.
+    /// Used for sending messages back to the subscriber, such as NavigationRequest.
+    /// </summary>
+    public Address? Subscriber { get; init; }
+    public StreamConfiguration<TStream> WithSubscriber(Address subscriber) =>
+        this with { Subscriber = subscriber };
 
     internal bool NullReturn { get; init; }
 
@@ -420,6 +486,8 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// This is useful when the stream initialization depends on properties that are set after stream construction.
     /// </summary>
     internal bool DeferredInitialization { get; init; }
+    internal string? DeferredGateName { get; init; }
+    internal Predicate<IMessageDelivery>? DeferredGatePredicate { get; init; }
 
     public StreamConfiguration<TStream> WithInitialization(Func<ISynchronizationStream<TStream>, CancellationToken, Task<TStream>> init)
         => this with { Initialization = init };
@@ -439,4 +507,13 @@ public record StreamConfiguration<TStream>(ISynchronizationStream<TStream> Strea
     /// <returns>Updated configuration</returns>
     public StreamConfiguration<TStream> WithDeferredInitialization(bool deferred = true)
         => this with { DeferredInitialization = deferred };
+
+    /// <summary>
+    /// Enables deferred initialization with a named gate. The gate is added to the stream's
+    /// sub-hub and allows matching messages through while initialization is deferred.
+    /// The gate is opened by calling Hub.OpenGate(gateName) when the data is ready.
+    /// </summary>
+    public StreamConfiguration<TStream> WithDeferredInitialization(
+        string gateName, Predicate<IMessageDelivery> allowDuringInit)
+        => this with { DeferredInitialization = true, DeferredGateName = gateName, DeferredGatePredicate = allowDuringInit };
 }

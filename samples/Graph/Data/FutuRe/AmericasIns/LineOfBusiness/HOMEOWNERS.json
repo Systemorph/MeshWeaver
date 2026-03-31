@@ -1,0 +1,18 @@
+{
+  "id": "HOMEOWNERS",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Homeowners",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Residential property insurance covering homes, condos, and personal property in the Americas",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "HOMEOWNERS",
+    "displayName": "Homeowners",
+    "description": "US and Latin American homeowners insurance covering dwelling structures, personal property, loss of use, and personal liability. Products range from standard HO-3 policies to high-value dwelling programs. Key perils include windstorm and hurricane in coastal states, wildfire in the West, tornado in the Midwest, and freeze damage in northern regions. The reinsurance program emphasizes catastrophe excess-of-loss treaties given significant nat-cat exposure across the Americas.",
+    "order": 1,
+    "productExamples": "HO-3 standard, High-value dwelling, Condo owners, Renters, Flood (write-your-own), Earthquake, Mobile home"
+  }
+}
