@@ -21,19 +21,20 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     /// Restores the user's access context before each tool call.
     /// AsyncLocal doesn't flow through the AI framework's async streaming + tool invocation,
     /// so we must explicitly set it from the captured ThreadExecutionContext.
-    /// Returns IDisposable that restores the previous context when done.
+    /// No disposal needed — we're inside the thread's InvokeAsync async flow.
     /// </summary>
-    private IDisposable? RestoreUserContext()
+    private void RestoreUserContext()
     {
         var userCtx = chat.ExecutionContext?.UserAccessContext;
-        return userCtx != null ? accessService?.SwitchAccessContext(userCtx) : null;
+        if (userCtx != null)
+            accessService?.SetContext(userCtx);
     }
 
     [Description("Retrieves a node or content from the mesh by path. Supports Unified Path prefixes (schema:, model:, data:, content:, collection:, area:, layoutAreas:).")]
     public Task<string> Get(
         [Description("Path to data (e.g., @graph/org1, @NodeType/*, @ACME/schema:, @ACME/model:)")] string path)
     {
-        using var _ = RestoreUserContext();
+        RestoreUserContext();
         return ops.Get(path);
     }
 
@@ -42,7 +43,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Query string (e.g., 'nodeType:Agent', 'path:ACME scope:descendants', 'name:*sales*')")] string query,
         [Description("Base path to search from (e.g., @graph). Empty for all.")] string? basePath = null)
     {
-        using var _ = RestoreUserContext();
+        RestoreUserContext();
         return ops.Search(query, basePath);
     }
 
@@ -50,7 +51,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     public Task<string> Create(
         [Description("JSON MeshNode with required: id, name, nodeType, namespace. Example: {\"id\":\"my-page\",\"namespace\":\"MyOrg\",\"name\":\"My Page\",\"nodeType\":\"Markdown\"}")] string node)
     {
-        using var _ = RestoreUserContext();
+        RestoreUserContext();
         return ops.Create(node);
     }
 
@@ -58,7 +59,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     public Task<string> Update(
         [Description("JSON array of complete MeshNode objects")] string nodes)
     {
-        using var _ = RestoreUserContext();
+        RestoreUserContext();
         return ops.Update(nodes);
     }
 
@@ -67,7 +68,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
         [Description("Path to the node (e.g., @User/rbuergi/my-node)")] string path,
         [Description("JSON object with only the fields to update (e.g., {\"icon\": \"<svg>...</svg>\"} or {\"name\": \"New Name\", \"content\": {...}})")] string fields)
     {
-        using var _ = RestoreUserContext();
+        RestoreUserContext();
         return ops.Patch(path, fields);
     }
 
@@ -75,7 +76,7 @@ public class MeshPlugin(IMessageHub hub, IAgentChat chat)
     public Task<string> Delete(
         [Description("JSON array of path strings to delete")] string paths)
     {
-        using var _ = RestoreUserContext();
+        RestoreUserContext();
         return ops.Delete(paths);
     }
 
