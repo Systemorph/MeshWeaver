@@ -14,12 +14,14 @@ public record ExportResult
     /// <summary>True if the export succeeded.</summary>
     public bool Success => Error == null;
 
+    /// <summary>Creates a successful export result with the given counts.</summary>
     public static ExportResult Ok(int nodesExported, int partitionsExported = 0) => new()
     {
         NodesExported = nodesExported,
         PartitionsExported = partitionsExported
     };
 
+    /// <summary>Creates a failed export result with the given error message.</summary>
     public static ExportResult Fail(string error) => new() { Error = error };
 }
 

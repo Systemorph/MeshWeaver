@@ -56,7 +56,7 @@ public class MeshExportService : IMeshExportService
             await foreach (var desc in _meshService.QueryAsync<MeshNode>($"path:{rootPath} scope:descendants").WithCancellation(ct))
             {
                 // Skip excluded satellite node types
-                if (excludedNodeTypes != null && excludedNodeTypes.Contains(desc.NodeType))
+                if (excludedNodeTypes != null && desc.NodeType != null && excludedNodeTypes.Contains(desc.NodeType))
                     continue;
                 allNodes.Add(desc);
             }

@@ -83,7 +83,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        var collection = await contentService.GetCollectionAsync("content");
+        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull("content collection should resolve to a usable IContentCollection");
     }
 
@@ -93,7 +93,7 @@ public class NodeHubContentCollectionTest(ITestOutputHelper output) : HubTestBas
         var hub = GetClient();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        var collection = await contentService.GetCollectionAsync("content");
+        var collection = await contentService.GetCollectionAsync("content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         // Create a test file
