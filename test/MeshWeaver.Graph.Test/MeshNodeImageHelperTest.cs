@@ -17,6 +17,6 @@ public class MeshNodeImageHelperTest
     [InlineData(null, null)]
     public void GetIconAsImageUrl_ReturnsExpected(string? icon, string? expected)
     {
-        MeshNodeImageHelper.GetIconAsImageUrl(icon).Should().Be(expected);
+        MeshNodeImageHelper.GetIconForRendering(icon).Should().Be(expected);
     }
 }
