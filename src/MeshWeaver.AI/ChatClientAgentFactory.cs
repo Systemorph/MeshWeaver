@@ -288,10 +288,19 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                 return o;
                             });
 
-                            if (delivery != null)
+                            if (delivery == null)
                             {
-                                Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+                                Logger.LogWarning("[Delegation] SubmitMessageRequest post returned null for {Path}", subThreadPath);
+                                tcs.TrySetResult(new DelegationResult
                                 {
+                                    AgentName = targetId, Task = task,
+                                    Result = $"Failed to submit message to sub-thread {subThreadPath}", Success = false
+                                });
+                                return;
+                            }
+
+                            Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+                            {
                                     if (response is IMessageDelivery<SubmitMessageResponse> sr)
                                     {
                                         var msg = sr.Message;
@@ -322,7 +331,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                     }
                                     return response;
                                 });
-                            }
                         },
                         error =>
                         {
@@ -334,7 +342,18 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                             });
                         });
 
-                    return tcs.Task; // AI framework awaits this — not our code
+                    // Register cancellation to prevent infinite hang if sub-thread routing fails
+                    cancellationToken.Register(() =>
+                    {
+                        tcs.TrySetResult(new DelegationResult
+                        {
+                            AgentName = targetId, Task = task,
+                            Result = $"Delegation to {targetId} was cancelled.",
+                            Success = false
+                        });
+                    });
+
+                    return tcs.Task;
                 },
                 Logger);
 
