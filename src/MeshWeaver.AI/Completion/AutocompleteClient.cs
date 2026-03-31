@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Immutable;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Messaging;
 
@@ -24,7 +25,7 @@ public class AutocompleteClient(
         AgentContext? context,
         CancellationToken ct = default)
     {
-        var allItems = new List<AutocompleteItem>();
+        var allItems = ImmutableList<AutocompleteItem>.Empty;
 
         // Get all addresses to query
         var addresses = await GetAllDispatchAddressesAsync(context, ct);
@@ -44,7 +45,7 @@ public class AutocompleteClient(
 
                 if (responseMsg?.Items != null)
                 {
-                    allItems.AddRange(responseMsg.Items);
+                    allItems = allItems.AddRange(responseMsg.Items);
                 }
             }
             catch
@@ -57,7 +58,7 @@ public class AutocompleteClient(
         var deduplicated = allItems
             .GroupBy(i => i.InsertText)
             .Select(g => g.OrderByDescending(i => i.Priority).First())
-            .ToList();
+            .ToImmutableList();
 
         return new AutocompleteResponse(deduplicated);
     }
@@ -69,20 +70,20 @@ public class AutocompleteClient(
         AgentContext? context,
         CancellationToken ct)
     {
-        var addresses = new HashSet<Address>();
+        var addresses = ImmutableHashSet<Address>.Empty;
 
         // Add base addresses (app/Agents)
         foreach (var addr in getBaseAddresses(context))
         {
-            addresses.Add(addr);
+            addresses = addresses.Add(addr);
         }
 
         // Add context address if present
         if (context?.Address != null)
         {
-            addresses.Add(context.Address);
+            addresses = addresses.Add(context.Address);
         }
 
-        return Task.FromResult<IReadOnlyCollection<Address>>(addresses.ToList());
+        return Task.FromResult<IReadOnlyCollection<Address>>(addresses);
     }
 }

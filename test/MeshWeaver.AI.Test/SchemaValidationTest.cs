@@ -171,7 +171,7 @@ public class SchemaValidationTest : MonolithMeshTestBase
     #region Id Validation
 
     [Fact]
-    public async Task Create_WithSlashInId_ReturnsError()
+    public async Task Create_WithSlashInId_SanitizesAndCreates()
     {
         var plugin = CreatePlugin();
 
@@ -185,8 +185,8 @@ public class SchemaValidationTest : MonolithMeshTestBase
 
         var result = await plugin.Create(nodeJson);
 
-        result.Should().Contain("Error");
-        result.Should().Contain("slashes");
+        result.Should().StartWith("Created:", because: "slashes in id should be sanitized into namespace + id");
+        result.Should().Contain("PricingTool");
     }
 
     #endregion

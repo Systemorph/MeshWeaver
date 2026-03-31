@@ -4,7 +4,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Data\**\*.md" />
+    <EmbeddedResource Include="Data\**\*.*" />
+    <Compile Remove="Data\**\*.cs" />
     <EmbeddedResource Include="Content\**\*.*" />
   </ItemGroup>
 
@@ -12,5 +13,6 @@
     <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
     <ProjectReference Include="..\MeshWeaver.Markdown\MeshWeaver.Markdown.csproj" />
     <ProjectReference Include="..\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
+    <ProjectReference Include="..\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
   </ItemGroup>
 </Project>

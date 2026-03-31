@@ -51,8 +51,8 @@ public record Role
     {
         Id = "Editor",
         DisplayName = "Editor",
-        Description = "Can read, create, update nodes, comment, and use threads",
-        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread,
+        Description = "Can read, create, update, export nodes, comment, and use threads",
+        Permissions = Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export,
         IsInheritable = true
     };
 
@@ -64,7 +64,7 @@ public record Role
         Id = "Viewer",
         DisplayName = "Viewer",
         Description = "Read-only access",
-        Permissions = Permission.Read | Permission.Execute,
+        Permissions = Permission.Read | Permission.Execute | Permission.Api,
         IsInheritable = true
     };
 
@@ -77,7 +77,7 @@ public record Role
         Id = "Commenter",
         DisplayName = "Commenter",
         Description = "Can read and comment",
-        Permissions = Permission.Read | Permission.Comment,
+        Permissions = Permission.Read | Permission.Comment | Permission.Api,
         IsInheritable = true
     };
 

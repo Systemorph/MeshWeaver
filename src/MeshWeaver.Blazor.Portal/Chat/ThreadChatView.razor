@@ -8,7 +8,7 @@
 @using FluentJustifyContent = Microsoft.FluentUI.AspNetCore.Components.JustifyContent
 @inject NavigationManager NavigationManager
 
-<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")">
+<div class="thread-chat-container @(ViewModel.HideEmptyState ? "compact-mode" : "")" style="@Style">
 @if (viewMode == ChatViewMode.ResumeThreads)
 {
     <div class="thread-resume-view">
@@ -58,35 +58,38 @@ else
         </div>
     }
 
-    <!-- Footer: progress + input — pinned at bottom, never scrolls -->
-    <div class="thread-chat-footer">
-        @if (!submissionHandler.IsInputEnabled || isCancelling)
-        {
-            <div class="chat-progress-bar">
-                <FluentProgressRing Style="width: 18px; height: 18px;" />
-                <span class="chat-progress-text">
-                    @if (isCancelling)
-                    {
-                        @:Cancelling...
-                    }
-                    else if (submissionHandler.State == ChatSubmissionHandler.SubmissionState.Submitting)
-                    {
-                        @:Sending...
-                    }
-                    else
-                    {
-                        @:Generating response...
-                    }
-                </span>
-                @if (!isCancelling && !submissionHandler.IsInputEnabled)
-                {
-                    <FluentButton BackgroundColor="transparent" OnClick="CancelSubmission" Title="Cancel" Style="margin-left: auto; padding: 2px 8px;">
-                        <FluentIcon Value="@(new Icons.Regular.Size16.Dismiss())" Color="Color.Neutral" />
-                    </FluentButton>
-                }
+    <!-- Execution status bar — shows when thread is executing -->
+    @if (ThreadViewModel?.IsExecuting == true)
+    {
+        <div class="thread-exec-bar">
+            <div class="thread-exec-header">
+                <span class="thread-exec-star">&#10041;</span>
+                <span class="thread-exec-status">@(ThreadViewModel.ExecutionStatus ?? "Generating response...")</span>
+                <button class="thread-exec-cancel" @onclick="CancelExecution">
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+                    Stop
+                </button>
             </div>
-        }
+            @if (!string.IsNullOrEmpty(ThreadViewModel.StreamingText))
+            {
+                <div class="thread-exec-preview">@TruncateText(ThreadViewModel.StreamingText, 300)</div>
+            }
+            @if (ThreadViewModel.StreamingToolCalls is { Count: > 0 })
+            {
+                <div class="thread-exec-tools">
+                    @foreach (var call in ThreadViewModel.StreamingToolCalls)
+                    {
+                        <span class="thread-exec-tool @(call.Result != null ? "done" : "pending")">
+                            @(call.Result != null ? "✓" : "●") @(call.DisplayName ?? call.Name)
+                        </span>
+                    }
+                </div>
+            }
+        </div>
+    }
 
+    <!-- Footer: input — pinned at bottom, never scrolls -->
+    <div class="thread-chat-footer">
         <div class="thread-chat-input-area">
         <!-- Attachment chip collection -->
         <ReferenceChipCollection
@@ -168,3 +171,4 @@ else
     </div>
 }
 </div>
+

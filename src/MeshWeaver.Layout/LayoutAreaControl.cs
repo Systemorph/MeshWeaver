@@ -21,7 +21,12 @@ public enum SpinnerType
     /// <summary>
     /// Ghost box skeleton placeholder (pulsing lines).
     /// </summary>
-    Skeleton
+    Skeleton,
+
+    /// <summary>
+    /// No spinner — empty space while loading.
+    /// </summary>
+    None
 }
 
 /// <summary>

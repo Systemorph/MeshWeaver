@@ -104,6 +104,19 @@ public class AzureFoundryPersistentAgentFactory : IChatClientFactory
         return agent;
     }
 
+    /// <summary>
+    /// Persistent agents require server-side creation (Azure API call).
+    /// This is an external HTTP call, not Orleans — safe to block here.
+    /// </summary>
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+    {
+        throw new NotSupportedException("Persistent agent factory requires async creation. Use CreateAgentAsync.");
+    }
+
     private List<ToolDefinition> GetToolDefinitions(
         AgentConfiguration agentConfig,
         IAgentChat chat,

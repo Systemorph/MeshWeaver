@@ -288,14 +288,16 @@ export function enableCommentSelection(containerEl, dotNetRef) {
                 return;
             }
 
-            // Position the button near the end of the selection
+            // Position the button centered above the selection
             const range = sel.getRangeAt(0);
             const rect = range.getBoundingClientRect();
             const containerRect = containerEl.getBoundingClientRect();
+            const btnWidth = 90; // approximate button width
 
             _commentButton.style.display = 'block';
-            _commentButton.style.top = (rect.bottom - containerRect.top + 4) + 'px';
-            _commentButton.style.left = (rect.right - containerRect.left) + 'px';
+            const centerX = (rect.left + rect.right) / 2 - containerRect.left - btnWidth / 2;
+            _commentButton.style.top = (rect.top - containerRect.top - 32) + 'px';
+            _commentButton.style.left = Math.max(0, centerX) + 'px';
         }, 10);
     };
 
@@ -309,8 +311,15 @@ export function enableCommentSelection(containerEl, dotNetRef) {
 
         _commentButton.style.display = 'none';
 
+        // Send selected text + start/end fragments for robust server-side matching.
+        // The handler uses these fragments to find positions in the raw markdown,
+        // avoiding the impossible task of mapping rendered HTML offsets back to source.
+        const words = selectedText.split(/\s+/);
+        const startFragment = words.slice(0, Math.min(5, words.length)).join(' ');
+        const endFragment = words.slice(Math.max(0, words.length - 5)).join(' ');
+
         try {
-            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText);
+            await _dotNetRef.invokeMethodAsync('OnCommentFromSelection', selectedText, startFragment, endFragment);
         } catch (err) {
             console.error('Error creating comment from selection:', err);
         }
@@ -369,4 +378,33 @@ function getAnnotationId(card) {
         }
     }
     return null;
+}
+
+/**
+ * Walks up the DOM tree to find the nearest ancestor with data-start/data-end.
+ * Handles both text nodes and element nodes.
+ */
+function findSourceMappedAncestor(node) {
+    if (!node) return null;
+    const el = node.nodeType === 3 ? node.parentElement : node;
+    return el?.closest?.('[data-start]') || null;
+}
+
+/**
+ * Computes the character offset within an element's textContent
+ * at the point where (container, offset) points.
+ * Uses a TreeWalker to count text characters before the given position.
+ */
+function getTextOffsetInElement(element, container, offset) {
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let charCount = 0;
+    let node;
+    while ((node = walker.nextNode())) {
+        if (node === container) {
+            return charCount + offset;
+        }
+        charCount += node.textContent.length;
+    }
+    // container not found in element — return offset from end
+    return charCount;
 }

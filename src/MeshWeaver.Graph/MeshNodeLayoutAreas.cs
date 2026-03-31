@@ -70,6 +70,8 @@ public static class MeshNodeLayoutAreas
     public const string ChatArea = "Chat";
     public const string ImportMeshNodesArea = "ImportMeshNodes";
     public const string ExportArea = "Export";
+    public const string CopyArea = "Copy";
+    public const string MoveArea = "Move";
     public const string VersionsArea = "Versions";
     public const string VersionDiffArea = "VersionDiff";
 
@@ -111,6 +113,8 @@ public static class MeshNodeLayoutAreas
             .WithView(EditArea, EditNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(ExportArea, ExportLayoutArea.Export)
+            .WithView(CopyArea, CopyLayoutArea.Copy)
+            .WithView(MoveArea, MoveLayoutArea.Move)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
             .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)

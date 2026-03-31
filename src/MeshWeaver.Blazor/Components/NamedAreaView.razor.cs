@@ -20,10 +20,14 @@ public partial class NamedAreaView
     private IDictionary<string, object>? MetaAttributes;
 
     private string? AreaToBeRendered { get; set; }
+    private CancellationTokenSource? _timeoutCts;
+
     protected override void BindData()
     {
         subscription?.Dispose();
         subscription = null;
+        _timeoutCts?.Cancel();
+        _timeoutCts?.Dispose();
         var newArea = ViewModel.Area?.ToString() ?? string.Empty;
         if (newArea != AreaToBeRendered)
             RootControl = null; // Only clear when the area actually changed
@@ -39,10 +43,18 @@ public partial class NamedAreaView
         // When area is empty, GetControlStream returns a NamedAreaControl pointing to the default area
         var controlStream = Stream.GetControlStream(AreaToBeRendered);
 
+        // Start a timeout — if no content arrives within 15s, show diagnostic info
+        if (ShowProgress && !Top)
+        {
+            _timeoutCts = new CancellationTokenSource();
+            _ = ShowTimeoutMessageAsync(_timeoutCts.Token);
+        }
+
         AddBinding(controlStream
             .Subscribe(
                 x =>
                 {
+                    _timeoutCts?.Cancel(); // Content arrived, cancel timeout
                     InvokeAsync(() =>
                     {
                         var control = x as UiControl;
@@ -61,6 +73,7 @@ public partial class NamedAreaView
                 },
                 error =>
                 {
+                    _timeoutCts?.Cancel();
                     Logger.LogError(error, "Error in control stream for area {Area}", AreaToBeRendered);
                     InvokeAsync(() =>
                     {
@@ -74,6 +87,29 @@ public partial class NamedAreaView
                 }
             )
         );
+    }
+
+    private async Task ShowTimeoutMessageAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(15_000, ct);
+            // Still no content after 15s — show diagnostic
+            await InvokeAsync(() =>
+            {
+                if (RootControl == null)
+                {
+                    var owner = Stream?.Owner?.ToString() ?? "(unknown)";
+                    var area = AreaToBeRendered ?? "(default)";
+                    Logger.LogWarning("Layout area timeout: no content after 15s for {Owner}/{Area}", owner, area);
+                    RootControl = new MarkdownControl(
+                        $"**Timed out** waiting for `{owner}` area `{area}`");
+                    ShowProgress = false;
+                    RequestStateChange();
+                }
+            });
+        }
+        catch (TaskCanceledException) { /* Content arrived or component disposed */ }
     }
 
 

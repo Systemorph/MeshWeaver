@@ -11,7 +11,6 @@
     width: 100%;
     padding: 16px 0;
     position: relative;
-    overflow: hidden;
 }
 
 .collab-md-toolbar {
@@ -60,11 +59,7 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    overflow-y: auto;
     overflow-x: hidden;
-    max-height: 80vh;
-    position: sticky;
-    top: 80px;
 }
 
 /* --- Annotation Cards (Google Docs style) --- */
@@ -1038,4 +1033,140 @@
         max-height: none;
         position: static;
     }
+}
+
+/* ==========================================================================
+   Comment Input Dialog (text selection comment)
+   ========================================================================== */
+
+.comment-input-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.comment-input-dialog {
+    background: var(--neutral-layer-1);
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 12px;
+    padding: 20px;
+    width: 420px;
+    max-width: 90vw;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.comment-input-header {
+    font-weight: 600;
+    font-size: 1rem;
+    margin-bottom: 12px;
+}
+
+.comment-input-quote {
+    padding: 8px 12px;
+    background: var(--annotation-comment-bg);
+    border-left: 3px solid var(--annotation-comment-border);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: var(--neutral-foreground-hint);
+    margin-bottom: 12px;
+    font-style: italic;
+}
+
+.comment-input-textarea {
+    width: 100%;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    resize: vertical;
+    background: var(--neutral-layer-1);
+    color: var(--neutral-foreground-rest);
+    outline: none;
+    box-sizing: border-box;
+}
+
+.comment-input-textarea:focus {
+    border-color: var(--accent-fill-rest);
+    box-shadow: 0 0 0 1px var(--accent-fill-rest);
+}
+
+.comment-input-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.comment-btn {
+    padding: 6px 16px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--neutral-stroke-rest);
+    transition: background-color 0.15s ease;
+}
+
+.comment-btn-cancel {
+    background: var(--neutral-layer-2);
+    color: var(--neutral-foreground-rest);
+}
+
+.comment-btn-cancel:hover {
+    background: var(--neutral-layer-3);
+}
+
+.comment-btn-submit {
+    background: var(--accent-fill-rest);
+    color: white;
+    border-color: var(--accent-fill-rest);
+}
+
+.comment-btn-submit:hover {
+    background: var(--accent-fill-hover);
+}
+
+/* ==========================================================================
+   Page Comment Section (bottom of page)
+   ========================================================================== */
+
+.page-comment-section {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--neutral-stroke-rest);
+}
+
+.page-comment-form {
+    padding: 12px;
+    border: 1px solid var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: var(--neutral-layer-1);
+}
+
+.add-page-comment-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: 1px dashed var(--neutral-stroke-rest);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--accent-fill-rest);
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.add-page-comment-btn:hover {
+    background: var(--neutral-layer-2);
+    border-color: var(--accent-fill-rest);
 }

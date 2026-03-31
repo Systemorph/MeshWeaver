@@ -89,14 +89,14 @@ public record CreateCommentRequest : IRequest<CreateCommentResponse>
     public string SelectedText { get; init; } = string.Empty;
 
     /// <summary>
-    /// Character position where the selection starts.
+    /// First few words of the selection — used for fuzzy matching in markdown source.
     /// </summary>
-    public int SelectionStart { get; init; }
+    public string StartFragment { get; init; } = string.Empty;
 
     /// <summary>
-    /// Character position where the selection ends.
+    /// Last few words of the selection — used to find the end position in markdown source.
     /// </summary>
-    public int SelectionEnd { get; init; }
+    public string EndFragment { get; init; } = string.Empty;
 
     /// <summary>
     /// The comment text.

@@ -228,18 +228,11 @@ public class MarkdownHtmlRenderer
         builder.OpenElement(1, "div");
         builder.AddAttribute(2, "class", "layout-area");
 
-        var progressMessage = area switch
-        {
-            "$Data" => $"Loading {areaId}",
-            "$Content" => $"Loading {areaId}",
-            _ => $"Loading {area}"
-        };
-
         builder.OpenComponent<LayoutAreaView>(3);
         builder.AddAttribute(4, nameof(LayoutAreaView.ViewModel), new LayoutAreaControl((Address)address, new LayoutAreaReference(area) { Id = areaId })
         {
             ShowProgress = true,
-            ProgressMessage = progressMessage
+            SpinnerType = SpinnerType.Skeleton
         });
         builder.CloseComponent();
 

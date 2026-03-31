@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using Markdig;
 using Markdig.Extensions.Yaml;
@@ -59,9 +60,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
 
     private static MeshNode[] LoadAllNodes()
     {
-        var nodes = new List<MeshNode> { CreateThreadNamerNode() };
-        nodes.AddRange(LoadEmbeddedNodes());
-        return nodes.ToArray();
+        return ImmutableList.Create(CreateThreadNamerNode())
+            .AddRange(LoadEmbeddedNodes())
+            .ToArray();
     }
 
     private static MeshNode CreateThreadNamerNode()

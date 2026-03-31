@@ -51,43 +51,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 $"Cannot activate grain {streamId}: node not found at {addressPath}.");
         }
 
-        // Enrich with node type info (triggers compilation if needed, sets HubConfiguration + AssemblyLocation)
-        var nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
-        if (nodeTypeService != null)
-        {
-            node = await nodeTypeService.EnrichWithNodeTypeAsync(node, cancellationToken);
-        }
+        // Resolve hub configuration (triggers compilation if needed, composes with default config)
+        var hubFactory = meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>();
+        if (hubFactory != null)
+            node = await hubFactory.ResolveHubConfigurationAsync(node, cancellationToken);
 
-        Hub = await InstantiateFromHubConfiguration(address, node);
-    }
+        if (node.AssemblyLocation is not null)
+            Assembly.LoadFrom(node.AssemblyLocation);
 
-    private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
-    {
-        if (node.AssemblyLocation is null)
-            throw new ArgumentException(
-                $"Assembly location is not configured for node {node.Path}."
-            );
-        var assembly = Assembly.LoadFrom(node.AssemblyLocation);
-        if (assembly is null)
-            throw new ArgumentException(
-                $"Could not load assembly {node.AssemblyLocation}."
-            );
+        if (node.HubConfiguration is null)
+            throw new ArgumentException($"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
 
-
-        var nodeConfig = node.HubConfiguration;
-        if (nodeConfig is null)
-            throw new ArgumentException(
-                $"No hub configuration is specified for {node.Path}."
-            );
-
-        // Compose with DefaultNodeHubConfiguration (same as MonolithRoutingService)
-        var meshConfig = meshHub.ServiceProvider.GetRequiredService<MeshConfiguration>();
-        var defaultConfig = meshConfig.DefaultNodeHubConfiguration;
-        var hubConfig = defaultConfig != null
-            ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config => nodeConfig(defaultConfig(config)))
-            : nodeConfig;
-
-        return meshHub.GetHostedHub(address, hubConfig)!;
+        Hub = meshHub.GetHostedHub(address, node.HubConfiguration)!;
     }
 
 

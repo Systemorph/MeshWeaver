@@ -230,9 +230,11 @@ Creates a new node in the mesh. The node is validated before being persisted.
 
 The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-level nodes).
 
-**Critical: `id` must be a simple slug — NO slashes.** Use `namespace` for hierarchy.
-- Correct: `"id": "PricingTool", "namespace": "User/rbuergi"`
-- **Wrong**: `"id": "User/rbuergi/PricingTool", "namespace": ""`
+**CRITICAL: `id` must NEVER contain `/` (slashes). The database enforces this with a CHECK constraint — writes with `/` in the id will FAIL.** Use `namespace` for hierarchy. The `id` is just the final segment (the node's own name), `namespace` is the parent path.
+- Correct: `"id": "PricingTool", "namespace": "User/rbuergi"` (path = `User/rbuergi/PricingTool`)
+- Correct: `"id": "NewPage", "namespace": "MyOrg/Projects"` (path = `MyOrg/Projects/NewPage`)
+- **WRONG**: `"id": "User/rbuergi/PricingTool", "namespace": ""` — **WILL FAIL, slashes in id are forbidden**
+- **WRONG**: `"id": "MyOrg/Projects/NewPage"` — **WILL FAIL**
 
 ### Discovering Content Schemas
 

@@ -513,6 +513,9 @@ public static class DataExtensions
         IMessageDelivery<DataChangeRequest> request, CancellationToken ct)
     {
         var changeRequest = request.Message;
+        var dcLogger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.DataChange");
+        dcLogger?.LogDebug("[DataChange] RECEIVED: {Time:HH:mm:ss.fff} hub={Hub}, updates={Updates}, creates={Creates}, deletes={Deletes}",
+            DateTime.UtcNow, hub.Address, changeRequest.Updates.Count, changeRequest.Creations.Count, changeRequest.Deletions.Count);
 
         // Run validators for each type of operation
         var validationResult = await RunChangeValidatorsAsync(hub, changeRequest, ct);

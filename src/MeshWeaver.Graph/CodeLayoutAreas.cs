@@ -72,7 +72,7 @@ public static class CodeLayoutAreas
         var stack = Controls.Stack.WithWidth("100%").WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host));
 
         // Header with title and edit button
-        var title = node?.Name ?? codeConfig?.DisplayName ?? codeConfig?.Id ?? "Code";
+        var title = node?.Name ?? node?.Id ?? "Code";
         var headerRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
             .WithStyle("justify-content: space-between; align-items: center; margin-bottom: 16px;")
@@ -195,8 +195,7 @@ public static class CodeLayoutAreas
         {
             foreach (var sibling in siblings)
             {
-                var codeConfig = sibling.Content as CodeConfiguration;
-                var label = sibling.Name ?? codeConfig?.DisplayName ?? sibling.Id;
+                var label = sibling.Name ?? sibling.Id;
                 var siblingHref = new LayoutAreaReference(OverviewArea).ToHref(sibling.Path);
                 codeGroup = codeGroup.WithView(
                     new NavLinkControl(label, CustomIcons.CSharp(), siblingHref)
@@ -246,13 +245,13 @@ public static class CodeLayoutAreas
 
         var initialCode = codeConfig.Code ?? "";
         var language = codeConfig.Language ?? "csharp";
-        var displayName = codeConfig.DisplayName ?? "";
+        var nodeName = host.Hub.Address.Id ?? "";
 
         host.UpdateData(codeDataId, initialCode);
-        host.UpdateData(displayNameDataId, displayName);
+        host.UpdateData(displayNameDataId, nodeName);
 
         // Header
-        stack = stack.WithView(Controls.H2($"Edit: {codeConfig.DisplayName ?? codeConfig.Id}")
+        stack = stack.WithView(Controls.H2($"Edit: {nodeName}")
             .WithStyle("margin-bottom: 16px;"));
 
         // DisplayName field
@@ -306,8 +305,7 @@ public static class CodeLayoutAreas
 
                 var updatedCodeConfiguration = codeConfig with
                 {
-                    Code = currentCode,
-                    DisplayName = string.IsNullOrWhiteSpace(currentDisplayName) ? null : currentDisplayName
+                    Code = currentCode
                 };
 
                 using var cts = new CancellationTokenSource(10.Seconds());

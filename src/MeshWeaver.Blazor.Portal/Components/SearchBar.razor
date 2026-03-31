@@ -1,16 +1,16 @@
 @using MeshWeaver.Mesh.Services
 
 <div class="search-bar-container">
-    <FluentTextField @ref="textField"
-                     Value="@searchTerm"
-                     ValueChanged="OnSearchTermChanged"
-                     Immediate="true"
-                     AutoComplete="off"
-                     Placeholder="@SearchPlaceholder"
-                     @onkeydown="HandleKeyDown"
-                     @onfocus="OnFocus"
-                     @onblur="OnBlur"
-                     Style="width: 100%;" />
+    <input @key="_inputKey"
+           @ref="inputRef"
+           type="text"
+           @oninput="OnInput"
+           @onkeydown="HandleKeyDown"
+           @onfocus="OnFocus"
+           @onblur="OnBlur"
+           autocomplete="off"
+           placeholder="@SearchPlaceholder"
+           class="search-input" />
 
     @if (showDropdown && (isLoading || suggestions.Length > 0))
     {
@@ -59,6 +59,10 @@
                         </div>
                     </div>
                 }
+            }
+            @if (isLoading && suggestions.Length > 0)
+            {
+                <div class="search-dropdown-progress"></div>
             }
         </div>
     }

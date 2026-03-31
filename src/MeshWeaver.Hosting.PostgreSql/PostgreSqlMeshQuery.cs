@@ -81,8 +81,12 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
 
         parsedQuery = parsedQuery with { Path = effectivePath, Scope = effectiveScope };
 
-        // Context-based exclusion
+        // Context-based exclusion — push to SQL WHERE clause so the database
+        // filters excluded node types instead of fetching and discarding them.
         var context = request.Context ?? parsedQuery.Context;
+        var excludedNodeTypes = context != null
+            ? _meshConfiguration?.GetExcludedNodeTypes(context)
+            : null;
 
         // Determine activity user ID for source:accessed queries (JOIN with UserActivity nodes)
         var activityUserId = parsedQuery.Source == QuerySource.Accessed
@@ -94,9 +98,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         {
             var buffered = new List<(MeshNode Node, double Score)>();
             var userId = GetEffectiveUserId(request);
-            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, ct: ct))
+            await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, userId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct))
             {
-                if (context != null && IsExcludedByContext(node, context))
+                // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
+                if (context != null && node.ExcludeFromContext?.Contains(context) == true)
                     continue;
                 var boost = PathProximity.ComputeBoost(request.ContextPath, node.Path);
                 buffered.Add((node, boost));
@@ -121,9 +126,10 @@ public class PostgreSqlMeshQuery : IMeshQueryProvider
         var countOrig = 0;
 
         var effectiveUserId = GetEffectiveUserId(request);
-        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, ct: ct))
+        await foreach (var node in _adapter.QueryNodesAsync(parsedQuery, options, effectiveUserId, activityUserId: activityUserId, excludedNodeTypes: excludedNodeTypes, ct: ct))
         {
-            if (context != null && IsExcludedByContext(node, context))
+            // Instance-level exclusion still checked in memory (node.ExcludeFromContext)
+            if (context != null && node.ExcludeFromContext?.Contains(context) == true)
                 continue;
 
             if (skipOrig > 0)

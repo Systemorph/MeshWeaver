@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -127,14 +128,14 @@ public static class DelegationTool
         Func<string, string, string?, CancellationToken, Task<DelegationResult>> executeAsync,
         ILogger? logger = null)
     {
-        var delegationInfo = new List<DelegationInfo>();
+        var delegationInfo = ImmutableList<DelegationInfo>.Empty;
 
         // Add explicit delegations from current agent
         if (currentAgent.Delegations != null)
         {
             foreach (var d in currentAgent.Delegations)
             {
-                delegationInfo.Add(new DelegationInfo(
+                delegationInfo = delegationInfo.Add(new DelegationInfo(
                     d.AgentPath,
                     d.Instructions ?? "Specialized agent for this task"));
             }
@@ -145,7 +146,7 @@ public static class DelegationTool
         {
             if (!delegationInfo.Any(d => d.AgentPath == agent.Id || d.AgentPath.EndsWith($"/{agent.Id}")))
             {
-                delegationInfo.Add(new DelegationInfo(
+                delegationInfo = delegationInfo.Add(new DelegationInfo(
                     agent.Id,
                     agent.Description ?? $"Agent {agent.Id}"));
             }

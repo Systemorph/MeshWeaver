@@ -71,7 +71,6 @@ public static class NodeMenuItemsExtensions
         LayoutAreaHost host, RenderingContext ctx)
     {
         var hubPath = host.Hub.Address.ToString();
-        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, hubPath);
 
         // Get the current node to determine name and type
         var nodes = await (host.Workspace.GetStream<MeshNode>()
@@ -79,34 +78,52 @@ public static class NodeMenuItemsExtensions
             ?? Observable.Return(Array.Empty<MeshNode>()))
             .FirstAsync();
         var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-        var nodeName = node?.Name ?? "";
+
+        // For satellite nodes (threads, comments, etc.), the menu should refer to the main node
+        var menuPath = node != null && node.MainNode != node.Path ? node.MainNode : hubPath;
+        var menuNode = menuPath != hubPath ? nodes.FirstOrDefault(n => n.Path == menuPath) : node;
+        var nodeName = menuNode?.Name ?? node?.Name ?? "";
+
+        var perms = await PermissionHelper.GetEffectivePermissionsAsync(host.Hub, menuPath);
 
         // Each area class provides its own GetMenuItem — factored for reuse
-        var edit = MeshNodeLayoutAreas.GetEditMenuItem(hubPath, nodeName, perms);
+        var edit = MeshNodeLayoutAreas.GetEditMenuItem(menuPath, nodeName, perms);
         if (edit != null) yield return edit;
 
-        var create = CreateLayoutArea.GetMenuItem(hubPath, node, perms);
-        if (create != null) yield return create;
-
-        var import = ImportLayoutArea.GetMenuItem(hubPath, perms);
-        if (import != null) yield return import;
-
-        var files = MeshNodeLayoutAreas.GetFilesMenuItem(hubPath, perms);
+        var files = MeshNodeLayoutAreas.GetFilesMenuItem(menuPath, perms);
         if (files != null) yield return files;
 
-        var export = ExportLayoutArea.GetMenuItem(hubPath, nodeName, perms);
-        if (export != null) yield return export;
+        yield return MeshNodeLayoutAreas.GetThreadsMenuItem(menuPath);
 
-        yield return MeshNodeLayoutAreas.GetThreadsMenuItem(hubPath);
-
-        var versions = VersionLayoutArea.GetMenuItem(hubPath, perms);
+        var versions = VersionLayoutArea.GetMenuItem(menuPath, perms);
         if (versions != null) yield return versions;
 
-        var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(hubPath, perms);
+        var settings = MeshNodeLayoutAreas.GetSettingsMenuItem(menuPath, perms);
         if (settings != null) yield return settings;
 
-        var delete = DeleteLayoutArea.GetMenuItem(hubPath, nodeName, perms);
-        if (delete != null) yield return delete;
+        // Group Create, Copy, Move, Import, Export, Delete under "Actions" sub-menu
+        var actionsChildren = new List<NodeMenuItemDefinition>();
+
+        var create = CreateLayoutArea.GetMenuItem(menuPath, menuNode, perms);
+        if (create != null) actionsChildren.Add(create);
+
+        var copy = CopyLayoutArea.GetMenuItem(menuPath, perms);
+        if (copy != null) actionsChildren.Add(copy);
+
+        var move = MoveLayoutArea.GetMenuItem(menuPath, perms);
+        if (move != null) actionsChildren.Add(move);
+
+        var import = ImportLayoutArea.GetMenuItem(menuPath, perms);
+        if (import != null) actionsChildren.Add(import);
+
+        var export = ExportLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        if (export != null) actionsChildren.Add(export);
+
+        var delete = DeleteLayoutArea.GetMenuItem(menuPath, nodeName, perms);
+        if (delete != null) actionsChildren.Add(delete);
+
+        if (actionsChildren.Count > 0)
+            yield return new NodeMenuItemDefinition("Actions", "Actions", Order: 95, Children: actionsChildren);
     }
 
     /// <summary>

@@ -10,6 +10,10 @@
             <Link>SamplesGraph\%(RecursiveDir)%(Filename)%(Extension)</Link>
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </Content>
+        <Content Include="..\..\src\MeshWeaver.Documentation\Data\**\*.*">
+            <Link>SamplesGraph\Data\Doc\%(RecursiveDir)%(Filename)%(Extension)</Link>
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
     </ItemGroup>
 
     <ItemGroup>
@@ -21,6 +25,7 @@
         <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.Graph\MeshWeaver.Graph.csproj" />
         <ProjectReference Include="..\..\src\MeshWeaver.AI\MeshWeaver.AI.csproj" />
+        <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
     </ItemGroup>
 
     <ItemGroup>

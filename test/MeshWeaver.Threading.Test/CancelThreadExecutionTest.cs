@@ -113,32 +113,34 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         // 2. Wait briefly for streaming to start
         await Task.Delay(500, ct);
 
-        // Verify execution is in progress
-        var midContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
-        midContent.Should().NotBeNull();
-        midContent!.IsExecuting.Should().BeTrue("streaming should still be in progress");
-        Output.WriteLine($"Mid-stream: IsExecuting={midContent.IsExecuting}, text length={midContent.Text?.Length ?? 0}");
+        // Verify execution is in progress (check Thread.IsExecuting, not ThreadMessage)
+        var midThread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+        midThread.Should().NotBeNull();
+        midThread!.IsExecuting.Should().BeTrue("streaming should still be in progress");
+        Output.WriteLine($"Mid-stream: Thread.IsExecuting={midThread.IsExecuting}");
 
         // 3. Cancel the stream
         Output.WriteLine("Sending CancelThreadStreamRequest...");
         client.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
             o => o.WithTarget(new Address(threadPath)));
 
-        // 4. Wait for execution to stop
-        ThreadMessage? finalContent = null;
+        // 4. Wait for execution to stop (poll Thread.IsExecuting)
+        MeshThread? finalThread = null;
         for (var i = 0; i < 30; i++)
         {
             await Task.Delay(200, ct);
-            finalContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
-            if (finalContent is { IsExecuting: false })
+            finalThread = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
+            if (finalThread is { IsExecuting: false })
                 break;
         }
 
         // 5. Assert cancellation took effect
+        finalThread.Should().NotBeNull();
+        finalThread!.IsExecuting.Should().BeFalse("execution should be stopped after cancel");
+        var finalContent = await GetHubContentAsync<ThreadMessage>(client, $"{threadPath}/{msgIds[1]}", ct);
         finalContent.Should().NotBeNull();
-        finalContent!.IsExecuting.Should().BeFalse("execution should be stopped after cancel");
-        finalContent.Text.Should().Contain("Cancelled", "response should be marked as cancelled");
-        Output.WriteLine($"Final: IsExecuting={finalContent.IsExecuting}, text='{finalContent.Text}'");
+        finalContent!.Text.Should().Contain("Cancelled", "response should be marked as cancelled");
+        Output.WriteLine($"Final: Thread.IsExecuting={finalThread.IsExecuting}, text='{finalContent.Text}'");
 
         // 6. Verify the fake client was actually interrupted (didn't stream all 50 words)
         var wordCount = finalContent.Text?.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
@@ -191,7 +193,7 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
         public IReadOnlyList<string> Models => ["slow-model"];
         public int Order => 0;
 
-        public Task<ChatClientAgent> CreateAgentAsync(
+        public ChatClientAgent CreateAgent(
             AgentConfiguration config, IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
             IReadOnlyList<AgentConfiguration> hierarchyAgents,
@@ -202,8 +204,15 @@ public class CancelThreadExecutionTest(ITestOutputHelper output) : MonolithMeshT
                 instructions: config.Instructions ?? "You are a slow test assistant.",
                 name: config.Id, description: config.Description ?? config.Id,
                 tools: [], loggerFactory: null, services: null);
-            return Task.FromResult(agent);
+            return agent;
         }
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion

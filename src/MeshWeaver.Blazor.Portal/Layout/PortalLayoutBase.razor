@@ -23,23 +23,30 @@
                 </div>
                 @* Node menu (Cube icon) *@
                 <FluentMenu Anchor="node-menu-anchor" Open="@isNodeMenuOpen" OpenChanged="@OnNodeMenuOpenChanged">
-                    @foreach (var menuItem in GetVisibleMenuItems())
+                    @foreach (var menuItem in FlattenMenuItems(GetVisibleMenuItems()))
                     {
                         var item = menuItem;
-                        <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
-                            @if (!string.IsNullOrEmpty(item.Icon))
-                            {
-                                if (IsEmoji(item.Icon))
+                        @if (item.Area == "_separator")
+                        {
+                            <hr style="margin: 4px 8px; border: none; border-top: 1px solid var(--neutral-stroke-divider-rest);" />
+                        }
+                        else
+                        {
+                            <FluentMenuItem OnClick="@(() => HandleMenuItemClick(item))">
+                                @if (!string.IsNullOrEmpty(item.Icon))
                                 {
-                                    <span style="margin-right: 8px;">@item.Icon</span>
+                                    if (IsEmoji(item.Icon))
+                                    {
+                                        <span style="margin-right: 8px;">@item.Icon</span>
+                                    }
+                                    else
+                                    {
+                                        <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
+                                    }
                                 }
-                                else
-                                {
-                                    <img src="@item.Icon" alt="" style="width: 16px; height: 16px; margin-right: 8px;" />
-                                }
-                            }
-                            @item.Label
-                        </FluentMenuItem>
+                                @item.Label
+                            </FluentMenuItem>
+                        }
                     }
                 </FluentMenu>
                 <FluentButton Id="node-menu-anchor" Appearance="Appearance.Stealth"
@@ -92,7 +99,7 @@
     <FluentMultiSplitter Orientation="@(SidePanelPositionValue == SidePanelPosition.Bottom ? Orientation.Vertical : Orientation.Horizontal)"
                          Style="grid-area: main; height: 100%; width: 100%; overflow: hidden;"
                          Class="body-splitter"
-                         BarSize="@(IsSidePanelVisible ? "3" : "0")">
+                         BarSize="@(IsSidePanelVisible ? "8" : "0")">
         <FluentMultiSplitterPane Size="@(IsSidePanelVisible ? MainPaneSize : "100%")" Min="100px" Collapsible="false">
             <div class="body-content">
                 <FluentToastProvider MaxToastCount="3" Timeout="5000" />

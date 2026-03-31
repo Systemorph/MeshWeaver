@@ -1,5 +1,6 @@
 #nullable enable
 
+using System.Collections.Immutable;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Completion;
 
@@ -61,7 +62,7 @@ public class AutocompleteService(
         CancellationToken ct,
         int maxResults = 20)
     {
-        var allItems = new List<AutocompleteItem>();
+        var allItems = ImmutableList<AutocompleteItem>.Empty;
 
         // Collect items from all registered providers
         foreach (var provider in providers)
@@ -70,7 +71,7 @@ public class AutocompleteService(
             {
                 await foreach (var item in provider.GetItemsAsync(query, contextPath, ct))
                 {
-                    allItems.Add(item);
+                    allItems = allItems.Add(item);
                 }
             }
             catch
@@ -83,7 +84,7 @@ public class AutocompleteService(
         allItems = allItems
             .GroupBy(i => i.InsertText)
             .Select(g => g.OrderByDescending(i => i.Priority).First())
-            .ToList();
+            .ToImmutableList();
 
         // Apply fuzzy scoring
         var scored = fuzzyScorer.Score(

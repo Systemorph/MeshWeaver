@@ -119,6 +119,17 @@ public class MeshConfiguration(
     }
 
     /// <summary>
+    /// Returns all node types excluded from the given context.
+    /// Used by database query providers to push context filtering into SQL.
+    /// </summary>
+    public IReadOnlyCollection<string> GetExcludedNodeTypes(string context)
+    {
+        return _contextExcludedTypes.Value.TryGetValue(context, out var excluded)
+            ? excluded
+            : Array.Empty<string>();
+    }
+
+    /// <summary>
     /// Set of node types that are satellite types (IsSatelliteType = true on their type definition).
     /// Used to determine whether to set MainNode on new instances.
     /// </summary>

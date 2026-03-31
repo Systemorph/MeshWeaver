@@ -1,4 +1,6 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -21,11 +23,11 @@ public class AgentChatClient : IAgentChat
     private readonly IMessageHub hub;
     private readonly ILogger<AgentChatClient> logger;
     private readonly IMeshService? meshQuery;
-    private readonly IReadOnlyList<IChatClientFactory> chatClientFactories;
-    private readonly Dictionary<string, ChatClientAgent> agents = new();
-    private readonly Queue<ChatLayoutAreaContent> queuedLayoutAreaContent = new();
+    private readonly ImmutableList<IChatClientFactory> chatClientFactories;
+    private ImmutableDictionary<string, ChatClientAgent> agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
+    private ImmutableQueue<ChatLayoutAreaContent> queuedLayoutAreaContent = ImmutableQueue<ChatLayoutAreaContent>.Empty;
     private HandoffRequest? pendingHandoff;
-    private List<AgentDisplayInfo> loadedAgents = [];
+    private ImmutableList<AgentDisplayInfo> loadedAgents = ImmutableList<AgentDisplayInfo>.Empty;
     private string? lastLoadedContextPath;
     private string currentThreadId = Guid.NewGuid().AsString();
     private string? currentAgentName;
@@ -39,7 +41,7 @@ public class AgentChatClient : IAgentChat
     private string? cachedSystemPrompt;
 
     // Tracks which attachment paths are agent nodes (for context filtering)
-    private HashSet<string>? agentAttachmentPaths;
+    private ImmutableHashSet<string>? agentAttachmentPaths;
 
     // Tracks the first agent found in @references in the user's message text (for selection override)
     private string? firstMessageAgentPath;
@@ -52,7 +54,7 @@ public class AgentChatClient : IAgentChat
         hub = serviceProvider.GetRequiredService<IMessageHub>();
         logger = serviceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         meshQuery = serviceProvider.GetService<IMeshService>();
-        chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToList();
+        chatClientFactories = serviceProvider.GetServices<IChatClientFactory>().ToImmutableList();
     }
 
     public AgentContext? Context { get; private set; }
@@ -68,6 +70,7 @@ public class AgentChatClient : IAgentChat
 
     /// <inheritdoc />
     public Action<ToolCallEntry>? ForwardToolCall { get; set; }
+
 
     /// <summary>Sets the execution context for delegation sub-thread creation.</summary>
     public void SetExecutionContext(ThreadExecutionContext? ctx) => ExecutionContext = ctx;
@@ -264,12 +267,12 @@ public class AgentChatClient : IAgentChat
             {
                 try
                 {
-                    var nearby = new List<string>();
+                    var nearby = ImmutableList<string>.Empty;
                     var meshQuery = hub.ServiceProvider.GetRequiredService<IMeshService>();
                     await foreach (var node in meshQuery.QueryAsync<MeshNode>(
                         $"namespace:{contextPath} select:name,nodeType,icon"))
                     {
-                        nearby.Add($"- `{node.Path}` ({node.NodeType}): {node.Name}");
+                        nearby = nearby.Add($"- `{node.Path}` ({node.NodeType}): {node.Name}");
                         if (nearby.Count >= 15) break;
                     }
                     if (nearby.Count > 0)
@@ -453,9 +456,9 @@ public class AgentChatClient : IAgentChat
         }
 
         // Check for any queued layout area content
-        while (queuedLayoutAreaContent.Count > 0)
+        while (!queuedLayoutAreaContent.IsEmpty)
         {
-            var layoutAreaContent = queuedLayoutAreaContent.Dequeue();
+            queuedLayoutAreaContent = queuedLayoutAreaContent.Dequeue(out var layoutAreaContent);
             var layoutAreaMessage = new ChatMessage(ChatRole.Assistant, [layoutAreaContent])
             {
                 AuthorName = currentAgentName ?? "Assistant"
@@ -502,9 +505,9 @@ public class AgentChatClient : IAgentChat
             }
 
             // Yield any queued layout area content from the handoff target
-            while (queuedLayoutAreaContent.Count > 0)
+            while (!queuedLayoutAreaContent.IsEmpty)
             {
-                var lac = queuedLayoutAreaContent.Dequeue();
+                queuedLayoutAreaContent = queuedLayoutAreaContent.Dequeue(out var lac);
                 yield return new ChatMessage(ChatRole.Assistant, [lac])
                 {
                     AuthorName = currentAgentName ?? "Assistant"
@@ -589,9 +592,9 @@ public class AgentChatClient : IAgentChat
         await SaveThreadAsync(agent, thread);
 
         // Check for any queued layout area content
-        while (queuedLayoutAreaContent.Count > 0)
+        while (!queuedLayoutAreaContent.IsEmpty)
         {
-            var layoutAreaContent = queuedLayoutAreaContent.Dequeue();
+            queuedLayoutAreaContent = queuedLayoutAreaContent.Dequeue(out var layoutAreaContent);
             yield return new ChatResponseUpdate(ChatRole.Assistant, [layoutAreaContent])
             {
                 AuthorName = currentAgentName ?? "Assistant"
@@ -657,9 +660,9 @@ public class AgentChatClient : IAgentChat
             await SaveThreadAsync(targetAgent, thread);
 
             // Yield any queued layout area content from the handoff target
-            while (queuedLayoutAreaContent.Count > 0)
+            while (!queuedLayoutAreaContent.IsEmpty)
             {
-                var lac = queuedLayoutAreaContent.Dequeue();
+                queuedLayoutAreaContent = queuedLayoutAreaContent.Dequeue(out var lac);
                 yield return new ChatResponseUpdate(ChatRole.Assistant, [lac])
                 {
                     AuthorName = currentAgentName ?? "Assistant"
@@ -735,37 +738,155 @@ public class AgentChatClient : IAgentChat
     }
 
     /// <summary>
-    /// Initializes the chat client by loading agents for the specified context path.
-    /// This should be called after construction and before use.
+    /// Returns an IObservable that emits once when agent initialization is complete.
+    /// Uses ObserveQuery (reactive) — no await, no blocking, no deadlock.
+    /// Subscribe to this and chain the streaming loop after it emits.
     /// </summary>
-    /// <param name="contextPath">The context path for agent resolution</param>
-    /// <param name="modelName">Optional model name for agent creation</param>
-    public async Task InitializeAsync(string? contextPath, string? modelName = null)
+    /// <summary>
+    /// Returns an IObservable that emits the initialized AgentChatClient when agents are ready.
+    /// Re-emits when agent definitions change (system prompt updates, new agents added).
+    /// Uses ObserveQuery (reactive) — no await, no blocking, no deadlock.
+    /// </summary>
+    public IObservable<AgentChatClient> Initialize(string? contextPath, string? modelName = null)
     {
         currentModelName = modelName;
-
-        // Load and order agents from mesh
-        loadedAgents = await LoadOrderedAgentsAsync(contextPath);
         lastLoadedContextPath = contextPath;
 
-        // Create AIAgent instances
-        await CreateAgentsAsync();
+        if (meshQuery == null)
+            return Observable.Return(this);
 
-        // Pre-compute tool documentation (expensive mesh queries)
-        if (!isPersistentFactory)
-            cachedToolDocs = await LoadToolDocumentationAsync();
+        var q1 = string.IsNullOrEmpty(contextPath)
+            ? "nodeType:Agent"
+            : $"nodeType:Agent namespace:{contextPath} scope:selfAndAncestors";
+
+        // Two ObserveQuery streams — merge agent nodes from context hierarchy + Agent namespace
+        var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(q1));
+        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"));
+
+        // CombineLatest: re-emit whenever either query updates (agent added/changed)
+        return contextAgents.CombineLatest(globalAgents, (ctx, global) =>
+        {
+            var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
+
+            foreach (var node in ctx.Items)
+            {
+                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+            }
+            foreach (var node in global.Items)
+            {
+                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+            }
+
+            loadedAgents = agentsDict.Values.Select(x => new AgentDisplayInfo
+            {
+                Name = x.Config.Id, Path = x.Path,
+                Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
+                GroupName = x.Config.GroupName, Order = x.Config.Order,
+                Icon = x.Config.Icon, CustomIconSvg = x.Config.CustomIconSvg,
+                AgentConfiguration = x.Config
+            }).ToImmutableList();
+
+            loadedAgents = AgentOrderingHelper.OrderByRelevance(
+                loadedAgents, contextPath?.TrimStart('/') ?? "", "").ToImmutableList();
+
+            logger.LogInformation("[AgentChatClient] Initialize: {Count} agents: [{Agents}]",
+                loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
+
+            agentsInitialized = false;
+            agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
+            CreateAgentsSync();
+            return this;
+        });
+    }
+
+    /// <summary>
+    /// Reactive initialization — uses ObserveQuery (IObservable) instead of QueryAsync.
+    /// No await anywhere. Returns Task completed by subscription when agents are ready.
+    /// The AI framework awaits the returned Task — our code never awaits.
+    /// </summary>
+    public Task InitializeAsync(string? contextPath, string? modelName = null)
+    {
+        currentModelName = modelName;
+        lastLoadedContextPath = contextPath;
+
+        if (meshQuery == null)
+            return Task.CompletedTask;
+
+        var tcs = new TaskCompletionSource();
+
+        // Use ObserveQuery (IObservable) — NOT QueryAsync. No await, no deadlock.
+        var contextQuery = string.IsNullOrEmpty(contextPath)
+            ? "nodeType:Agent"
+            : $"nodeType:Agent namespace:{contextPath} scope:selfAndAncestors";
+
+        var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(contextQuery));
+        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"));
+
+        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
+        var queriesCompleted = 0;
+
+        void OnAgentQueryResult(QueryResultChange<MeshNode> change)
+        {
+            if (change.ChangeType != QueryChangeType.Initial)
+                return;
+
+            foreach (var node in change.Items)
+            {
+                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+            }
+
+            if (Interlocked.Increment(ref queriesCompleted) < 2)
+                return;
+
+            // Both queries emitted initial — build agents
+            try
+            {
+                var displayInfos = agentsDict.Values.Select(x => new AgentDisplayInfo
+                {
+                    Name = x.Config.Id, Path = x.Path,
+                    Description = x.Config.Description ?? x.Config.DisplayName ?? x.Config.Id,
+                    GroupName = x.Config.GroupName, Order = x.Config.Order,
+                    Icon = x.Config.Icon, CustomIconSvg = x.Config.CustomIconSvg,
+                    AgentConfiguration = x.Config
+                }).ToImmutableList();
+
+                loadedAgents = AgentOrderingHelper.OrderByRelevance(
+                    displayInfos, contextPath?.TrimStart('/') ?? "", "").ToImmutableList();
+
+                logger.LogInformation("[AgentChatClient] Loaded {Count} agents: [{Agents}]",
+                    loadedAgents.Count, string.Join(", ", loadedAgents.Select(a => a.Name)));
+
+                CreateAgentsSync();
+                tcs.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "[AgentChatClient] Failed to create agents");
+                tcs.TrySetException(ex);
+            }
+        }
+
+        contextAgents.Subscribe(OnAgentQueryResult,
+            ex => { logger.LogWarning(ex, "Context agent query failed"); Interlocked.Increment(ref queriesCompleted); });
+        globalAgents.Subscribe(OnAgentQueryResult,
+            ex => { logger.LogWarning(ex, "Global agent query failed"); Interlocked.Increment(ref queriesCompleted); });
+
+        return tcs.Task;
     }
 
     /// <summary>
     /// Loads agents from mesh and returns them ordered by relevance.
     /// Two queries: path hierarchy + NodeType hierarchy.
     /// </summary>
-    private async Task<List<AgentDisplayInfo>> LoadOrderedAgentsAsync(string? contextPath)
+    private async Task<ImmutableList<AgentDisplayInfo>> LoadOrderedAgentsAsync(string? contextPath)
     {
         if (meshQuery == null)
-            return [];
+            return ImmutableList<AgentDisplayInfo>.Empty;
 
-        var agentsDict = new Dictionary<string, (AgentConfiguration Config, string Path)>();
+        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
 
         // 1. Get NodeType of current node
         string? nodeTypePath = null;
@@ -798,7 +919,7 @@ public class AgentChatClient : IAgentChat
             await foreach (var node in meshQuery.QueryAsync<MeshNode>(pathQuery))
             {
                 if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict[config.Id] = (config, node.Path ?? "");
+                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
             }
         }
         catch (Exception ex)
@@ -819,7 +940,7 @@ public class AgentChatClient : IAgentChat
                     await foreach (var node in meshQuery.QueryAsync<MeshNode>(subtreeQuery))
                     {
                         if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                            agentsDict[config.Id] = (config, node.Path ?? "");
+                            agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
                     }
                 }
             }
@@ -838,7 +959,7 @@ public class AgentChatClient : IAgentChat
                 await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery))
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                        agentsDict[config.Id] = (config, node.Path ?? "");
+                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
                 }
             }
             catch (Exception ex)
@@ -854,7 +975,7 @@ public class AgentChatClient : IAgentChat
             await foreach (var node in meshQuery.QueryAsync<MeshNode>(agentNamespaceQuery))
             {
                 if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict[config.Id] = (config, node.Path ?? "");
+                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
             }
         }
         catch (Exception ex)
@@ -873,21 +994,70 @@ public class AgentChatClient : IAgentChat
             Icon = x.Config.Icon,
             CustomIconSvg = x.Config.CustomIconSvg,
             AgentConfiguration = x.Config
-        }).ToList();
+        }).ToImmutableList();
 
         // Order by relevance: own namespace > NodeType namespace > hierarchy (path > nodeType)
         var contextPathNorm = contextPath?.TrimStart('/') ?? "";
         var nodeTypePathNorm = nodeTypePath?.TrimStart('/') ?? "";
 
-        var result = AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToList();
+        var result = AgentOrderingHelper.OrderByRelevance(displayInfos, contextPathNorm, nodeTypePathNorm).ToImmutableList();
         logger.LogDebug("Loaded {Count} agents for context {ContextPath}: [{Agents}]",
             result.Count, contextPath ?? "(none)", string.Join(", ", result.Select(a => a.Name)));
         return result;
     }
 
     /// <summary>
+    /// Creates ChatClientAgent instances synchronously — no await, no deadlock.
+    /// Uses CreateAgent (sync) on the factory which skips async reference resolution.
+    /// </summary>
+    private void CreateAgentsSync()
+    {
+        if (chatClientFactories.Count == 0)
+        {
+            logger.LogWarning("[AgentChatClient] No IChatClientFactory available, cannot create agents");
+            return;
+        }
+
+        if (agentsInitialized) return;
+
+        var factory = GetFactoryForModel(currentModelName);
+        if (factory == null)
+        {
+            logger.LogWarning("[AgentChatClient] No factory can serve model: {ModelName}", currentModelName);
+            return;
+        }
+
+        isPersistentFactory = factory.IsPersistent;
+        logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
+            factory.Name, currentModelName ?? "default", isPersistentFactory);
+
+        var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
+        var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
+        var orderedConfigs = OrderAgentsForCreation(configs);
+
+        foreach (var agentConfig in orderedConfigs)
+        {
+            var agent = factory.CreateAgent(agentConfig, this, createdAgents, configs, currentModelName);
+            createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
+            agents = agents.SetItem(agentConfig.Id, agent);
+        }
+
+        var cyclicAgents = FindCyclicDelegations(configs);
+        foreach (var agentConfig in cyclicAgents)
+        {
+            var updatedAgent = factory.CreateAgent(agentConfig, this, createdAgents, configs, currentModelName);
+            createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
+            agents = agents.SetItem(agentConfig.Id, updatedAgent);
+        }
+
+        agentsInitialized = true;
+        logger.LogInformation("[AgentChatClient] Created {Count} agents", agents.Count);
+    }
+
+    /// <summary>
     /// Creates ChatClientAgent instances for all loaded configurations.
     /// </summary>
+    [Obsolete("Use CreateAgentsSync — CreateAgentsAsync deadlocks in Orleans")]
     private async Task CreateAgentsAsync()
     {
         if (chatClientFactories.Count == 0)
@@ -911,8 +1081,8 @@ public class AgentChatClient : IAgentChat
         logger.LogInformation("[AgentChatClient] Using factory {FactoryName} for model {ModelName} (persistent={IsPersistent})",
             factory.Name, currentModelName ?? "default", isPersistentFactory);
 
-        var configs = loadedAgents.Select(a => a.AgentConfiguration).ToList();
-        var createdAgents = new Dictionary<string, ChatClientAgent>();
+        var configs = loadedAgents.Select(a => a.AgentConfiguration).ToImmutableList();
+        var createdAgents = ImmutableDictionary<string, ChatClientAgent>.Empty;
 
         // Order agents: non-delegating first, delegating second, default last
         var orderedConfigs = OrderAgentsForCreation(configs);
@@ -922,8 +1092,8 @@ public class AgentChatClient : IAgentChat
         {
             var agent = await factory.CreateAgentAsync(
                 agentConfig, this, createdAgents, configs, currentModelName);
-            createdAgents[agentConfig.Id] = agent;
-            agents[agentConfig.Id] = agent;
+            createdAgents = createdAgents.SetItem(agentConfig.Id, agent);
+            agents = agents.SetItem(agentConfig.Id, agent);
         }
 
         // Second pass: Update agents with cyclic dependencies
@@ -932,8 +1102,8 @@ public class AgentChatClient : IAgentChat
         {
             var updatedAgent = await factory.CreateAgentAsync(
                 agentConfig, this, createdAgents, configs, currentModelName);
-            createdAgents[agentConfig.Id] = updatedAgent;
-            agents[agentConfig.Id] = updatedAgent;
+            createdAgents = createdAgents.SetItem(agentConfig.Id, updatedAgent);
+            agents = agents.SetItem(agentConfig.Id, updatedAgent);
         }
 
         agentsInitialized = true;
@@ -992,12 +1162,12 @@ public class AgentChatClient : IAgentChat
     /// </summary>
     internal static IEnumerable<AgentConfiguration> FindCyclicDelegations(IEnumerable<AgentConfiguration> configs)
     {
-        var delegatingAgents = configs.Where(a => a.Delegations is { Count: > 0 }).ToList();
-        var cyclicAgents = new HashSet<string>();
+        var delegatingAgents = configs.Where(a => a.Delegations is { Count: > 0 }).ToImmutableList();
+        var cyclicAgents = ImmutableHashSet<string>.Empty;
 
         foreach (var agent in delegatingAgents)
         {
-            var delegatedAgentPaths = agent.Delegations!.Select(d => d.AgentPath).ToHashSet();
+            var delegatedAgentPaths = agent.Delegations!.Select(d => d.AgentPath).ToImmutableHashSet();
 
             foreach (var delegatedPath in delegatedAgentPaths)
             {
@@ -1006,11 +1176,10 @@ public class AgentChatClient : IAgentChat
 
                 if (delegatedAgent?.Delegations != null)
                 {
-                    var backDelegations = delegatedAgent.Delegations.Select(d => d.AgentPath.Split('/').Last()).ToHashSet();
+                    var backDelegations = delegatedAgent.Delegations.Select(d => d.AgentPath.Split('/').Last()).ToImmutableHashSet();
                     if (backDelegations.Contains(agent.Id))
                     {
-                        cyclicAgents.Add(agent.Id);
-                        cyclicAgents.Add(delegatedId);
+                        cyclicAgents = cyclicAgents.Add(agent.Id).Add(delegatedId);
                     }
                 }
             }
@@ -1039,7 +1208,7 @@ public class AgentChatClient : IAgentChat
 
             // Recreate agent instances for new context
             agentsInitialized = false;
-            agents.Clear();
+            agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
             await CreateAgentsAsync();
         }
 
@@ -1056,7 +1225,7 @@ public class AgentChatClient : IAgentChat
     public void DisplayLayoutArea(LayoutAreaControl layoutAreaControl)
     {
         var layoutAreaContent = new ChatLayoutAreaContent(layoutAreaControl);
-        queuedLayoutAreaContent.Enqueue(layoutAreaContent);
+        queuedLayoutAreaContent = queuedLayoutAreaContent.Enqueue(layoutAreaContent);
     }
 
     public void RequestHandoff(HandoffRequest request)
@@ -1075,16 +1244,17 @@ public class AgentChatClient : IAgentChat
 
     private void DetectAgentAttachments()
     {
-        agentAttachmentPaths = new(StringComparer.OrdinalIgnoreCase);
-        if (currentAttachments is not { Count: > 0 })
-            return;
-
-        foreach (var path in currentAttachments)
+        var builder = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        if (currentAttachments is { Count: > 0 })
         {
-            var cleanPath = path.TrimStart('@');
-            if (IsAgentPath(cleanPath))
-                agentAttachmentPaths.Add(cleanPath);
+            foreach (var path in currentAttachments)
+            {
+                var cleanPath = path.TrimStart('@');
+                if (IsAgentPath(cleanPath))
+                    builder.Add(cleanPath);
+            }
         }
+        agentAttachmentPaths = builder.ToImmutable();
     }
 
     private void DetectMessageAgentReferences(string? messageText)

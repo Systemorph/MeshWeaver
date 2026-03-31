@@ -94,7 +94,7 @@ public class GlobalSearchAccessTests(ITestOutputHelper output) : MonolithMeshTes
         {
             Name = "Test Thread", NodeType = "Thread",
             MainNode = "satCtx/_Thread",
-            Content = new AI.Thread { ParentPath = "satCtx", CreatedBy = "Roland" }
+            Content = new AI.Thread { CreatedBy = "Roland" }
         }, TestTimeout);
 
         // Act: search with context:search (mimics the top search bar)

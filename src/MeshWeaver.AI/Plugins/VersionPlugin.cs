@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json;
 using MeshWeaver.Mesh;
@@ -30,10 +31,10 @@ public class VersionPlugin(IMessageHub hub)
 
         try
         {
-            var versions = new List<object>();
+            var versions = ImmutableList<object>.Empty;
             await foreach (var v in versionQuery.GetVersionsAsync(path))
             {
-                versions.Add(new
+                versions = versions.Add(new
                 {
                     v.Version,
                     LastModified = v.LastModified.ToString("yyyy-MM-dd HH:mm:ss"),
@@ -96,8 +97,12 @@ public class VersionPlugin(IMessageHub hub)
             if (historicalNode == null)
                 return $"Version {version} not found for '{path}'.";
 
-            var updated = await meshService.UpdateNodeAsync(historicalNode with { Version = 0 });
-            return $"Restored '{path}' to version {version}. New version: {updated.Version}.";
+            // Use IObservable UpdateNode — no await on hub operations, no deadlock
+            var tcs = new TaskCompletionSource<string>();
+            meshService.UpdateNode(historicalNode with { Version = 0 }).Subscribe(
+                updated => tcs.TrySetResult($"Restored '{path}' to version {version}. New version: {updated.Version}."),
+                ex => tcs.TrySetResult($"Error: {ex.Message}"));
+            return await tcs.Task;
         }
         catch (Exception ex)
         {
@@ -128,7 +133,7 @@ public class VersionPlugin(IMessageHub hub)
                 if (v.LastModified <= targetTime)
                 {
                     targetVersion = v;
-                    break; // Versions are ordered newest first, so first match is the latest before target
+                    break;
                 }
             }
 
@@ -139,8 +144,12 @@ public class VersionPlugin(IMessageHub hub)
             if (historicalNode == null)
                 return $"Could not retrieve version {targetVersion.Version} for '{path}'.";
 
-            var updated = await meshService.UpdateNodeAsync(historicalNode with { Version = 0 });
-            return $"Restored '{path}' to version {targetVersion.Version} (from {targetVersion.LastModified:yyyy-MM-dd HH:mm:ss}). New version: {updated.Version}.";
+            // Use IObservable UpdateNode — no await on hub operations, no deadlock
+            var tcs = new TaskCompletionSource<string>();
+            meshService.UpdateNode(historicalNode with { Version = 0 }).Subscribe(
+                updated => tcs.TrySetResult($"Restored '{path}' to version {targetVersion.Version} (from {targetVersion.LastModified:yyyy-MM-dd HH:mm:ss}). New version: {updated.Version}."),
+                ex => tcs.TrySetResult($"Error: {ex.Message}"));
+            return await tcs.Task;
         }
         catch (Exception ex)
         {

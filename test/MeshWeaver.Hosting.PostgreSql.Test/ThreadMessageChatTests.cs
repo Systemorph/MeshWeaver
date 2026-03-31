@@ -91,7 +91,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "My First Chat",
             NodeType = "Thread",
             MainNode = "User/alice",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         };
         await _threadAdapter.WriteAsync(thread, _options, ct);
 
@@ -120,7 +120,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Message Test Chat",
             NodeType = "Thread",
             MainNode = "User/alice",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         // Post user message
@@ -179,7 +179,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/bob",
             Content = new MeshThread
             {
-                ParentPath = "User/bob",
                 ProviderType = "TestProvider"
             }
         };
@@ -388,7 +387,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "First Chat",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("chat-q2", "User/alice/_Thread")
@@ -396,7 +395,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Second Chat",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         // Grant alice access to her own scope
@@ -430,7 +429,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Alice Chat",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("chat-all2", "User/bob/_Thread")
@@ -438,7 +437,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Bob Chat",
             NodeType = "Thread",
             MainNode = "User/bob/_Thread",
-            Content = new MeshThread { ParentPath = "User/bob" }
+            Content = new MeshThread()
         }, _options, ct);
 
         // Grant both users access to their own scopes
@@ -481,7 +480,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Query Test Conv",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         await _messageAdapter.WriteAsync(new MeshNode("1", "User/alice/_Thread/conv-q")
@@ -542,7 +541,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
             LastModified = DateTimeOffset.UtcNow.AddDays(-10),
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("sort-new", "User/alice/_Thread")
@@ -551,7 +550,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
             LastModified = DateTimeOffset.UtcNow,
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         var query = new PostgreSqlMeshQuery(_threadAdapter);
@@ -601,7 +600,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Alice Thread",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         var query = new PostgreSqlMeshQuery(_threadAdapter);
@@ -630,7 +629,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Alice Private Thread",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         // Query as bob — should NOT see alice's thread
@@ -663,7 +662,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Alice Global",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice" }
+            Content = new MeshThread()
         }, _options, ct);
 
         await _threadAdapter.WriteAsync(new MeshNode("bob-global", "User/bob/_Thread")
@@ -671,7 +670,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Bob Global",
             NodeType = "Thread",
             MainNode = "User/bob/_Thread",
-            Content = new MeshThread { ParentPath = "User/bob" }
+            Content = new MeshThread()
         }, _options, ct);
 
         // Query as alice
@@ -709,7 +708,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Resolve Test",
             NodeType = "Thread",
             MainNode = "User/alice/_Thread",
-            Content = new MeshThread { ParentPath = "User/alice", Messages = ["r1"] }
+            Content = new MeshThread { Messages = ["r1"] }
         }, _options, ct);
 
         // Create ThreadMessage child
@@ -773,7 +772,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "E2E Chat",
             NodeType = "Thread",
             MainNode = threadNs,
-            Content = new MeshThread { ParentPath = "User/alice", Messages = [] }
+            Content = new MeshThread { Messages = [] }
         }, _options, ct);
 
         // 2. Create user message node
@@ -812,7 +811,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = threadNs,
             Content = new MeshThread
             {
-                ParentPath = "User/alice",
                 Messages = [userMsgId, responseMsgId]
             }
         }, _options, ct);
@@ -936,7 +934,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = threadNs,
             Content = new MeshThread
             {
-                ParentPath = "User/alice",
                 Messages = ["m1", "m2"]
             }
         }, _options, ct);

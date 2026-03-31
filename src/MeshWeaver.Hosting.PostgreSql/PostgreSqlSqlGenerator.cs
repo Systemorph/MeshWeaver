@@ -107,7 +107,7 @@ public class PostgreSqlSqlGenerator
     }
 
     public (string WhereClause, Dictionary<string, object> Parameters) GenerateWhereClause(
-        ParsedQuery query, string? userId = null)
+        ParsedQuery query, string? userId = null, IReadOnlyCollection<string>? excludedNodeTypes = null)
     {
         _paramIndex = 0;
         _parameters.Clear();
@@ -139,6 +139,20 @@ public class PostgreSqlSqlGenerator
             clauses.Add("n.main_node = n.path");
         }
 
+        // Context-based exclusion: exclude node types that are configured to be
+        // hidden from the given context (e.g., Role, User excluded from "search").
+        if (excludedNodeTypes is { Count: > 0 })
+        {
+            var paramNames = new List<string>();
+            foreach (var nt in excludedNodeTypes)
+            {
+                var p = $"@p{_paramIndex++}";
+                _parameters[p] = nt;
+                paramNames.Add(p);
+            }
+            clauses.Add($"(n.node_type IS NULL OR n.node_type NOT IN ({string.Join(", ", paramNames)}))");
+        }
+
         // Only return Active nodes (state=2) — excludes Transient and Deleted
         clauses.Add("n.state = 2");
 
@@ -153,9 +167,10 @@ public class PostgreSqlSqlGenerator
         ParsedQuery query, string? userId = null, string? activityUserId = null,
         string tableName = "mesh_nodes",
         string activityTable = "activities",
-        string userActivityTable = "user_activities")
+        string userActivityTable = "user_activities",
+        IReadOnlyCollection<string>? excludedNodeTypes = null)
     {
-        var (whereClause, parameters) = GenerateWhereClause(query, userId);
+        var (whereClause, parameters) = GenerateWhereClause(query, userId, excludedNodeTypes);
 
         var isAccessedQuery = query.Source == QuerySource.Accessed && !string.IsNullOrEmpty(activityUserId);
         var isActivityQuery = query.Source == QuerySource.Activity;

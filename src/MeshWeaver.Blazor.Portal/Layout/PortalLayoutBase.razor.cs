@@ -1,9 +1,9 @@
 ﻿using MeshWeaver.AI;
-using MeshWeaver.Data;
 using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -127,6 +127,43 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return _menuItems;
     }
 
+    private static readonly NodeMenuItemDefinition Separator = new("", "_separator");
+
+    /// <summary>
+    /// Flattens hierarchical menu items: parent items with Children are replaced by
+    /// a separator followed by their children inline.
+    /// </summary>
+    private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
+    {
+        var hasChildren = false;
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+            {
+                hasChildren = true;
+                break;
+            }
+        }
+        if (!hasChildren)
+            return items;
+
+        var result = new List<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+            {
+                if (result.Count > 0)
+                    result.Add(Separator);
+                result.AddRange(item.Children);
+            }
+            else
+            {
+                result.Add(item);
+            }
+        }
+        return result;
+    }
+
     /// <summary>
     /// Navigates to the Create page for a specific node type (fallback/legacy method).
     /// </summary>
@@ -218,7 +255,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 {
                     await JSRuntime.InvokeVoidAsync("eval", "window.dispatchEvent(new Event('resize'))");
                 }
-                catch (Exception) when (true) { /* ignore JS errors */ }
+                catch (Exception) { /* ignore JS errors */ }
             }
         });
     }
@@ -265,11 +302,10 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
         {
             var threadPath = context.Namespace;
-            var threadContent = context.Node.Content as MeshWeaver.AI.Thread;
-            var parentPath = threadContent?.ParentPath;
+            var mainNode = context.Node.MainNode;
 
-            // Navigate to parent (or home if no parent path)
-            var navigateTo = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
+            // Navigate to content entity (or home if self-referencing)
+            var navigateTo = mainNode != context.Node.Path ? $"/{mainNode}" : "/";
             NavigationManager.NavigateTo(navigateTo);
 
             // Open panel with thread and set title
@@ -304,7 +340,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Side panel content state
-    private string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+    private readonly string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;

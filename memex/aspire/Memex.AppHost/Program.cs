@@ -110,11 +110,9 @@ else if (isDeployed)
     });
 }
 var orleansTables = orleansStorage.AddTables("orleans-clustering");
-var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");
 
 var orleans = builder.AddOrleans("memex-mesh")
-    .WithClustering(orleansTables)
-    .WithGrainStorage("Default", grainStateBlobs);
+    .WithClustering(orleansTables);
 
 // --- Application Insights ---
 var appInsights = builder.AddAzureApplicationInsights("appinsights")
@@ -162,7 +160,6 @@ var portal = builder
     .WithEnvironment("Authentication__Microsoft__TenantId", "common")
     // Wait for dependencies
     .WaitFor(orleansTables)
-    .WaitFor(grainStateBlobs)
     .WaitForCompletion(dbMigration)
     // ACA deployment: sticky sessions (Blazor Server) + custom domain + resources
     .PublishAsAzureContainerApp((module, app) =>

@@ -216,18 +216,22 @@ internal class TestChatClientFactory : IChatClientFactory
     public IReadOnlyList<string> Models => ["test-model"];
     public int Order => 0;
 
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => new(chatClient: new TestChatClient(ResponseText),
+            instructions: config.Instructions ?? "Test.",
+            name: config.Id, description: config.Description ?? config.Id,
+            tools: [], loggerFactory: null, services: null);
+
     public Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config, IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null)
-    {
-        return Task.FromResult(new ChatClientAgent(
-            chatClient: new TestChatClient(ResponseText),
-            instructions: config.Instructions ?? "Test.",
-            name: config.Id, description: config.Description ?? config.Id,
-            tools: [], loggerFactory: null, services: null));
-    }
+        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
 
 internal class TestChatClient(string response) : IChatClient

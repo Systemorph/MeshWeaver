@@ -269,6 +269,7 @@ public static class MeshNodeExtensions
         typeRegistry.WithType(typeof(ApiToken), nameof(ApiToken));
         typeRegistry.WithType(typeof(MeshDataSourceConfiguration), nameof(MeshDataSourceConfiguration));
         typeRegistry.WithType(typeof(PartitionDefinition), nameof(PartitionDefinition));
+        typeRegistry.WithType(typeof(MeshNodeReference), nameof(MeshNodeReference));
         return typeRegistry;
     }
 }

@@ -202,4 +202,44 @@
     {
         <p style="color: var(--neutral-foreground-hint); font-style: italic;">No content yet. Click Edit to add content.</p>
     }
+
+    @* Comment input dialog — appears when user selects text and clicks Comment *@
+    @if (_showCommentInput)
+    {
+        <div class="comment-input-overlay" @onclick="CancelSelectionComment">
+            <div class="comment-input-dialog" @onclick:stopPropagation="true">
+                <div class="comment-input-header">Add Comment</div>
+                @if (!string.IsNullOrEmpty(_pendingSelectionText))
+                {
+                    <div class="comment-input-quote">&ldquo;@Truncate(_pendingSelectionText, 120)&rdquo;</div>
+                }
+                <textarea class="comment-input-textarea" @bind="_pendingCommentText" @bind:event="oninput" placeholder="Write your comment..." rows="3"></textarea>
+                <div class="comment-input-actions">
+                    <button class="comment-btn comment-btn-cancel" @onclick="CancelSelectionComment">Cancel</button>
+                    <button class="comment-btn comment-btn-submit" @onclick="SubmitSelectionComment">Add Comment</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* Bottom page comment section *@
+    @if (!string.IsNullOrEmpty(BoundNodePath))
+    {
+        <div class="page-comment-section">
+            @if (_showPageCommentInput)
+            {
+                <div class="page-comment-form">
+                    <textarea class="comment-input-textarea" @bind="_pageCommentText" @bind:event="oninput" placeholder="Write your comment..." rows="3"></textarea>
+                    <div class="comment-input-actions">
+                        <button class="comment-btn comment-btn-cancel" @onclick="CancelPageComment">Cancel</button>
+                        <button class="comment-btn comment-btn-submit" @onclick="SubmitPageComment">Add Comment</button>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <button class="add-page-comment-btn" @onclick="StartPageComment">+ Add Comment</button>
+            }
+        </div>
+    }
 </div>

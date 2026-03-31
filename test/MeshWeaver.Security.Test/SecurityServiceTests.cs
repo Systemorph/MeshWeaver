@@ -66,7 +66,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
 
-        permissions.Should().Be(Permission.Read | Permission.Execute);
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
     [Fact(Timeout = 20000)]
@@ -80,7 +80,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         var permissions = await securityService.GetEffectivePermissionsAsync(nodePath, userId, TestTimeout);
 
-        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread);
+        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
     }
 
     [Fact(Timeout = 20000)]
@@ -137,7 +137,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         var permissions = await securityService.GetEffectivePermissionsAsync(path2, userId, TestTimeout);
 
-        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread);
+        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
     }
 
     [Fact(Timeout = 20000)]
@@ -204,7 +204,7 @@ public class SecurityServiceTests(ITestOutputHelper output) : MonolithMeshTestBa
 
         var permissions = await securityService.GetEffectivePermissionsAsync(targetNamespace, "", TestTimeout);
 
-        permissions.Should().Be(Permission.Read | Permission.Execute);
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
     [Fact(Timeout = 20000)]
@@ -585,7 +585,7 @@ public class SampleDataSecurityTests(ITestOutputHelper output) : MonolithMeshTes
         var canRead = await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, TestTimeout);
 
         canRead.Should().BeTrue("Roland should still be able to read Documentation");
-        canEdit.Should().BeFalse("Roland should NOT be able to edit Documentation when policy is active (policy caps to Read + Execute)");
+        canEdit.Should().BeFalse("Roland should NOT be able to edit Documentation when policy is active (policy caps to Read + Execute + Api + Export)");
 
         // Cleanup
         await securityService.RemovePolicyAsync("MeshWeaver/Documentation", TestTimeout);
@@ -615,7 +615,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute);
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export);
     }
 
     [Fact(Timeout = 20000)]
@@ -629,13 +629,13 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Admin", globalNs, "system", TestTimeout);
         await securityService.SetPolicyAsync(docNs, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
 
-        // At the policy namespace, admin should only have Read + Execute
+        // At the policy namespace, admin should only have Read + Execute + Api + Export
         var docPermissions = await securityService.GetEffectivePermissionsAsync(docNs, userId, TestTimeout);
-        docPermissions.Should().Be(Permission.Read | Permission.Execute);
+        docPermissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export);
 
-        // At a child path, admin should also only have Read + Execute (policy applies to descendants)
+        // At a child path, admin should also only have Read + Execute + Api + Export (policy applies to descendants)
         var childPermissions = await securityService.GetEffectivePermissionsAsync("platform/docs/readme", userId, TestTimeout);
-        childPermissions.Should().Be(Permission.Read | Permission.Execute);
+        childPermissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export);
 
         // Outside the policy scope, admin still has full access
         var otherPermissions = await securityService.GetEffectivePermissionsAsync("platform/code", userId, TestTimeout);
@@ -666,10 +666,10 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.SetPolicyAsync("org/restricted", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
 
         var orgPermissions = await securityService.GetEffectivePermissionsAsync("org/general", userId, TestTimeout);
-        orgPermissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread, "org level allows Read + Comment + Execute + Thread");
+        orgPermissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export, "org level allows Read + Comment + Execute + Thread + Api + Export");
 
         var restrictedPermissions = await securityService.GetEffectivePermissionsAsync("org/restricted/item", userId, TestTimeout);
-        restrictedPermissions.Should().Be(Permission.Read | Permission.Execute, "nested policy further restricts to Read + Execute only (Thread also denied)");
+        restrictedPermissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "nested policy further restricts to Read + Execute + Api + Export only (Thread also denied)");
     }
 
     [Fact(Timeout = 20000)]
@@ -699,7 +699,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Editor", "scoped", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("scoped/item", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread,
+        permissions.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export,
             "local Editor role should survive, inherited Admin should be discarded");
     }
 
@@ -714,7 +714,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
 
         var cappedPerms = await securityService.GetEffectivePermissionsAsync(ns, userId, TestTimeout);
-        cappedPerms.Should().Be(Permission.Read | Permission.Execute, "permissions should be capped");
+        cappedPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "permissions should be capped");
 
         await securityService.RemovePolicyAsync(ns, TestTimeout);
 
@@ -758,7 +758,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.SetPolicyAsync(ns, new PartitionAccessPolicy { Read = false, Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync(ns, WellKnownUsers.Public, TestTimeout);
-        permissions.Should().Be(Permission.Execute, "Public user permissions should be capped to Execute only (Read denied by policy)");
+        permissions.Should().Be(Permission.Execute | Permission.Api, "Public user permissions should be capped to Execute + Api only (Read denied by policy)");
     }
 
     [Fact(Timeout = 20000)]
@@ -771,7 +771,7 @@ public class PartitionAccessPolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.SetPolicyAsync("", new PartitionAccessPolicy { Create = false, Update = false, Delete = false, Comment = false, Thread = false }, TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("any/random/path", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "global policy should cap all namespaces to Read + Execute");
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "global policy should cap all namespaces to Read + Execute + Api + Export");
 
         // Cleanup global policy
         await securityService.RemovePolicyAsync("", TestTimeout);
@@ -803,7 +803,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("Doc/GettingStarted", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Doc namespace has a static read-only policy");
+        permissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export, "Doc namespace allows read + comment + thread + export but not create/update/delete");
     }
 
     [Fact(Timeout = 20000)]
@@ -815,7 +815,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Editor", "Doc", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("Doc/AI/AgenticAI", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Doc namespace has a static read-only policy");
+        permissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export, "Doc namespace allows read + comment + thread + export but not create/update/delete");
     }
 
     [Fact(Timeout = 20000)]
@@ -827,7 +827,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("Agent/ThreadNamer", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Agent namespace has a static read-only policy");
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "Agent namespace has a static read-only policy");
     }
 
     [Fact(Timeout = 20000)]
@@ -839,7 +839,7 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
         await securityService.AddUserRoleAsync(userId, "Admin", "", "system", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("Role/Admin", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Role namespace has a static read-only policy");
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api | Permission.Export, "Role namespace has a static read-only policy");
     }
 
     [Fact(Timeout = 20000)]
@@ -864,6 +864,6 @@ public class StaticNamespacePolicyTests(ITestOutputHelper output) : MonolithMesh
 
         // The policy is at "Doc" namespace — nodes AT "Doc" should also be capped
         var permissions = await securityService.GetEffectivePermissionsAsync("Doc", userId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Doc root itself should be capped to Read + Execute");
+        permissions.Should().Be(Permission.Read | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export, "Doc root itself should be capped to Read + Comment + Execute + Thread + Api + Export");
     }
 }

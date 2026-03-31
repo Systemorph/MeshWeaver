@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ProjectGuid>{d3e4f5a6-2b7c-4d8e-9f0a-1b2c3d4e5f6a}</ProjectGuid>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MeshWeaver.Documentation\MeshWeaver.Documentation.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+  </ItemGroup>
+
+</Project>

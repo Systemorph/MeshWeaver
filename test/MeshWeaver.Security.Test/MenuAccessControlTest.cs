@@ -80,6 +80,23 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
         return menu.Items;
     }
 
+    /// <summary>
+    /// Flattens menu items by expanding group items (e.g., Actions) into their children.
+    /// </summary>
+    private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
+    {
+        var flat = new List<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+                flat.AddRange(item.Children);
+            else
+                flat.Add(item);
+        }
+        flat.Sort((a, b) => a.Order.CompareTo(b.Order));
+        return flat;
+    }
+
     [Fact(Timeout = 5000)]
     public async Task Menu_NoRoles_SubscriptionDenied()
     {
@@ -120,15 +137,15 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = await FetchMenuItemsAsync(client, nodeAddress);
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
 
         Output.WriteLine($"Menu items for Viewer: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Files", "Export", "Threads", "Versions", "Settings"],
-            "Viewer has only Read — no Create, Update, or Delete items");
+            ["Files", "Threads", "Versions", "Settings"],
+            "Viewer has only Read — no Create, Update, Delete, or Export items");
     }
 
     [Fact(Timeout = 5000)]
@@ -149,16 +166,16 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = await FetchMenuItemsAsync(client, nodeAddress);
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
 
         Output.WriteLine($"Menu items for Editor: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        // Editor gets Edit, Create, Import, plus always-visible items
+        // Editor gets Edit, Create, Copy, Import, Export, plus always-visible items
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Import", "Files", "Export", "Threads", "Versions", "Settings"],
-            "Editor has Read|Create|Update|Comment — Edit/Create/Import plus always-visible items");
+            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Settings"],
+            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export plus always-visible items");
     }
 
     [Fact(Timeout = 5000)]
@@ -179,15 +196,15 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = await FetchMenuItemsAsync(client, nodeAddress);
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
 
         Output.WriteLine($"Menu items for Admin: {items.Count}");
         foreach (var item in items)
             Output.WriteLine($"  {item.Label} (Area={item.Area})");
 
-        items.Should().HaveCount(9, "Admin should see all default menu items");
+        items.Should().HaveCount(11, "Admin should see all default menu items");
         items.Select(i => i.Label).Should().BeEquivalentTo(
-            ["Edit", "Create", "Import", "Files", "Export", "Threads", "Versions", "Settings", "Delete"]);
+            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Settings", "Delete"]);
     }
 
     [Fact(Timeout = 5000)]
@@ -208,7 +225,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = await FetchMenuItemsAsync(client, nodeAddress);
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
 
         items.Should().BeInAscendingOrder(i => i.Order,
             "menu items should be sorted by Order");
@@ -232,7 +249,7 @@ public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestB
             o => o.WithTarget(nodeAddress),
             pingCts.Token);
 
-        var items = await FetchMenuItemsAsync(client, nodeAddress);
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
 
         var importItem = items.FirstOrDefault(i => i.Label == "Import");
         importItem.Should().NotBeNull("Import menu item should exist for Editor");

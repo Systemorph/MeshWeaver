@@ -10,7 +10,6 @@ namespace MeshWeaver.Hosting.Monolith;
 
 internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingService> logger) : RoutingServiceBase(hub)
 {
-    private readonly INodeTypeService? nodeTypeService = hub.ServiceProvider.GetService<INodeTypeService>();
     private readonly ConcurrentDictionary<Address, AsyncDelivery> streams = new();
 
 
@@ -39,7 +38,7 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
         if (streams.TryGetValue(address, out var stream))
             return await stream.Invoke(delivery, cancellationToken);
 
-        var hub = CreateHub(node, address);
+        var hub = await CreateHubAsync(node, address);
         if (hub is null)
         {
             var isShuttingDown = Mesh.Disposal is not null;
@@ -73,93 +72,21 @@ internal class MonolithRoutingService(IMessageHub hub, ILogger<MonolithRoutingSe
         return delivery.Forwarded(hub.Address);
     }
 
-    private IMessageHub? CreateHub(MeshNode? node, Address address)
+    private async Task<IMessageHub?> CreateHubAsync(MeshNode? node, Address address)
     {
-        // Don't create new hubs during shutdown - would lead to endless disposal cycles
-        if (Mesh.Disposal is not null)
-        {
-            logger.LogDebug("Rejecting hub creation for {Address} - mesh is shutting down", address);
-            return null;
-        }
-
-        // Don't create hubs for non-existent nodes - caller will post DeliveryFailure
-        if (node is null)
+        if (Mesh.Disposal is not null || node is null)
             return null;
 
-        // Use INodeTypeService if available - it properly combines DefaultNodeHubConfiguration
-        // with node type's specific configuration
-        var hubConfig = GetHubConfiguration(node);
+        var hubFactory = Mesh.ServiceProvider.GetRequiredService<IMeshNodeHubFactory>();
+        node = await hubFactory.ResolveHubConfigurationAsync(node);
 
-        if (hubConfig is not null)
-        {
-            var hub = Mesh.GetHostedHub(address, hubConfig);
-            if(hub is not null)
-            {
-                hub.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
-            }
-            return hub;
-        }
-        return null;
-    }
+        if (node.HubConfiguration is null)
+            throw new InvalidOperationException(
+                $"No hub configuration for node '{node.Path}' (NodeType: {node.NodeType}). " +
+                $"Ensure the node type is registered via AddGraph() or has a HubConfiguration set.");
 
-    /// <summary>
-    /// Gets the HubConfiguration for a node, properly combining:
-    /// 1. Node's own HubConfiguration (if set)
-    /// 2. NodeType's HubConfiguration (from template)
-    /// 3. DefaultNodeHubConfiguration (from MeshBuilder.ConfigureDefaultNodeHub)
-    /// </summary>
-    private Func<MessageHubConfiguration, MessageHubConfiguration>? GetHubConfiguration(MeshNode? node)
-    {
-        // Get the default config first
-        var defaultConfig = MeshCatalog.Configuration.DefaultNodeHubConfiguration;
-
-        logger.LogDebug("GetHubConfiguration for node {NodePath}, NodeType: {NodeType}, HasNodeHubConfig: {HasNodeHubConfig}, HasDefaultConfig: {HasDefaultConfig}, NodeTypeService: {HasNodeTypeService}",
-            node?.Path, node?.NodeType, node?.HubConfiguration != null, defaultConfig != null, nodeTypeService != null);
-
-        // If node has its own HubConfiguration, compose with DefaultNodeHubConfiguration.
-        if (node?.HubConfiguration != null)
-        {
-            logger.LogDebug("Using node's own HubConfiguration for {NodePath}", node.Path);
-            if (defaultConfig != null)
-            {
-                var nodeConfig = node.HubConfiguration;
-                return config => nodeConfig(defaultConfig(config));
-            }
-            return node.HubConfiguration;
-        }
-
-        // Use INodeTypeService which properly combines default + node type configs
-        if (nodeTypeService != null && node?.NodeType != null)
-        {
-            var cachedConfig = nodeTypeService.GetCachedHubConfiguration(node.NodeType);
-            logger.LogDebug("GetCachedHubConfiguration({NodeType}) returned: {HasConfig}", node.NodeType, cachedConfig != null);
-            if (cachedConfig != null)
-            {
-                logger.LogDebug("Using cached HubConfiguration from INodeTypeService for {NodeType} at {Address}",
-                    node.NodeType, node.Path);
-                return cachedConfig;
-            }
-        }
-
-        // Fallback: look up the NodeType template in Configuration.Nodes
-        if (node?.NodeType != null &&
-            MeshCatalog.Configuration.Nodes.TryGetValue(node.NodeType, out var templateNode) &&
-            templateNode.HubConfiguration is not null)
-        {
-            logger.LogDebug("Using NodeType HubConfiguration from template for {NodeType} at {Address}",
-                node.NodeType, node.Path);
-
-            // Combine with default config
-            if (defaultConfig != null)
-            {
-                var templateConfig = templateNode.HubConfiguration;
-                return config => templateConfig(defaultConfig(config));
-            }
-            return templateNode.HubConfiguration;
-        }
-
-        logger.LogDebug("Returning defaultConfig only for {NodePath}: {HasDefaultConfig}", node?.Path, defaultConfig != null);
-        // No node-specific config - return just the default config
-        return defaultConfig;
+        var hub = Mesh.GetHostedHub(address, node.HubConfiguration!);
+        hub?.RegisterForDisposal((_, _) => UnregisterStreamAsync(hub.Address));
+        return hub;
     }
 }

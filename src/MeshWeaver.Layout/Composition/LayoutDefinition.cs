@@ -2,6 +2,7 @@
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Composition;
 
@@ -55,12 +56,14 @@ public record LayoutDefinition(IMessageHub Hub)
         EntityStore store)
     {
         var result = new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
+        var hasContent = false;
 
         // Execute named renderer if one exists for this area
         if (NamedRenderers.TryGetValue(context.Area, out var namedRenderer))
         {
             var ret = await namedRenderer.Invoke(host, context, result.Store);
             result = ret with { Updates = result.Updates.Concat(ret.Updates) };
+            hasContent = true;
         }
 
         // Execute predicate-based renderers (existing behavior)
@@ -68,6 +71,16 @@ public record LayoutDefinition(IMessageHub Hub)
         {
             var ret = await x.Renderer.Invoke(host, context, result.Store);
             result = ret with { Updates = result.Updates.Concat(ret.Updates) };
+            hasContent = true;
+        }
+
+        if (!hasContent)
+        {
+            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("LayoutDefinition");
+            logger?.LogWarning("No renderer produced content for area '{Area}' on hub {Address}. " +
+                "Named renderers: [{Named}], predicate renderers: {Count}",
+                context.Area, host.Hub.Address,
+                string.Join(", ", NamedRenderers.Keys), AsyncRenderers.Count);
         }
 
         return result;

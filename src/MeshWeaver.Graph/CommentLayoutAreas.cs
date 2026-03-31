@@ -58,7 +58,6 @@ public static class CommentLayoutAreas
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
-        var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
         var accessService = host.Hub.ServiceProvider.GetService<AccessService>();
         var currentUser = accessService?.Context?.Name ?? "";
 
@@ -66,58 +65,20 @@ public static class CommentLayoutAreas
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
         var editStateId = $"editState_comment_{hubPath.Replace("/", "_")}";
-        var initialized = new[] { false, false, false }; // [0]=editState, [1]=repliesExpanded, [2]=replyPath
+        var initialized = new[] { false, false }; // [0]=editState, [1]=repliesExpanded
 
-        // Initialize reply data area and subscribe to child Comment nodes
-        var repliesDataId = $"replies_{hubPath.Replace("/", "_")}";
-        host.UpdateData(repliesDataId, Array.Empty<LayoutAreaControl>());
-
-        if (meshQuery != null)
-        {
-            meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"namespace:{hubPath} nodeType:{CommentNodeType.NodeType}"))
-                .Scan(new List<MeshNode>(), (list, change) =>
-                {
-                    if (change.ChangeType == QueryChangeType.Initial || change.ChangeType == QueryChangeType.Reset)
-                        return change.Items.ToList();
-                    foreach (var item in change.Items)
-                    {
-                        if (change.ChangeType == QueryChangeType.Added)
-                            list.Add(item);
-                        else if (change.ChangeType == QueryChangeType.Removed)
-                            list.RemoveAll(n => n.Path == item.Path);
-                        else if (change.ChangeType == QueryChangeType.Updated)
-                        {
-                            list.RemoveAll(n => n.Path == item.Path);
-                            list.Add(item);
-                        }
-                    }
-                    return list;
-                })
-                .Subscribe(list =>
-                {
-                    var replyControls = list
-                        .Where(n => n.Content is Comment)
-                        .OrderBy(n => ((Comment)n.Content!).CreatedAt)
-                        .Select(n => Controls.LayoutArea(n.Path, OverviewArea))
-                        .ToArray();
-                    host.UpdateData(repliesDataId, replyControls);
-                });
-        }
-
-        // Check permissions once (parent path for comment permissions)
+        // Permissions checked once via Observable (no await, no blocking)
         var parentPath = hubPath.Contains('/') ? hubPath[..hubPath.LastIndexOf('/')] : hubPath;
-        var permissionsStream = Observable.FromAsync(() => PermissionHelper.GetEffectivePermissionsAsync(host.Hub, parentPath));
+        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, parentPath);
 
-        return nodeStream
-            .CombineLatest(permissionsStream, (nodes, perms) =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
-                var canDelete = perms.HasFlag(Permission.Delete);
-                return BuildOverview(host, node, hubPath, editStateId, initialized,
-                    repliesDataId, currentUser, canComment, canDelete);
-            });
+        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
+        {
+            var node = nodes.FirstOrDefault(n => n.Path == hubPath);
+            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+            var canDelete = perms.HasFlag(Permission.Delete);
+            return (UiControl?)BuildOverview(host, node, hubPath, editStateId, initialized,
+                currentUser, canComment, canDelete);
+        });
     }
 
     /// <summary>
@@ -134,16 +95,18 @@ public static class CommentLayoutAreas
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+
+        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
+            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
             return (UiControl?)BuildEditContent(host, node, hubPath, currentUser, canComment);
         });
     }
 
     internal static UiControl BuildOverview(LayoutAreaHost host, MeshNode? node, string hubPath,
-        string editStateId, bool[] initialized, string repliesDataId, string currentUser,
+        string editStateId, bool[] initialized, string currentUser,
         bool canComment = true, bool canDelete = true)
     {
         var comment = node?.Content as Comment;
@@ -230,95 +193,68 @@ public static class CommentLayoutAreas
             }
         }
 
-        // Replies section — data-bound via repliesDataId with expand/collapse and load-more
-        var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
-        var visibleCountStateId = $"replies_visible_{hubPath.Replace("/", "_")}";
-
-        container = container.WithView((h, _) =>
+        // Replies section — data-bound from comment.Replies (same pattern as Thread.Messages)
+        if (comment.Replies.Count > 0)
         {
-            // Only initialize once so expanding replies (e.g. via Reply button) persists across re-renders
-            if (!initialized[1])
-            {
-                h.UpdateData(expandedStateId, false);
-                h.UpdateData(visibleCountStateId, InitialReplyCount);
-                initialized[1] = true;
-            }
+            var expandedStateId = $"replies_expanded_{hubPath.Replace("/", "_")}";
+            var visibleCountStateId = $"replies_visible_{hubPath.Replace("/", "_")}";
 
-            return h.Stream.GetDataStream<LayoutAreaControl[]>(repliesDataId)
-                .CombineLatest(
-                    h.Stream.GetDataStream<bool>(expandedStateId),
-                    h.Stream.GetDataStream<int>(visibleCountStateId),
-                    (replyControls, expanded, visibleCount) =>
-                    {
-                        if (replyControls == null || replyControls.Length == 0)
-                            return (UiControl)Controls.Stack;
-
-                        var totalCount = replyControls.Length;
-                        var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 8px;");
-
-                        // Toggle header
-                        var headerText = expanded
-                            ? $"▾ Replies ({totalCount})"
-                            : $"▸ Replies ({totalCount})";
-                        section = section.WithView(Controls.Html(
-                                $"<span style=\"font-size: 0.8rem; font-weight: 600; color: var(--accent-fill-rest); cursor: pointer;\">{headerText}</span>")
-                            .WithClickAction(ctx =>
-                            {
-                                ctx.Host.UpdateData(expandedStateId, !expanded);
-                                return Task.CompletedTask;
-                            }));
-
-                        if (!expanded)
-                            return (UiControl)section;
-
-                        // Show reply Overview areas up to visibleCount
-                        var shown = Math.Min(visibleCount, totalCount);
-                        for (var i = 0; i < shown; i++)
-                        {
-                            section = section.WithView(Controls.Stack
-                                .WithStyle("margin-left: 0; padding-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
-                                .WithView(replyControls[i]));
-                        }
-
-                        // Load more button
-                        if (shown < totalCount)
-                        {
-                            var remaining = totalCount - shown;
-                            section = section.WithView(Controls.Button(
-                                    $"Load {Math.Min(remaining, LoadMoreCount)} more repl{(Math.Min(remaining, LoadMoreCount) == 1 ? "y" : "ies")}")
-                                .WithAppearance(Appearance.Lightweight)
-                                .WithStyle("margin-top: 4px; margin-left: 4px; font-size: 0.8rem;")
-                                .WithClickAction(ctx =>
-                                {
-                                    ctx.Host.UpdateData(visibleCountStateId, visibleCount + LoadMoreCount);
-                                    return Task.CompletedTask;
-                                }));
-                        }
-
-                        return section;
-                    });
-        });
-
-        // Inline reply creation form — rendered when replyPathStateId is non-empty
-        if (host != null)
-        {
-            var replyPathStateId = $"replyPath_{hubPath.Replace("/", "_")}";
             container = container.WithView((h, _) =>
             {
-                if (!initialized[2])
+                if (!initialized[1])
                 {
-                    h.UpdateData(replyPathStateId, "");
-                    initialized[2] = true;
+                    h.UpdateData(expandedStateId, false);
+                    h.UpdateData(visibleCountStateId, InitialReplyCount);
+                    initialized[1] = true;
                 }
-                return h.Stream.GetDataStream<string>(replyPathStateId)
-                    .DistinctUntilChanged()
-                    .Select(replyPath =>
-                    {
-                        if (string.IsNullOrEmpty(replyPath))
-                            return (UiControl)Controls.Stack; // empty placeholder
 
-                        return (UiControl)BuildReplyCreateForm(h, replyPath, replyPathStateId);
-                    });
+                return h.Stream.GetDataStream<bool>(expandedStateId)
+                    .CombineLatest(
+                        h.Stream.GetDataStream<int>(visibleCountStateId),
+                        (expanded, visibleCount) =>
+                        {
+                            var totalCount = comment.Replies.Count;
+                            var section = Controls.Stack.WithWidth("100%").WithStyle("margin-top: 8px;");
+
+                            var headerText = expanded
+                                ? $"▾ Replies ({totalCount})"
+                                : $"▸ Replies ({totalCount})";
+                            section = section.WithView(Controls.Html(
+                                    $"<span style=\"font-size: 0.8rem; font-weight: 600; color: var(--accent-fill-rest); cursor: pointer;\">{headerText}</span>")
+                                .WithClickAction(ctx =>
+                                {
+                                    ctx.Host.UpdateData(expandedStateId, !expanded);
+                                    return Task.CompletedTask;
+                                }));
+
+                            if (!expanded)
+                                return (UiControl)section;
+
+                            var shown = Math.Min(visibleCount, totalCount);
+                            for (var i = 0; i < shown; i++)
+                            {
+                                var replyPath = $"{hubPath}/{comment.Replies[i]}";
+                                section = section.WithView(Controls.Stack
+                                    .WithStyle("margin-left: 0; padding-left: 8px; border-left: 2px solid var(--neutral-stroke-rest); margin-top: 4px;")
+                                    .WithView(Controls.LayoutArea(replyPath, OverviewArea)));
+                            }
+
+                            if (shown < totalCount)
+                            {
+                                var remaining = totalCount - shown;
+                                section = section.WithView(Controls.Button(
+                                        $"Load {Math.Min(remaining, LoadMoreCount)} more repl{(Math.Min(remaining, LoadMoreCount) == 1 ? "y" : "ies")}")
+                                    .WithAppearance(Appearance.Lightweight)
+                                    .WithStyle("margin-top: 4px; margin-left: 4px; font-size: 0.8rem;")
+                                    .WithClickAction(ctx =>
+                                    {
+                                        ctx.Host.UpdateData(visibleCountStateId, visibleCount + LoadMoreCount);
+                                        return Task.CompletedTask;
+                                    }));
+                            }
+
+                            return section;
+                        });
             });
         }
 

@@ -53,6 +53,20 @@ async function loadMonacoScripts() {
 export function afterWebStarted(blazor) {
     // Load Monaco scripts immediately after Blazor starts
     loadMonacoScripts();
+
+    // Register global helper for file downloads from DotNetStreamReference
+    window.meshweaverDownloadFileFromStream = async (fileName, streamRef) => {
+        const arrayBuffer = await streamRef.arrayBuffer();
+        const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
 }
 
 // Also export for manual loading if needed

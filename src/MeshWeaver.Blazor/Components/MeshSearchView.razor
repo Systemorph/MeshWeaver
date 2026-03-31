@@ -133,32 +133,15 @@
                     @if (!isCollapsed)
                     {
                         <div class="mesh-search-grid-wrapper">
-                            @if (!string.IsNullOrEmpty(BoundItemArea))
-                            {
-                                <div class="mesh-search-area-grid" style="@AreaGridStyle">
-                                    @foreach (var item in group.Items)
+                            <div class="mesh-search-area-grid" style="@CardGridStyle">
+                                @foreach (var item in group.Items)
+                                {
+                                    if (item is MeshNode node)
                                     {
-                                        if (item is MeshNode node)
-                                        {
-                                            @RenderCard(node)
-                                        }
+                                        @RenderCard(node)
                                     }
-                                </div>
-                            }
-                            else
-                            {
-                                <FluentGrid Spacing="@BoundGrid.Spacing" Justify="Microsoft.FluentUI.AspNetCore.Components.JustifyContent.FlexStart" Style="width: 100%;">
-                                    @foreach (var item in group.Items)
-                                    {
-                                        if (item is MeshNode node)
-                                        {
-                                            <FluentGridItem xs="@BoundGrid.Xs" sm="@BoundGrid.Sm" md="@BoundGrid.Md" lg="@BoundGrid.Lg" Style="width: 100%;">
-                                                @RenderCard(node)
-                                            </FluentGridItem>
-                                        }
-                                    }
-                                </FluentGrid>
-                            }
+                                }
+                            </div>
                         </div>
 
                         @if (group.Items.Count < group.TotalCount)
