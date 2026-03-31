@@ -459,7 +459,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             },
             o => o.WithTarget(docAddress));
 
-        client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
+        await client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
         {
             tcs.TrySetResult(response.Message);
             return response;
@@ -522,7 +522,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             },
             o => o.WithTarget(docAddress));
 
-        client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
+        await client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
         {
             tcs.TrySetResult(response.Message);
             return response;
@@ -535,7 +535,7 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Verify comment node via GetDataRequest
         var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{commentResponse.MarkerId}";
         var commentNodeResponse = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId)),
+            new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId!)),
             o => o.WithTarget(new Address(commentPath)), TestTimeout);
         var commentNode = commentNodeResponse.Message.Data as MeshNode;
 

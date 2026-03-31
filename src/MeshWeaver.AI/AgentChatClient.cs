@@ -1221,7 +1221,7 @@ public class AgentChatClient : IAgentChat
             // Recreate agent instances for new context
             agentsInitialized = false;
             agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
-            await CreateAgentsAsync();
+            CreateAgentsSync();
         }
 
         return loadedAgents;
