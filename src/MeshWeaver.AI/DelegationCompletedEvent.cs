@@ -31,6 +31,8 @@ public static class DelegationTracker
             callback(evt);
             return true;
         }
+        // Not found — log for debugging
+        System.Diagnostics.Debug.WriteLine($"[DelegationTracker] TryComplete: no pending for {evt.ThreadPath}, pending keys: [{string.Join(", ", Pending.Keys)}]");
         return false;
     }
 }

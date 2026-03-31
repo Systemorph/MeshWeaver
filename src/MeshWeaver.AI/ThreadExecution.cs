@@ -53,7 +53,24 @@ public static class ThreadExecution
             logger?.LogInformation("[ThreadExec] Recovery: stale execution on {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, thread.ActiveMessageId);
 
-            // Clear thread execution state — set to cancelled
+            // Cancel pending tool calls on the active response message
+            if (!string.IsNullOrEmpty(thread.ActiveMessageId))
+            {
+                var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
+                // Mark all pending tool calls as cancelled
+                var cancelledToolCalls = thread.StreamingToolCalls?
+                    .Select(tc => tc.Result == null
+                        ? tc with { Result = "Cancelled (server restarted)", IsSuccess = false }
+                        : tc)
+                    .ToImmutableList();
+                hub.Post(new UpdateThreadMessageContent
+                {
+                    Text = "*Cancelled (server restarted)*",
+                    ToolCalls = cancelledToolCalls
+                }, o => o.WithTarget(new Address(responsePath)));
+            }
+
+            // Clear thread execution state
             workspace.UpdateMeshNode(node =>
             {
                 var t = node.Content as Thread ?? new Thread();
@@ -64,10 +81,12 @@ public static class ThreadExecution
                     Content = t with
                     {
                         IsExecuting = false,
-                        ExecutionStatus = $"Cancelled at {cancelledAt:HH:mm:ss}",
+                        ExecutionStatus = null,
                         ActiveMessageId = null,
                         TokensUsed = 0,
-                        ExecutionStartedAt = null
+                        ExecutionStartedAt = null,
+                        StreamingText = null,
+                        StreamingToolCalls = null
                     }
                 };
             });
@@ -434,7 +453,7 @@ public static class ThreadExecution
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                     });
                     // Notify parent thread that delegation completed
-                    NotifyParentCompletion(parentHub, delivery, finalText, true);
+                    NotifyParentCompletion(parentHub, threadPath, finalText, true);
                     }
                     catch (OperationCanceledException)
                     {
@@ -446,7 +465,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, delivery, cancelText, false, SubmitMessageStatus.ExecutionCancelled);
+                        NotifyParentCompletion(parentHub, threadPath, cancelText, false);
                     }
                     catch (Exception ex)
                     {
@@ -458,7 +477,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, delivery, errorText, false, SubmitMessageStatus.ExecutionFailed);
+                        NotifyParentCompletion(parentHub, threadPath, errorText, false);
                     }
                 }, ex =>
                 {
@@ -519,16 +538,19 @@ public static class ThreadExecution
     /// The parent's delegation tool handler resolves its TaskCompletionSource.
     /// Only posts if this thread IS a child (path has a parent response message segment).
     /// </summary>
-    private static void NotifyParentCompletion(IMessageHub hub,
-        IMessageDelivery delivery, string responseText, bool success,
-        SubmitMessageStatus status = SubmitMessageStatus.ExecutionCompleted)
+    private static void NotifyParentCompletion(IMessageHub hub, string threadPath, string responseText, bool success)
     {
-        hub.Post(new SubmitMessageResponse
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
+        logger.LogInformation("[ThreadExec] NOTIFY_PARENT: threadPath={ThreadPath}, success={Success}, textLen={TextLen}",
+            threadPath, success, responseText.Length);
+        var completed = DelegationTracker.TryComplete(new DelegationCompletedEvent
         {
-            Success = success,
-            Status = status,
-            ResponseText = Truncate(responseText, 500)
-        }, o => o.ResponseFor(delivery));
+            ThreadPath = threadPath,
+            ResponseText = Truncate(responseText, 500),
+            Success = success
+        });
+        logger.LogInformation("[ThreadExec] NOTIFY_PARENT_RESULT: threadPath={ThreadPath}, resolved={Resolved}",
+            threadPath, completed);
     }
 
     private static string? SerializeArgs(IDictionary<string, object?>? args)

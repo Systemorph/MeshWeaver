@@ -45,9 +45,8 @@
                         </div>
                         @if (isPending)
                         {
-                            @* Subscribe to sub-thread's StreamingArea — shows its active response message *@
                             <div class="thread-msg-delegation-stream">
-                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")))" />
+                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
                             </div>
                         }
                     </div>

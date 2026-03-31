@@ -69,16 +69,9 @@
 .thread-exec-tool.done {
     color: var(--neutral-foreground-hint);
 }
-.thread-exec-dots {
-    display: inline-flex;
-    gap: 3px;
-}
-.thread-exec-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--accent-fill-rest);
-    animation: thread-exec-blink 1.4s infinite both;
+.thread-exec-star {
+    font-size: 1.2rem;
+    animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
 }
 .thread-exec-status {
     flex: 1;
@@ -211,9 +204,12 @@
     0%, 100% { opacity: 0.3; }
     50% { opacity: 0.15; }
 }
-@@keyframes thread-exec-blink {
-    0%, 100% { opacity: 0.2; transform: scale(0.8); }
-    50% { opacity: 1; transform: scale(1.2); }
+@@keyframes thread-exec-star-pulse {
+    0% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+    25% { color: #ff6b6b; transform: scale(1.3) rotate(15deg); }
+    50% { color: #ffd93d; transform: scale(1) rotate(0deg); }
+    75% { color: #6bcb77; transform: scale(1.3) rotate(-15deg); }
+    100% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
 }
 
 

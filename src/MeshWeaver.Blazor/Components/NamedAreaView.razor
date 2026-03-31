@@ -19,7 +19,7 @@
     </HeadContent>
 }
 
-@if (ShowProgress && RootControl == null)
+@if (ShowProgress && RootControl == null && SpinnerType != SpinnerType.None)
 {
     @if (SpinnerType == SpinnerType.Skeleton)
     {

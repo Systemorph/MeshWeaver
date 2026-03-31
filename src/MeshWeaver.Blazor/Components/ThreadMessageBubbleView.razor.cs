@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using MeshWeaver.Layout;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -8,7 +10,7 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private bool IsUser => ViewModel.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
 
     private string? messageText;
-    private ImmutableList<ToolCallEntry>? toolCalls;
+    private IReadOnlyList<ToolCallEntry>? toolCalls;
 
     private bool HasToolCalls => toolCalls is { Count: > 0 };
 
@@ -19,7 +21,19 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     {
         base.BindData();
         DataBind(ViewModel.Text, x => x.messageText);
-        DataBind(ViewModel.ToolCalls, x => x.toolCalls);
+        DataBind(ViewModel.ToolCalls, x => x.toolCalls, (val, prev) =>
+        {
+            IReadOnlyList<ToolCallEntry>? result = val switch
+            {
+                null => null,
+                IReadOnlyList<ToolCallEntry> list => list,
+                JsonElement je => je.Deserialize<List<ToolCallEntry>>(Hub.JsonSerializerOptions),
+                _ => null
+            };
+            Logger.LogDebug("[BubbleView] TOOLCALLS_BIND: type={Type}, count={Count}, area={Area}",
+                val?.GetType().Name ?? "null", result?.Count ?? -1, Area);
+            return result;
+        });
     }
 
     private static string FormatToolCallSummary(ToolCallEntry call)

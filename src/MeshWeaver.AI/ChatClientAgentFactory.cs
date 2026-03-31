@@ -259,9 +259,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         Content = new MeshThread()
                     };
 
-                    // Set delegation path BEFORE CreateNode — so the throttle block
-                    // in ThreadExecution can include it in the tool call entry immediately
+                    // Set delegation path and notify — the streaming loop is blocked
+                    // during tool execution, so the throttle never fires. The callback
+                    // pushes the tool call with DelegationPath immediately.
                     chat.LastDelegationPath = subThreadPath;
+                    chat.UpdateDelegationStatus?.Invoke($"Delegating to {targetId}...");
 
                     meshService.CreateNode(subThreadNode).Subscribe(
                         _ =>

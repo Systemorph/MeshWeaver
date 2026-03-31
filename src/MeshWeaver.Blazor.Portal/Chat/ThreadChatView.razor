@@ -63,11 +63,7 @@ else
     {
         <div class="thread-exec-bar">
             <div class="thread-exec-header">
-                <span class="thread-exec-dots">
-                    <span class="thread-exec-dot"></span>
-                    <span class="thread-exec-dot" style="animation-delay: 0.2s;"></span>
-                    <span class="thread-exec-dot" style="animation-delay: 0.4s;"></span>
-                </span>
+                <span class="thread-exec-star">&#10041;</span>
                 <span class="thread-exec-status">@(ThreadViewModel.ExecutionStatus ?? "Generating response...")</span>
                 <button class="thread-exec-cancel" @onclick="CancelExecution">
                     <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity: 0.7;"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>

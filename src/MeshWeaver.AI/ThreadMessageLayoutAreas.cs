@@ -31,11 +31,85 @@ public static class ThreadMessageLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
+                .WithView("Streaming", StreamingCompact)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
 
     private const string MessageDataKey = "msg";
+
+    /// <summary>
+    /// Compact streaming view for parent thread consumption.
+    /// Shows last 3 lines of text + tool call chips + delegation links.
+    /// Subscribes to the MeshNodeReference sync stream for live updates.
+    /// </summary>
+    public static IObservable<UiControl?> StreamingCompact(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+
+        return syncStream!
+            .Select(change =>
+            {
+                var msg = change.Value?.Content as ThreadMessage;
+                if (msg == null) return (UiControl?)null;
+
+                var stack = Controls.Stack
+                    .WithStyle("font-size:0.75rem; color:var(--neutral-foreground-hint); line-height:1.3; gap:2px;");
+
+                // Row 1: Last 3 lines of text
+                var text = msg.Text ?? "";
+                if (text.Length > 0)
+                {
+                    var lines = text.Split('\n');
+                    var last = lines.Length > 3 ? lines[^3..] : lines;
+                    var preview = string.Join("\n", last).Trim();
+                    if (preview.Length > 200) preview = "..." + preview[^197..];
+                    stack = stack.WithView(Controls.Html(
+                        $"<pre style=\"margin:0; white-space:pre-wrap; max-height:45px; overflow:hidden; font-size:0.72rem;\">{System.Web.HttpUtility.HtmlEncode(preview)}</pre>"));
+                }
+
+                // Row 2: Tool call chips (non-delegation)
+                var regularCalls = msg.ToolCalls.Where(tc => string.IsNullOrEmpty(tc.DelegationPath)).ToList();
+                if (regularCalls.Count > 0)
+                {
+                    var chips = string.Join(" ", regularCalls.Select(tc =>
+                    {
+                        var icon = tc.Result != null ? "&#10003;" : "&#9679;";
+                        var color = tc.Result != null ? "var(--neutral-foreground-hint)" : "var(--accent-fill-rest)";
+                        var name = (tc.DisplayName ?? tc.Name);
+                        if (name.Length > 25) name = name[..22] + "...";
+                        return $"<span style=\"font-size:0.68rem; color:{color};\">{icon} {System.Web.HttpUtility.HtmlEncode(name)}</span>";
+                    }));
+                    stack = stack.WithView(Controls.Html($"<div style=\"display:flex; flex-wrap:wrap; gap:3px;\">{chips}</div>"));
+                }
+
+                // Row 3: Delegation sub-threads (recursive — embed their StreamingArea)
+                foreach (var tc in msg.ToolCalls.Where(tc => !string.IsNullOrEmpty(tc.DelegationPath)))
+                {
+                    var icon = tc.Result != null ? "&#10003;" : "&#10041;";
+                    var name = (tc.DisplayName ?? tc.Name);
+                    if (name.Length > 30) name = name[..27] + "...";
+
+                    var delStack = Controls.Stack
+                        .WithStyle("border-left:2px solid var(--accent-fill-rest); padding-left:6px; margin-top:2px;");
+
+                    delStack = delStack.WithView(Controls.Html(
+                        $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:var(--accent-fill-rest); text-decoration:none; font-weight:500;\">{icon} {System.Web.HttpUtility.HtmlEncode(name)}</a>"));
+
+                    if (tc.Result == null)
+                    {
+                        // Recurse: embed sub-thread's StreamingArea
+                        delStack = delStack.WithView(
+                            new LayoutAreaControl(tc.DelegationPath!, new LayoutAreaReference(ThreadNodeType.StreamingArea)));
+                    }
+
+                    stack = stack.WithView(delStack);
+                }
+
+                return (UiControl?)stack;
+            });
+    }
 
     /// <summary>
     /// Handles content updates from thread execution.
@@ -225,7 +299,7 @@ public static class ThreadMessageLayoutAreas
         {
             var name = System.Web.HttpUtility.HtmlEncode(
                 st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
-            var href = $"/{st.Path}/{ThreadNodeType.ThreadArea}";
+            var href = $"/{st.Path}";
 
             sb.Append($"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 2px 0; " +
                        $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none;\">" +
@@ -396,7 +470,7 @@ public static class ThreadMessageLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}")));
         }
 
         return Controls.Stack
@@ -476,7 +550,7 @@ public static class ThreadMessageLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}")));
         }
 
         return Controls.Stack

@@ -316,40 +316,31 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         // 4. Subscribe to the response message node — watch for tool calls appearing
         var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
 
-        // Poll via GetDataRequest — does the grain have the content?
-        Output.WriteLine("4. Polling response message for content...");
-        ThreadMessage? msgWithContent = null;
-        for (var i = 0; i < 60; i++)
-        {
-            var polled = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (polled != null && (!string.IsNullOrEmpty(polled.Text) || polled.ToolCalls.Count > 0))
-            {
-                Output.WriteLine($"   [POLL {i}] text={polled.Text?.Length ?? 0}, toolCalls={polled.ToolCalls.Count}");
-                msgWithContent = polled;
-                break;
-            }
-            if (i % 10 == 0) Output.WriteLine($"   [POLL {i}] waiting...");
-            await Task.Delay(500, ct);
-        }
-
-        msgWithContent.Should().NotBeNull("response should have content after execution");
-        Output.WriteLine($"5. Content found via polling: text={msgWithContent!.Text?.Length ?? 0}, toolCalls={msgWithContent.ToolCalls.Count}");
-
-        // Now verify the STREAM also received the update (this is the critical live-update check)
-        Output.WriteLine("6. Checking if stream received the update...");
-        var streamMsg = await responseStream
+        // 4. Wait for delegation tool call with DelegationPath on the response stream
+        Output.WriteLine("4. Waiting for delegation tool call with DelegationPath...");
+        var msgWithDelegation = await responseStream
             .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
-            .Where(m => !string.IsNullOrEmpty(m?.Text))
-            .Timeout(5.Seconds())
+            .Where(m => m?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
+            .Timeout(60.Seconds())
             .FirstAsync()
             .ToTask(ct);
 
-        streamMsg.Should().NotBeNull("stream should receive the text update live");
-        streamMsg!.Text.Should().NotBeNullOrEmpty("stream should have text");
-        Output.WriteLine($"7. STREAM received update: text={streamMsg.Text?.Length ?? 0}, toolCalls={streamMsg.ToolCalls.Count}");
-        Output.WriteLine("8. PASS — live streaming works via UpdateThreadMessageContent → workspace.UpdateMeshNode → client stream");
+        var delegation = msgWithDelegation!.ToolCalls.First(c => !string.IsNullOrEmpty(c.DelegationPath));
+        Output.WriteLine($"5. DELEGATION APPEARED: {delegation.Name}, path={delegation.DelegationPath}");
+        delegation.DelegationPath.Should().NotBeNullOrEmpty("delegation tool call must have DelegationPath set");
 
-        Output.WriteLine("8. PASS — live streaming works via UpdateThreadMessageContent → workspace.UpdateMeshNode → client stream");
+        // 5. Wait for parent execution to complete (text appears)
+        Output.WriteLine("6. Waiting for parent to complete...");
+        var completed = await responseStream
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
+            .Where(m => !string.IsNullOrEmpty(m?.Text))
+            .Timeout(60.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
+
+        completed!.Text.Should().NotBeNullOrEmpty("parent should have text after delegation completes");
+        Output.WriteLine($"7. PARENT COMPLETE: text='{completed.Text}', toolCalls={completed.ToolCalls.Count}");
+        Output.WriteLine("8. PASS — delegation with DelegationPath end-to-end");
     }
 
     /// <summary>
@@ -446,6 +437,64 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 }
 
 /// <summary>
+/// Fake chat client that calls delegate_to_agent, triggering REAL delegation.
+/// The Orchestrator emits a delegate_to_agent function call.
+/// FunctionInvokingChatClient intercepts it and calls the actual delegation tool.
+/// The sub-thread runs with a simple fake that returns text.
+/// </summary>
+internal class DelegatingFakeChatClient : IChatClient
+{
+    private readonly string agentName;
+    public DelegatingFakeChatClient(string agentName) => this.agentName = agentName;
+    public ChatClientMetadata Metadata => new("DelegatingFake");
+
+    public Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var hasFunctionResult = messages.SelectMany(m => m.Contents).OfType<FunctionResultContent>().Any();
+        if (hasFunctionResult)
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Delegation complete.")));
+
+        var call = new FunctionCallContent("del-1", "delegate_to_agent",
+            new Dictionary<string, object?>
+            {
+                ["agentName"] = "Agent/Worker",
+                ["task"] = "Do something simple",
+            });
+        return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, [call])));
+    }
+
+    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var hasFunctionResult = messages.SelectMany(m => m.Contents).OfType<FunctionResultContent>().Any();
+        if (hasFunctionResult)
+        {
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "Delegation complete.");
+            yield break;
+        }
+
+        yield return new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent("del-1", "delegate_to_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agentName"] = "Agent/Worker",
+                    ["task"] = "Do something simple",
+                })]
+        };
+        await Task.Delay(10, cancellationToken);
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null) =>
+        serviceType == typeof(IChatClient) ? this : null;
+    public void Dispose() { }
+}
+
+/// <summary>
 /// Fake chat client that issues a tool call before producing text.
 /// This simulates the real flow where agents call tools during execution.
 /// </summary>
@@ -498,17 +547,25 @@ internal class ToolCallingFakeChatClientFactory : IChatClientFactory
     public string Name => "ToolCallingFakeFactory";
     public IReadOnlyList<string> Models => ["tool-calling-model"];
     public int Order => 0;
+    public bool IsPersistent => false;
 
     public ChatClientAgent CreateAgent(
         AgentConfiguration config, IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null)
-        => new(chatClient: new ToolCallingFakeChatClient(),
-            instructions: config.Instructions ?? "Test assistant with tools.",
+    {
+        // Orchestrator delegates, Worker does simple text
+        IChatClient client = config.Id == "Orchestrator"
+            ? new DelegatingFakeChatClient(config.Id)
+            : new ToolCallingFakeChatClient();
+
+        return new(chatClient: client,
+            instructions: config.Instructions ?? "Test assistant.",
             name: config.Id, description: config.Description ?? config.Id,
             tools: [AIFunctionFactory.Create((string param) => $"Tool executed with {param}", "test_tool", "A test tool")],
             loggerFactory: null, services: null);
+    }
 
     public Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config, IAgentChat chat,

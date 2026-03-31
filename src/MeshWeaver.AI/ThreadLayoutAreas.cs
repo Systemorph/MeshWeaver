@@ -252,7 +252,6 @@ public static class ThreadLayoutAreas
         var hubPath = host.Hub.Address.ToString();
         var stream = host.Workspace.GetStream<MeshNode>();
 
-        // Only re-emit when IsExecuting or ActiveMessageId changes — prevents flickering
         return stream!
             .Select(nodes =>
             {
@@ -262,17 +261,14 @@ public static class ThreadLayoutAreas
             })
             .DistinctUntilChanged()
             .Select(state =>
-        {
-            if (!state.IsExecuting || string.IsNullOrEmpty(state.ActiveMessageId))
-                return (UiControl?)null;
+            {
+                if (!state.IsExecuting || string.IsNullOrEmpty(state.ActiveMessageId))
+                    return (UiControl?)null;
 
-            var responsePath = $"{hubPath}/{state.ActiveMessageId}";
-
-            // StreamingArea = OutputCell (for parent thread consumption)
-            return (UiControl?)new LayoutAreaControl(responsePath,
-                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
-                    .WithSpinnerType(SpinnerType.Skeleton);
-        });
+                var responsePath = $"{hubPath}/{state.ActiveMessageId}";
+                return (UiControl?)new LayoutAreaControl(responsePath,
+                    new LayoutAreaReference("Streaming"));
+            });
     }
 
     /// <summary>
