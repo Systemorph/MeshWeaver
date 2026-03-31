@@ -88,11 +88,13 @@ public record LayoutDefinition(IMessageHub Hub)
 
     public int Count => AsyncRenderers.Count + NamedRenderers.Count;
 
+    /// <summary>
+    /// Conversion rules collected at config time. Applied by UiControlService at construction.
+    /// </summary>
+    internal ImmutableList<Func<object, UiControl?>> ConversionRules { get; init; } = ImmutableList<Func<object, UiControl?>>.Empty;
+
     public LayoutDefinition AddRendering(Func<object, UiControl?> rule)
-    {
-        Hub.ServiceProvider.GetRequiredService<IUiControlService>().AddRule(rule);
-        return this;
-    }
+        => this with { ConversionRules = ConversionRules.Insert(0, rule) };
 
     internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
     internal ThumbnailPattern? ThumbnailPattern { get; init; }
