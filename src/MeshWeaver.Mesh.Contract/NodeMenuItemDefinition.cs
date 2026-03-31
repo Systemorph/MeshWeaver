@@ -14,6 +14,7 @@ namespace MeshWeaver.Mesh;
 /// <param name="RequiredPermission">Permission the user must have for this item to appear</param>
 /// <param name="Order">Sort order within the menu (lower = earlier)</param>
 /// <param name="Href">Optional absolute href — when set, navigates to this URL instead of constructing from Area</param>
+/// <param name="Children">Optional child menu items for nested/hierarchical menus</param>
 public record NodeMenuItemDefinition(
     string Label,
     string Area,
