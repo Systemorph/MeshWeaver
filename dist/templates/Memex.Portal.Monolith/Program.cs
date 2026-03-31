@@ -1,4 +1,4 @@
-using Memex.Portal.ServiceDefaults;
+﻿using Memex.Portal.ServiceDefaults;
 using Memex.Portal.Shared;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.DataProtection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure portal services (auth, AI, Blazor, Radzen, etc.)
+// Configure Memex services (pattern from MeshWeaver.Portal's ConfigureWebPortalServices)
 builder.ConfigureMemexServices();
 
 // Data protection: persist keys to local file system (single-instance monolith)
@@ -52,7 +52,13 @@ builder.UseMeshWeaver(
         {
             config = config
                 .AddFileSystemDataSource("ACME", "ACME Corporation",
-                    Path.Combine(graphBasePath, "ACME"), "Sample ACME organization data");
+                    Path.Combine(graphBasePath, "ACME"), "Sample ACME organization data")
+                .AddFileSystemDataSource("Northwind", "Northwind Traders",
+                    Path.Combine(graphBasePath, "Northwind"), "Sample Northwind trading data")
+                .AddFileSystemDataSource("Cornerstone", "Cornerstone",
+                    Path.Combine(graphBasePath, "Cornerstone"), "Sample Cornerstone data")
+                .AddFileSystemDataSource("FutuRe", "FutuRe",
+                    Path.Combine(graphBasePath, "FutuRe"), "Sample FutuRe reinsurance data");
         }
 
         return config.UseMonolithMesh();
@@ -64,5 +70,5 @@ var app = builder.Build();
 // Map Aspire default endpoints (health checks)
 app.MapDefaultEndpoints();
 
-// Start the Memex portal application
+// Start the Memex portal application (pattern from MeshWeaver.Portal's StartPortalApplication)
 app.StartMemexApplication<Memex.Portal.Shared.App>();

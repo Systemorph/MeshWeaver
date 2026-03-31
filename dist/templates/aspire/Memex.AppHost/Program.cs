@@ -98,11 +98,9 @@ else if (isDeployed)
     });
 }
 var orleansTables = orleansStorage.AddTables("orleans-clustering");
-var grainStateBlobs = orleansStorage.AddBlobs("orleans-grain-state");
 
 var orleans = builder.AddOrleans("memex-mesh")
-    .WithClustering(orleansTables)
-    .WithGrainStorage("Default", grainStateBlobs);
+    .WithClustering(orleansTables);
 
 // --- Application Insights ---
 var appInsights = builder.AddAzureApplicationInsights("appinsights")
@@ -137,6 +135,10 @@ var portal = builder
     .WithEnvironment("Anthropic__Models__0", "claude-sonnet-4-6")
     .WithEnvironment("Anthropic__Models__1", "claude-opus-4-6")
     .WithEnvironment("Anthropic__Models__2", "claude-haiku-4-5")
+    // Model tiers: map agent tiers to concrete models
+    .WithEnvironment("ModelTier__Heavy", "claude-opus-4-6")
+    .WithEnvironment("ModelTier__Standard", "claude-sonnet-4-6")
+    .WithEnvironment("ModelTier__Light", "claude-haiku-4-5")
     // LLM: Azure OpenAI
     .WithEnvironment("AzureOpenAIS__Endpoint", "https://s-meshweaver.cognitiveservices.azure.com")
     .WithEnvironment("AzureOpenAIS__ApiKey", azureFoundryKey)
@@ -150,13 +152,17 @@ var portal = builder
     .WithEnvironment("Authentication__Google__ClientSecret", googleClientSecret)
     // Wait for dependencies
     .WaitFor(orleansTables)
-    .WaitFor(grainStateBlobs)
     .WaitForCompletion(dbMigration)
-    // ACA deployment: sticky sessions (Blazor Server) + custom domain
+    // ACA deployment: sticky sessions (Blazor Server) + custom domain + resources
     .PublishAsAzureContainerApp((module, app) =>
     {
         app.Configuration.Ingress.StickySessionsAffinity = StickySessionAffinity.Sticky;
         app.ConfigureCustomDomain(customDomain, certificateName);
+
+        // Scale: min 2 replicas (Orleans needs ≥2 for resilience), max 6 under load.
+        // Each replica: 2 vCPU / 4Gi (50% of Consumption tier max 4 vCPU / 8Gi).
+        app.Template.Scale.MinReplicas = 2;
+        app.Template.Scale.MaxReplicas = 6;
     });
 
 // --- Azure Blob Storage ---

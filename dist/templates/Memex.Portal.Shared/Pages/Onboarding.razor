@@ -178,19 +178,20 @@
 
                 await NodeFactory.CreateNodeAsync(node);
 
-                // First user becomes PlatformAdmin
+                // First user becomes global Admin (stored in admin.access table)
                 if (isFirstUser)
                 {
                     var securityService = PortalApplication.Hub.ServiceProvider
                         .GetService<ISecurityService>();
                     if (securityService != null)
-                        await securityService.AddUserRoleAsync(username, "PlatformAdmin", "Admin", username);
+                        await securityService.AddUserRoleAsync(username, Role.Admin.Id, "Admin", username);
                 }
             }
 
-            // Update circuit context so the OnboardingMiddleware on the next request
-            // recognizes this user as already onboarded (the query for newly created
-            // nodes may not return results immediately due to routing/caching).
+            // Update request-scoped context so the OnboardingMiddleware on the next request
+            // recognizes this user as already onboarded. The forceLoad navigation below
+            // triggers a fresh HTTP request + circuit, so CircuitAccessHandler will
+            // re-resolve the user from AuthenticationState.
             var updatedContext = (AccessService.Context ?? new AccessContext()) with
             {
                 ObjectId = username,
@@ -198,7 +199,6 @@
                 Email = model.Email.Trim()
             };
             AccessService.SetContext(updatedContext);
-            AccessService.SetCircuitContext(updatedContext);
 
             Navigation.NavigateTo("/", forceLoad: true);
         }
