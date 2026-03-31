@@ -11,19 +11,22 @@ public interface IUiControlService
     LayoutDefinition LayoutDefinition { get; }
 }
 
-public class UiControlService(IMessageHub hub) : IUiControlService
+public class UiControlService : IUiControlService
 {
-    public LayoutDefinition LayoutDefinition { get; } = hub.GetLayoutDefinition();
+    public LayoutDefinition LayoutDefinition { get; }
 
     // Rules are immutable: config-time rules from LayoutDefinition + default fallback.
     // No AddRule() — all rules are known at construction time.
-    private ImmutableList<Func<object, UiControl?>> Rules { get; } = BuildRules(hub.GetLayoutDefinition());
+    private readonly ImmutableList<Func<object, UiControl?>> rules;
 
-    private static ImmutableList<Func<object, UiControl?>> BuildRules(LayoutDefinition layout)
-        => layout.ConversionRules.Add(o => o as UiControl ?? DefaultConversion(o));
+    public UiControlService(IMessageHub hub)
+    {
+        LayoutDefinition = hub.GetLayoutDefinition();
+        rules = LayoutDefinition.ConversionRules.Add(o => o as UiControl ?? DefaultConversion(o));
+    }
 
     public UiControl? Convert(object o) =>
-        Rules.Select(r => r.Invoke(o))
+        rules.Select(r => r.Invoke(o))
             .FirstOrDefault(x => x is not null);
 
 
