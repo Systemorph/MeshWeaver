@@ -1,5 +1,5 @@
 using System;
-using System.Linq;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -16,8 +16,8 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// Orleans integration test for API token creation and validation.
-/// Tests the full flow: create token → validate via ApiToken/{hashPrefix} grain → get AccessContext.
-/// This requires Orleans grain activation for the ApiToken/{hashPrefix} hub.
+/// Uses standard CreateNodeRequest with nodeType=ApiToken — same satellite pattern
+/// as Thread/Comment. The RLS validator maps ApiToken → Permission.Api.
 /// </summary>
 public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(output)
 {
@@ -25,46 +25,50 @@ public class OrleansApiTokenTest(ITestOutputHelper output) : OrleansTestBase(out
     {
         configuration.TypeRegistry
             .WithType(typeof(ValidateTokenRequest), nameof(ValidateTokenRequest))
-            .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse))
-            .WithType(typeof(CreateApiTokenRequest), nameof(CreateApiTokenRequest))
-            .WithType(typeof(CreateApiTokenResponse), nameof(CreateApiTokenResponse));
+            .WithType(typeof(ValidateTokenResponse), nameof(ValidateTokenResponse));
         return base.ConfigureClient(configuration);
     }
 
     [Fact]
-    public async Task CreateAndValidateApiToken_ViaOrleans()
+    public async Task CreateApiToken_ViaStandardCreateNodeRequest()
     {
         var ct = new CancellationTokenSource(30.Seconds()).Token;
         var client = await GetClientAsync();
         var meshAddress = ClientMesh.Address;
 
-        // 1. Create token
-        var createResponse = await client.AwaitResponse(
-            new CreateApiTokenRequest { Label = "Orleans Test Token" },
-            o => o.WithTarget(meshAddress), ct);
-
-        createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var rawToken = createResponse.Message.RawToken!;
-        rawToken.Should().StartWith("mw_");
-        createResponse.Message.TokenPath.Should().Contain("/_Api/");
-        Output.WriteLine($"Created token at {createResponse.Message.TokenPath}");
-
-        // 2. Validate token — routes to ApiToken/{hashPrefix} grain
+        // Generate token hash
+        var rawToken = $"mw_{Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant()}";
         var hash = ValidateTokenRequest.HashToken(rawToken);
         var hashPrefix = hash[..12];
 
-        var validateResponse = await client.AwaitResponse(
-            new ValidateTokenRequest(rawToken),
-            o => o.WithTarget(new Address("ApiToken", hashPrefix)), ct);
+        // Create token as satellite of User node — same pattern as Thread
+        var userId = "Roland";
+        var tokenNode = new MeshNode(hashPrefix, $"User/{userId}/_Api")
+        {
+            Name = "Orleans Test Token",
+            NodeType = ApiTokenNodeType.NodeType,
+            MainNode = $"User/{userId}",
+            Content = new ApiToken
+            {
+                UserId = userId,
+                UserName = "Roland",
+                UserEmail = "rbuergi@systemorph.com",
+                TokenHash = hash,
+                Label = "Orleans Test Token",
+                CreatedAt = DateTimeOffset.UtcNow,
+            }
+        };
 
-        validateResponse.Message.Success.Should().BeTrue(validateResponse.Message.Error);
-        validateResponse.Message.UserId.Should().NotBeNullOrEmpty();
-        validateResponse.Message.UserName.Should().NotBeNullOrEmpty();
-        Output.WriteLine($"Validated: user={validateResponse.Message.UserId}, name={validateResponse.Message.UserName}");
+        // Act — standard CreateNodeRequest (same as Thread creation)
+        var response = await client.AwaitResponse(
+            new CreateNodeRequest(tokenNode),
+            o => o.WithTarget(meshAddress), ct);
 
-        // 3. Verify the token represents the user who created it
-        // (AccessContext is set by UserContextMiddleware — here we just verify the response data)
-        validateResponse.Message.UserEmail.Should().NotBeNullOrEmpty();
+        response.Message.Success.Should().BeTrue(response.Message.Error);
+        response.Message.Node.Should().NotBeNull();
+        response.Message.Node!.Path.Should().Be($"User/{userId}/_Api/{hashPrefix}");
+        response.Message.Node.NodeType.Should().Be(ApiTokenNodeType.NodeType);
+        Output.WriteLine($"Token created at {response.Message.Node.Path}");
     }
 
     [Fact]
