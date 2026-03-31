@@ -241,16 +241,9 @@ public record LayoutAreaHost : IDisposable
         {
             logger?.LogDebug("Start rendering of {area}", context.Area);
             var observable = await asyncGenerator.Invoke(this, context, ct);
-            var hasEmitted = false;
             RegisterForDisposal(context.Parent?.Area ?? context.Area,
                 observable
-                    .Subscribe(c =>
-                    {
-                        if (hasEmitted)
-                            ClearArea(context);
-                        hasEmitted = true;
-                        UpdateArea(context, c);
-                    }, FailRendering)
+                    .Subscribe(c => UpdateArea(context, c), FailRendering)
             );
 
             logger?.LogDebug("End rendering of {area}", context.Area);
@@ -270,7 +263,7 @@ public record LayoutAreaHost : IDisposable
     {
         Stream.Update(store =>
         {
-            var changes = RemoveViews(store ?? new EntityStore(), context.Area);
+            var changes = DisposeChildAreas(store ?? new EntityStore(), context);
             var updates = RenderArea(context, view, changes.Store);
             return Stream.ApplyChanges(
                 new(
@@ -451,6 +444,21 @@ public record LayoutAreaHost : IDisposable
         return RemoveViews(store, contextArea);
     }
 
+    /// <summary>
+    /// Disposes subscriptions for child areas only (not the area itself),
+    /// then removes all views under the area from the store.
+    /// Used by UpdateArea to avoid disposing the feeding observable subscription.
+    /// </summary>
+    private EntityStoreAndUpdates DisposeChildAreas(EntityStore store, RenderingContext context)
+    {
+        var contextArea = context.Area;
+        foreach (var area in disposablesByArea.Where(x => x.Key.StartsWith(contextArea) && x.Key != contextArea).ToArray())
+            if (disposablesByArea.TryRemove(area.Key, out var disposables))
+                disposables.ForEach(d => d.Dispose());
+
+        return RemoveViews(store, contextArea);
+    }
+
     private EntityStoreAndUpdates RemoveViews(EntityStore store, string contextArea)
     {
         var existing =
@@ -472,16 +480,9 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea<T>(RenderingContext context, ViewStream<T> generator, EntityStore store) where T : UiControl?
     {
         var ret = DisposeExistingAreas(store, context);
-        var hasEmitted = false;
         RegisterForDisposal(context.Parent?.Area ?? context.Area,
             generator.Invoke(this, context, ret.Store)
-                .Subscribe(c =>
-                {
-                    if (hasEmitted)
-                        ClearArea(context);
-                    hasEmitted = true;
-                    UpdateArea(context, c);
-                }, FailRendering)
+                .Subscribe(c => UpdateArea(context, c), FailRendering)
         );
         return ret;
     }
@@ -494,16 +495,9 @@ public record LayoutAreaHost : IDisposable
         {
             logger.LogDebug("Start rendering of {area}", context.Area);
             var observable = await asyncGenerator.Invoke(this, context, store, ct);
-            var hasEmitted = false;
             RegisterForDisposal(context.Parent?.Area ?? context.Area,
                 observable
-                    .Subscribe(c =>
-                    {
-                        if (hasEmitted)
-                            ClearArea(context);
-                        hasEmitted = true;
-                        UpdateArea(context, c);
-                    }, FailRendering)
+                    .Subscribe(c => UpdateArea(context, c), FailRendering)
             );
 
             logger.LogDebug("End rendering of {area}", context.Area);
@@ -546,13 +540,9 @@ public record LayoutAreaHost : IDisposable
         IObservable<ViewDefinition> generator,
         EntityStore store)
     {
-        var hasEmitted = false;
         RegisterForDisposal(context.Area, generator.Subscribe(vd =>
                 InvokeAsync(async ct =>
                 {
-                    if (hasEmitted)
-                        ClearArea(context);
-                    hasEmitted = true;
                     var view = await vd.Invoke(this, context, ct);
                     UpdateArea(context, view!);
                 }, ex =>
@@ -570,19 +560,12 @@ public record LayoutAreaHost : IDisposable
     internal EntityStoreAndUpdates RenderArea(RenderingContext context, IObservable<object?> generator, EntityStore store)
     {
         var ret = DisposeExistingAreas(store, context);
-        var hasEmitted = false;
 
         RegisterForDisposal(
             context.Area,
             generator
                 .DistinctUntilChanged()
-                .Subscribe(view =>
-                {
-                    if (hasEmitted)
-                        ClearArea(context);
-                    hasEmitted = true;
-                    UpdateArea(context, view);
-                })
+                .Subscribe(view => UpdateArea(context, view))
         );
         return ret;
     }
