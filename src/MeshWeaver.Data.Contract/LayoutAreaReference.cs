@@ -10,7 +10,7 @@ namespace MeshWeaver.Data;
 /// </summary>
 public record LayoutAreaReference : WorkspaceReference<EntityStore>
 {
-    public LayoutAreaReference(string area)
+    public LayoutAreaReference(string? area)
     {
         Area = area;
         parameters = new(ParseParameters);
@@ -41,7 +41,7 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <summary>
     /// Name of the layout area.
     /// </summary>
-    public string Area { get; init; }
+    public string? Area { get; init; }
     /// <summary>
     /// Id of the layout area. Can contain optional parameters after a ? in URL format.
     /// </summary>
@@ -68,14 +68,22 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <param name="id">The ID for the data pointer.</param>
     /// <param name="extraSegments">The extra segments for the data pointer.</param>
     /// <returns>A string representing the data pointer.</returns>
-    public static string GetDataPointer(string id, params string?[] extraSegments) =>
-        JsonPointer.Create(
-            new[] { Data, Encode(id) }
+    public static string GetDataPointer(string id, params string?[] extraSegments)
+    {
+
+        var segments = new[] { Data, Encode(id) }
             .Concat(extraSegments)
-            .Select(x => (PointerSegment)x!)
-            .ToArray()
-        )
-        .ToString();
+            .Where(x => x is not null);
+        // Build JSON Pointer path manually: /segment1/segment2/...
+        return "/" + string.Join("/", segments.Select(EncodePointerSegment));
+    }
+
+    private static string EncodePointerSegment(string? segment)
+    {
+        if (segment is null) return string.Empty;
+        // RFC 6901: escape ~ as ~0 and / as ~1
+        return segment.Replace("~", "~0").Replace("/", "~1");
+    }
 
     public static string Encode(string id)
         => JsonSerializer.Serialize(id);
@@ -85,8 +93,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// </summary>
     /// <param name="area">The area for the control pointer.</param>
     /// <returns>A string representing the control pointer.</returns>
-    public static string GetControlPointer(string area) =>
-        JsonPointer.Create(Areas, JsonSerializer.Serialize(area)).ToString();
+    public static string GetControlPointer(string? area) =>
+        JsonPointer.Create(Areas, JsonSerializer.Serialize(area ?? string.Empty)).ToString();
 
 
     /// <summary>
@@ -96,6 +104,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <returns>A string representing the application href.</returns>
     public string ToHref(object address)
     {
+        if (Area == null)
+            return address.ToString()!;
         var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
@@ -108,6 +118,8 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
     /// <returns>A string representing the application href.</returns>
     public string ToHref(Address address)
     {
+        if (Area is null)
+            return address.ToString();
         var ret = $"{address}/{WorkspaceReference.Encode(Area)}";
         if (Id?.ToString() is { } s)
             ret = $"{ret}/{WorkspaceReference.Encode(s)}";
@@ -116,11 +128,15 @@ public record LayoutAreaReference : WorkspaceReference<EntityStore>
 
     public string ToHref(string addressType, string addressId)
     {
-        var ret = $"area/{addressType}/{addressId}/{WorkspaceReference.Encode(Area)}";
-        if (Id?.ToString() is { } s)
-            ret = $"{ret}/{WorkspaceReference.Encode(s)}";
+        // Format: addressType/addressId/areaName[/areaId] (area is default, no keyword needed)
+        var ret = $"{addressType}/{addressId}";
+        if (Area is not null)
+        {
+            ret = $"{ret}/{WorkspaceReference.Encode(Area)}";
+            if (Id?.ToString() is { } s)
+                ret = $"{ret}/{WorkspaceReference.Encode(s)}";
+        }
         return ret;
-
     }
 
     private readonly Lazy<IReadOnlyDictionary<string, string?>> parameters = new();

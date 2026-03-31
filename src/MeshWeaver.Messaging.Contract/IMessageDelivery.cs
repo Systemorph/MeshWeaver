@@ -18,7 +18,7 @@ public interface IMessageDelivery
 
     IMessageDelivery Package();
 
-    internal IMessageDelivery SetAccessContext(AccessContext accessObject);
+    IMessageDelivery SetAccessContext(AccessContext accessObject);
     internal IMessageDelivery ChangeState(MessageDeliveryState state);
     IMessageDelivery SetProperty(string name, object value);
     IMessageDelivery SetProperties(IReadOnlyDictionary<string, object> properties);

@@ -89,6 +89,7 @@ public abstract record MessageDelivery : IMessageDelivery
             Id = Id,
             ForwardedTo = ForwardedTo,
             RoutingPath = RoutingPath,
+            AccessContext = AccessContext,
         };
     }
 
@@ -127,6 +128,8 @@ public record MessageDelivery<TMessage> : MessageDelivery, IMessageDelivery<TMes
         : this(options.Sender, options.Target, message, jsonSerializerOptions)
     {
         Properties = options.Properties;
+        if (options.ImpersonateContext is not null)
+            AccessContext = options.ImpersonateContext;
     }
 
     public MessageDelivery(Address Sender, Address Target, TMessage Message, JsonSerializerOptions jsonSerializerOptions) : base(Sender, Target, jsonSerializerOptions)

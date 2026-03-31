@@ -1,0 +1,17 @@
+{
+  "id": "Analysis",
+  "namespace": "FutuRe/AmericasIns",
+  "name": "AmericasIns Profitability Analysis",
+  "nodeType": "FutuRe/LocalAnalysis",
+  "category": "Analytics",
+  "description": "Monthly profitability analysis for AmericasIns local lines of business",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "order": 1,
+  "isPersistent": true,
+  "content": {
+    "$type": "AnalysisContent",
+    "id": "Analysis",
+    "name": "AmericasIns Profitability Analysis",
+    "description": "Interactive profitability analysis for AmericasIns with local lines of business, estimates vs actuals, and quarterly trends."
+  }
+}

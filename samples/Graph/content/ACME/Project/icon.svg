@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .fg { fill: #d13438; }
+    .accent { fill: #a4262c; }
+  </style>
+  <rect class="bg" width="64" height="64" rx="8"/>
+  <!-- Board container (outer border) -->
+  <rect class="accent" x="6.75" y="10.75" width="50.5" height="42.5" rx="4.25"/>
+  <!-- Board container (inner background) -->
+  <rect class="bg" x="9.25" y="13.25" width="45.5" height="37.5" rx="1.75"/>
+  <!-- Header bar -->
+  <rect class="accent" x="9.25" y="21.25" width="45.5" height="1.5"/>
+  <!-- Column dividers -->
+  <rect class="accent" x="23.5" y="22" width="1" height="30"/>
+  <rect class="accent" x="39.5" y="22" width="1" height="30"/>
+  <!-- Cards -->
+  <rect class="fg" x="11" y="25" width="10" height="6" rx="1.5" opacity="0.7"/>
+  <rect class="fg" x="11" y="34" width="10" height="6" rx="1.5" opacity="0.4"/>
+  <rect class="fg" x="27" y="25" width="10" height="6" rx="1.5" opacity="0.6"/>
+  <rect class="fg" x="43" y="25" width="10" height="6" rx="1.5" opacity="0.5"/>
+</svg>

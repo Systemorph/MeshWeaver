@@ -11,7 +11,7 @@ public class ImgPathMarkdownExtension(Func<string, string> transformation) : IMa
         pipeline.DocumentProcessed += ChangeImgPath;
     }
 
-    public void ChangeImgPath(MarkdownDocument document)
+    public void ChangeImgPath(Markdig.Syntax.MarkdownDocument document)
     {
         foreach (var link in document.Descendants<LinkInline>())
         {

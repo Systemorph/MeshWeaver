@@ -12,7 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Configure mesh with kernel support
 builder.ConfigureMesh(builder => 
     builder
-        .AddKernel()
+        .AddGraph()  // includes .AddKernel() for kernel support
         .ConfigureMesh(config => config.AddMeshNodes(/* your nodes */))
 );
 

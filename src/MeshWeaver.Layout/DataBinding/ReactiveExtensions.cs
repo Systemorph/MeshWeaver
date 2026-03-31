@@ -81,5 +81,103 @@ namespace MeshWeaver.Layout.DataBinding
                 return new CompositeDisposable(serialDisposable, sourceSubscription);
             });
         }
+        /// <summary>
+        /// Leading-edge throttle: emits the first value immediately, then suppresses subsequent values
+        /// for the specified interval. After the interval expires, if a value was suppressed during
+        /// the cooldown, it is emitted (guaranteeing the final state is always delivered).
+        /// </summary>
+        /// <typeparam name="T">The type of the elements in the source sequence.</typeparam>
+        /// <param name="source">The source observable sequence.</param>
+        /// <param name="interval">The cooldown interval after each emission.</param>
+        /// <param name="scheduler">The scheduler to use for timing.</param>
+        /// <returns>An observable sequence with leading-edge throttle behavior.</returns>
+        /// <summary>
+        /// Leading-edge throttle using the default scheduler.
+        /// </summary>
+        public static IObservable<T> ThrottleImmediate<T>(
+            this IObservable<T> source,
+            TimeSpan interval)
+            => ThrottleImmediate(source, interval, DefaultScheduler.Instance);
+
+        public static IObservable<T> ThrottleImmediate<T>(
+            this IObservable<T> source,
+            TimeSpan interval,
+            IScheduler scheduler)
+        {
+            return Observable.Create<T>(observer =>
+            {
+                var gate = new object();
+                var cooldownDisposable = new SerialDisposable();
+                var inCooldown = false;
+                var hasPending = false;
+                var pendingValue = default(T)!;
+
+                var sourceSubscription = source.Subscribe(
+                    onNext: x =>
+                    {
+                        lock (gate)
+                        {
+                            if (!inCooldown)
+                            {
+                                // Leading edge: emit immediately
+                                observer.OnNext(x);
+                                inCooldown = true;
+                                hasPending = false;
+
+                                // Schedule end of cooldown
+                                cooldownDisposable.Disposable = scheduler.Schedule(interval, () =>
+                                {
+                                    lock (gate)
+                                    {
+                                        inCooldown = false;
+                                        if (hasPending)
+                                        {
+                                            // Emit the latest suppressed value and start a new cooldown
+                                            hasPending = false;
+                                            observer.OnNext(pendingValue);
+                                            inCooldown = true;
+
+                                            cooldownDisposable.Disposable = scheduler.Schedule(interval, () =>
+                                            {
+                                                lock (gate)
+                                                {
+                                                    inCooldown = false;
+                                                    if (hasPending)
+                                                    {
+                                                        hasPending = false;
+                                                        observer.OnNext(pendingValue);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                            }
+                            else
+                            {
+                                // In cooldown: remember the latest value
+                                hasPending = true;
+                                pendingValue = x;
+                            }
+                        }
+                    },
+                    onError: observer.OnError,
+                    onCompleted: () =>
+                    {
+                        lock (gate)
+                        {
+                            if (hasPending)
+                            {
+                                observer.OnNext(pendingValue);
+                                hasPending = false;
+                            }
+                            observer.OnCompleted();
+                        }
+                    }
+                );
+
+                return new CompositeDisposable(cooldownDisposable, sourceSubscription);
+            });
+        }
     }
 }

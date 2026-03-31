@@ -1,0 +1,35 @@
+@using MeshWeaver.Blazor.Portal.Resize
+@using MeshWeaver.Blazor.Portal.Pages
+@using MeshWeaver.Blazor.Graph
+@using MeshWeaver.Blazor.Pages
+@using Microsoft.AspNetCore.Components.Authorization
+
+<BrowserDimensionWatcher @bind-ViewportInformation="@ViewportInformation" />
+
+@if (ViewportInformation is null)
+{
+    // prevent render until we've determined the browser viewport
+    return;
+}
+
+<CascadingAuthenticationState>
+<CascadingValue Value="@ViewportInformation">
+    <Router AppAssembly="@typeof(Routes).Assembly"
+            AdditionalAssemblies="@(new[] { typeof(ApplicationPage).Assembly, typeof(MeshNodeEditorView).Assembly, typeof(CreateNode).Assembly })">
+        <Found Context="routeData">
+            <RouteView RouteData="@routeData" DefaultLayout="@typeof(MainLayout)" />
+            <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+        </Found>
+        <NotFound>
+            <PageTitle>Not found</PageTitle>
+            <LayoutView Layout="@typeof(MainLayout)">
+                <p role="alert">Sorry, there's nothing at this address.</p>
+            </LayoutView>
+        </NotFound>
+    </Router>
+</CascadingValue>
+</CascadingAuthenticationState>
+
+@code {
+    private ViewportInformation? ViewportInformation;
+}

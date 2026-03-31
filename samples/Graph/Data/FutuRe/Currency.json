@@ -1,0 +1,19 @@
+{
+  "id": "Currency",
+  "namespace": "FutuRe",
+  "name": "Currency",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "ISO 4217 currency codes used in financial reporting",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Currency",
+    "namespace": "FutuRe",
+    "displayName": "Currency",
+    "iconName": "CurrencyDollarEuro",
+    "description": "Currency dimension for monetary values in profitability reporting",
+    "configuration": "config => config.WithContentType<Currency>()"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

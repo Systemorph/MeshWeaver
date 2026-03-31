@@ -1,0 +1,19 @@
+{
+  "id": "ExchangeRate",
+  "namespace": "FutuRe",
+  "name": "Exchange Rate",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "FX rates for local-to-CHF conversion. Rates frozen on last business day of each month. Publication deadline: 1 business day after month-end. Sources: ECB (EUR), Bloomberg (USD, JPY). Owner: Group Treasury, Zurich. Missing or late rates block downstream consolidation. Change requests require 5 business days notice via Group Treasury portal.",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "ExchangeRate",
+    "namespace": "FutuRe",
+    "displayName": "Exchange Rate",
+    "iconName": "CurrencyExchange",
+    "description": "FX rates for local-to-CHF conversion.\n\n**SLOs:**\n- **Publication deadline:** 1 business day after month-end\n- **Rate source:** ECB reference rates (EUR), Bloomberg (USD, JPY)\n- **Owner:** Group Treasury, Zurich\n- **Freeze policy:** Rates frozen on last business day of month — no retrospective changes\n- **Change requests:** Via Group Treasury portal, minimum 5 business days notice\n- **Fallback:** Missing or late rates block downstream consolidation — no silent fallback to stale values",
+    "configuration": "config => config.WithContentType<ExchangeRate>()"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

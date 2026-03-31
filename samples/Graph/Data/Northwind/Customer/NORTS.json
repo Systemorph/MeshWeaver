@@ -1,0 +1,23 @@
+{
+  "id": "NORTS",
+  "namespace": "Northwind/Customer",
+  "name": "North/South",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "North/South - London, UK",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "NORTS",
+    "companyName": "North/South",
+    "contactName": "Simon Crowther",
+    "contactTitle": "Sales Associate",
+    "city": "London",
+    "region": "",
+    "postalCode": "SW7 1RZ",
+    "country": "UK",
+    "phone": "(171) 555-7733",
+    "fax": "(171) 555-2530"
+  }
+}

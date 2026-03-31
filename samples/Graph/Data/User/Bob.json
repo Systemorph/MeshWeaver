@@ -1,0 +1,13 @@
+{
+  "id": "Bob",
+  "namespace": "User",
+  "name": "Bob Smith",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "User",
+    "email": "bob.smith@meshweaver.io",
+    "bio": "Software engineer and project contributor."
+  }
+}

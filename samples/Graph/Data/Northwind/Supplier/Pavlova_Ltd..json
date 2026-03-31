@@ -1,0 +1,21 @@
+{
+  "id": "Pavlova_Ltd.",
+  "namespace": "Northwind/Supplier",
+  "name": "Pavlova, Ltd.",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Pavlova, Ltd. - Melbourne, Australia",
+  "icon": "/static/NodeTypeIcons/truck.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 7,
+    "companyName": "Pavlova, Ltd.",
+    "contactName": "Ian Devling",
+    "contactTitle": "Marketing Manager",
+    "city": "Melbourne",
+    "region": "Victoria",
+    "country": "Australia",
+    "phone": "(03) 444-2343"
+  }
+}

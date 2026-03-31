@@ -1,0 +1,17 @@
+{
+  "id": "CHF-CHF",
+  "namespace": "FutuRe/ExchangeRate",
+  "name": "CHF → CHF (1.0)",
+  "nodeType": "FutuRe/ExchangeRate",
+  "isPersistent": true,
+  "content": {
+    "$type": "ExchangeRate",
+    "systemName": "CHF-CHF",
+    "displayName": "CHF → CHF",
+    "fromCurrency": "CHF",
+    "toCurrency": "CHF",
+    "planRate": 1.0,
+    "actualRate": 1.0
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

@@ -1,0 +1,23 @@
+{
+  "id": "RANCH",
+  "namespace": "Northwind/Customer",
+  "name": "Rancho grande",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Rancho grande - Buenos Aires, Argentina",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "RANCH",
+    "companyName": "Rancho grande",
+    "contactName": "Sergio Guti\u00e9rrez",
+    "contactTitle": "Sales Representative",
+    "city": "Buenos Aires",
+    "region": "",
+    "postalCode": "1010",
+    "country": "Argentina",
+    "phone": "(1) 123-5555",
+    "fax": "(1) 123-5556"
+  }
+}

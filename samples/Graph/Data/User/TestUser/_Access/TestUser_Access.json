@@ -1,0 +1,17 @@
+{
+  "id": "TestUser_Access",
+  "namespace": "User/TestUser/_Access",
+  "name": "TestUser Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "TestUser",
+    "displayName": "Test User",
+    "roles": [
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}

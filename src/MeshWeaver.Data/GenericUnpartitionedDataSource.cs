@@ -9,9 +9,10 @@ using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Data;
 
-public record DataSourceAddress(string Id) : Address(TypeName, Id)
+public static class DataSourceAddress
 {
     public const string TypeName = "ds";
+    public static Address Create(string id) => new(TypeName, id);
 }
 
 public interface IDataSource : IDisposable
@@ -150,7 +151,7 @@ public abstract record DataSource<TDataSource, TTypeSource>(object Id, IWorkspac
 
     public ISynchronizationStream<EntityStore> GetStreamForPartition(object? partition)
     {
-        var identity = new StreamIdentity(new DataSourceAddress(Id.ToString() ?? ""), partition);
+        var identity = new StreamIdentity(DataSourceAddress.Create(Id.ToString() ?? ""), partition);
         lock (Streams)
         {
             if (Streams.TryGetValue(partition ?? Id, out var ret))
@@ -201,8 +202,12 @@ public abstract record GenericUnpartitionedDataSource<TDataSource>(object Id, IW
     where TDataSource : GenericUnpartitionedDataSource<TDataSource>
 {
 
+    private static readonly MethodInfo WithTypeGeneric = ReflectionHelper.GetMethodGeneric<
+        GenericUnpartitionedDataSource<TDataSource>>(x => x.WithType<object>((Func<ITypeSource, ITypeSource>?)null));
     public override TDataSource WithType<T>(Func<ITypeSource, ITypeSource>? config) =>
         WithType<T>(x => (TypeSourceWithType<T>)(config ?? (y => y))(x));
+    public override TDataSource WithType(Type type, Func<ITypeSource, ITypeSource>? config = null) =>
+        (TDataSource)WithTypeGeneric.MakeGenericMethod(type).InvokeAsFunction(this, config ?? (Func<ITypeSource, ITypeSource>)(x => x));
 
     public TDataSource WithType<T>(Func<TypeSourceWithType<T>, TypeSourceWithType<T>>? configurator)
         where T : class => WithTypeSource(typeof(T), (configurator ?? (x => x)).Invoke(new(Workspace, Id)));
@@ -243,35 +248,25 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
 
     protected virtual async Task<EntityStore> GetInitialValueAsync(ISynchronizationStream<EntityStore> stream, CancellationToken cancellationToken)
     {
-        var initial = await TypeSources
-            .Values.ToAsyncEnumerable()
-            .SelectAwait(async ts =>
-            {
-                WorkspaceReference<InstanceCollection> reference =
-                    stream.StreamIdentity.Partition == null
-                        ? new CollectionReference(ts.CollectionName)
-                        : new PartitionedWorkspaceReference<InstanceCollection>(
-                            stream.StreamIdentity.Partition,
-                            new CollectionReference(ts.CollectionName)
-                        );
-                return new
-                {
-                    Reference = reference,
-                    Initialized = await ts.InitializeAsync(
-                        reference,
-                        cancellationToken
-                    )
-                };
-            })
-            .AggregateAsync(
-                new EntityStore()
-                {
-                    GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
-                },
-                (store, selected) => store.Update(selected.Reference, selected.Initialized),
-                cancellationToken: cancellationToken
-            );
-        return initial;
+        var store = new EntityStore()
+        {
+            GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
+        };
+
+        await foreach (var ts in TypeSources.Values.ToAsyncEnumerable())
+        {
+            WorkspaceReference<InstanceCollection> reference =
+                stream.StreamIdentity.Partition == null
+                    ? new CollectionReference(ts.CollectionName)
+                    : new PartitionedWorkspaceReference<InstanceCollection>(
+                        stream.StreamIdentity.Partition,
+                        new CollectionReference(ts.CollectionName)
+                    );
+            var initialized = await ts.InitializeAsync(reference, cancellationToken);
+            store = store.Update(reference, initialized);
+        }
+
+        return store;
     }
 
 
@@ -304,7 +299,8 @@ public abstract record TypeSourceBasedUnpartitionedDataSource<TDataSource, TType
                         return; // Skip processing on first emission (initialization)
                     }
                     Synchronize(change);
-                })
+                },
+                ex => Logger.LogWarning(ex, "Data source stream {Id} errored", Id))
         );
         // Always use async initialization to call GetInitialValueAsync properly
 
@@ -333,35 +329,25 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
         GetInitialValue(ISynchronizationStream<EntityStore> stream,
             CancellationToken cancellationToken)
     {
-        var initial = await TypeSources
-            .Values.ToAsyncEnumerable()
-            .SelectAwait(async ts =>
-            {
-                WorkspaceReference<InstanceCollection> reference =
-                    stream.StreamIdentity.Partition == null
-                        ? new CollectionReference(ts.CollectionName)
-                        : new PartitionedWorkspaceReference<InstanceCollection>(
-                            stream.StreamIdentity.Partition,
-                            new CollectionReference(ts.CollectionName)
-                        );
-                return new
-                {
-                    Reference = reference,
-                    Initialized = await ts.InitializeAsync(
-                        reference,
-                        cancellationToken
-                    )
-                };
-            })
-            .AggregateAsync(
-                new EntityStore()
-                {
-                    GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
-                },
-                (store, selected) => store.Update(selected.Reference, selected.Initialized),
-                cancellationToken: cancellationToken
-            );
-        return initial;
+        var store = new EntityStore()
+        {
+            GetCollectionName = valueType => Workspace.DataContext.TypeRegistry.GetOrAddType(valueType, valueType.Name)
+        };
+
+        await foreach (var ts in TypeSources.Values.ToAsyncEnumerable())
+        {
+            WorkspaceReference<InstanceCollection> reference =
+                stream.StreamIdentity.Partition == null
+                    ? new CollectionReference(ts.CollectionName)
+                    : new PartitionedWorkspaceReference<InstanceCollection>(
+                        stream.StreamIdentity.Partition,
+                        new CollectionReference(ts.CollectionName)
+                    );
+            var initialized = await ts.InitializeAsync(reference, cancellationToken);
+            store = store.Update(reference, initialized);
+        }
+
+        return store;
     }
 
     protected override ISynchronizationStream<EntityStore> CreateStream(StreamIdentity identity, Func<StreamConfiguration<EntityStore>, StreamConfiguration<EntityStore>> config)
@@ -388,7 +374,8 @@ public abstract record TypeSourceBasedPartitionedDataSource<TDataSource, TTypeSo
                         return; // Skip processing on first emission (initialization)
                     }
                     Synchronize(change);
-                })
+                },
+                ex => Logger.LogWarning(ex, "Data source stream {Id} errored", Id))
         );
         return stream;
     }

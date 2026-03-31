@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .fg { fill: #d13438; }
+    .accent { fill: #a4262c; }
+    .line { fill: #a4262c; }
+  </style>
+  <rect class="bg" width="64" height="64" rx="8"/>
+  <!-- List container (outer border) -->
+  <rect class="accent" x="8.75" y="6.75" width="46.5" height="50.5" rx="5.25"/>
+  <!-- List container (inner background) -->
+  <rect class="bg" x="11.25" y="9.25" width="41.5" height="45.5" rx="2.75"/>
+  <!-- Task 1 - completed -->
+  <!-- Checkbox outer -->
+  <rect class="fg" x="15" y="17" width="12" height="12" rx="3"/>
+  <!-- Checkbox inner -->
+  <rect class="bg" x="17" y="19" width="8" height="8" rx="1"/>
+  <!-- Checkmark (filled polygon tracing the stroke path) -->
+  <path class="fg" d="M17.29,22.29 L19.79,24.79 L20.5,25.5 L21.21,24.79 L25.21,20.79 L23.79,19.21 L20.5,22.5 L19.21,21.21 Z"/>
+  <rect class="line" x="30" y="21" width="18" height="3" rx="1"/>
+  <!-- Task 2 - unchecked -->
+  <!-- Checkbox outer -->
+  <rect class="accent" x="15" y="35" width="12" height="12" rx="3"/>
+  <!-- Checkbox inner -->
+  <rect class="bg" x="17" y="37" width="8" height="8" rx="1"/>
+  <rect class="line" x="30" y="39" width="14" height="3" rx="1" opacity="0.5"/>
+</svg>

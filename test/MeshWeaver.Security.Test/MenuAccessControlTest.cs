@@ -1,0 +1,298 @@
+using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using FluentAssertions.Extensions;
+using MeshWeaver.Data;
+using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Security;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Composition;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Security.Test;
+
+/// <summary>
+/// Tests that menu items are filtered server-side by the provider/permission system.
+/// Renders a layout area for the target node and reads MenuControl from the $Menu slot.
+/// </summary>
+public class MenuAccessControlTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string NodePath = "TestOrg/TestProject";
+    private const string TestUserId = "TestUser";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder)
+            .AddRowLevelSecurity()
+            .AddMeshNodes(
+                new MeshNode("TestOrg") { Name = "Test Organization" },
+                new MeshNode("TestProject", "TestOrg") { Name = "Test Project" },
+                new MeshNode("Admin") { Name = "Admin", NodeType = "Role", Content = Role.Admin },
+                new MeshNode("Editor") { Name = "Editor", NodeType = "Role", Content = Role.Editor },
+                new MeshNode("Viewer") { Name = "Viewer", NodeType = "Role", Content = Role.Viewer },
+                new MeshNode("Commenter") { Name = "Commenter", NodeType = "Role", Content = Role.Commenter }
+            )
+            .ConfigureDefaultNodeHub(c => c.AddDefaultLayoutAreas());
+
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration)
+            .AddLayoutClient()
+            .WithTypes(typeof(MenuControl), typeof(NodeMenuItemDefinition));
+
+    /// <summary>
+    /// Creates a client hub with an AccessContext for the test user.
+    /// The AccessContext flows through the message delivery pipeline to the node hub,
+    /// enabling server-side permission checks via ISecurityService.
+    /// </summary>
+    private IMessageHub GetClientWithUser(string userId = TestUserId)
+    {
+        var client = GetClient();
+        var accessService = client.ServiceProvider.GetRequiredService<AccessService>();
+        accessService.SetCircuitContext(new AccessContext { ObjectId = userId, Name = userId });
+        return client;
+    }
+
+    private async Task<IReadOnlyList<NodeMenuItemDefinition>> FetchMenuItemsAsync(IMessageHub client, Address nodeAddress)
+    {
+        var workspace = client.GetWorkspace();
+        var reference = new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea);
+
+        var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
+            nodeAddress,
+            reference);
+
+        // Read the $Menu control from the layout stream
+        var menuControl = await stream.GetControlStream(MenuControl.MenuArea)
+            .Timeout(3.Seconds())
+            .FirstAsync(x => x != null);
+
+        var menu = menuControl.Should().BeOfType<MenuControl>().Which;
+        return menu.Items;
+    }
+
+    /// <summary>
+    /// Flattens menu items by expanding group items (e.g., Actions) into their children.
+    /// </summary>
+    private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
+    {
+        var flat = new List<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+                flat.AddRange(item.Children);
+            else
+                flat.Add(item);
+        }
+        flat.Sort((a, b) => a.Order.CompareTo(b.Order));
+        return flat;
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Menu_NoRoles_SubscriptionDenied()
+    {
+        // With RLS enabled but no roles seeded, user has Permission.None.
+        // The AccessControlPipeline blocks SubscribeRequest (requires Read),
+        // so the stream receives a DeliveryFailure.
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(NodePath);
+
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            pingCts.Token);
+
+        var act = () => FetchMenuItemsAsync(client, nodeAddress);
+        var ex = await Assert.ThrowsAsync<DeliveryFailureException>(act);
+        ex.Message.Should().Contain("Access denied",
+            "user with no roles should be denied Read access on the hub");
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Menu_ReadOnlyUser_ShowsOnlyUnrestrictedItems()
+    {
+        // Viewer role: Read only → no Create, Update, or Delete
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync(TestUserId, "Viewer", NodePath, "system",
+            TestContext.Current.CancellationToken);
+
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(NodePath);
+
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            pingCts.Token);
+
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+
+        Output.WriteLine($"Menu items for Viewer: {items.Count}");
+        foreach (var item in items)
+            Output.WriteLine($"  {item.Label} (Area={item.Area})");
+
+        items.Select(i => i.Label).Should().BeEquivalentTo(
+            ["Files", "Threads", "Versions", "Settings"],
+            "Viewer has only Read — no Create, Update, Delete, or Export items");
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Menu_Editor_ShowsCreateItems()
+    {
+        // Editor role: Read|Create|Update|Comment → has Create but not Delete
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
+            TestContext.Current.CancellationToken);
+
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(NodePath);
+
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            pingCts.Token);
+
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+
+        Output.WriteLine($"Menu items for Editor: {items.Count}");
+        foreach (var item in items)
+            Output.WriteLine($"  {item.Label} (Area={item.Area})");
+
+        // Editor gets Edit, Create, Copy, Import, Export, plus always-visible items
+        items.Select(i => i.Label).Should().BeEquivalentTo(
+            ["Edit", "Create", "Copy", "Import", "Files", "Export", "Threads", "Versions", "Settings"],
+            "Editor has Read|Create|Update|Comment|Export — Edit/Create/Copy/Import/Export plus always-visible items");
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Menu_Admin_ShowsAllItems()
+    {
+        // Admin role: All permissions
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system",
+            TestContext.Current.CancellationToken);
+
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(NodePath);
+
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            pingCts.Token);
+
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+
+        Output.WriteLine($"Menu items for Admin: {items.Count}");
+        foreach (var item in items)
+            Output.WriteLine($"  {item.Label} (Area={item.Area})");
+
+        items.Should().HaveCount(11, "Admin should see all default menu items");
+        items.Select(i => i.Label).Should().BeEquivalentTo(
+            ["Edit", "Create", "Copy", "Move", "Import", "Files", "Export", "Threads", "Versions", "Settings", "Delete"]);
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Menu_ItemsAreSortedByOrder()
+    {
+        // Seed Admin so we get all items for sorting verification
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync(TestUserId, "Admin", NodePath, "system",
+            TestContext.Current.CancellationToken);
+
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(NodePath);
+
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            pingCts.Token);
+
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+
+        items.Should().BeInAscendingOrder(i => i.Order,
+            "menu items should be sorted by Order");
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task Menu_ImportAreaIsImportMeshNodes()
+    {
+        // Seed Editor to get Import item (requires Create permission)
+        var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        await svc.AddUserRoleAsync(TestUserId, "Editor", NodePath, "system",
+            TestContext.Current.CancellationToken);
+
+        var client = GetClientWithUser();
+        var nodeAddress = new Address(NodePath);
+
+        using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        pingCts.CancelAfter(3.Seconds());
+        await client.AwaitResponse(
+            new PingRequest(),
+            o => o.WithTarget(nodeAddress),
+            pingCts.Token);
+
+        var items = FlattenMenuItems(await FetchMenuItemsAsync(client, nodeAddress));
+
+        var importItem = items.FirstOrDefault(i => i.Label == "Import");
+        importItem.Should().NotBeNull("Import menu item should exist for Editor");
+        importItem!.Area.Should().Be(MeshNodeLayoutAreas.ImportMeshNodesArea,
+            "Import should navigate to ImportMeshNodes area, not $Import");
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task StaticRoles_AppearInNodeTypeRoleQuery()
+    {
+        // Static built-in roles should appear when querying with nodeType:Role
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var roles = await meshQuery
+            .QueryAsync<MeshNode>($"nodeType:Role namespace:")
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Roles returned: {roles.Count}");
+        foreach (var r in roles)
+            Output.WriteLine($"  {r.Path} ({r.Name})");
+
+        roles.Should().HaveCountGreaterThanOrEqualTo(4,
+            "built-in roles (Admin, Editor, Viewer, Commenter) should appear as static nodes");
+        roles.Select(r => r.Name).Should().Contain(
+            ["Admin", "Editor", "Viewer", "Commenter"]);
+    }
+
+    [Fact(Timeout = 5000)]
+    public async Task StaticRoles_NotIncludedInGenericChildrenQuery()
+    {
+        // Static roles should NOT appear in unfiltered children queries
+        var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        var children = await meshQuery
+            .QueryAsync<MeshNode>($"namespace:{NodePath}")
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Output.WriteLine($"Children returned: {children.Count}");
+        foreach (var c in children)
+            Output.WriteLine($"  {c.Path} ({c.Name})");
+
+        children.Select(c => c.Name).Should().NotContain(
+            ["Administrator", "Editor", "Viewer", "Commenter"],
+            "static roles should not leak into generic children queries");
+    }
+}

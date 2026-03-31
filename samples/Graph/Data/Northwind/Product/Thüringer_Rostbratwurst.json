@@ -1,0 +1,23 @@
+{
+  "id": "Th\u00fcringer_Rostbratwurst",
+  "namespace": "Northwind/Product",
+  "name": "Th\u00fcringer Rostbratwurst",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Th\u00fcringer Rostbratwurst - 50 bags x 30 sausgs.",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 29,
+    "productName": "Th\u00fcringer Rostbratwurst",
+    "supplierId": 12,
+    "categoryId": 6,
+    "quantityPerUnit": "50 bags x 30 sausgs.",
+    "unitPrice": 123.79,
+    "unitsInStock": 0,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": true
+  }
+}

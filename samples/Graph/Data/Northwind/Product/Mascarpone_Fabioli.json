@@ -1,0 +1,23 @@
+{
+  "id": "Mascarpone_Fabioli",
+  "namespace": "Northwind/Product",
+  "name": "Mascarpone Fabioli",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Mascarpone Fabioli - 24 - 200 g pkgs.",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 32,
+    "productName": "Mascarpone Fabioli",
+    "supplierId": 14,
+    "categoryId": 4,
+    "quantityPerUnit": "24 - 200 g pkgs.",
+    "unitPrice": 32.0,
+    "unitsInStock": 9,
+    "unitsOnOrder": 40,
+    "reorderLevel": 25,
+    "discontinued": false
+  }
+}

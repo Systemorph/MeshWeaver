@@ -1,0 +1,23 @@
+{
+  "id": "Genen_Shouyu",
+  "namespace": "Northwind/Product",
+  "name": "Genen Shouyu",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Genen Shouyu - 24 - 250 ml bottles",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 15,
+    "productName": "Genen Shouyu",
+    "supplierId": 6,
+    "categoryId": 2,
+    "quantityPerUnit": "24 - 250 ml bottles",
+    "unitPrice": 13.0,
+    "unitsInStock": 39,
+    "unitsOnOrder": 0,
+    "reorderLevel": 5,
+    "discontinued": false
+  }
+}

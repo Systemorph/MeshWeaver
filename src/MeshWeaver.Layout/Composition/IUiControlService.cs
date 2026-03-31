@@ -7,24 +7,27 @@ namespace MeshWeaver.Layout.Composition;
 public interface IUiControlService
 {
     UiControl? Convert(object o);
-    void AddRule(Func<object, UiControl?> rule);
 
     LayoutDefinition LayoutDefinition { get; }
 }
 
-public class UiControlService(IMessageHub hub) : IUiControlService
+public class UiControlService : IUiControlService
 {
-    private ImmutableList<Func<object, UiControl?>> rules = [o => o as UiControl ?? DefaultConversion(o)];
-    public UiControl? Convert(object o) => 
-        rules.Select(r => r.Invoke(o))
-            .FirstOrDefault(x => x is not null);
+    public LayoutDefinition LayoutDefinition { get; }
 
-    public void AddRule(Func<object, UiControl?> rule)
+    // Rules are immutable: config-time rules from LayoutDefinition + default fallback.
+    // No AddRule() — all rules are known at construction time.
+    private readonly ImmutableList<Func<object, UiControl?>> rules;
+
+    public UiControlService(IMessageHub hub)
     {
-        rules = rules.Insert(0, rule);
+        LayoutDefinition = hub.GetLayoutDefinition();
+        rules = LayoutDefinition.ConversionRules.Add(o => o as UiControl ?? DefaultConversion(o));
     }
 
-    public LayoutDefinition LayoutDefinition { get; } = hub.GetLayoutDefinition();
+    public UiControl? Convert(object o) =>
+        rules.Select(r => r.Invoke(o))
+            .FirstOrDefault(x => x is not null);
 
 
 

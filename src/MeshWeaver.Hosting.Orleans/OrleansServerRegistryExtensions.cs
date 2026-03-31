@@ -1,8 +1,10 @@
 ﻿using MeshWeaver.Connection.Orleans;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace MeshWeaver.Hosting.Orleans;
@@ -49,9 +51,8 @@ public static class OrleansServerRegistryExtensions
     public static ISiloBuilder ConfigureMeshWeaverServer(this ISiloBuilder silo)
     {
         return silo.AddMemoryStreams(StreamProviders.Memory)
-            .AddMemoryGrainStorage("PubSubStore");
-
-
+            .AddMemoryGrainStorage("PubSubStore")
+            .AddIncomingGrainCallFilter<AccessContextGrainCallFilter>();
     }
 
     internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address address)
@@ -65,7 +66,7 @@ public static class OrleansServerRegistryExtensions
     }
     internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
     {
-        var builder = new MeshHostBuilder(hostBuilder, new MeshAddress());
+        var builder = new MeshHostBuilder(hostBuilder, AddressExtensions.CreateMeshAddress());
         builder.ConfigureMeshWeaver();
         builder.Host.ConfigureServices(services =>
         {
@@ -75,10 +76,15 @@ public static class OrleansServerRegistryExtensions
         return builder;
     }
 
-    public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services) =>
-        services
-            .AddSingleton<IRoutingService, OrleansRoutingService>()
-            .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>();
+    public static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
+    {
+        // Register defaults if not already registered - user can register their own first
+        services.AddInMemoryPersistence();
+        services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+        services.AddMeshCatalog();
+
+        return services;
+    }
 
 
 }

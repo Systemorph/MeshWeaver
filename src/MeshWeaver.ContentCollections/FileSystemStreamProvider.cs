@@ -1,5 +1,6 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json;
+using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.ContentCollections;
 
@@ -26,7 +27,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
             fullPath,
             FileMode.Open,
             FileAccess.Read,
-            FileShare.Read,
+            FileShare.ReadWrite | FileShare.Delete,
             4096,
             useAsync: true);
 
@@ -40,8 +41,9 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         {
             return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(default);
         }
+        var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         return Task.FromResult<(Stream? Stream, string Path, DateTime LastModified)>(
-            (File.OpenRead(fullPath), path, File.GetLastWriteTime(fullPath)));
+            (stream, path, File.GetLastWriteTime(fullPath)));
     }
 
     public async Task WriteStreamAsync(string reference, Stream content, CancellationToken cancellationToken = default)
@@ -73,7 +75,7 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
         var items = files
             .Where(File.Exists)
             .Select(file =>
-                (Stream: (Stream?)File.OpenRead(file), Path: Path.GetRelativePath(basePath, file), LastModified: File.GetLastWriteTime(file)));
+                (Stream: (Stream?)new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete), Path: Path.GetRelativePath(basePath, file), LastModified: File.GetLastWriteTime(file)));
 
         return items.ToAsyncEnumerable();
     }
@@ -215,6 +217,69 @@ public class FileSystemStreamProvider(string basePath) : IStreamProvider
 
         watcher.EnableRaisingEvents = true;
         return watcher;
+    }
+
+    /// <summary>
+    /// Attaches a file system monitor that publishes changes to an IDataChangeNotifier.
+    /// Watches all file types (not just .md).
+    /// </summary>
+    /// <param name="notifier">The data change notifier to publish changes to.</param>
+    /// <param name="filter">Optional file extension filter (e.g., ".json"). If null, watches all files.</param>
+    /// <returns>A disposable that stops the watcher when disposed.</returns>
+    public IDisposable? AttachMonitor(IDataChangeNotifier notifier, string? filter = null)
+    {
+        var watcherInstance = new FileSystemWatcher(basePath)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName
+        };
+
+        void OnChanged(object sender, FileSystemEventArgs e)
+        {
+            if (filter != null && Path.GetExtension(e.FullPath) != filter)
+                return;
+
+            var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
+            notifier.NotifyChange(DataChangeNotification.Updated(relativePath, null));
+        }
+
+        void OnCreated(object sender, FileSystemEventArgs e)
+        {
+            if (filter != null && Path.GetExtension(e.FullPath) != filter)
+                return;
+
+            var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
+            notifier.NotifyChange(DataChangeNotification.Created(relativePath, null));
+        }
+
+        void OnDeleted(object sender, FileSystemEventArgs e)
+        {
+            if (filter != null && Path.GetExtension(e.FullPath) != filter)
+                return;
+
+            var relativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
+            notifier.NotifyChange(DataChangeNotification.Deleted(relativePath, null));
+        }
+
+        void OnRenamed(object sender, RenamedEventArgs e)
+        {
+            if (filter != null && Path.GetExtension(e.FullPath) != filter)
+                return;
+
+            var oldRelativePath = Path.GetRelativePath(basePath, e.OldFullPath).Replace('\\', '/');
+            var newRelativePath = Path.GetRelativePath(basePath, e.FullPath).Replace('\\', '/');
+
+            notifier.NotifyChange(DataChangeNotification.Deleted(oldRelativePath, null));
+            notifier.NotifyChange(DataChangeNotification.Created(newRelativePath, null));
+        }
+
+        watcherInstance.Changed += OnChanged;
+        watcherInstance.Created += OnCreated;
+        watcherInstance.Deleted += OnDeleted;
+        watcherInstance.Renamed += OnRenamed;
+
+        watcherInstance.EnableRaisingEvents = true;
+        return watcherInstance;
     }
 
     public async Task<ImmutableDictionary<string, Author>> LoadAuthorsAsync(CancellationToken cancellationToken = default)

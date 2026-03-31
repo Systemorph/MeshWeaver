@@ -129,7 +129,9 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
             
             try
             {
-                return new LayoutAreaComponentInfo(address, area, id, parser);
+                // Build original path from components for display purposes
+                var originalPath = BuildOriginalPath(address, area, id);
+                return new LayoutAreaComponentInfo(originalPath, address, area, id, parser);
             }
             catch (ArgumentException ex)
             {
@@ -165,7 +167,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         {
             var result = new Dictionary<string, string?>();
             var lines = content.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries);
-            
+
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
@@ -178,7 +180,7 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
 
                 var key = trimmed[..colonIndex].Trim();
                 var value = trimmed[(colonIndex + 1)..].Trim();
-                
+
                 // Remove quotes if present
                 if (value.StartsWith('"') && value.EndsWith('"'))
                     value = value[1..^1];
@@ -194,6 +196,19 @@ public class ExecutableCodeBlock(BlockParser parser) : FencedCodeBlock(parser)
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Builds the original path representation from components for display purposes.
+    /// This preserves the expected display format when using YAML-like syntax.
+    /// </summary>
+    private static string BuildOriginalPath(string address, string? area, string? id)
+    {
+        if (string.IsNullOrEmpty(area))
+            return address;
+        if (string.IsNullOrEmpty(id))
+            return $"{address}/{area}";
+        return $"{address}/{area}/{id}";
     }
 
     public void Initialize()

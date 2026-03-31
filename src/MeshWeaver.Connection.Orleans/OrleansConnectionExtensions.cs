@@ -1,9 +1,10 @@
-﻿using MeshWeaver.ContentCollections;
-using MeshWeaver.Hosting;
+﻿using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Orleans.Serialization;
 
@@ -13,7 +14,7 @@ public static class OrleansConnectionExtensions
 {
     internal static MeshHostApplicationBuilder CreateOrleansConnectionBuilder(this IHostApplicationBuilder hostBuilder, Address? address = null)
     {
-        var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? new MeshAddress());
+        var builder = new MeshHostApplicationBuilder(hostBuilder, address ?? AddressExtensions.CreateMeshAddress());
         ConfigureMeshWeaver(builder);
         builder.ConfigureServices(services =>
             services.AddOrleansMeshServices());
@@ -22,7 +23,7 @@ public static class OrleansConnectionExtensions
     }
     internal static MeshHostBuilder CreateOrleansConnectionBuilder(this IHostBuilder hostBuilder)
     {
-        var builder = new MeshHostBuilder(hostBuilder, new MeshAddress());
+        var builder = new MeshHostBuilder(hostBuilder, AddressExtensions.CreateMeshAddress());
         ConfigureMeshWeaver(builder);
         builder.Host.ConfigureServices(services =>
         {
@@ -33,11 +34,16 @@ public static class OrleansConnectionExtensions
     }
 
     private static IServiceCollection AddOrleansMeshServices(this IServiceCollection services)
-        => services.AddSingleton<IRoutingService, OrleansRoutingService>();
+    {
+        services.AddInMemoryPersistence();
+        services.TryAddSingleton<IRoutingService, OrleansRoutingService>();
+        return services;
+    }
 
     internal static void ConfigureMeshWeaver(this MeshBuilder builder)
     {
         builder.ConfigureServices(services =>
+        {
             services.AddSerializer(serializerBuilder =>
             {
                 serializerBuilder.AddJsonSerializer(
@@ -48,11 +54,12 @@ public static class OrleansConnectionExtensions
                             (o, hub) => o.SerializerOptions = hub.JsonSerializerOptions
                         )
                 );
-            })
-            .AddSingleton<IMeshCatalog, InMemoryMeshCatalog>()
-        );
+            });
+            // Use TryAdd so user can register their own catalog first
+            services.AddMeshCatalog();
+            return services;
+        });
         builder.ConfigureHub(conf => conf
-            .WithTypes(typeof(Article), typeof(StreamInfo))
             .AddMeshTypes()
         );
     }

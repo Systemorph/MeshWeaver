@@ -1,0 +1,18 @@
+{
+  "id": "CYBER_TECH",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Cyber & Technology",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Standalone cyber liability and technology errors & omissions insurance for US and Americas markets",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "CYBER_TECH",
+    "displayName": "Cyber & Technology",
+    "description": "US-focused cyber liability and technology professional liability insurance. The Americas cyber market is the most mature globally, driven by extensive state breach notification laws, SEC disclosure requirements, and CCPA/state privacy regulations. Covers first-party losses (business interruption, data restoration, ransom payments, crisis management) and third-party claims (privacy liability, network security liability, media liability). Technology E&O provides coverage for software failures, cloud outages, and professional negligence. Key sectors include healthcare, financial services, retail, and critical infrastructure.",
+    "order": 6,
+    "productExamples": "Standalone cyber, Technology E&O, Privacy liability, Ransomware response, Network security, Media liability, Cyber excess"
+  }
+}

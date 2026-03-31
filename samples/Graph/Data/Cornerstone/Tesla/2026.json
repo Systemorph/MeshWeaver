@@ -1,0 +1,25 @@
+{
+  "id": "2026",
+  "namespace": "Cornerstone/Tesla",
+  "name": "Tesla 2026",
+  "nodeType": "Cornerstone/Pricing",
+  "category": "Pricings",
+  "description": "Property reinsurance for Tesla, Inc. - UW Year 2026",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "state": "Active",
+  "content": {
+    "$type": "Pricing",
+    "id": "2026",
+    "insuredName": "Tesla, Inc.",
+    "description": "Property reinsurance program for Tesla, Inc. covering manufacturing facilities, Gigafactories, and energy installations worldwide.",
+    "inceptionDate": "2026-01-01T00:00:00Z",
+    "expirationDate": "2026-12-31T00:00:00Z",
+    "underwritingYear": 2026,
+    "lineOfBusiness": "PROP",
+    "country": "US",
+    "currency": "USD",
+    "legalEntity": "MW-US",
+    "status": "Draft"
+  }
+}

@@ -91,18 +91,18 @@ public static class WorkspaceOperations
 
     private static Task UpdateFailed(IMessageDelivery? delivery, Exception? exception)
     {
-        if (delivery is not null)
-        {
-            // Log the error instead of using DeliveryFailure which doesn't seem to exist
-            var errorMessage = $"Update failed: {exception?.ToString() ?? "Unknown error"}";
-            // We would need an activity context to log properly, for now we'll skip the error posting
-        }
+        if (exception != null)
+            throw new DataException($"Data update failed: {exception.Message}", exception);
         return Task.CompletedTask;
     }
 
     private static void Update(Activity? activity, IWorkspace workspace, DataChangeRequest change, IMessageDelivery? request)
     {
         activity?.LogInformation("Starting Update");
+        var logger = workspace.Hub.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(WorkspaceOperations));
+        logger.LogDebug("Update called: Creations={Creations}, Updates={Updates}, Deletions={Deletions}",
+            change.Creations.Count(), change.Updates.Count(), change.Deletions.Count());
         workspace.UpdateStreams(change, activity, request);
     }
 
@@ -141,9 +141,18 @@ public static class WorkspaceOperations
 
 
             // Use async update to allow proper retry logic if state changed during computation
-            stream!.Update((store, _) => Task.FromResult(UpdateDataChangeRequest(store, change, logger, stream, subActivity, group)),
-            ex => UpdateFailed(request, ex)
-                );
+            stream!.Update((store, _) =>
+                {
+                    var result = UpdateDataChangeRequest(store, change, logger, stream, subActivity, group);
+                    subActivity?.Complete();
+                    return Task.FromResult(result);
+                },
+                ex =>
+                {
+                    subActivity?.Complete();
+                    return UpdateFailed(request, ex);
+                }
+            );
         }
     }
 
@@ -166,8 +175,20 @@ public static class WorkspaceOperations
                     {
                         if (g.Key.Op == OperationType.Add || g.Key.Op == OperationType.Replace)
                         {
+                            var allInstances = g.Select(x => x.Instance).ToList();
+                            var invalidInstances = allInstances
+                                .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) == null)
+                                .ToList();
+                            if (invalidInstances.Count > 0)
+                            {
+                                logger.LogError("Skipping {Count} instances with null key in collection {Collection}",
+                                    invalidInstances.Count, g.Key.TypeSource!.CollectionName);
+                                subActivity?.LogError("Skipping {Count} instances with null key in collection {Collection}",
+                                    invalidInstances.Count, g.Key.TypeSource!.CollectionName);
+                            }
                             var instances =
-                                new InstanceCollection(g.Select(x => x.Instance)
+                                new InstanceCollection(allInstances
+                                    .Where(x => g.Key.TypeSource!.TypeDefinition.GetKey(x) != null)
                                     .ToDictionary(g.Key.TypeSource!.TypeDefinition.GetKey))
                                 {
                                     GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
@@ -202,7 +223,7 @@ public static class WorkspaceOperations
                         throw new NotSupportedException($"Operation {g.Key.Op} not supported");
                     });
             subActivity?.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
-            logger.LogInformation("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
+            logger.LogDebug("Applying changes to Data Stream {Stream}", stream.StreamIdentity);
             // Complete sub-activity - this would need proper sub-activity tracking to work correctly
             return stream.ApplyChanges(updates);
         }
@@ -210,6 +231,8 @@ public static class WorkspaceOperations
         {
             subActivity?.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity,
                 ex.Message);
+            logger.LogError(ex, "Error updating Data Stream {Stream}: {Message}", stream.StreamIdentity, ex.Message);
+            stream.OnError(ex);
             return null;
         }
         finally
@@ -292,7 +315,7 @@ public static class WorkspaceOperations
     }
 
     public static IReadOnlyCollection<T> GetData<T>(this EntityStore store)
-        => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)!.Get<T>().ToArray();
+        => store.GetCollection(store.GetCollectionName?.Invoke(typeof(T)) ?? typeof(T).Name)?.Get<T>().ToArray() ?? [];
 
     public static T? GetData<T>(this EntityStore store, object id)
         => (T?)store.GetCollection(store.GetCollectionName?.Invoke(typeof(T))

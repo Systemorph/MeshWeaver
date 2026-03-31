@@ -1,0 +1,23 @@
+{
+  "id": "Gorgonzola_Telino",
+  "namespace": "Northwind/Product",
+  "name": "Gorgonzola Telino",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Gorgonzola Telino - 12 - 100 g pkgs",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 31,
+    "productName": "Gorgonzola Telino",
+    "supplierId": 14,
+    "categoryId": 4,
+    "quantityPerUnit": "12 - 100 g pkgs",
+    "unitPrice": 12.5,
+    "unitsInStock": 0,
+    "unitsOnOrder": 70,
+    "reorderLevel": 20,
+    "discontinued": false
+  }
+}

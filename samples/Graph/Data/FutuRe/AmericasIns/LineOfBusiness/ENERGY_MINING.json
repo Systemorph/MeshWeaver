@@ -1,0 +1,18 @@
+{
+  "id": "ENERGY_MINING",
+  "namespace": "FutuRe/AmericasIns/LineOfBusiness",
+  "name": "Energy & Mining",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Upstream and downstream energy, mining operations, and renewable energy project insurance",
+  "icon": "/static/storage/content/FutuRe/AmericasIns/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "ENERGY_MINING",
+    "displayName": "Energy & Mining",
+    "description": "Specialized energy and mining insurance covering upstream oil & gas exploration and production, midstream pipelines and storage, downstream refining and petrochemical, and mining operations across North and South America. Includes construction all-risks for energy megaprojects, operational all-risks, business interruption, control of well, and environmental liability. The Americas market covers shale oil operations in the Permian Basin, deepwater Gulf of Mexico platforms, Canadian oil sands, Brazilian pre-salt fields, and Chilean copper mines. Growing renewable energy portfolio includes wind farms, solar parks, and battery storage facilities.",
+    "order": 4,
+    "productExamples": "Upstream E&P, Downstream refinery, Pipeline, Mining all-risks, Renewable energy, Construction all-risks, Control of well"
+  }
+}

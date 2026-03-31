@@ -1,0 +1,16 @@
+{
+  "id": "PROF",
+  "namespace": "FutuRe/LineOfBusiness",
+  "name": "Professional Liability",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Professional liability covering D&O, E&O, and medical malpractice",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "PROF",
+    "displayName": "Professional Liability",
+    "description": "Professional liability insurance protects professionals and their firms against claims of negligence, errors, or omissions in the performance of professional services. Directors & Officers (D&O) insurance shields corporate leaders from personal liability arising from management decisions. Errors & Omissions (E&O) covers professional service providers including lawyers, architects, and consultants. Medical malpractice addresses claims against healthcare providers. These lines feature claims-made policy forms and often involve complex litigation with significant defense costs."
+  }
+}

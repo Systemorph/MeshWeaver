@@ -1,0 +1,23 @@
+{
+  "id": "PERIC",
+  "namespace": "Northwind/Customer",
+  "name": "Pericles Comidas cl\u00e1sicas",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Pericles Comidas cl\u00e1sicas - M\u00e9xico D.F., Mexico",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "PERIC",
+    "companyName": "Pericles Comidas cl\u00e1sicas",
+    "contactName": "Guillermo Fern\u00e1ndez",
+    "contactTitle": "Sales Representative",
+    "city": "M\u00e9xico D.F.",
+    "region": "",
+    "postalCode": "05033",
+    "country": "Mexico",
+    "phone": "(5) 552-3745",
+    "fax": "(5) 545-3745"
+  }
+}

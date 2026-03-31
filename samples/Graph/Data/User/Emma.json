@@ -1,0 +1,13 @@
+{
+  "id": "Emma",
+  "namespace": "User",
+  "name": "Emma Wilson",
+  "nodeType": "User",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "User",
+    "email": "emma.wilson@meshweaver.io",
+    "bio": "Software engineer and project contributor."
+  }
+}

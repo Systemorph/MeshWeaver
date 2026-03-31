@@ -1,0 +1,240 @@
+@page "/onboarding"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using MeshWeaver.Blazor.Infrastructure
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Security
+@using MeshWeaver.Mesh.Services
+@using MeshWeaver.Messaging
+@using Microsoft.Extensions.DependencyInjection
+@inject AccessService AccessService
+@inject IMeshService NodeFactory
+@inject IMeshService MeshQuery
+@inject PortalApplication PortalApplication
+@inject NavigationManager Navigation
+
+<PageTitle>Complete Your Profile - Memex Portal</PageTitle>
+
+<div class="onboarding-container">
+    <div class="onboarding-card">
+        <div class="onboarding-header">
+            <FluentIcon Value="@(new Icons.Regular.Size24.PersonAdd())" />
+            <h1>Complete Your Profile</h1>
+            <p class="onboarding-subtitle">Tell us a bit about yourself to get started</p>
+        </div>
+
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <FluentMessageBar Intent="@MessageIntent.Error" Style="margin-bottom: 1rem;">
+                @errorMessage
+            </FluentMessageBar>
+        }
+
+        <EditForm Model="model" OnValidSubmit="HandleSubmit" FormName="onboarding">
+            <DataAnnotationsValidator />
+
+            <FluentStack Orientation="Orientation.Vertical" VerticalGap="16">
+                <FluentTextField Label="Full Name"
+                                 Required="true"
+                                 @bind-Value="model.FullName"
+                                 Placeholder="Your full name"
+                                 Style="width: 100%;" />
+
+                <FluentTextField Label="Username"
+                                 Required="true"
+                                 @bind-Value="model.Username"
+                                 Placeholder="Pick a username"
+                                 Style="width: 100%;" />
+
+                <FluentTextField Label="Email"
+                                 Required="true"
+                                 ReadOnly="@emailReadOnly"
+                                 @bind-Value="model.Email"
+                                 Placeholder="your@email.com"
+                                 Style="@($"width: 100%;{(emailReadOnly ? " opacity: 0.7;" : "")}")" />
+
+                <FluentTextArea Label="Bio"
+                                @bind-Value="model.Bio"
+                                Placeholder="A short bio about yourself (optional)"
+                                Rows="3"
+                                Style="width: 100%;" />
+
+                <FluentTextField Label="Role"
+                                 @bind-Value="model.Role"
+                                 Placeholder="e.g., Developer, Manager, Designer (optional)"
+                                 Style="width: 100%;" />
+
+                <FluentTextField Label="Avatar URL"
+                                 @bind-Value="model.AvatarUrl"
+                                 Placeholder="https://example.com/avatar.jpg (optional)"
+                                 Style="width: 100%;" />
+
+                <FluentButton Type="ButtonType.Submit"
+                              Appearance="Appearance.Accent"
+                              Style="width: 100%; margin-top: 8px;"
+                              Loading="isSaving"
+                              Disabled="isSaving">
+                    Get Started
+                </FluentButton>
+            </FluentStack>
+        </EditForm>
+    </div>
+</div>
+
+@code {
+    private OnboardingModel model = new();
+    private bool isSaving;
+    private bool emailReadOnly;
+    private string? errorMessage;
+
+    protected override void OnInitialized()
+    {
+        var context = AccessService?.Context;
+        if (context != null)
+        {
+            model.Email = context.Email ?? "";
+
+            // Only lock the email field if we got a valid email from OAuth
+            emailReadOnly = !string.IsNullOrEmpty(context.Email) && context.Email.Contains('@');
+
+            // Pre-populate full name from OAuth claims
+            if (!string.IsNullOrEmpty(context.Name) && context.Name != "Unknown")
+                model.FullName = context.Name;
+
+            // Suggest username from email prefix (lowercase)
+            if (!string.IsNullOrEmpty(context.Email) && context.Email.Contains('@'))
+                model.Username = context.Email.Split('@')[0].ToLowerInvariant();
+        }
+    }
+
+    private async Task HandleSubmit()
+    {
+        if (string.IsNullOrWhiteSpace(model.Username))
+        {
+            errorMessage = "Username is required.";
+            return;
+        }
+
+        isSaving = true;
+        errorMessage = null;
+
+        try
+        {
+            var userId = AccessService?.Context?.ObjectId;
+            if (string.IsNullOrEmpty(userId))
+            {
+                errorMessage = "Not authenticated. Please sign in again.";
+                return;
+            }
+
+            var username = model.Username.Trim().ToLowerInvariant();
+            var fullName = model.FullName?.Trim();
+            var userContent = new User
+            {
+                FullName = string.IsNullOrWhiteSpace(fullName) ? null : fullName,
+                Email = model.Email.Trim(),
+                Bio = string.IsNullOrWhiteSpace(model.Bio) ? null : model.Bio.Trim(),
+                Role = string.IsNullOrWhiteSpace(model.Role) ? null : model.Role.Trim(),
+            };
+
+            // Use ImpersonateAsHub so the portal hub identity is recognized
+            // by the portal create access rule (portal namespace = create/read/update User nodes)
+            using (AccessService!.ImpersonateAsHub(PortalApplication!.Hub))
+            {
+                // Check if this is the first user (no existing User nodes = platform admin)
+                var isFirstUser = true;
+                await foreach (var _ in MeshQuery.QueryAsync<MeshNode>(new MeshQueryRequest { Query = "namespace:User", Limit = 1 }))
+                {
+                    isFirstUser = false;
+                    break;
+                }
+
+                // Check that the username is not already taken
+                var existingNode = await MeshQuery.QueryAsync<MeshNode>(
+                    $"path:User/{username} scope:self").FirstOrDefaultAsync();
+                if (existingNode != null)
+                {
+                    errorMessage = $"Username '{username}' is already taken. Please choose a different one.";
+                    return;
+                }
+
+                // Check that the email is not already assigned to another user
+                var emailValue = model.Email.Trim();
+                var existingByEmail = await MeshQuery.QueryAsync<MeshNode>(
+                    $"nodeType:User content.email:{emailValue}").FirstOrDefaultAsync();
+                if (existingByEmail != null && existingByEmail.State == MeshNodeState.Active)
+                {
+                    errorMessage = $"This email is already assigned to user '{existingByEmail.Id}'. Please sign in with that account.";
+                    return;
+                }
+
+                var node = new MeshNode(username, "User")
+                {
+                    Name = string.IsNullOrWhiteSpace(fullName) ? username : fullName,
+                    NodeType = "User",
+                    State = MeshNodeState.Active,
+                    Icon = string.IsNullOrWhiteSpace(model.AvatarUrl) ? null : model.AvatarUrl.Trim(),
+                    Content = userContent
+                };
+
+                await NodeFactory.CreateNodeAsync(node);
+
+                // First user becomes global Admin (stored in admin.access table)
+                if (isFirstUser)
+                {
+                    var securityService = PortalApplication.Hub.ServiceProvider
+                        .GetService<ISecurityService>();
+                    if (securityService != null)
+                        await securityService.AddUserRoleAsync(username, Role.Admin.Id, "Admin", username);
+                }
+            }
+
+            // Update request-scoped context so the OnboardingMiddleware on the next request
+            // recognizes this user as already onboarded. The forceLoad navigation below
+            // triggers a fresh HTTP request + circuit, so CircuitAccessHandler will
+            // re-resolve the user from AuthenticationState.
+            var updatedContext = (AccessService.Context ?? new AccessContext()) with
+            {
+                ObjectId = username,
+                Name = username,
+                Email = model.Email.Trim()
+            };
+            AccessService.SetContext(updatedContext);
+
+            Navigation.NavigateTo("/", forceLoad: true);
+        }
+        catch (Microsoft.AspNetCore.Components.NavigationException)
+        {
+            // NavigateTo with forceLoad throws NavigationException — let it propagate
+            throw;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Failed to save profile: {ex.Message}";
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private class OnboardingModel
+    {
+        public string? FullName { get; set; }
+        public string Username { get; set; } = "";
+        public string Email { get; set; } = "";
+        public string? Bio { get; set; }
+        public string? Role { get; set; }
+        public string? AvatarUrl { get; set; }
+    }
+
+    private static class Icons
+    {
+        public static class Regular
+        {
+            public static class Size24
+            {
+                public class PersonAdd : Microsoft.FluentUI.AspNetCore.Components.Icons.Regular.Size24.PersonAdd { }
+            }
+        }
+    }
+}

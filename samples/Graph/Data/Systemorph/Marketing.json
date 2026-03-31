@@ -1,0 +1,19 @@
+{
+  "id": "Marketing",
+  "namespace": "Systemorph",
+  "name": "Marketing",
+  "nodeType": "Markdown",
+  "category": "Marketing",
+  "description": "Marketing stories and social media content for MeshWeaver",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/megaphone.svg",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "catalogMode": "hierarchical",
+  "catalogQuery": "namespace:Systemorph/Marketing scope:descendants",
+  "content": {
+    "$type": "MarkdownDocument",
+    "title": "Marketing",
+    "icon": "/static/storage/content/Systemorph/Marketing/icons/megaphone.svg",
+    "content": "# Marketing\n\nThis space is dedicated to developing and maintaining our marketing content.\n\n## Scope\n\nThe purpose of this area is to:\n\n- **Write main marketing stories** - Core narratives that explain MeshWeaver's value proposition and vision\n- **Create social media posts** - Content for LinkedIn, Twitter, and other platforms to engage our audience\n\nBrowse the content below to explore our marketing materials."
+  }
+}

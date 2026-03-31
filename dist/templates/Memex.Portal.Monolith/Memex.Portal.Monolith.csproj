@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MeshWeaver.Hosting.Monolith" />
+    <PackageReference Include="MeshWeaver.Import" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\aspire\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
+    <ProjectReference Include="..\Memex.Portal.Shared\Memex.Portal.Shared.csproj" />
+  </ItemGroup>
+
+</Project>

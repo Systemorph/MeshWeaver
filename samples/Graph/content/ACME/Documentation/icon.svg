@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .fg { fill: #d13438; }
+    .accent { fill: #a4262c; }
+    .wh { fill: #ffffff; }
+  </style>
+  <rect class="bg" width="64" height="64" rx="8"/>
+  <!-- Open book -->
+  <rect class="wh" x="8" y="14" width="48" height="36" rx="3"/>
+  <rect class="accent" x="31" y="14" width="2" height="36"/>
+  <!-- Left page lines -->
+  <rect class="fg" x="13" y="22" width="14" height="2" rx="1" opacity="0.5"/>
+  <rect class="fg" x="13" y="28" width="11" height="2" rx="1" opacity="0.35"/>
+  <rect class="fg" x="13" y="34" width="14" height="2" rx="1" opacity="0.25"/>
+  <!-- Right page lines -->
+  <rect class="fg" x="37" y="22" width="14" height="2" rx="1" opacity="0.5"/>
+  <rect class="fg" x="37" y="28" width="11" height="2" rx="1" opacity="0.35"/>
+  <rect class="fg" x="37" y="34" width="14" height="2" rx="1" opacity="0.25"/>
+</svg>

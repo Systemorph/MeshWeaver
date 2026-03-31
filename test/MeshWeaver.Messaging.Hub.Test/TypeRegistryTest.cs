@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
 using MeshWeaver.Domain;
@@ -39,7 +39,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var host = GetHost();
         var typeRegistry = host.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        
+
         // Test List<int?>
         var canMap = typeRegistry.TryGetCollectionName(typeof(List<int?>), out var typeName);
         canMap.Should().BeTrue();
@@ -48,7 +48,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         canMap = typeRegistry.TryGetType(typeName, out var mappedType);
         canMap.Should().BeTrue();
         mappedType!.Type.Should().Be(typeof(List<int?>));
-        
+
         // Test GenericRequest<int?>
         canMap = typeRegistry.TryGetCollectionName(typeof(GenericRequest<int?>), out typeName);
         canMap.Should().BeTrue();

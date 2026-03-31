@@ -1,0 +1,18 @@
+{
+  "id": "AME-COMMERCIAL-MARINE",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Commercial Lines → Marine (15%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-COMMERCIAL-MARINE",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "COMMERCIAL",
+    "localLineOfBusinessName": "Commercial Lines",
+    "groupLineOfBusiness": "MARINE",
+    "groupLineOfBusinessName": "Marine",
+    "percentage": 0.15
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

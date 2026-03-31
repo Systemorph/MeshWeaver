@@ -1,0 +1,33 @@
+@page "/dev/login/confirm"
+@inject IJSRuntime JS
+
+<PageTitle>Logging in...</PageTitle>
+
+<div style="display: flex; justify-content: center; align-items: center; min-height: 100vh;">
+    <div style="text-align: center;">
+        <FluentProgressRing />
+        <p>Logging in...</p>
+    </div>
+</div>
+
+<form method="post" action="/dev/signin" id="loginForm">
+    <input type="hidden" name="personId" value="@PersonId" />
+    <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+</form>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? PersonId { get; set; }
+
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !string.IsNullOrEmpty(PersonId))
+        {
+            // Auto-submit the form
+            await JS.InvokeVoidAsync("eval", "document.getElementById('loginForm').submit()");
+        }
+    }
+}

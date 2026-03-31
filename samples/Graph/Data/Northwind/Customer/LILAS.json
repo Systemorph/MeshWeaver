@@ -1,0 +1,23 @@
+{
+  "id": "LILAS",
+  "namespace": "Northwind/Customer",
+  "name": "LILA-Supermercado",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "LILA-Supermercado - Barquisimeto, Venezuela",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "LILAS",
+    "companyName": "LILA-Supermercado",
+    "contactName": "Carlos Gonz\u00e1lez",
+    "contactTitle": "Accounting Manager",
+    "city": "Barquisimeto",
+    "region": "Lara",
+    "postalCode": "3508",
+    "country": "Venezuela",
+    "phone": "(9) 331-6954",
+    "fax": "(9) 331-7256"
+  }
+}

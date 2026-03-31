@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/AsiaRe/TransactionMapping/MappingRules/t1/m1",
+  "path": "FutuRe/AsiaRe/TransactionMapping/MappingRules/t1/m1",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-04T09:00:00+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "m1",
+    "role": "user",
+    "text": "Please set up the AsiaRe business unit's lines of business and transaction mapping rules. Use @FutuRe/EuropeRe as the reference — AsiaRe should have the exact same structure.\n\nSpecifically:\n\n1. **Create local Lines of Business** under @FutuRe/AsiaRe/LineOfBusiness (same structure as @FutuRe/EuropeRe/LineOfBusiness). The local LoBs should reflect Asian reinsurance markets — see the discussion in the attachments at @FutuRe/AsiaRe/TransactionMapping/lob-mapping-discussion.md for context on what local LoBs to create and how they differ from the group standard.\n\n2. **Create Transaction Mapping instances** under @FutuRe/AsiaRe/TransactionMapping (same structure as @FutuRe/EuropeRe/TransactionMapping). Each mapping should specify the businessUnit as \"AsiaRe\", the localLineOfBusiness, the groupLineOfBusiness from @FutuRe/LineOfBusiness, and the percentage split. Ensure all splits for each local LoB sum to 100%.\n\n3. **Create the Mapping Rules document** at @FutuRe/AsiaRe/TransactionMapping/MappingRules — update the MappingRules.md with a mapping table (same format as @FutuRe/EuropeRe/TransactionMapping/MappingRules), and create an Approval node requesting sign-off from the APAC actuarial team.",
+    "timestamp": "2026-03-04T09:00:00Z",
+    "type": "ExecutedInput"
+  }
+}

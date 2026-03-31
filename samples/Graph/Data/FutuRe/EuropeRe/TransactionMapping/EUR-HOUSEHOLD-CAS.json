@@ -1,0 +1,18 @@
+{
+  "id": "EUR-HOUSEHOLD-CAS",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Household → Casualty (10%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-HOUSEHOLD-CAS",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "HOUSEHOLD",
+    "localLineOfBusinessName": "Household",
+    "groupLineOfBusiness": "CAS",
+    "groupLineOfBusinessName": "Casualty",
+    "percentage": 0.1
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

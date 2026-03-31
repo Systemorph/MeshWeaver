@@ -10,6 +10,11 @@ public record InstanceCollection
     public ImmutableDictionary<object, object> Instances { get; init; } =
         ImmutableDictionary<object, object>.Empty;
 
+    /// <summary>
+    /// Optional collection name used during serialization to preserve type information.
+    /// </summary>
+    public string? CollectionName { get; init; }
+
     public InstanceCollection() { }
 
     public InstanceCollection(IReadOnlyDictionary<object, object> instances) =>
@@ -108,5 +113,5 @@ public record InstanceCollection
     }
 
     public override int GetHashCode() =>
-        Instances.Values.Select(x => x.GetHashCode()).Aggregate((x, y) => x ^ y);
+        Instances.Values.Select(x => x.GetHashCode()).Aggregate(0, (x, y) => x ^ y);
 }

@@ -49,4 +49,3 @@ For more detailed examples of how these domain types are used in practice, refer
 
 - MeshWeaver.Data - Uses domain types for data management
 - MeshWeaver.Import - Uses domain types for data import
-- MeshWeaver.Hierarchies - Uses domain types for hierarchical structures

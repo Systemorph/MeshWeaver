@@ -1,0 +1,23 @@
+{
+  "id": "BLONP",
+  "namespace": "Northwind/Customer",
+  "name": "Blondesddsl p\u00e8re et fils",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Blondesddsl p\u00e8re et fils - Strasbourg, France",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "BLONP",
+    "companyName": "Blondesddsl p\u00e8re et fils",
+    "contactName": "Fr\u00e9d\u00e9rique Citeaux",
+    "contactTitle": "Marketing Manager",
+    "city": "Strasbourg",
+    "region": "",
+    "postalCode": "67000",
+    "country": "France",
+    "phone": "88.60.15.31",
+    "fax": "88.60.15.32"
+  }
+}

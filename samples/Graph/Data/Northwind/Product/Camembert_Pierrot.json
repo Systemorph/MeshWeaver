@@ -1,0 +1,23 @@
+{
+  "id": "Camembert_Pierrot",
+  "namespace": "Northwind/Product",
+  "name": "Camembert Pierrot",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Camembert Pierrot - 15 - 300 g rounds",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 60,
+    "productName": "Camembert Pierrot",
+    "supplierId": 28,
+    "categoryId": 4,
+    "quantityPerUnit": "15 - 300 g rounds",
+    "unitPrice": 34.0,
+    "unitsInStock": 19,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}

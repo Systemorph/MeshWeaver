@@ -64,7 +64,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource =>
+                data.AddHubSource(CreateHostAddress(), dataSource =>
                     dataSource.WithType<WorkspaceTestData>())
             );
 
@@ -175,7 +175,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { updatedItem }),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -219,7 +219,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         await client.AwaitResponse(
             DataChangeRequest.Delete(new object[] { itemToDelete }, "TestUser"),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -248,7 +248,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { updateItem }),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -322,7 +322,7 @@ public class WorkspaceDataTest(ITestOutputHelper output) : HubTestBase(output)
         // act - update from client1
         var response = await client1.AwaitResponse(
             DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <pattern id="emma-pattern" patternUnits="userSpaceOnUse" width="16" height="16">
+      <rect width="16" height="16" fill="#0891B2"/>
+      <polygon points="8,0 16,8 8,16 0,8" fill="#22D3EE"/>
+    </pattern>
+    <clipPath id="emma-clip">
+      <circle cx="64" cy="64" r="60"/>
+    </clipPath>
+  </defs>
+  <circle cx="64" cy="64" r="60" fill="url(#emma-pattern)"/>
+  <g clip-path="url(#emma-clip)">
+    <!-- Head -->
+    <circle cx="64" cy="42" r="20" fill="#FCD5CE"/>
+    <!-- Hair (ponytail style) -->
+    <ellipse cx="64" cy="28" rx="20" ry="10" fill="#FCD34D"/>
+    <ellipse cx="48" cy="38" rx="6" ry="14" fill="#FCD34D"/>
+    <ellipse cx="80" cy="38" rx="6" ry="14" fill="#FCD34D"/>
+    <!-- Ponytail -->
+    <ellipse cx="84" cy="30" rx="12" ry="8" fill="#FCD34D"/>
+    <ellipse cx="94" cy="38" rx="8" ry="14" fill="#FCD34D"/>
+    <!-- Hair tie -->
+    <circle cx="84" cy="30" r="4" fill="#EC4899"/>
+    <!-- Face -->
+    <circle cx="64" cy="44" r="17" fill="#FCD5CE"/>
+    <!-- Glasses -->
+    <circle cx="55" cy="42" r="7" fill="none" stroke="#1F2937" stroke-width="2"/>
+    <circle cx="73" cy="42" r="7" fill="none" stroke="#1F2937" stroke-width="2"/>
+    <line x1="62" y1="42" x2="66" y2="42" stroke="#1F2937" stroke-width="2"/>
+    <line x1="48" y1="42" x2="44" y2="40" stroke="#1F2937" stroke-width="2"/>
+    <line x1="80" y1="42" x2="84" y2="40" stroke="#1F2937" stroke-width="2"/>
+    <!-- Eyes behind glasses -->
+    <circle cx="55" cy="42" r="2" fill="#1F2937"/>
+    <circle cx="73" cy="42" r="2" fill="#1F2937"/>
+    <!-- Smile -->
+    <path d="M58 51 Q64 55 70 51" stroke="#1F2937" stroke-width="2" fill="none" stroke-linecap="round"/>
+    <!-- Body/Shoulders (professional blouse) -->
+    <ellipse cx="64" cy="95" rx="32" ry="28" fill="#67E8F9"/>
+    <!-- Collar -->
+    <path d="M52 76 L64 86 L76 76" fill="#CFFAFE" stroke="#0891B2" stroke-width="2"/>
+  </g>
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#0891B2" stroke-width="4"/>
+</svg>

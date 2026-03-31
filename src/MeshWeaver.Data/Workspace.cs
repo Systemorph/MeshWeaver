@@ -18,11 +18,18 @@ public class Workspace : IWorkspace
         Hub = hub;
         _logger = logger;
         logger.LogDebug("Creating data context of address {address}", Id);
-        DataContext = this.GetDataConfiguration();
-
-        //stream.OnNext(new(stream.Owner, stream.Reference, new(), null, ChangeType.NoUpdate, null, stream.ParentHub.Version));
+        DataContext = this.CreateDataContext();
         logger.LogDebug("Started initialization of data context of address {address}", Id);
         DataContext.Initialize();
+    }
+
+    /// <summary>
+    /// Opens the initialization gate after all handlers are registered.
+    /// Called via SyncBuildupActions to ensure proper ordering.
+    /// </summary>
+    internal void OpenInitializationGate()
+    {
+        DataContext.OpenInitializationGate();
     }
 
 
@@ -43,6 +50,7 @@ public class Workspace : IWorkspace
         if (collection == null)
             return null;
         return GetStream(typeof(T))
+            .Synchronize()
             .Select(x => x.Value?.Collections.SingleOrDefault().Value?.Instances.Values.Cast<T>().ToArray());
     }
 
@@ -71,14 +79,37 @@ public class Workspace : IWorkspace
             ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
             : GetExternalClientSynchronizationStream<TReduced, TReference>(owner, reference);
 
+    /// <summary>
+    /// Gets a remote stream with hub impersonation. The subscribing hub's address
+    /// becomes the identity on the SubscribeRequest, ensuring hub-to-hub subscriptions
+    /// use the hub's identity instead of any ambient user context.
+    /// </summary>
+    public ISynchronizationStream<EntityStore> GetRemoteStreamAsHub(
+        Address owner,
+        WorkspaceReference<EntityStore> reference
+    ) =>
+        Hub.Address.Equals(owner)
+            ? throw new ArgumentException("Owner cannot be the same as the subscriber.")
+            : (ISynchronizationStream<EntityStore>)this.CreateExternalClient<EntityStore, WorkspaceReference<EntityStore>>(owner, reference, impersonateAsHub: true);
 
+
+    private readonly ConcurrentDictionary<(Address, WorkspaceReference), ISynchronizationStream> _remoteStreamCache = new();
 
     private ISynchronizationStream<TReduced> GetExternalClientSynchronizationStream<
         TReduced,
         TReference
     >(Address address, TReference reference)
-        where TReference : WorkspaceReference =>
-        (ISynchronizationStream<TReduced>)this.CreateExternalClient<TReduced, TReference>(address, reference);
+        where TReference : WorkspaceReference
+    {
+        var key = (address, (WorkspaceReference)reference);
+        // Check if cached stream is still alive; if disposed, replace it
+        if (_remoteStreamCache.TryGetValue(key, out var cached) && cached.Hub.RunLevel <= MessageHubRunLevel.Started)
+            return (ISynchronizationStream<TReduced>)cached;
+
+        var stream = (ISynchronizationStream)this.CreateExternalClient<TReduced, TReference>(address, reference);
+        _remoteStreamCache[key] = stream;
+        return (ISynchronizationStream<TReduced>)stream;
+    }
 
 
 

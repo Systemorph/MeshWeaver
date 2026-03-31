@@ -1,0 +1,24 @@
+{
+  "id": "Andrew_Fuller",
+  "namespace": "Northwind/Employee",
+  "name": "Andrew Fuller",
+  "nodeType": "Northwind/Employee",
+  "category": "Employees",
+  "description": "Andrew Fuller - Vice President, Sales",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 2,
+    "lastName": "Fuller",
+    "firstName": "Andrew",
+    "title": "Vice President, Sales",
+    "titleOfCourtesy": "Dr.",
+    "birthDate": "1952-02-19",
+    "hireDate": "1992-08-14",
+    "city": "Tacoma",
+    "region": "WA",
+    "country": "USA",
+    "reportsTo": 0
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "id": "ReviewKYC",
+  "namespace": "ACME/CustomerOnboarding/Todo",
+  "name": "Review KYC documentation",
+  "nodeType": "ACME/Project/Todo",
+  "category": "Tasks",
+  "description": "Comprehensive KYC review for Apex Manufacturing",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Todo",
+    "title": "Review KYC documentation",
+    "description": "Review all submitted KYC documents for Apex Manufacturing: certificate of incorporation, tax ID verification, business license, and authorized signatory documentation.",
+    "category": "Legal",
+    "priority": "Critical",
+    "assignee": "Oliver",
+    "dueDateOffsetDays": -7,
+    "status": "InProgress"
+  }
+}

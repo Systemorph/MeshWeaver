@@ -1,0 +1,18 @@
+{
+  "id": "AME-COMMERCIAL-CAS",
+  "namespace": "FutuRe/AmericasIns/TransactionMapping",
+  "name": "AmericasIns: Commercial Lines → Casualty (25%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "AME-COMMERCIAL-CAS",
+    "businessUnit": "AmericasIns",
+    "localLineOfBusiness": "COMMERCIAL",
+    "localLineOfBusinessName": "Commercial Lines",
+    "groupLineOfBusiness": "CAS",
+    "groupLineOfBusinessName": "Casualty",
+    "percentage": 0.25
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

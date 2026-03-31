@@ -1,0 +1,18 @@
+{
+  "id": "EUR-HOUSEHOLD-PROP",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Household → Property (90%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-HOUSEHOLD-PROP",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "HOUSEHOLD",
+    "localLineOfBusinessName": "Household",
+    "groupLineOfBusiness": "PROP",
+    "groupLineOfBusinessName": "Property",
+    "percentage": 0.9
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

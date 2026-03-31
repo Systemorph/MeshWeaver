@@ -134,6 +134,9 @@ public static class Controls
     public static CheckBoxControl CheckBox(object isChecked) =>
         new(isChecked);
 
+    public static SwitchControl Switch(object isChecked) =>
+        new(isChecked);
+
     public static SliderControl Slider(int min, int max, int step) => new(min, max, step);
 
     /// <summary>
@@ -148,7 +151,7 @@ public static class Controls
 
     public static SpacerControl Spacer => new();
 
-    public static MarkdownControl Markdown(object data) => new MarkdownControl(data);
+    public static MarkdownControl Markdown(object data) => new(data);
 
     public static DataGridControl DataGrid(object elements)
     => new(elements);
@@ -187,4 +190,10 @@ public static class Controls
         => new(collection) { Path = path! };
 
     public static RedirectControl Redirect(object href) => new(href);
+
+    public static SearchBoxControl SearchBox => new();
+
+    public static MeshSearchControl MeshSearch => new();
+
+    public static MeshNodePickerControl MeshNodePicker(object data) => new(data);
 }

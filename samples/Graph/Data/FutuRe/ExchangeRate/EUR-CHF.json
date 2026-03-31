@@ -1,0 +1,17 @@
+{
+  "id": "EUR-CHF",
+  "namespace": "FutuRe/ExchangeRate",
+  "name": "EUR → CHF (Plan 0.94 / Actual 0.92)",
+  "nodeType": "FutuRe/ExchangeRate",
+  "isPersistent": true,
+  "content": {
+    "$type": "ExchangeRate",
+    "systemName": "EUR-CHF",
+    "displayName": "EUR → CHF",
+    "fromCurrency": "EUR",
+    "toCurrency": "CHF",
+    "planRate": 0.94,
+    "actualRate": 0.92
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

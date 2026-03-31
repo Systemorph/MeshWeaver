@@ -163,7 +163,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
         Output.WriteLine($"NamedArea.Area Type: {namedArea.Area?.GetType()}");
 
         // Test direct serialization of NamedAreaControl
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
         var serialized = JsonSerializer.Serialize(namedArea, client.JsonSerializerOptions);
 
         Output.WriteLine($"Direct NamedAreaControl JSON: {serialized}");
@@ -175,7 +175,7 @@ public class LayoutSerializationTest(ITestOutputHelper output) : HubTestBase(out
     [Fact]
     public void StackControlWithViewTest()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
         // Create NamedAreaControl directly
         var namedArea = new NamedAreaControl("Catalog/1");

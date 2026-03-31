@@ -110,31 +110,40 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
 
     /// <summary>
-    /// Tests that GetSchemaRequest returns a valid JSON schema for complex types with all properties and metadata
+    /// Tests that SchemaReference returns a valid JSON schema for complex types with all properties and metadata
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ShouldReturnValidJsonSchemaForComplexType()
+    public async Task SchemaReference_ShouldReturnValidJsonSchemaForComplexType()
     {
         // arrange
         var client = GetClient();
-        var typeName = nameof(TestSchemaData);        // act
+        var typeName = nameof(TestSchemaData);
+
+        // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );// assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(typeName);
-        schemaResponse.Schema.Should().NotBeNullOrEmpty();        // Debug output to see what we got
+        );
+
+        // assert
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(typeName);
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+
+        // Debug output to see what we got
         Output.WriteLine($"Type requested: {typeName}");
-        Output.WriteLine($"Schema received: {schemaResponse.Schema}");
+        Output.WriteLine($"Schema received: {schemaInfo.Schema}");
 
         // Skip detailed verification if schema is empty (type not found)
-        if (schemaResponse.Schema == "{}")
+        if (schemaInfo.Schema == "{}")
         {
             Assert.Fail($"Type '{typeName}' was not found in the type registry. Schema was empty.");
-        }        // Verify it's valid JSON
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        }
+
+        // Verify it's valid JSON
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
 
         schemaJson.RootElement.GetProperty("title").GetString().Should().Be("TestSchemaData");
 
@@ -239,10 +248,10 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Tests that GetSchemaRequest returns an empty schema for unknown/unregistered types
+    /// Tests that SchemaReference returns an empty schema for unknown/unregistered types
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForUnknownType_ShouldReturnEmptySchema()
+    public async Task SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
     {
         // arrange
         var client = GetClient();
@@ -250,15 +259,16 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(unknownTypeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(unknownTypeName)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(unknownTypeName);
-        schemaResponse.Schema.Should().Be("{}");
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(unknownTypeName);
+        schemaInfo.Schema.Should().Be("{}");
     }
 
     /// <summary>
@@ -273,7 +283,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -301,7 +311,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -332,12 +342,15 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName!)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
-        );        // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        );
+
+        // assert
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
 
         // The schema should be generated without errors even for complex types
         // Check for properties in the anyOf structure or direct properties
@@ -377,7 +390,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -410,7 +423,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
@@ -439,13 +452,15 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which; var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         Output.WriteLine($"Schema root properties: {string.Join(", ", schemaJson.RootElement.EnumerateObject().Select(p => p.Name))}");
 
         if (schemaJson.RootElement.TryGetProperty("properties", out var props))
@@ -458,7 +473,7 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
         }
 
         // Just pass the test for debugging
-        schemaResponse.Should().NotBeNull();
+        schemaInfo.Should().NotBeNull();
     }
 
     /// <summary>
@@ -497,18 +512,19 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
 
         Output.WriteLine("=== ACTUAL SCHEMA STRUCTURE ===");
-        Output.WriteLine(schemaResponse.Schema);
+        Output.WriteLine(schemaInfo.Schema);
 
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         Output.WriteLine("\n=== ROOT PROPERTIES ===");
         foreach (var prop in schemaJson.RootElement.EnumerateObject())
         {
@@ -531,14 +547,15 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
 
         if (schemaJson.RootElement.TryGetProperty("anyOf", out var anyOfElement))
         {
@@ -573,14 +590,15 @@ public class SchemaTests(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName)),
+            o => o.WithTarget(CreateClientAddress()),
             new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
 
         if (schemaJson.RootElement.TryGetProperty("anyOf", out var anyOfElement))
         {

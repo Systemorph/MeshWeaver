@@ -1,0 +1,17 @@
+{
+  "id": "Carol_Access",
+  "namespace": "User/Carol/_Access",
+  "name": "Carol Access",
+  "icon": "/static/NodeTypeIcons/shield.svg",
+  "nodeType": "AccessAssignment",
+  "content": {
+    "$type": "AccessAssignment",
+    "accessObject": "Carol",
+    "displayName": "Carol Johnson",
+    "roles": [
+      {
+        "role": "Admin"
+      }
+    ]
+  }
+}

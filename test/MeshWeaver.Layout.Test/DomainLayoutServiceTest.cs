@@ -14,7 +14,9 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Layout.Domain;
+using MeshWeaver.Domain;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -26,7 +28,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     {
         return base.ConfigureHost(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<ClientAddress>((_, d) => d.Package())
+                r.RouteAddress(ClientType, (_, d) => d.Package())
             )
             .AddData(data =>
                 data.AddSource(
@@ -36,14 +38,14 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
                         )
                 )
             )
-            .AddLayout(l => l.AddDomainViews());
+            .AddLayout(l => l.AddDomainLayoutAreas());
     }
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
             .WithRoutes(r =>
-                r.RouteAddress<HostAddress>((_, d) => d.Package())
+                r.RouteAddress(HostType, (_, d) => d.Package())
             )
             .AddLayoutClient();
     }
@@ -51,14 +53,14 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     [HubFact]
     public async Task TestEntityView()
     {
-        var reference = DomainViews.GetDetailsReference(nameof(DataRecord), "Hello");
+        var reference = DomainLayoutAreas.GetDetailsReference(nameof(DataRecord), "Hello");
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content
@@ -66,13 +68,35 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             .BeOfType<StackControl>()
             .Which;
 
-
+        // The last area is a reactive view that resolves to BuildPropertyForm() → StackControl
         var controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null)!;
-        var control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
-        var dataContext = control.DataContext;
+        var formStack = controlFromStream.Should().BeOfType<StackControl>().Which;
+
+        // Navigate into the form to find a control with DataContext:
+        // formStack → first area (LayoutGridControl) → first property area (StackControl) → last area (reactive control with DataContext)
+        var gridAreaId = formStack.Areas.First().Area.ToString()!;
+        var gridControl = await stream
+            .GetControlStream(gridAreaId)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var grid = gridControl.Should().BeOfType<LayoutGridControl>().Which;
+
+        var propAreaId = grid.Areas.First().Area.ToString()!;
+        var propControl = await stream
+            .GetControlStream(propAreaId)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var propStack = propControl.Should().BeOfType<StackControl>().Which;
+
+        var reactiveAreaId = propStack.Areas.Last().Area.ToString()!;
+        var reactiveControl = await stream
+            .GetControlStream(reactiveAreaId)
+            .Timeout(10.Seconds())
+            .FirstAsync(x => x != null);
+        var dataContext = reactiveControl!.DataContext;
         dataContext.Should().NotBeNullOrWhiteSpace();
 
 
@@ -105,16 +129,16 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
         stream.Dispose();
         await Task.Delay(10);
         stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
+        // After re-opening, the form is again a StackControl
         controlFromStream = await stream
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
 
-        control = controlFromStream.Should().BeOfType<EditFormControl>().Which;
-        dataContext = control.DataContext;
+        controlFromStream.Should().BeOfType<StackControl>();
         value = await stream
             .GetDataBoundObservable<string>(namePointer, dataContext!)
             .Timeout(10.Seconds())
@@ -128,14 +152,14 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
     public async Task TestCatalog()
     {
         var host = GetHost();
-        var reference = DomainViews.GetCatalogReference(nameof(DataRecord));
+        var reference = DomainLayoutAreas.GetCatalogReference(nameof(DataRecord));
         var client = GetClient();
         var workspace = client.GetWorkspace();
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             reference
         );
-        var content = await stream.GetControlStream(reference.Area.ToString()!)
+        var content = await stream.GetControlStream(reference.Area!)
             .Timeout(10.Seconds())
             .FirstAsync(x => x != null);
         var stack = content

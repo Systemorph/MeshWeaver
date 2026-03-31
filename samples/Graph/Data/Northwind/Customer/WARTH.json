@@ -1,0 +1,23 @@
+{
+  "id": "WARTH",
+  "namespace": "Northwind/Customer",
+  "name": "Wartian Herkku",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Wartian Herkku - Oulu, Finland",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "WARTH",
+    "companyName": "Wartian Herkku",
+    "contactName": "Pirkko Koskitalo",
+    "contactTitle": "Accounting Manager",
+    "city": "Oulu",
+    "region": "",
+    "postalCode": "90110",
+    "country": "Finland",
+    "phone": "981-443655",
+    "fax": "981-443655"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "CHF",
+  "namespace": "FutuRe/Currency",
+  "name": "Swiss Franc",
+  "nodeType": "FutuRe/Currency",
+  "isPersistent": true,
+  "content": {
+    "$type": "Currency",
+    "id": "CHF",
+    "name": "Swiss Franc",
+    "symbol": "CHF",
+    "decimalPlaces": 2,
+    "order": 2
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

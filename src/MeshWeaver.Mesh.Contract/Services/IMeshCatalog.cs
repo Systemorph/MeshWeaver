@@ -1,30 +1,101 @@
 ﻿using MeshWeaver.Messaging;
 
-[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Orleans")]
+// Infrastructure assemblies that need internal access to IMeshStorage, IStorageService, IMeshCatalog
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Hosting")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("MeshWeaver.Graph")]
+
 namespace MeshWeaver.Mesh.Services;
 
-public interface IMeshCatalog
+/// <summary>
+/// Catalog service for managing mesh nodes and their configuration.
+/// </summary>
+internal interface IMeshCatalog : IPathResolver
 {
+    /// <summary>
+    /// Gets the mesh configuration.
+    /// </summary>
     MeshConfiguration Configuration { get; }
+
+    /// <summary>
+    /// Gets a mesh node by its address.
+    /// </summary>
+    /// <param name="address">The address of the node to retrieve.</param>
+    /// <returns>The mesh node, or null if not found.</returns>
     Task<MeshNode?> GetNodeAsync(Address address);
 
-    Task UpdateAsync(MeshNode node);
+    /// <summary>
+    /// Creates a new node in the catalog with validation.
+    /// The node is created in Transient state, validated, and then confirmed.
+    /// Identity is resolved from AccessContext.
+    /// </summary>
+    /// <param name="node">The node to create</param>
+    /// <param name="createdBy">Optional user who created the node (resolved from AccessContext if null)</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>The created node with State set to Confirmed</returns>
+    /// <exception cref="InvalidOperationException">If node already exists or validation fails</exception>
+    Task<MeshNode> CreateNodeAsync(MeshNode node, string? createdBy = null, CancellationToken ct = default);
 
-    Task<StreamInfo> GetStreamInfoAsync(Address address);
+    /// <summary>
+    /// Creates a transient node for UI creation flows.
+    /// Resolves currentUser internally from AccessService.
+    /// The node is persisted in Transient state, enriched with HubConfiguration,
+    /// but NOT confirmed — the Create area handles confirmation.
+    /// </summary>
+    Task<MeshNode> CreateTransientAsync(MeshNode node, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deletes a node from the catalog.
+    /// </summary>
+    /// <param name="path">The path of the node to delete</param>
+    /// <param name="recursive">If true, also delete all descendant nodes</param>
+    /// <param name="ct">Cancellation token</param>
+    Task DeleteNodeAsync(string path, bool recursive = false, CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolves a full URL path to an address using score-based matching.
+    /// Returns the best matching node's address and the remaining path segments.
+    /// Score is the number of matching segments from the path start.
+    /// </summary>
+    new Task<AddressResolution?> ResolvePathAsync(string path);
+
+    /// <summary>
+    /// Queries for child nodes under a parent path, filtered by query string.
+    /// Used for autocomplete and node discovery.
+    /// </summary>
+    /// <param name="parentPath">Parent path to search under (null or empty for root level)</param>
+    /// <param name="query">Optional search query to filter by name/description</param>
+    /// <param name="maxResults">Optional maximum number of results to return</param>
+    /// <param name="ct">Cancellation token</param>
+    /// <returns>Async enumerable of matching child nodes</returns>
+    IAsyncEnumerable<MeshNode> QueryAsync(string? parentPath, string? query = null, int? maxResults = null, CancellationToken ct = default);
+
 }
 
-
-
-public record StreamInfo(
-    StreamType Type,
-    string Provider, 
-    string Namespace);
-public enum StreamType{Stream, Channel}
+/// <summary>
+/// Information about storage configuration.
+/// </summary>
+/// <param name="Id">The storage identifier.</param>
+/// <param name="BaseDirectory">The base directory for storage.</param>
+/// <param name="AssemblyLocation">The location of the assembly.</param>
+/// <param name="AddressType">The type of address used.</param>
 public record StorageInfo(
-    string Id, 
-    string BaseDirectory, 
-    string AssemblyLocation, 
+    string Id,
+    string BaseDirectory,
+    string AssemblyLocation,
     string AddressType);
 
-
+/// <summary>
+/// Information needed to start a mesh node.
+/// </summary>
+/// <param name="Address">The address of the node.</param>
+/// <param name="PackageName">The package name.</param>
+/// <param name="AssemblyLocation">The location of the assembly.</param>
 public record StartupInfo(Address Address, string PackageName, string AssemblyLocation);
+
+/// <summary>
+/// Result of path resolution containing the matched prefix and remaining path.
+/// </summary>
+public record AddressResolution(
+    string Prefix,
+    string? Remainder
+);

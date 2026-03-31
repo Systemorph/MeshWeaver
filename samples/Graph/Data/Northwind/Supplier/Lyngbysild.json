@@ -1,0 +1,21 @@
+{
+  "id": "Lyngbysild",
+  "namespace": "Northwind/Supplier",
+  "name": "Lyngbysild",
+  "nodeType": "Northwind/Supplier",
+  "category": "Suppliers",
+  "description": "Lyngbysild - Lyngby, Denmark",
+  "icon": "/static/NodeTypeIcons/truck.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "SupplierContent",
+    "supplierId": 21,
+    "companyName": "Lyngbysild",
+    "contactName": "Niels Petersen",
+    "contactTitle": "Sales Manager",
+    "city": "Lyngby",
+    "region": "",
+    "country": "Denmark",
+    "phone": "43844108"
+  }
+}

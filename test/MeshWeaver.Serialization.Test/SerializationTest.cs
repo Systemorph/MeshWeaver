@@ -20,7 +20,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     {
         return base.ConfigureHost(c)
             .WithTypes(typeof(BoomerangResponse), typeof(GetDataRequest), typeof(GetDataResponse))
-            .WithRoutes(f => f.RouteAddress<ClientAddress>(
+            .WithRoutes(f => f.RouteAddress(ClientType,
                     (routedAddress, d) =>
                     {
                         var hostedHub = c.ParentHub!.GetHostedHub(routedAddress, ConfigureClient);
@@ -48,7 +48,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         return base.ConfigureClient(configuration)
             .WithTypes(typeof(BoomerangResponse), typeof(MyEvent), typeof(GetDataRequest), typeof(GetDataResponse))
             .WithRoutes(f =>
-            f.RouteAddress<HostAddress>(
+            f.RouteAddress(HostType,
                 (routedAddress, d) =>
                 {
                     var hostedHub = configuration.ParentHub!.GetHostedHub(routedAddress, ConfigureHost);
@@ -63,7 +63,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void BoomerangResponseSerialization()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
         var orig = new BoomerangResponse(new MyEvent("Hello"), Type: nameof(MyEvent));
         var serialized = JsonSerializer.Serialize(orig, client.JsonSerializerOptions);
 
@@ -75,11 +75,11 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public async Task BoomerangTest()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
         var response = await client.AwaitResponse(
             new Boomerang(new MyEvent("Hello")),
-            o => o.WithTarget(new HostAddress())
+            o => o.WithTarget(CreateHostAddress())
             , new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
         );
 
@@ -90,8 +90,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void TestHostedHubSerializationOptions()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         Output.WriteLine("=== CLIENT HUB CONVERTERS ===");
         foreach (var converter in client.JsonSerializerOptions.Converters)
@@ -122,8 +122,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void TestSimplePolymorphicSerialization()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Test simple polymorphic object
         var testMessage = new PolymorphicTestMessage
@@ -154,8 +154,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void TestPolymorphicCollectionSerialization()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Test collection of polymorphic objects
         var testMessages = new List<object>
@@ -210,8 +210,8 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
     [Fact]
     public void TestGenericPolymorphicTypeSerialization()
     {
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
-        var hosted = client.GetHostedHub(new SynchronizationAddress());
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
+        var hosted = client.GetHostedHub(SynchronizationAddress.Create());
 
         // Create a generic polymorphic type similar to PropertyColumnControl<string>
         var genericObject = new GenericTestClass<string>
@@ -304,7 +304,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         // This test verifies that when no handler exists for a request message type,
         // AwaitResponse should throw DeliveryFailureException instead of hanging
 
-        var client = Router.GetHostedHub(new ClientAddress(), ConfigureClient);
+        var client = Mesh.GetHostedHub(CreateClientAddress(), ConfigureClient);
 
         // Send an UnknownRequest to the host 
         // The host has no handler for this type at all
@@ -317,7 +317,7 @@ public class SerializationTest(ITestOutputHelper output) : HubTestBase(output)
         var exception = await Assert.ThrowsAsync<AggregateException>(() =>
             client.AwaitResponse(
                 unknownRequest,
-                o => o.WithTarget(new HostAddress()),
+                o => o.WithTarget(CreateHostAddress()),
                 new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token
             )
         );

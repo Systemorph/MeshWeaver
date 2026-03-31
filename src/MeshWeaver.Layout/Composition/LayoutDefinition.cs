@@ -2,6 +2,7 @@
 using MeshWeaver.Data;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Layout.Composition;
 
@@ -10,6 +11,20 @@ public delegate Task<EntityStoreAndUpdates> AsyncRenderer(LayoutAreaHost host, R
 public record LayoutDefinition(IMessageHub Hub)
 {
     private ImmutableList<(Func<RenderingContext, bool> Filter, AsyncRenderer Renderer)> AsyncRenderers { get; init; } = [];
+
+    private ImmutableDictionary<string, AsyncRenderer> NamedRenderers { get; init; }
+        = ImmutableDictionary<string, AsyncRenderer>.Empty;
+
+    /// <summary>
+    /// The default area to display when no area is specified in the URL.
+    /// </summary>
+    public string? DefaultArea { get; init; }
+
+    /// <summary>
+    /// Sets the default area to display when no area is specified in the URL.
+    /// </summary>
+    public LayoutDefinition WithDefaultArea(string area)
+        => this with { DefaultArea = area };
 
     public LayoutDefinition WithRenderer(Func<RenderingContext, bool> filter, Renderer renderer)
         => this with
@@ -22,35 +37,85 @@ public record LayoutDefinition(IMessageHub Hub)
             AsyncRenderers = AsyncRenderers.Add((filter, renderer))
         };
 
-    public ValueTask<EntityStoreAndUpdates> RenderAsync(
+    public LayoutDefinition WithNamedRenderer(string area, Renderer renderer)
+        => this with
+        {
+            NamedRenderers = NamedRenderers.SetItem(area, (h, ctx, s) =>
+                Task.FromResult(renderer.Invoke(h, ctx, s)))
+        };
+
+    public LayoutDefinition WithNamedRenderer(string area, AsyncRenderer renderer)
+        => this with
+        {
+            NamedRenderers = NamedRenderers.SetItem(area, renderer)
+        };
+
+    public async ValueTask<EntityStoreAndUpdates> RenderAsync(
         LayoutAreaHost host,
         RenderingContext context,
-        EntityStore store) =>
-        AsyncRenderers
-            .ToAsyncEnumerable()
-            .Where(r => r.Filter(context))
-            .AggregateAwaitAsync(new EntityStoreAndUpdates(store, [], host.Stream.StreamId),
-                async (r,x) =>
-            {
-                var ret = await x.Renderer.Invoke(host, context, r.Store);
-                return ret with{
-                    Updates = r.Updates.Concat(ret.Updates)
-                };
-            });
-
-    public int Count => AsyncRenderers.Count;
-
-    public LayoutDefinition AddRendering(Func<object, UiControl?> rule)
+        EntityStore store)
     {
-        Hub.ServiceProvider.GetRequiredService<IUiControlService>().AddRule(rule);
-        return this;
+        var result = new EntityStoreAndUpdates(store, [], host.Stream.StreamId);
+        var hasContent = false;
+
+        // Execute named renderer if one exists for this area
+        if (NamedRenderers.TryGetValue(context.Area, out var namedRenderer))
+        {
+            var ret = await namedRenderer.Invoke(host, context, result.Store);
+            result = ret with { Updates = result.Updates.Concat(ret.Updates) };
+            hasContent = true;
+        }
+
+        // Execute predicate-based renderers (existing behavior)
+        await foreach (var x in AsyncRenderers.ToAsyncEnumerable().Where(r => r.Filter(context)))
+        {
+            var ret = await x.Renderer.Invoke(host, context, result.Store);
+            result = ret with { Updates = result.Updates.Concat(ret.Updates) };
+            hasContent = true;
+        }
+
+        if (!hasContent)
+        {
+            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("LayoutDefinition");
+            logger?.LogWarning("No renderer produced content for area '{Area}' on hub {Address}. " +
+                "Named renderers: [{Named}], predicate renderers: {Count}",
+                context.Area, host.Hub.Address,
+                string.Join(", ", NamedRenderers.Keys), AsyncRenderers.Count);
+        }
+
+        return result;
     }
 
-    internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
-    internal string? ThumbnailBase { get; init; }
+    public int Count => AsyncRenderers.Count + NamedRenderers.Count;
 
-    public LayoutDefinition WithThumbnailBasePath(string basePath)
-        => this with { ThumbnailBase = basePath};
+    /// <summary>
+    /// Conversion rules collected at config time. Applied by UiControlService at construction.
+    /// </summary>
+    internal ImmutableList<Func<object, UiControl?>> ConversionRules { get; init; } = ImmutableList<Func<object, UiControl?>>.Empty;
+
+    public LayoutDefinition AddRendering(Func<object, UiControl?> rule)
+        => this with { ConversionRules = ConversionRules.Insert(0, rule) };
+
+    internal ImmutableDictionary<string, LayoutAreaDefinition> AreaDefinitions { get; init; } = ImmutableDictionary<string, LayoutAreaDefinition>.Empty;
+    internal ThumbnailPattern? ThumbnailPattern { get; init; }
+
+    /// <summary>
+    /// Configures thumbnails using the default naming convention: {basePath}/{area}.png and {basePath}/{area}-dark.png
+    /// </summary>
+    public LayoutDefinition WithThumbnailsPath(string basePath)
+        => this with { ThumbnailPattern = ThumbnailPattern.FromBasePath(basePath) };
+
+    /// <summary>
+    /// Configures thumbnails using lambda expressions to generate URLs from area names.
+    /// </summary>
+    public LayoutDefinition WithThumbnailPattern(Func<string, string> lightUrlFactory, Func<string, string> darkUrlFactory)
+        => this with { ThumbnailPattern = new ThumbnailPattern(lightUrlFactory, darkUrlFactory) };
+
+    /// <summary>
+    /// Configures thumbnails using a custom pattern.
+    /// </summary>
+    public LayoutDefinition WithThumbnailPattern(ThumbnailPattern pattern)
+        => this with { ThumbnailPattern = pattern };
 
     public LayoutDefinition WithAreaDefinition(LayoutAreaDefinition? layoutArea) => 
         layoutArea == null 

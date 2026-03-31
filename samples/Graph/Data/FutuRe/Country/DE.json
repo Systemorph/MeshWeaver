@@ -1,0 +1,16 @@
+{
+  "id": "DE",
+  "namespace": "FutuRe/Country",
+  "name": "Germany",
+  "nodeType": "FutuRe/Country",
+  "isPersistent": true,
+  "content": {
+    "$type": "Country",
+    "id": "DE",
+    "name": "Germany",
+    "alpha3Code": "DEU",
+    "region": "EMEA",
+    "order": 2
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

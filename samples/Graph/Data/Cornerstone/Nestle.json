@@ -1,0 +1,20 @@
+{
+  "id": "Nestle",
+  "namespace": "Cornerstone",
+  "name": "Nestle S.A.",
+  "nodeType": "Cornerstone/Insured",
+  "category": "Clients",
+  "description": "Global food and beverage company - Insurance client",
+  "icon": "/static/storage/content/Cornerstone/icons/nestle.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Insured",
+    "id": "Nestle",
+    "name": "Nestle S.A.",
+    "description": "Global food and beverage company",
+    "address": "Avenue Nestle 55, 1800 Vevey, Switzerland",
+    "website": "https://nestle.com",
+    "industry": "Food & Beverage",
+    "location": "Switzerland"
+  }
+}

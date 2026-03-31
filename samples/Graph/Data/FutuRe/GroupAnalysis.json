@@ -1,0 +1,19 @@
+{
+  "id": "GroupAnalysis",
+  "namespace": "FutuRe",
+  "name": "Group Analysis",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "Group-level profitability analysis hub aggregating data from local business unit hubs",
+  "icon": "/static/storage/content/FutuRe/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "GroupAnalysis",
+    "namespace": "FutuRe",
+    "displayName": "Group Analysis",
+    "iconName": "DataTrending",
+    "description": "Group profitability analysis hub loading data from local BU hubs via PartitionedHubDataSource and applying transaction mapping rules",
+    "configuration": "config => config.ConfigureGroupAnalysis()"
+  }
+}

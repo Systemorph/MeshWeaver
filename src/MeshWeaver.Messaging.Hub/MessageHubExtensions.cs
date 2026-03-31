@@ -34,6 +34,15 @@ public static class MessageHubExtensions
     public static ITypeRegistry GetTypeRegistry(this IServiceProvider serviceProvider)
         => serviceProvider.GetRequiredService<ITypeRegistry>();
 
+    /// <summary>
+    /// Creates a new type registry that can be used at the mesh level.
+    /// Hub-level type registries will inherit from this registry if registered as ITypeRegistry.
+    /// </summary>
+    /// <param name="parent">Optional parent registry to inherit from</param>
+    /// <returns>A new type registry</returns>
+    public static ITypeRegistry CreateTypeRegistry(ITypeRegistry? parent = null)
+        => new TypeRegistry(parent);
+
     public static (string AddressType, string AddressId) GetAddressTypeAndId(object instance)
     {
         if (instance is JsonObject jObj)
@@ -51,22 +60,24 @@ public static class MessageHubExtensions
     {
         if (address is T ret)
             return ret;
-        if (address is HostedAddress hosted)
-            return GetAddressOfType<T>(hosted.Address);
+        if (address is Address { Host: not null } hosted)
+            return GetAddressOfType<T>(hosted with { Host = null });
         return default;
+    }
+
+    public static Address? GetAddressOfType(object address, string addressType)
+    {
+        if (address is Address addr && addr.Type == addressType)
+            return addr;
+        if (address is Address { Host: not null } hosted)
+            return GetAddressOfType(hosted with { Host = null }, addressType);
+        return null;
     }
 
     public static Address GetAddress(this IMessageHub hub, string address)
     {
-        var split = address.Split('/');
-        if (split.Length < 2)
-            throw new InvalidOperationException($"Address {address} is not in the correct format. Expected format is AddressType/AddressId");
-        var type = hub.GetTypeRegistry().GetType(split[0]);
-
-        if (type is null)
-            throw new InvalidOperationException($"Unknown address type {split[0]} for {address}. Expected format is AddressType/AddressId");
-
-        return (Address)Activator.CreateInstance(type, [string.Join('/', split.Skip(1))])!;
+        // Use implicit conversion which handles @ separator for hosted addresses
+        return address;
     }
 
     /// <summary>

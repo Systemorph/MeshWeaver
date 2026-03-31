@@ -1,0 +1,23 @@
+{
+  "id": "BOLID",
+  "namespace": "Northwind/Customer",
+  "name": "B\u00f3lido Comidas preparadas",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "B\u00f3lido Comidas preparadas - Madrid, Spain",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "BOLID",
+    "companyName": "B\u00f3lido Comidas preparadas",
+    "contactName": "Mart\u00edn Sommer",
+    "contactTitle": "Owner",
+    "city": "Madrid",
+    "region": "",
+    "postalCode": "28023",
+    "country": "Spain",
+    "phone": "(91) 555 22 82",
+    "fax": "(91) 555 91 99"
+  }
+}

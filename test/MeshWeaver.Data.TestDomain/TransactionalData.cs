@@ -20,7 +20,26 @@ public record ComputedData([property: Key] string Id, int Year, string LoB, stri
 public record LineOfBusiness([property: Key] string SystemName, string DisplayName);
 public record BusinessUnit([property: Key] string SystemName, string DisplayName);
 
-public record ImportAddress(int Year) : Address(nameof(ImportAddress), Year.ToString());
-public record ReferenceDataAddress() : Address(nameof(ReferenceDataAddress), "1");
-public record ComputedDataAddress(int Year, string BusinessUnit) : Address(nameof(ComputedDataAddress), $"{Year}-{BusinessUnit}");
-public record TransactionalDataAddress(int Year, string BusinessUnit) : Address(nameof(TransactionalData), $"{Year}-{BusinessUnit}");
+public static class ImportAddress
+{
+    public const string TypeName = nameof(ImportAddress);
+    public static Address Create(int year) => new(TypeName, year.ToString());
+}
+
+public static class ReferenceDataAddress
+{
+    public const string TypeName = nameof(ReferenceDataAddress);
+    public static Address Create() => new(TypeName, "1");
+}
+
+public static class ComputedDataAddress
+{
+    public const string TypeName = nameof(ComputedDataAddress);
+    public static Address Create(int year, string businessUnit) => new(TypeName, $"{year}-{businessUnit}");
+}
+
+public static class TransactionalDataAddress
+{
+    public const string TypeName = nameof(TransactionalData);
+    public static Address Create(int year, string businessUnit) => new(TypeName, $"{year}-{businessUnit}");
+}

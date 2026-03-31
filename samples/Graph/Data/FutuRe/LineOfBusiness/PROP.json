@@ -1,0 +1,16 @@
+{
+  "id": "PROP",
+  "namespace": "FutuRe/LineOfBusiness",
+  "name": "Property",
+  "nodeType": "FutuRe/LineOfBusiness",
+  "category": "Lines of Business",
+  "description": "Property insurance covering buildings, contents, business interruption, and catastrophe",
+  "icon": "/static/storage/content/FutuRe/LineOfBusiness/icon.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "LineOfBusiness",
+    "systemName": "PROP",
+    "displayName": "Property",
+    "description": "Property insurance covers physical assets against damage or loss from perils such as fire, storm, flood, earthquake, and other natural or man-made catastrophes. Policies typically protect commercial buildings, industrial facilities, residential properties, and their contents. Business interruption coverage compensates for lost income when insured premises become unusable. Property reinsurance is one of the largest global reinsurance markets, with catastrophe excess-of-loss treaties forming a critical component of capacity management."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "RATTC",
+  "namespace": "Northwind/Customer",
+  "name": "Rattlesnake Canyon Grocery",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Rattlesnake Canyon Grocery - Albuquerque, USA",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "RATTC",
+    "companyName": "Rattlesnake Canyon Grocery",
+    "contactName": "Paula Wilson",
+    "contactTitle": "Assistant Sales Representative",
+    "city": "Albuquerque",
+    "region": "NM",
+    "postalCode": "87110",
+    "country": "USA",
+    "phone": "(505) 555-5939",
+    "fax": "(505) 555-3620"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "Premium",
+  "namespace": "FutuRe/AmountType",
+  "name": "Premium",
+  "nodeType": "FutuRe/AmountType",
+  "isPersistent": true,
+  "content": {
+    "$type": "AmountType",
+    "systemName": "Premium",
+    "displayName": "Premium",
+    "order": 0,
+    "sign": 1,
+    "hasActuals": true
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

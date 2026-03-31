@@ -1,0 +1,23 @@
+{
+  "id": "HUNGC",
+  "namespace": "Northwind/Customer",
+  "name": "Hungry Coyote Import Store",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Hungry Coyote Import Store - Elgin, USA",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "HUNGC",
+    "companyName": "Hungry Coyote Import Store",
+    "contactName": "Yoshi Latimer",
+    "contactTitle": "Sales Representative",
+    "city": "Elgin",
+    "region": "OR",
+    "postalCode": "97827",
+    "country": "USA",
+    "phone": "(503) 555-6874",
+    "fax": "(503) 555-2376"
+  }
+}

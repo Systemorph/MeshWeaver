@@ -1,0 +1,16 @@
+{
+  "id": "ExpectedProfit",
+  "namespace": "FutuRe/AmountType",
+  "name": "Expected Profit",
+  "nodeType": "FutuRe/AmountType",
+  "isPersistent": true,
+  "content": {
+    "$type": "AmountType",
+    "systemName": "ExpectedProfit",
+    "displayName": "Expected Profit",
+    "order": 5,
+    "sign": 1,
+    "hasActuals": false
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

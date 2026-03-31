@@ -1,0 +1,11 @@
+{
+  "id": "TestUser",
+  "namespace": "User",
+  "name": "Test User",
+  "nodeType": "User",
+  "content": {
+    "$type": "UserProfile",
+    "displayName": "Test User",
+    "email": "testuser@meshweaver.io"
+  }
+}

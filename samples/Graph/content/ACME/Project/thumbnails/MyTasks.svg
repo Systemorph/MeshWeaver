@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+    .sf { fill: #ffffff; }
+  </style>
+  <!-- Background -->
+  <rect class="bg" width="140" height="79" rx="8"/>
+
+  <!-- User icon: head circle cx=70 cy=22 r=12 stroke-width=2.5 -->
+  <circle class="nf" cx="70" cy="22" r="13.25"/>
+  <circle class="bg" cx="70" cy="22" r="10.75"/>
+
+  <!-- Body arc: "M50 60c0-11.046 8.954-20 20-20s20 8.954 20 20" stroke-width=2.5 -->
+  <!-- Convert to filled arc shape: outer arc at r=21.25, inner arc at r=18.75 -->
+  <path class="nf" d="M48.75 60c0-11.736 9.514-21.25 21.25-21.25s21.25 9.514 21.25 21.25h-2.5c0-10.355-8.395-18.75-18.75-18.75S51.25 49.645 51.25 60h-2.5z"/>
+
+  <!-- Checkmark badge with red accent (already filled circle) -->
+  <circle class="af" cx="94" cy="16" r="12"/>
+  <!-- Checkmark: "M89 16l3.5 3.5 6-6" sw=2 round => filled polygon -->
+  <polygon class="sf" points="89.6,16 92.5,18.9 97.9,13.5 99.4,15 92.5,21.9 88.1,17.5"/>
+</svg>

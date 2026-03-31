@@ -1,0 +1,23 @@
+{
+  "id": "HILAA",
+  "namespace": "Northwind/Customer",
+  "name": "HILARION-Abastos",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "HILARION-Abastos - San Crist\u00f3bal, Venezuela",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "HILAA",
+    "companyName": "HILARION-Abastos",
+    "contactName": "Carlos Hern\u00e1ndez",
+    "contactTitle": "Sales Representative",
+    "city": "San Crist\u00f3bal",
+    "region": "T\u00e1chira",
+    "postalCode": "5022",
+    "country": "Venezuela",
+    "phone": "(5) 555-1340",
+    "fax": "(5) 555-1948"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "StreamArchitecture",
+  "namespace": "Systemorph/Marketing",
+  "name": "Stream Architecture",
+  "nodeType": "Markdown",
+  "category": "MeshWeaver",
+  "description": "Real-time updates via CRDT - subscribe to data changes as they happen",
+  "icon": "/static/storage/content/Systemorph/Marketing/icons/flash.svg",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "content": {
+    "$type": "MarkdownDocument",
+    "title": "Stream-Based Architecture",
+    "iconName": "Document",
+    "content": "# Stream-Based Architecture\n\nMeshWeaver provides data as streams - subscribe once and receive updates as they happen. No polling, no stale data.\n\n## Everything is a Stream\n\n```mermaid\nsequenceDiagram\n    participant Client as Client/Agent\n    participant Mesh as MeshWeaver\n    participant Source as Data Source\n\n    Client->>Mesh: Subscribe to @app/Claims/ActiveClaims\n    Mesh->>Source: Watch for changes\n    Mesh->>Client: Initial data snapshot\n\n    Note over Source: Claim updated\n\n    Source->>Mesh: Change notification\n    Mesh->>Client: Stream update (delta)\n\n    Note over Client: UI/Agent receives update automatically\n```\n\n## Subscribe, Don't Poll\n\n| Traditional Approach | Stream Approach |\n|---------------------|----------------|\n| Poll every N seconds | Subscribe once |\n| Full refresh each time | Receive deltas |\n| Wasted API calls | Updates on change |\n| Always somewhat stale | Always current |\n\n## CRDT for Consistency\n\nMeshWeaver uses **Conflict-free Replicated Data Types (CRDT)** for distributed consistency:\n\n```mermaid\ngraph TD\n    A[Change in Source] --> B[MeshWeaver]\n    B --> C[Subscriber 1]\n    B --> D[Subscriber 2]\n    B --> E[Subscriber 3]\n    \n    C --> F[Consistent View]\n    D --> F\n    E --> F\n```\n\n**CRDT Properties:**\n- Multiple clients can subscribe to the same data\n- Updates propagate automatically\n- No central locking required\n- Eventually consistent across all subscribers\n\n## Real-Time Use Cases\n\n| Use Case | How Streams Help |\n|----------|------------------|\n| **Dashboard updates** | KPIs refresh automatically when data changes |\n| **Collaboration** | Multiple users see changes in real-time |\n| **AI monitoring** | Agents react to new data immediately |\n| **Notifications** | Alerts triggered on specific changes |\n\n## Event-Driven Integration\n\n```mermaid\ngraph LR\n    subgraph \"MeshWeaver\"\n        A[Stream Engine]\n    end\n\n    subgraph \"Message Bus Options\"\n        B[Change Feed]\n        C[Service Bus]\n        D[Event Hubs]\n    end\n\n    subgraph \"Consumers\"\n        E[Downstream System]\n        F[Analytics]\n        G[Notifications]\n    end\n\n    A --> B --> E\n    A --> C --> F\n    A --> D --> G\n```\n\n## Integration Patterns\n\n| Pattern | Description | Use Case |\n|---------|-------------|----------|\n| **Publish** | Emit events on data change | Notify downstream systems |\n| **Subscribe** | React to external events | Process incoming documents |\n| **Request/Reply** | Synchronous query | API queries |\n| **Saga** | Multi-step workflows | Complex business processes |\n\n## Benefits\n\n- **Real-time**: See changes as they happen\n- **Efficient**: Only transfer what changed (deltas)\n- **Scalable**: Pub/sub handles many subscribers\n- **Decoupled**: Producers and consumers independent\n- **Reactive**: Build responsive applications"
+  }
+}

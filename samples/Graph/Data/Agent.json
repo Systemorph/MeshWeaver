@@ -1,0 +1,13 @@
+{
+  "id": "Agent",
+  "name": "Agents",
+  "nodeType": "Section",
+  "description": "Default AI agents for the mesh",
+  "icon": "/static/NodeTypeIcons/bot.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "Section",
+    "name": "Agents",
+    "description": "Default AI agents for the mesh"
+  }
+}

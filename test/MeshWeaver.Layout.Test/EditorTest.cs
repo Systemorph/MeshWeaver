@@ -77,15 +77,10 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Label.Should().NotBeNull();
                 skin.Description.Should().NotBeNull();
             });
-        var editorAreas = await editor.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a => 
+        var editorAreas = await Task.WhenAll(
+            editor.Areas.Select(async a =>
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync())
-            .ToArrayAsync(
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(5.Seconds()).Token
-                    ).Token
-            );
+        );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -100,7 +95,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = client.GetWorkspace();
         var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithResult)));
         var control = await area
             .GetControlStream(nameof(EditorWithResult))
@@ -122,15 +117,10 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                 skin.Label.Should().NotBeNull();
                 skin.Description.Should().NotBeNull();
             });
-        var editorAreas = await editor.Areas.ToAsyncEnumerable()
-            .SelectAwait(async a =>
+        var editorAreas = await Task.WhenAll(
+            editor.Areas.Select(async a =>
                 await area.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds()).FirstAsync(x => x is not null))
-            .ToArrayAsync(
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    TestContext.Current.CancellationToken,
-                    new CancellationTokenSource(5.Seconds()).Token
-                ).Token
-                );
+        );
 
         editorAreas.Should().HaveCount(2);
         editorAreas.Should()
@@ -149,7 +139,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl { Markdown: "0" });
+            .FirstAsync(x => x is MarkdownControl { Markdown: not "0" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("1");
 
@@ -158,7 +148,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
         control = await area
             .GetControlStream(stack.Areas.Last().Area.ToString()!)
             .Timeout(10.Seconds())
-            .FirstAsync(x => x is not MarkdownControl { Markdown: "1" });
+            .FirstAsync(x => x is MarkdownControl { Markdown: not "1" });
 
         control.Should().BeOfType<MarkdownControl>().Subject.Markdown.Should().Be("2");
     }
@@ -169,7 +159,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
 
         var workspace = client.GetWorkspace();
         var area = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new HostAddress(),
+            CreateHostAddress(),
             new LayoutAreaReference(nameof(EditorWithDelayedResult)));
         var control = await area
             .GetControlStream(nameof(EditorWithDelayedResult))
@@ -303,7 +293,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             
             var stream = workspace
                 .GetRemoteStream<JsonElement, LayoutAreaReference>(
-                new HostAddress(),
+                CreateHostAddress(),
                 new LayoutAreaReference(nameof(EditorWithListFormProperties)));
             Output.WriteLine("🔧 DEBUG: Got stream");
 
@@ -318,8 +308,8 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
             Output.WriteLine($"🔧 DEBUG: Editor has {editor.Areas.Count} areas");
 
             Output.WriteLine("🔧 DEBUG: Starting to get controls for areas...");
-            var controls = await editor.Areas.ToAsyncEnumerable()
-                .SelectAwait(async a =>
+            var controls = await Task.WhenAll(
+                editor.Areas.Select(async a =>
                 {
                     Output.WriteLine($"🔧 DEBUG: Getting control for area: {a.Area}");
                     var areaControl = await stream.GetControlStream(a.Area.ToString()!).Timeout(5.Seconds())
@@ -327,12 +317,7 @@ public class EditorTest(ITestOutputHelper output) : HubTestBase(output)
                     Output.WriteLine($"🔧 DEBUG: Got area control: {areaControl?.GetType().Name}");
                     return areaControl;
                 })
-                .ToArrayAsync(
-                    CancellationTokenSource.CreateLinkedTokenSource(
-                        TestContext.Current.CancellationToken,
-                        new CancellationTokenSource(5.Seconds()).Token
-                    ).Token
-                    );
+            );
             Output.WriteLine($"🔧 DEBUG: Got {controls.Length} controls");
 
             controls.Should().HaveCount(ListPropertyBenchmarks.Length);

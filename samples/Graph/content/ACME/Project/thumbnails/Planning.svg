@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+  </style>
+  <!-- Background -->
+  <rect class="bg" width="140" height="79" rx="8"/>
+
+  <!-- Calendar frame: rect x=10 y=8 w=120 h=62 rx=4 stroke-width=2 -->
+  <rect class="nf" x="9" y="7" width="122" height="64" rx="5"/>
+  <rect class="bg" x="11" y="9" width="118" height="60" rx="3"/>
+
+  <!-- Header line: M10 22h120 stroke-width=2 -->
+  <rect class="nf" x="10" y="21" width="120" height="2"/>
+
+  <!-- Calendar header dots (already filled) -->
+  <circle class="nf" cx="24" cy="15" r="2"/>
+  <circle class="nf" cx="36" cy="15" r="2"/>
+  <circle class="nf" cx="48" cy="15" r="2"/>
+
+  <!-- Person 1: circle cx=32 cy=38 r=7 stroke-width=1.5 -->
+  <circle class="nf" cx="32" cy="38" r="7.75"/>
+  <circle class="bg" cx="32" cy="38" r="6.25"/>
+  <!-- Head dot (already filled) -->
+  <circle class="nf" cx="32" cy="36" r="2.5"/>
+  <!-- Body arc: "M27 44c0-2.8 2.2-5 5-5s5 2.2 5 5" stroke-width=1 -->
+  <path class="nf" d="M26.5 44c0-3.038 2.462-5.5 5.5-5.5s5.5 2.462 5.5 5.5h-1c0-2.485-2.015-4.5-4.5-4.5s-4.5 2.015-4.5 4.5h-1z"/>
+
+  <!-- Person 2: circle cx=70 cy=38 r=7 stroke-width=1.5 -->
+  <circle class="nf" cx="70" cy="38" r="7.75"/>
+  <circle class="bg" cx="70" cy="38" r="6.25"/>
+  <circle class="nf" cx="70" cy="36" r="2.5"/>
+  <path class="nf" d="M64.5 44c0-3.038 2.462-5.5 5.5-5.5s5.5 2.462 5.5 5.5h-1c0-2.485-2.015-4.5-4.5-4.5s-4.5 2.015-4.5 4.5h-1z"/>
+
+  <!-- Person 3: circle cx=108 cy=38 r=7 stroke-width=1.5 -->
+  <circle class="nf" cx="108" cy="38" r="7.75"/>
+  <circle class="bg" cx="108" cy="38" r="6.25"/>
+  <circle class="nf" cx="108" cy="36" r="2.5"/>
+  <path class="nf" d="M102.5 44c0-3.038 2.462-5.5 5.5-5.5s5.5 2.462 5.5 5.5h-1c0-2.485-2.015-4.5-4.5-4.5s-4.5 2.015-4.5 4.5h-1z"/>
+
+  <!-- Task indicators with red accent (already filled) -->
+  <rect class="af" x="22" y="54" width="20" height="5" rx="1"/>
+  <rect class="af" x="56" y="54" width="14" height="5" rx="1" opacity="0.6"/>
+  <rect class="af" x="82" y="54" width="18" height="5" rx="1" opacity="0.4"/>
+  <rect class="af" x="106" y="54" width="12" height="5" rx="1" opacity="0.3"/>
+</svg>

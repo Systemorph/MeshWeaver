@@ -1,0 +1,18 @@
+{
+  "id": "EUR-LIABILITY-PROF",
+  "namespace": "FutuRe/EuropeRe/TransactionMapping",
+  "name": "EuropeRe: Liability → Professional Liability (30%)",
+  "nodeType": "FutuRe/TransactionMapping",
+  "isPersistent": true,
+  "content": {
+    "$type": "TransactionMapping",
+    "id": "EUR-LIABILITY-PROF",
+    "businessUnit": "EuropeRe",
+    "localLineOfBusiness": "LIABILITY",
+    "localLineOfBusinessName": "Liability",
+    "groupLineOfBusiness": "PROF",
+    "groupLineOfBusinessName": "Professional Liability",
+    "percentage": 0.3
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

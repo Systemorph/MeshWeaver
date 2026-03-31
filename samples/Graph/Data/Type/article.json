@@ -1,0 +1,18 @@
+{
+  "id": "Article",
+  "namespace": "Type",
+  "name": "Article",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A content article with YAML frontmatter",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "namespace": "Type",
+    "displayName": "Article",
+    "iconName": "DocumentText",
+    "description": "A content article with YAML frontmatter",
+    "configuration": "config => config.WithContentType<Article>().AddNodeTypeView()"
+  }
+}

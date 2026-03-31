@@ -1,5 +1,4 @@
-﻿#nullable enable
-using System.Text.Json;
+﻿using System.Text.Json;
 using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
@@ -58,7 +57,7 @@ public record CollectionsReference(params IReadOnlyCollection<string> Collection
 
 public record CombinedStreamReference(params StreamIdentity[] References) : WorkspaceReference<EntityStore>
 {
-    public override string ToString() => 
+    public override string ToString() =>
         string.Join(", ", References.Select(r => r.ToString()));
 }
 
@@ -82,4 +81,115 @@ public record PartitionedWorkspaceReference<TReduced>(object? Partition, Workspa
 {
     WorkspaceReference IPartitionedWorkspaceReference.Reference => Reference;
 }
+
+/// <summary>
+/// Unified reference for accessing content via path patterns.
+/// Supports multiple path formats:
+/// - Data: data:addressType/addressId[/collection[/entityId]]
+/// - Content: content:addressType/addressId/collection/path
+/// - Area: area:addressType/addressId/areaName[/areaId]
+/// </summary>
+/// <param name="Path">The unified path to access content</param>
+public record UnifiedReference(string Path) : WorkspaceReference<object>
+{
+    /// <summary>
+    /// Optional: number of rows to read (for files like Excel/CSV)
+    /// </summary>
+    public int? NumberOfRows { get; init; }
+
+    public override string ToString() => Path;
+}
+
+/// <summary>
+/// Reference to a file in a content collection.
+/// Used by the content: prefix handler.
+/// </summary>
+/// <param name="Collection">The content collection name</param>
+/// <param name="Path">The path to the file within the collection</param>
+/// <param name="Partition">Optional partition for partitioned collections</param>
+public record FileReference(
+    string Collection,
+    string Path,
+    string? Partition = null) : WorkspaceReference<object>
+{
+    /// <summary>
+    /// Optional: number of rows to read (for files like Excel/CSV)
+    /// </summary>
+    public int? NumberOfRows { get; init; }
+
+    public override string ToString() =>
+        Partition != null
+            ? $"{Collection}@{Partition}/{Path}"
+            : $"{Collection}/{Path}";
+}
+
+/// <summary>
+/// Reference for content access with collection and path.
+/// Alternative naming for FileReference for semantic clarity.
+/// </summary>
+/// <param name="Collection">The content collection name</param>
+/// <param name="Path">The path within the collection</param>
+/// <param name="Partition">Optional partition for partitioned collections</param>
+public record ContentWorkspaceReference(
+    string Collection,
+    string Path,
+    string? Partition = null) : WorkspaceReference<object>
+{
+    /// <summary>
+    /// Optional: number of rows to read (for files like Excel/CSV)
+    /// </summary>
+    public int? NumberOfRows { get; init; }
+
+    public override string ToString() =>
+        Partition != null
+            ? $"{Collection}@{Partition}/{Path}"
+            : $"{Collection}/{Path}";
+}
+
+/// <summary>
+/// Reference for data access via a relative path.
+/// The path is relative to the current hub and will be resolved by the local path registry.
+/// Path interpretation is hub-specific - the registry determines how to resolve it.
+/// </summary>
+/// <param name="Path">The relative data path (without prefix or address)</param>
+public record DataPathReference(string Path) : WorkspaceReference<object>
+{
+    public string Path { get; } = Path.StartsWith("data:") ? Path[5..] : Path;
+    public override string ToString() => $"data:{Path}";
+}
+
+/// <summary>
+/// Reference for accessing NodeType configuration data.
+/// Used by the "type" UnifiedPath handler.
+/// The node type is encoded in the hub address, so this reference is just a marker.
+/// Resolves to CodeConfiguration from the node's partition.
+/// </summary>
+public record NodeTypeReference() : WorkspaceReference<object>
+{
+    public override string ToString() => "type";
+}
+
+/// <summary>
+/// Reference for accessing JSON schema for a specific type.
+/// Used by the "schema" UnifiedPath handler.
+/// Path format: schema[/TypeName]
+/// If TypeName is empty/null, returns schema for the hub's default type.
+/// </summary>
+/// <param name="Type">The type name to get schema for, or null/empty for default type</param>
+public record SchemaReference(string? Type = null) : WorkspaceReference<object>
+{
+    public override string ToString() => string.IsNullOrEmpty(Type) ? "schema" : $"schema/{Type}";
+}
+
+/// <summary>
+/// Reference for accessing all data types available in a hub.
+/// Used by the "model" UnifiedPath handler.
+/// Returns type descriptions (name, display name, description) for all registered types.
+/// Path format: model
+/// </summary>
+public record DataModelReference() : WorkspaceReference<object>
+{
+    public override string ToString() => "model";
+}
+
 

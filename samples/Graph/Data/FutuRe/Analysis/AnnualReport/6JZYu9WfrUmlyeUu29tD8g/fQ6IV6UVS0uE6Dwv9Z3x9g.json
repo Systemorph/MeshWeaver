@@ -1,0 +1,17 @@
+{
+  "$type": "MeshNode",
+  "id": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g/fQ6IV6UVS0uE6Dwv9Z3x9g",
+  "path": "FutuRe/Analysis/AnnualReport/6JZYu9WfrUmlyeUu29tD8g/fQ6IV6UVS0uE6Dwv9Z3x9g",
+  "nodeType": "ThreadMessage",
+  "icon": "/static/NodeTypeIcons/message.svg",
+  "lastModified": "2026-03-09T15:05:35.680399+00:00",
+  "state": "Active",
+  "content": {
+    "$type": "ThreadMessage",
+    "id": "fQ6IV6UVS0uE6Dwv9Z3x9g",
+    "role": "user",
+    "text": "Can you check if you have the necessary information for onboarding asia re?",
+    "timestamp": "2026-03-09T15:05:35.679859Z",
+    "type": "ExecutedInput"
+  }
+}

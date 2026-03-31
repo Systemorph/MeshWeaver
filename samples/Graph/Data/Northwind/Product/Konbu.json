@@ -1,0 +1,23 @@
+{
+  "id": "Konbu",
+  "namespace": "Northwind/Product",
+  "name": "Konbu",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Konbu - 2 kg box",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 13,
+    "productName": "Konbu",
+    "supplierId": 6,
+    "categoryId": 8,
+    "quantityPerUnit": "2 kg box",
+    "unitPrice": 6.0,
+    "unitsInStock": 24,
+    "unitsOnOrder": 0,
+    "reorderLevel": 5,
+    "discontinued": false
+  }
+}

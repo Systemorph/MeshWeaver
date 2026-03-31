@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 79" fill="none">
+  <style>
+    .bg { fill: #fdf6f6; }
+    .nf { fill: #616161; }
+    .af { fill: #d13438; }
+  </style>
+  <!-- Background -->
+  <rect class="bg" width="140" height="79" rx="8"/>
+
+  <!-- Entity box 1 (left) -->
+  <!-- Original: rect x=10 y=10 w=30 h=22 rx=2 stroke-width=1.5 -->
+  <rect class="nf" x="9.25" y="9.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="10.75" y="10.75" width="28.5" height="20.5" rx="1.25"/>
+  <!-- Separator line: x1=10 y1=18 x2=40 y2=18 stroke-width=1 -->
+  <rect class="nf" x="10" y="17.5" width="30" height="1"/>
+  <!-- Field rects (already filled) -->
+  <rect class="af" x="14" y="22" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="14" y="27" width="14" height="2" rx="0.5" opacity="0.4"/>
+
+  <!-- Entity box 2 (center) -->
+  <rect class="nf" x="54.25" y="9.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="55.75" y="10.75" width="28.5" height="20.5" rx="1.25"/>
+  <rect class="nf" x="55" y="17.5" width="30" height="1"/>
+  <rect class="af" x="59" y="22" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="59" y="27" width="12" height="2" rx="0.5" opacity="0.4"/>
+
+  <!-- Entity box 3 (right) -->
+  <rect class="nf" x="99.25" y="9.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="100.75" y="10.75" width="28.5" height="20.5" rx="1.25"/>
+  <rect class="nf" x="100" y="17.5" width="30" height="1"/>
+  <rect class="af" x="104" y="22" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="104" y="27" width="16" height="2" rx="0.5" opacity="0.4"/>
+
+  <!-- Entity box 4 (bottom center) -->
+  <rect class="nf" x="54.25" y="46.25" width="31.5" height="23.5" rx="2.75"/>
+  <rect class="bg" x="55.75" y="47.75" width="28.5" height="20.5" rx="1.25"/>
+  <rect class="nf" x="55" y="54.5" width="30" height="1"/>
+  <rect class="af" x="59" y="59" width="20" height="2" rx="0.5" opacity="0.6"/>
+  <rect class="af" x="59" y="64" width="14" height="2" rx="0.5" opacity="0.4"/>
+
+  <!-- Connection lines (horizontal/vertical, stroke-width=1.5) -->
+  <!-- Horizontal: x1=40 x2=55 y=21 -->
+  <rect class="nf" x="40" y="20.25" width="15" height="1.5" rx="0.75"/>
+  <!-- Horizontal: x1=85 x2=100 y=21 -->
+  <rect class="nf" x="85" y="20.25" width="15" height="1.5" rx="0.75"/>
+  <!-- Vertical: x=70 y1=32 y2=47 -->
+  <rect class="nf" x="69.25" y="32" width="1.5" height="15" rx="0.75"/>
+
+  <!-- Relationship diamond (already filled) -->
+  <polygon class="af" points="70,37 73,40 70,43 67,40"/>
+</svg>

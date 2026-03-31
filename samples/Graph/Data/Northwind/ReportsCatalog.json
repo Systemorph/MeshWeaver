@@ -1,0 +1,19 @@
+{
+  "id": "ReportsCatalog",
+  "namespace": "Northwind",
+  "name": "Reports Catalog",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "A catalog that renders child reports with their frontmatter metadata",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "ReportsCatalog",
+    "namespace": "Northwind",
+    "displayName": "Reports Catalog",
+    "iconName": "Document",
+    "description": "A catalog that renders child reports with their frontmatter metadata",
+    "configuration": "config => config.AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddReportsCatalogLayoutAreas())"
+  }
+}

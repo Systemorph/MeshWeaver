@@ -1,0 +1,23 @@
+{
+  "id": "EASTC",
+  "namespace": "Northwind/Customer",
+  "name": "Eastern Connection",
+  "nodeType": "Northwind/Customer",
+  "category": "Customers",
+  "description": "Eastern Connection - London, UK",
+  "icon": "/static/NodeTypeIcons/people.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "CustomerContent",
+    "customerId": "EASTC",
+    "companyName": "Eastern Connection",
+    "contactName": "Ann Devon",
+    "contactTitle": "Sales Agent",
+    "city": "London",
+    "region": "",
+    "postalCode": "WX3 6FW",
+    "country": "UK",
+    "phone": "(171) 555-0297",
+    "fax": "(171) 555-3373"
+  }
+}

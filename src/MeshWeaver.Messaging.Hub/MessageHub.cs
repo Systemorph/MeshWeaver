@@ -32,6 +32,16 @@ public sealed class MessageHub : IMessageHub
     private readonly HostedHubsCollection hostedHubs;
 
     public long Version { get; private set; }
+
+    /// <summary>
+    /// Sets the initial version for the hub. Only callable during initialization
+    /// before any messages are processed.
+    /// </summary>
+    public void SetInitialVersion(long version)
+    {
+        Version = version;
+    }
+
     public MessageHubRunLevel RunLevel { get; private set; }
     private readonly IMessageService messageService;
     public ITypeRegistry TypeRegistry { get; }
@@ -40,8 +50,29 @@ public sealed class MessageHub : IMessageHub
         if (RunLevel < MessageHubRunLevel.Started)
         {
             RunLevel = MessageHubRunLevel.Started;
-            hasStarted.SetResult();
+            hasStarted.TrySetResult();
         }
+    }
+
+    public void FailStartup(Exception error)
+    {
+        hasStarted.TrySetException(error);
+    }
+
+    public void CancelCurrentExecution()
+    {
+        messageService.CancelExecution();
+    }
+
+    /// <summary>
+    /// Starts message processing and posts the initialization request.
+    /// Called from Build() after SyncBuildupActions complete.
+    /// </summary>
+    internal void StartMessageProcessing()
+    {
+        messageService.Start();
+        if (!Configuration.DeferredInitialization)
+            Post(new InitializeHubRequest());
     }
 
     private readonly ThreadSafeLinkedList<AsyncDelivery> rules = new();
@@ -76,6 +107,8 @@ public sealed class MessageHub : IMessageHub
 
         JsonSerializerOptions = this.CreateJsonSerializationOptions(parentHub);
 
+        TypeRegistry.WithType(typeof(PingRequest), nameof(PingRequest));
+        TypeRegistry.WithType(typeof(PingResponse), nameof(PingResponse));
         Register<DisposeRequest>(HandleDispose);
         Register<ShutdownRequest>(HandleShutdown);
         Register<PingRequest>(HandlePingRequest);
@@ -90,10 +123,10 @@ public sealed class MessageHub : IMessageHub
         }
         Register(ExecuteRequest);
         Register(HandleCallbacks);
-        messageService.Start();
-        if (!configuration.DeferredInitialization)
-            Post(new InitializeHubRequest());
 
+        // Note: messageService.Start() is called from MessageHubConfiguration.Build()
+        // AFTER SyncBuildupActions complete, to ensure services like Workspace/DataContext
+        // are fully configured before any messages arrive
     }
 
     private IMessageDelivery HandlePingRequest(IMessageDelivery<PingRequest> request)
@@ -107,8 +140,13 @@ public sealed class MessageHub : IMessageHub
         logger.LogDebug("Message hub {address} initializing via InitializeHubRequest", Address);
 
         var actions = Configuration.BuildupActions;
-        foreach (var buildup in actions)
-            await buildup(this, cancellationToken);
+        logger.LogDebug("Message hub {address} has {count} BuildupActions to run", Address, actions.Count);
+        for (var i = 0; i < actions.Count; i++)
+        {
+            logger.LogDebug("Message hub {address} starting BuildupAction {i}/{count}", Address, i + 1, actions.Count);
+            await actions[i](this, cancellationToken);
+            logger.LogDebug("Message hub {address} completed BuildupAction {i}/{count}", Address, i + 1, actions.Count);
+        }
 
         logger.LogDebug("Message hub {address} BuildupActions complete, opening Initialize gate", Address);
 
@@ -241,30 +279,28 @@ public sealed class MessageHub : IMessageHub
 
 
 
-    private async Task<IMessageDelivery> HandleMessageAsync(
+    private Task<IMessageDelivery> HandleMessageAsync(
         IMessageDelivery delivery,
         LinkedListNode<AsyncDelivery> node,
         CancellationToken cancellationToken
+    ) => HandleMessageAsyncImpl(delivery, node, cancellationToken, 0);
+
+    private async Task<IMessageDelivery> HandleMessageAsyncImpl(
+        IMessageDelivery delivery,
+        LinkedListNode<AsyncDelivery> node,
+        CancellationToken cancellationToken,
+        int depth
     )
     {
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_INVOKE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
+        if (depth > 500)
+            throw new InvalidOperationException($"HandleMessageAsync recursion depth exceeded 500 in hub {Address} for {delivery.Message.GetType().Name}");
 
         delivery = await node.Value.Invoke(delivery, cancellationToken);
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_RULE_RESULT | {MessageType} | Hub: {Address} | MessageId: {MessageId} | State: {State}",
-            delivery.Message.GetType().Name, Address, delivery.Id, delivery.State);
-
         if (node.Next == null)
-        {
-            logger.LogTrace("MESSAGE_FLOW: HUB_RULES_COMPLETE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-                delivery.Message.GetType().Name, Address, delivery.Id);
             return delivery;
-        }
 
-        logger.LogTrace("MESSAGE_FLOW: HUB_NEXT_RULE | {MessageType} | Hub: {Address} | MessageId: {MessageId}",
-            delivery.Message.GetType().Name, Address, delivery.Id);
-        return await HandleMessageAsync(delivery, node.Next, cancellationToken);
+        return await HandleMessageAsyncImpl(delivery, node.Next, cancellationToken, depth + 1);
     }
 
     public bool OpenGate(string name)
@@ -384,7 +420,8 @@ public sealed class MessageHub : IMessageHub
         var response2 = RegisterCallback(messageId, d => d, cancellationToken);
 
         // Now post the message with the pre-generated ID
-        var request = Post(r, opts => {
+        var request = Post(r, opts =>
+        {
             var configured = options(opts);
             return configured.WithMessageId(messageId);
         })!;
@@ -448,12 +485,22 @@ public sealed class MessageHub : IMessageHub
 
         var tcs = new TaskCompletionSource<IMessageDelivery>(combinedCts.Token);
 
+        // Register cancellation callback so the TCS completes when the token fires
+        // This prevents the TCS from waiting forever when no response arrives
+        var cancellationRegistration = combinedCts.Token.Register(() =>
+        {
+            tcs.TrySetException(new TimeoutException(
+                $"No response received for message {messageId} in hub {Address}. " +
+                $"The request may have been undeliverable or the target hub was not found."));
+        });
+
         // Register for disposal cancellation
         lock (locker)
         {
             if (RunLevel >= MessageHubRunLevel.ShutDown)
             {
                 // If already disposing, immediately cancel the callback
+                cancellationRegistration.Dispose();
                 tcs.SetCanceled(combinedCts.Token);
                 disposalCts.Dispose();
                 combinedCts.Dispose();
@@ -468,7 +515,8 @@ public sealed class MessageHub : IMessageHub
         {
             try
             {
-                // Clean up disposal cancellation token
+                // Clean up cancellation registration and disposal token
+                await cancellationRegistration.DisposeAsync();
                 lock (locker)
                 {
                     pendingCallbackCancellations.Remove(disposalCts);
@@ -477,14 +525,20 @@ public sealed class MessageHub : IMessageHub
                 combinedCts.Dispose();
                 if (d.Message is DeliveryFailure failure)
                 {
-                    tcs.SetException(new DeliveryFailureException(failure));
+                    tcs.TrySetException(new DeliveryFailureException(failure));
                     return d.Failed(failure.Message ?? "Delivery failed");
                 }
 
                 combinedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
                 var ret = await callback(d, combinedCts.Token);
-                tcs.SetResult(ret);
+                tcs.TrySetResult(ret);
                 return ret;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "ResolveCallback failed for message {MessageId} in hub {Address}", messageId, Address);
+                tcs.TrySetException(ex);
+                throw;
             }
             finally
             {
@@ -598,12 +652,11 @@ public sealed class MessageHub : IMessageHub
         return result;
     }
 
-    public IMessageHub? GetHostedHub<TAddress1>(
-        TAddress1 address,
+    public IMessageHub? GetHostedHub(
+        Address address,
         Func<MessageHubConfiguration, MessageHubConfiguration> config,
         HostedHubCreation create
     )
-        where TAddress1 : Address
     {
         var messageHub = hostedHubs.GetHub(address, config, create);
         return messageHub;
@@ -638,7 +691,7 @@ public sealed class MessageHub : IMessageHub
         {
             if (IsDisposing)
             {
-                logger.LogWarning("Dispose() called multiple times for hub {address} (elapsed: {elapsed}ms)", Address, totalStopwatch.ElapsedMilliseconds);
+                logger.LogDebug("Dispose() called multiple times for hub {address} (elapsed: {elapsed}ms)", Address, totalStopwatch.ElapsedMilliseconds);
                 return;
             }
             logger.LogDebug("STARTING DISPOSAL of hub {address}, current Version={Version}, hosted hubs count: {hostedHubsCount}",
@@ -658,12 +711,39 @@ public sealed class MessageHub : IMessageHub
         }
         else
         {
-            logger.LogInformation("Hub {address} has no hosted hubs to dispose", Address);
+            logger.LogDebug("Hub {address} has no hosted hubs to dispose", Address);
         }
+
+        // Cancel any in-progress message handlers (e.g. stuck initialization) to free the
+        // execution block so that the ShutdownRequest can be processed immediately.
+        // ShutdownRequest uses CancellationToken.None so it won't be affected.
+        messageService.CancelExecution();
 
         logger.LogDebug("POSTING initial ShutdownRequest for hub {Address} with Version={Version} (disposal preparation took {elapsed}ms)",
             Address, Version, totalStopwatch.ElapsedMilliseconds);
         Post(new ShutdownRequest(MessageHubRunLevel.DisposeHostedHubs, Version));
+
+        // Safety net: if the normal shutdown path deadlocks for any reason,
+        // force-complete the disposal task after a timeout to prevent indefinite hangs.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5));
+                if (!disposingTaskCompletionSource.Task.IsCompleted)
+                {
+                    logger.LogError(
+                        "DISPOSAL DEADLOCK DETECTED: Hub {Address} did not complete shutdown within 5 seconds. " +
+                        "RunLevel={RunLevel}. Force-completing disposal to prevent hang.",
+                        Address, RunLevel);
+                    disposingTaskCompletionSource.TrySetResult();
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error in disposal safety timeout for hub {Address}", Address);
+            }
+        });
     }
 
     private void DisposeImpl()
@@ -743,22 +823,21 @@ public sealed class MessageHub : IMessageHub
                 {
                     try
                     {
-                        logger.LogDebug("Awaiting disposal for hosted hubs in {address}", Address);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting hostedHubs.Disposal (IsCompleted={isCompleted})",
+                            Address, hostedHubs.Disposal?.IsCompleted);
                         await hostedHubs.Disposal!;
-
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal completed in {elapsed}ms",
+                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds);
                     }
                     catch (Exception e)
                     {
-                        logger.LogError(
-                            "Error during disposal of hosted hubs for hub {address} after {elapsed}ms (total disposal time: {totalElapsed}ms): {exception}",
-                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds,
-                            disposalStopwatch.ElapsedMilliseconds, e);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: hostedHubs.Disposal ERROR after {elapsed}ms: {error}",
+                            Address, disposeHostedHubsStopwatch.ElapsedMilliseconds, e.Message);
                     }
                     finally
                     {
-                        logger.LogDebug(
-                            "POSTING ShutDown request after DisposeHostedHubs initiation for hub {Address}, new Version={Version} (phase took {elapsed}ms)",
-                            Address, Version, phaseStopwatch.ElapsedMilliseconds);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: POSTING ShutDown request, Version={version}",
+                            Address, Version);
                         Post(new ShutdownRequest(MessageHubRunLevel.ShutDown, Version));
                     }
                 });
@@ -773,30 +852,27 @@ public sealed class MessageHub : IMessageHub
                     {
                         if (RunLevel == MessageHubRunLevel.ShutDown)
                         {
-                            logger.LogWarning("ShutDown already processed for hub {Address}, ignoring (phase time: {elapsed}ms)",
-                                Address, phaseStopwatch.ElapsedMilliseconds);
+                            logger.LogDebug("[DISPOSE-TRACE] {address}: ShutDown already processed, ignoring", Address);
                             return request.Ignored();
                         }
 
-                        logger.LogDebug("STARTING ShutDown for hub {address} with parent {parent} (total disposal time so far: {totalElapsed}ms)",
-                            Address, Configuration.ParentHub?.Address, disposalStopwatch.ElapsedMilliseconds);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: STARTING ShutDown phase", Address);
                         RunLevel = MessageHubRunLevel.ShutDown;
                     }
 
                     CancelCallbacks();
                     DisposeImpl();
 
-                    var messageServiceStopwatch = Stopwatch.StartNew();
-                    logger.LogDebug("Disposing message service for hub {address}", Address);
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: Awaiting messageService.DisposeAsync()...", Address);
                     await messageService.DisposeAsync();
-                    logger.LogDebug("Message service disposed successfully for hub {address} in {elapsed}ms",
-                        Address, messageServiceStopwatch.ElapsedMilliseconds);
+                    logger.LogDebug("[DISPOSE-TRACE] {address}: messageService.DisposeAsync() done in {elapsed}ms",
+                        Address, shutdownStopwatch.ElapsedMilliseconds);
 
                     try
                     {
                         disposingTaskCompletionSource.TrySetResult();
-                        logger.LogInformation("Disposal completed successfully for hub {address} with parent {parent} in {elapsed}ms (total disposal time: {totalElapsed}ms)",
-                            Address, Configuration.ParentHub?.Address, shutdownStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
+                        logger.LogDebug("[DISPOSE-TRACE] {address}: Disposal COMPLETED in {elapsed}ms total",
+                            Address, disposalStopwatch.ElapsedMilliseconds);
                     }
                     catch (InvalidOperationException)
                     {
@@ -824,7 +900,7 @@ public sealed class MessageHub : IMessageHub
                     RunLevel = MessageHubRunLevel.Dead;
                     disposalStopwatch.Stop();
                     //await ((IAsyncDisposable)ServiceProvider).DisposeAsync();
-                    logger.LogInformation("Finished shutdown of hub {address} with parent {parent} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms",
+                    logger.LogDebug("Finished shutdown of hub {address} with parent {parent} - final phase took {elapsed}ms, total disposal time: {totalElapsed}ms",
                         Address, Configuration.ParentHub?.Address, phaseStopwatch.ElapsedMilliseconds, disposalStopwatch.ElapsedMilliseconds);
                 }
 
@@ -936,7 +1012,12 @@ public sealed class MessageHub : IMessageHub
         WithTypeAndRelatedTypesFor(typeof(TMessage));
         return Register(
             (d, c) => action((IMessageDelivery<TMessage>)d, c),
-            d => (d.Target == null || Address.Equals(d.Target)) && d is IMessageDelivery<TMessage> md && filter(md)
+            d =>
+            {
+                // Compare without Host since Host tracks routing path
+                var targetWithoutHost = d.Target is not null ? d.Target with { Host = null } : null;
+                return (targetWithoutHost == null || Address.Equals(targetWithoutHost)) && d is IMessageDelivery<TMessage> md && filter(md);
+            }
         );
     }
 

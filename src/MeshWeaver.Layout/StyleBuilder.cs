@@ -11,7 +11,11 @@ public record StyleBuilder
     public object? Display { get; init; }
     public object? Width { get; init; }
     public object? MinWidth { get; init; }
+    public object? MaxWidth { get; init; }
     public object? Height { get; init; }
+    public object? MinHeight { get; init; }
+    public object? MaxHeight { get; init; }
+    public object? Overflow { get; init; }
     public object? FlexDirection { get; init; }
     public object? FlexWrap { get; init; }
     public object? FlexFlow { get; init; }
@@ -94,11 +98,39 @@ public record StyleBuilder
     public StyleBuilder WithMinWidth(object value) => this with { MinWidth = value };
 
     /// <summary>
+    /// Sets the maximum width style.
+    /// </summary>
+    /// <param name="value">The maximum width value.</param>
+    /// <returns>The updated <see cref="StyleBuilder"/> instance.</returns>
+    public StyleBuilder WithMaxWidth(object value) => this with { MaxWidth = value };
+
+    /// <summary>
     /// Sets the height style.
     /// </summary>
     /// <param name="value">The height value.</param>
     /// <returns>The updated <see cref="StyleBuilder"/> instance.</returns>
     public StyleBuilder WithHeight(object value) => this with { Height = value };
+
+    /// <summary>
+    /// Sets the minimum height style.
+    /// </summary>
+    /// <param name="value">The minimum height value.</param>
+    /// <returns>The updated <see cref="StyleBuilder"/> instance.</returns>
+    public StyleBuilder WithMinHeight(object value) => this with { MinHeight = value };
+
+    /// <summary>
+    /// Sets the maximum height style.
+    /// </summary>
+    /// <param name="value">The maximum height value.</param>
+    /// <returns>The updated <see cref="StyleBuilder"/> instance.</returns>
+    public StyleBuilder WithMaxHeight(object value) => this with { MaxHeight = value };
+
+    /// <summary>
+    /// Sets the overflow style.
+    /// </summary>
+    /// <param name="value">The overflow value (e.g., "auto", "scroll", "hidden").</param>
+    /// <returns>The updated <see cref="StyleBuilder"/> instance.</returns>
+    public StyleBuilder WithOverflow(object value) => this with { Overflow = value };
 
     /// <summary>
     /// Sets the flex direction style.
@@ -220,7 +252,11 @@ public record StyleBuilder
         if (Display != null) styleBuilder.Append($"display: {Display}; ");
         if (Width != null) styleBuilder.Append($"width: {Width}; ");
         if (MinWidth != null) styleBuilder.Append($"min-width: {MinWidth}; ");
+        if (MaxWidth != null) styleBuilder.Append($"max-width: {MaxWidth}; ");
         if (Height != null) styleBuilder.Append($"height: {Height}; ");
+        if (MinHeight != null) styleBuilder.Append($"min-height: {MinHeight}; ");
+        if (MaxHeight != null) styleBuilder.Append($"max-height: {MaxHeight}; ");
+        if (Overflow != null) styleBuilder.Append($"overflow: {Overflow}; ");
         if (FlexDirection != null) styleBuilder.Append($"flex-direction: {FlexDirection}; ");
         if (FlexWrap != null) styleBuilder.Append($"flex-wrap: {FlexWrap}; ");
         if (FlexFlow != null) styleBuilder.Append($"flex-flow: {FlexFlow}; ");

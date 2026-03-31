@@ -1,0 +1,19 @@
+{
+  "id": "TransactionMapping",
+  "namespace": "FutuRe/AmericasIns",
+  "name": "Transaction Mapping",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "AmericasIns transaction mappings from local to group lines of business",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "TransactionMapping",
+    "namespace": "FutuRe/AmericasIns",
+    "displayName": "Transaction Mapping",
+    "iconName": "ArrowSplit",
+    "description": "Maps local LoB to group LoB with percentage split",
+    "configuration": "config => config.WithContentType<TransactionMapping>()"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

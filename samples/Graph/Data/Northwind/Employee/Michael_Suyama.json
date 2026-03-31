@@ -1,0 +1,24 @@
+{
+  "id": "Michael_Suyama",
+  "namespace": "Northwind/Employee",
+  "name": "Michael Suyama",
+  "nodeType": "Northwind/Employee",
+  "category": "Employees",
+  "description": "Michael Suyama - Sales Representative",
+  "icon": "/static/NodeTypeIcons/person.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "EmployeeContent",
+    "employeeId": 6,
+    "lastName": "Suyama",
+    "firstName": "Michael",
+    "title": "Sales Representative",
+    "titleOfCourtesy": "Mr.",
+    "birthDate": "1963-07-02",
+    "hireDate": "1993-10-17",
+    "city": "London",
+    "region": "",
+    "country": "UK",
+    "reportsTo": 5
+  }
+}

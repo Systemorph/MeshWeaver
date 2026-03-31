@@ -67,6 +67,81 @@ sequenceDiagram
 ```
 ````
 
+### Unified Content References
+
+MeshWeaver.Markdown supports unified content references for embedding various types of content directly in markdown documents.
+
+#### Syntax
+
+Basic syntax:
+```markdown
+@app/dashboard/Overview
+@data:app/myapp/Products
+@content:app/docs/readme.md
+```
+
+For paths with spaces or special characters, use quotes:
+```markdown
+@"content:app/docs/My Report 2025.pdf"
+@"app/dashboard/Sales Summary"
+```
+
+The legacy syntax with parentheses is also supported:
+```markdown
+@("app/dashboard/Overview")
+```
+
+#### Layout Area References
+Display a layout area from another address:
+
+```markdown
+@app/dashboard/Overview
+@area:app/dashboard/UserDetails/user123
+```
+
+Format: `area:addressType/addressId/areaName[/areaId]`
+
+Paths without a prefix default to `area:`, so these are equivalent:
+```markdown
+@app/dashboard/MyArea
+@("area:app/dashboard/MyArea")
+```
+
+#### Data References
+Display data as JSON or in a structured format:
+
+```markdown
+@data:app/myapp/Users
+@data:app/myapp/Users/user123
+```
+
+Format: `data:addressType/addressId[/collection[/entityId]]`
+
+- Without collection: Returns default data entity
+- With collection: Returns entire collection
+- With collection and entityId: Returns single entity
+
+#### Content References
+Display file content based on its mime type:
+
+```markdown
+@content:app/myapp/Documents/report.pdf
+@content:app/myapp/Documents@2024/annual-report.pdf
+```
+
+For paths with spaces, use quoted syntax:
+```markdown
+@("content:app/myapp/Documents/My Report.pdf")
+```
+
+Format: `content:addressType/addressId/collection[/path/to/file]` or `content:addressType/addressId/collection@partition/path/to/file`
+
+Supported content types are rendered appropriately:
+- Images: Displayed inline
+- Text/Markdown: Rendered as formatted content
+- PDF: Displayed with viewer or download link
+- Other: Download link provided
+
 ## Usage
 
 This component is primarily used in conjunction with the [MeshWeaver.Articles](../MeshWeaver.Articles/README.md) library, which provides a complete solution for managing and displaying markdown-based content. Please refer to the Articles documentation for configuration and implementation details.

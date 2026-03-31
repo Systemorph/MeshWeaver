@@ -1,0 +1,19 @@
+{
+  "id": "Country",
+  "namespace": "FutuRe",
+  "name": "Country",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "ISO 3166 country codes for geographic classification",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Country",
+    "namespace": "FutuRe",
+    "displayName": "Country",
+    "iconName": "Globe",
+    "description": "Country dimension for geographic classification in profitability reporting",
+    "configuration": "config => config.WithContentType<Country>()"
+  },
+  "icon": "/static/storage/content/FutuRe/icon.svg"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "Article",
+  "namespace": "Cornerstone",
+  "name": "Article",
+  "nodeType": "NodeType",
+  "category": "Types",
+  "description": "An Cornerstone content article with metadata",
+  "icon": "/static/NodeTypeIcons/document.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "NodeTypeDefinition",
+    "id": "Article",
+    "namespace": "Cornerstone",
+    "displayName": "Article",
+    "iconName": "DocumentText",
+    "description": "An Cornerstone content article with metadata",
+    "configuration": "config => config.WithContentType<Article>().AddDefaultLayoutAreas().AddLayout(layout => layout.WithDefaultArea(\"Overview\").AddArticleLayoutAreas())"
+  }
+}

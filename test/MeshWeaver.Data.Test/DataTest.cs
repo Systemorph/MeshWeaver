@@ -72,7 +72,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     ) =>
         base.ConfigureClient(configuration)
             .AddData(data =>
-                data.AddHubSource(new HostAddress(), dataSource => dataSource.WithType<MyData>())
+                data.AddHubSource(CreateHostAddress(), dataSource => dataSource.WithType<MyData>())
             );
 
     /// <summary>
@@ -113,7 +113,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(3.Seconds()).Token
@@ -173,7 +173,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var deleteResponse = await client.AwaitResponse(
             DataChangeRequest.Delete(toBeDeleted, "TestUser"),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -181,20 +181,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         );
         deleteResponse.Message.Status.Should().Be(DataChangeStatus.Committed);
 
-        // asserts
-        data = await GetClient()
-            .GetWorkspace()
-            .GetObservable<MyData>()
-            .Timeout(10.Seconds())
-            .FirstOrDefaultAsync(i => i.Count == 1);
-        data.Should().BeEquivalentTo(expectedItems);
+        // asserts — verify through host workspace (client filters out own changes via echo prevention)
         data = await GetHost()
             .GetWorkspace()
             .GetObservable<MyData>()
             .Timeout(10.Seconds())
             .FirstOrDefaultAsync(i => i.Count == 1);
         data.Should().BeEquivalentTo(expectedItems);
-
+        await Task.Delay(100, TestContext.Current.CancellationToken);
         storage.Values.Should().BeEquivalentTo(expectedItems);
     }
 
@@ -229,7 +223,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         };
         await client.AwaitResponse(
             DataChangeRequest.Update([myInstance]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -290,7 +284,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(updateItems),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(3.Seconds()).Token
@@ -325,6 +319,80 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         collection.Should().BeEquivalentTo(MyData.InitialData);
     }
 
+    [Fact]
+    public async Task ReduceSchemaReference()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference(nameof(MyData)))!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(nameof(MyData));
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
+        GetPropertyType(schemaJson.RootElement).Should().Contain("object");
+    }
+
+    [Fact]
+    public async Task ReduceSchemaReference_NullType_ReturnsDefaultSchema()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference(null))!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
+    }
+
+    [Fact]
+    public async Task ReduceSchemaReference_UnknownType_ReturnsEmptySchema()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new SchemaReference("NonExistentType"))!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var schemaInfo = result.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be("NonExistentType");
+        schemaInfo.Schema.Should().Be("{}");
+    }
+
+    [Fact]
+    public async Task ReduceDataModelReference()
+    {
+        var host = GetHost();
+        var result = await host.GetWorkspace()
+            .GetStream(new DataModelReference())!
+            .Select(c => c.Value)
+            .Timeout(10.Seconds())
+            .FirstAsync();
+
+        var types = result.Should().BeAssignableTo<IEnumerable<TypeDescription>>().Which.ToArray();
+        types.Should().NotBeEmpty();
+        types.Should().Contain(t => t.Name.Contains("MyData"));
+    }
+
+    [Fact]
+    public async Task ReduceNodeTypeReference()
+    {
+        var host = GetHost();
+        var stream = host.GetWorkspace()
+            .GetStream(new NodeTypeReference(), x => x.ReturnNullWhenNotPresent());
+        stream.Should().NotBeNull();
+    }
+
     /// <summary>
     /// Tests that GetSchemaRequest returns a valid JSON schema for MyData type
     /// </summary>
@@ -337,8 +405,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(typeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(typeName)),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -346,12 +414,14 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(typeName); schemaResponse.Schema.Should().NotBeNullOrEmpty();
-        schemaResponse.Schema.Should().NotBe("{}");
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(typeName);
+        schemaInfo.Schema.Should().NotBeNullOrEmpty();
+        schemaInfo.Schema.Should().NotBe("{}");
 
         // Verify it's valid JSON
-        var schemaJson = JsonDocument.Parse(schemaResponse.Schema);
+        var schemaJson = JsonDocument.Parse(schemaInfo.Schema);
         schemaJson.Should().NotBeNull();
 
         // Verify it represents an object type (most likely)
@@ -362,10 +432,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Tests that GetSchemaRequest returns empty schema for unknown types
+    /// Tests that SchemaReference returns empty schema for unknown types
     /// </summary>
     [Fact]
-    public async Task GetSchemaRequest_ForUnknownType_ShouldReturnEmptySchema()
+    public async Task SchemaReference_ForUnknownType_ShouldReturnEmptySchema()
     {
         // arrange
         var client = GetClient();
@@ -373,8 +443,8 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
 
         // act
         var response = await client.AwaitResponse(
-            new GetSchemaRequest(unknownTypeName),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(unknownTypeName)),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -382,9 +452,10 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         );
 
         // assert
-        var schemaResponse = response.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponse.Type.Should().Be(unknownTypeName);
-        schemaResponse.Schema.Should().Be("{}");
+        response.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfo = response.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfo.Type.Should().Be(unknownTypeName);
+        schemaInfo.Schema.Should().Be("{}");
     }
 
     /// <summary>
@@ -399,7 +470,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -429,7 +500,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDomainTypesRequest(),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -461,7 +532,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(invalidItems),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -496,7 +567,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var updateResponse = await client.AwaitResponse(
             DataChangeRequest.Update(new object[] { newItem }),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -530,7 +601,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         {
             client.AwaitResponse(
                 DataChangeRequest.Update(updates1),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
@@ -538,7 +609,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             ),
             client.AwaitResponse(
                 DataChangeRequest.Update(updates2),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
@@ -546,7 +617,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
             ),
             client.AwaitResponse(
                 DataChangeRequest.Update(updates3),
-                o => o.WithTarget(new ClientAddress()),
+                o => o.WithTarget(CreateClientAddress()),
                 CancellationTokenSource.CreateLinkedTokenSource(
                     TestContext.Current.CancellationToken,
                     new CancellationTokenSource(10.Seconds()).Token
@@ -572,39 +643,41 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
-    /// Tests schema request behavior with null or empty type parameters
+    /// Tests schema request behavior with null or empty type parameters - returns default type schema
     /// </summary>
     [Fact]
-    public async Task SchemaRequest_WithNullOrEmptyType_ShouldReturnEmptySchema()
+    public async Task SchemaReference_WithNullOrEmptyType_ShouldReturnDefaultTypeSchema()
     {
         // arrange
         var client = GetClient();
 
-        // act & assert for null
+        // act & assert for null - with new implementation, null type returns the first registered type's schema
         var responseNull = await client.AwaitResponse(
-            new GetSchemaRequest(null!),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference(null)),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
 
-        var schemaResponseNull = responseNull.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponseNull.Schema.Should().Be("{}");
+        responseNull.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfoNull = responseNull.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfoNull.Schema.Should().NotBeNullOrEmpty();
 
         // act & assert for empty string
         var responseEmpty = await client.AwaitResponse(
-            new GetSchemaRequest(""),
-            o => o.WithTarget(new ClientAddress()),
+            new GetDataRequest(new SchemaReference("")),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
             ).Token
         );
 
-        var schemaResponseEmpty = responseEmpty.Message.Should().BeOfType<SchemaResponse>().Which;
-        schemaResponseEmpty.Schema.Should().Be("{}");
+        responseEmpty.Message.Should().BeOfType<GetDataResponse>();
+        var schemaInfoEmpty = responseEmpty.Message.Data.Should().BeOfType<SchemaInfo>().Which;
+        schemaInfoEmpty.Schema.Should().NotBeNullOrEmpty();
     }
 
     /// <summary>
@@ -636,7 +709,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act - update from client
         await client.AwaitResponse(
             DataChangeRequest.Update([updateItem]),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -695,7 +768,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDataRequest(collectionRef),
-            o => o.WithTarget(new HostAddress()),
+            o => o.WithTarget(CreateHostAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -723,7 +796,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // act
         var response = await client.AwaitResponse(
             new GetDataRequest(entityRef),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken,
                 new CancellationTokenSource(10.Seconds()).Token
@@ -751,7 +824,7 @@ public class DataTest(ITestOutputHelper output) : HubTestBase(output)
         // The exact behavior should be consistent with the stream-based approach
         var response = await client.AwaitResponse(
             new GetDataRequest(entityRef),
-            o => o.WithTarget(new ClientAddress()),
+            o => o.WithTarget(CreateClientAddress()),
             CancellationTokenSource.CreateLinkedTokenSource(
                 TestContext.Current.CancellationToken
                 , new CancellationTokenSource(10.Seconds()).Token

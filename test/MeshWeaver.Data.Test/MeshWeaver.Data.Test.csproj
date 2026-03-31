@@ -2,10 +2,12 @@
   <PropertyGroup>
     <ProjectGuid>{efb215ce-724a-4f2f-8f24-27502449d240}</ProjectGuid>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Data\MeshWeaver.Data.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\MeshWeaver.Data.TestDomain\MeshWeaver.Data.TestDomain.csproj" />
+    <ProjectReference Include="..\..\src\MeshWeaver.GridModel\MeshWeaver.GridModel.csproj" />
   </ItemGroup>
 </Project>

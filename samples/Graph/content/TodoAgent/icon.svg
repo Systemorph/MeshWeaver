@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="agent-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+  </defs>
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#agent-gradient)"/>
+  <!-- Clipboard background -->
+  <rect x="32" y="28" width="64" height="80" rx="6" fill="white"/>
+  <!-- Clipboard clip -->
+  <rect x="48" y="22" width="32" height="12" rx="4" fill="#A78BFA"/>
+  <rect x="54" y="26" width="20" height="6" rx="2" fill="#DDD6FE"/>
+  <!-- Task lines with checkboxes -->
+  <!-- Task 1 - checked -->
+  <rect x="40" y="44" width="12" height="12" rx="2" fill="#22C55E"/>
+  <path d="M43 50 L46 53 L52 47" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="58" y="47" width="30" height="6" rx="2" fill="#E5E7EB"/>
+  <!-- Task 2 - checked -->
+  <rect x="40" y="62" width="12" height="12" rx="2" fill="#22C55E"/>
+  <path d="M43 68 L46 71 L52 65" stroke="white" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="58" y="65" width="24" height="6" rx="2" fill="#E5E7EB"/>
+  <!-- Task 3 - unchecked -->
+  <rect x="40" y="80" width="12" height="12" rx="2" fill="white" stroke="#D1D5DB" stroke-width="2"/>
+  <rect x="58" y="83" width="28" height="6" rx="2" fill="#E5E7EB"/>
+  <!-- AI sparkle -->
+  <circle cx="90" cy="35" r="12" fill="#FCD34D"/>
+  <path d="M90 27 L90 43 M82 35 L98 35 M84 29 L96 41 M96 29 L84 41" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  <!-- Border -->
+  <circle cx="64" cy="64" r="60" fill="none" stroke="#8B5CF6" stroke-width="4"/>
+</svg>

@@ -1,0 +1,23 @@
+{
+  "id": "Chef_Antons_Cajun_Seasoning",
+  "namespace": "Northwind/Product",
+  "name": "Chef Anton's Cajun Seasoning",
+  "nodeType": "Northwind/Product",
+  "category": "Products",
+  "description": "Chef Anton's Cajun Seasoning - 48 - 6 oz jars",
+  "icon": "/static/NodeTypeIcons/shopping-bag.svg",
+  "isPersistent": true,
+  "content": {
+    "$type": "ProductContent",
+    "productId": 4,
+    "productName": "Chef Anton's Cajun Seasoning",
+    "supplierId": 2,
+    "categoryId": 2,
+    "quantityPerUnit": "48 - 6 oz jars",
+    "unitPrice": 22.0,
+    "unitsInStock": 53,
+    "unitsOnOrder": 0,
+    "reorderLevel": 0,
+    "discontinued": false
+  }
+}
