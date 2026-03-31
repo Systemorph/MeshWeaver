@@ -245,6 +245,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     var workspace = Hub.GetWorkspace();
                     var accessService = Hub.ServiceProvider.GetService<AccessService>();
 
+                    // Restore user access context — AsyncLocal doesn't flow through
+                    // the AI framework's async streaming + tool invocation chain.
+                    if (execCtx.UserAccessContext != null)
+                        accessService?.SetContext(execCtx.UserAccessContext);
+
                     var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
                     var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
                     var subThreadPath = $"{parentMsgPath}/{subThreadId}";
