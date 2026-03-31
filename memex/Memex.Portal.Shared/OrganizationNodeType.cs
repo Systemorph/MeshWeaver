@@ -44,7 +44,8 @@ public record Organization
 
 /// <summary>
 /// Provides configuration for Organization nodes in the graph.
-/// Access rules: public read. Create/Update/Delete require Admin role via ISecurityService.
+/// Access rules: Read/Create/Update/Delete controlled by partition-level permissions via ISecurityService.
+/// Excluded from search to prevent cross-partition data leakage.
 /// </summary>
 public static class OrganizationNodeType
 {
@@ -65,7 +66,8 @@ public static class OrganizationNodeType
                     sp.GetService<ILoggerFactory>()?.CreateLogger<OrganizationPostCreationHandler>()));
             return services;
         });
-        builder.ConfigureNodeTypeAccess(a => a.WithPublicRead(NodeType));
+        // Organization instances are NOT publicly readable — partition access controls visibility.
+        // The type definition itself remains visible; instances are filtered by user permissions.
         return builder;
     }
 
@@ -87,7 +89,6 @@ public static class OrganizationNodeType
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
                 .WithContentType<Organization>())
-            .WithPublicRead()
             .AddContentCollections()
             .AddNodeTypeLayoutAreas()
             .AddLayout(layout => layout
@@ -150,11 +151,11 @@ public static class OrganizationNodeType
 
         public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            if (context.Operation == NodeOperation.Read)
-                return true;
-
             if (string.IsNullOrEmpty(userId))
                 return false;
+
+            if (context.Operation == NodeOperation.Read)
+                return await securityService.HasPermissionAsync(context.Node.Path, userId, Permission.Read, ct);
 
             if (context.Operation == NodeOperation.Create)
             {
