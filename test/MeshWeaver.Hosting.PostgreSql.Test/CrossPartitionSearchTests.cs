@@ -338,7 +338,7 @@ public class CrossPartitionSearchTests
         var (adminAdapter, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
 
         // Only include ACME and FutuRe (exclude Contoso)
-        await PopulateSearchableSchemasAsync(["acme", "partnerre"], ct);
+        await PopulateSearchableSchemasAsync(["acme", "future"], ct);
 
         var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 50, ct);
 
