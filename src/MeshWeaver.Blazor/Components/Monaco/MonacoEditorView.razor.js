@@ -234,7 +234,8 @@ function debounce(fn, delay) {
 export function initEditor(editorId, placeholder, dotNetRef, codeEditMode = false, showLineNumbers = false) {
     const container = document.getElementById(editorId);
     if (!container) {
-        console.error('Container not found:', editorId);
+        // Component may have been disposed before JS init completed — not an error
+        console.debug('Monaco container not yet available:', editorId);
         return;
     }
 
@@ -404,7 +405,8 @@ function updatePlaceholderVisibility(editorId, show) {
 export function registerCompletionProvider(editorId, config) {
     const state = editorState.get(editorId);
     if (!state) {
-        console.error('No state found for editor:', editorId);
+        // Editor may have been disposed before completion provider was registered
+        console.debug('Monaco editor state not available:', editorId);
         return;
     }
 

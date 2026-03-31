@@ -26,4 +26,25 @@ public record ThreadMessageViewModel
         Text = msg.Text ?? "",
         ToolCalls = msg.ToolCalls
     };
+
+    public virtual bool Equals(ThreadMessageViewModel? other)
+    {
+        if (other is null) return false;
+        if (ReferenceEquals(this, other)) return true;
+        return Role == other.Role
+               && AuthorName == other.AuthorName
+               && ModelName == other.ModelName
+               && Text == other.Text
+               && ToolCalls.Count == other.ToolCalls.Count
+               && ToolCalls.SequenceEqual(other.ToolCalls);
+    }
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Role);
+        hash.Add(Text);
+        hash.Add(ToolCalls.Count);
+        return hash.ToHashCode();
+    }
 }

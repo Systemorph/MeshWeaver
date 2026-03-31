@@ -161,10 +161,12 @@ public static class ThreadMessageLayoutAreas
         host.SubscribeToDataStream(MessageDataKey, syncStream!
             .Select(change => change.Value?.Content as ThreadMessage)
             .Where(m => m != null)
-            .Select(m => (object)(ThreadMessageViewModel.FromMessage(m!) with
+            .Select(m => (ThreadMessageViewModel.FromMessage(m!) with
             {
                 Text = ConvertReferencesToLinks(m!.Text ?? "")
-            })));
+            }))
+            .DistinctUntilChanged()
+            .Select(vm => (object)vm));
 
         // Emit control once — role/author are static, text/toolCalls are data-bound.
         return syncStream!

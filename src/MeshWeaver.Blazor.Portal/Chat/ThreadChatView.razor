@@ -172,3 +172,15 @@ else
 }
 </div>
 
+<style>
+    .thread-exec-star {
+        animation: thread-exec-star-pulse 1.5s ease-in-out infinite;
+    }
+    @@keyframes thread-exec-star-pulse {
+        0% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+        25% { color: #ff6b6b; transform: scale(1.3) rotate(15deg); }
+        50% { color: #ffd93d; transform: scale(1) rotate(0deg); }
+        75% { color: #6bcb77; transform: scale(1.3) rotate(-15deg); }
+        100% { color: var(--accent-fill-rest); transform: scale(1) rotate(0deg); }
+    }
+</style>

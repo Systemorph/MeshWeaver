@@ -825,6 +825,7 @@ public class AgentChatClient : IAgentChat
         var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"));
 
         var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
+        var dictLock = new object();
         var queriesCompleted = 0;
 
         void OnAgentQueryResult(QueryResultChange<MeshNode> change)
@@ -832,10 +833,13 @@ public class AgentChatClient : IAgentChat
             if (change.ChangeType != QueryChangeType.Initial)
                 return;
 
-            foreach (var node in change.Items)
+            lock (dictLock)
             {
-                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+                foreach (var node in change.Items)
+                {
+                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+                }
             }
 
             if (Interlocked.Increment(ref queriesCompleted) < 2)

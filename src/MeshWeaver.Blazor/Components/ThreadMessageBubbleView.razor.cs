@@ -20,7 +20,12 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     protected override void BindData()
     {
         base.BindData();
-        DataBind(ViewModel.Text, x => x.messageText);
+        DataBind(ViewModel.Text, x => x.messageText, (val, prev) =>
+        {
+            var text = val as string ?? "";
+            if (text == prev) return prev; // skip if unchanged
+            return text;
+        });
         DataBind(ViewModel.ToolCalls, x => x.toolCalls, (val, prev) =>
         {
             IReadOnlyList<ToolCallEntry>? result = val switch
@@ -30,8 +35,8 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
                 JsonElement je => je.Deserialize<List<ToolCallEntry>>(Hub.JsonSerializerOptions),
                 _ => null
             };
-            Logger.LogDebug("[BubbleView] TOOLCALLS_BIND: type={Type}, count={Count}, area={Area}",
-                val?.GetType().Name ?? "null", result?.Count ?? -1, Area);
+            if (result == null && prev == null) return prev;
+            if (result != null && prev != null && result.SequenceEqual(prev)) return prev;
             return result;
         });
     }
