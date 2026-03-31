@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using FluentAssertions;
 using MeshWeaver.Domain;
@@ -744,10 +745,16 @@ public class CommentMeshNodeTests
     #region Reply System — MeshNode-Based
 
     [Fact]
-    public void Comment_Record_DoesNotHaveRepliesProperty()
+    public void Comment_Record_HasRepliesProperty_AsImmutableListOfPaths()
     {
         var repliesProp = typeof(Comment).GetProperty("Replies");
-        repliesProp.Should().BeNull("Replies property was removed in favor of MeshNode-based replies");
+        repliesProp.Should().NotBeNull("Comment.Replies stores paths to reply MeshNodes");
+        repliesProp!.PropertyType.Should().Be(typeof(ImmutableList<string>),
+            "Replies should be ImmutableList<string> (paths to reply nodes), not full Comment objects");
+
+        // Verify default value is empty
+        var comment = new Comment();
+        comment.Replies.Should().BeEmpty("new comments should have no replies by default");
     }
 
     [Fact]

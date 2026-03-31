@@ -57,13 +57,12 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var parsed = _parser.Parse(request.Query);
+        var context = request.Context ?? parsed.Context;
 
         // Short-circuit: if query has a nodeType filter that doesn't match any static node type
         var nodeTypeFilter = GetNodeTypeFilterValue(parsed.Filter);
         if (nodeTypeFilter != null && !_nodeTypes.Contains(nodeTypeFilter))
             yield break;
-
-        var context = request.Context ?? parsed.Context;
 
         // Provider nodes (roles, agents, etc.) — included when:
         // 1. There's an explicit field filter (e.g., nodeType:Role) — global match, no path check
@@ -72,7 +71,6 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         {
             foreach (var node in _providerNodes)
             {
-                // Always apply path matching when a path constraint is present
                 if (!string.IsNullOrEmpty(parsed.Path) && !MatchesPath(node, parsed))
                     continue;
                 if (!_evaluator.Matches(node, parsed))
@@ -85,8 +83,10 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
             }
         }
 
-        // Config nodes (type definitions) — require field filter or path, apply path/scope/context
-        if (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path))
+        // Config nodes are type definitions (meta-infrastructure), not user content.
+        // They are excluded from search context — user content comes from persistence providers.
+        var isSearch = string.Equals(context, "search", StringComparison.OrdinalIgnoreCase);
+        if (!isSearch && (HasFieldFilter(parsed) || !string.IsNullOrEmpty(parsed.Path)))
         {
             foreach (var node in _configNodes)
             {

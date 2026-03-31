@@ -41,6 +41,43 @@ else if (Content != null)
     {
         <pre>@ReadStreamAsString(Content)</pre>
     }
+    else if (ContentType == "text/csv")
+    {
+        @if (CsvHeaders != null && CsvRows != null)
+        {
+            <div style="overflow-x: auto; padding: 1rem;">
+                <table style="border-collapse: collapse; width: 100%; font-size: 0.875rem;">
+                    <thead>
+                        <tr>
+                            @foreach (var header in CsvHeaders)
+                            {
+                                <th style="border: 1px solid var(--neutral-stroke-rest, #ccc); padding: 6px 10px; background: var(--neutral-layer-card-container, #f5f5f5); text-align: left; white-space: nowrap;">@header</th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in CsvRows.Take(CsvVisibleRows))
+                        {
+                            <tr>
+                                @foreach (var cell in row)
+                                {
+                                    <td style="border: 1px solid var(--neutral-stroke-rest, #ccc); padding: 4px 10px; white-space: nowrap;">@cell</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <div style="padding: 8px 0; font-size: 0.85rem; color: var(--neutral-foreground-hint, #666);">
+                    Showing @Math.Min(CsvVisibleRows, CsvRows.Count) of @CsvRows.Count rows
+                    @if (CsvVisibleRows < CsvRows.Count)
+                    {
+                        <button style="margin-left: 12px; cursor: pointer; background: var(--accent-fill-rest, #0078d4); color: white; border: none; padding: 4px 12px; border-radius: 4px;"
+                                @onclick="LoadMoreCsvRows">Load more</button>
+                    }
+                </div>
+            </div>
+        }
+    }
     else
     {
         <p>Unsupported content type: @ContentType</p>

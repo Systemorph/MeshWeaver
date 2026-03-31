@@ -19,11 +19,15 @@
     </HeadContent>
 }
 
-@if (ShowProgress && RootControl == null)
+@if (ShowProgress && RootControl == null && SpinnerType != SpinnerType.None)
 {
     @if (SpinnerType == SpinnerType.Skeleton)
     {
         <div class="skeleton-placeholder">
+            @if (!string.IsNullOrEmpty(ProgressMessage))
+            {
+                <span style="font-size: 0.75rem; opacity: 0.45; letter-spacing: 0.02em;">@ProgressMessage</span>
+            }
             <div class="skeleton-line" style="width: 35%;"></div>
             <div class="skeleton-line" style="width: 80%;"></div>
             <div class="skeleton-line" style="width: 55%;"></div>
@@ -32,10 +36,10 @@
     else
     {
         <FluentStack HorizontalAlignment="HorizontalAlignment.Center" VerticalAlignment="VerticalAlignment.Center"
-            Orientation="Orientation.Vertical" Style="min-height: 100vh; min-height: 100dvh;">
+            Orientation="Orientation.Vertical" Style="@(Top ? "min-height: 100vh; min-height: 100dvh;" : "padding: 12px 0;")">
             @if (!string.IsNullOrEmpty(ProgressMessage))
             {
-                <h3>@ProgressMessage</h3>
+                <span style="@(Top ? "font-size: 1.17em; font-weight: bold;" : "font-size: 0.85em; color: var(--neutral-foreground-hint, #666);")">@ProgressMessage</span>
             }
             @if (SpinnerType == SpinnerType.Dots)
             {

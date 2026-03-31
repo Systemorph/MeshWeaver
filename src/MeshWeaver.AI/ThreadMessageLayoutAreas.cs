@@ -9,6 +9,7 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.AI;
 
@@ -26,9 +27,11 @@ public static class ThreadMessageLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadMessageViews(this MessageHubConfiguration configuration)
         => configuration
+            .WithHandler<UpdateThreadMessageContent>(HandleUpdateContent)
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
+                .WithView("Streaming", StreamingCompact)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail));
@@ -36,12 +39,112 @@ public static class ThreadMessageLayoutAreas
     private const string MessageDataKey = "msg";
 
     /// <summary>
+    /// Compact streaming view for parent thread consumption.
+    /// Shows last 3 lines of text + tool call chips + delegation links.
+    /// Subscribes to the MeshNodeReference sync stream for live updates.
+    /// </summary>
+    public static IObservable<UiControl?> StreamingCompact(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+
+        return syncStream!
+            .Select(change =>
+            {
+                var msg = change.Value?.Content as ThreadMessage;
+                if (msg == null) return (UiControl?)null;
+
+                var stack = Controls.Stack
+                    .WithStyle("font-size:0.75rem; color:var(--neutral-foreground-hint); line-height:1.3; gap:2px;");
+
+                // Row 1: Last 3 lines of text
+                var text = msg.Text ?? "";
+                if (text.Length > 0)
+                {
+                    var lines = text.Split('\n');
+                    var last = lines.Length > 3 ? lines[^3..] : lines;
+                    var preview = string.Join("\n", last).Trim();
+                    if (preview.Length > 200) preview = "..." + preview[^197..];
+                    stack = stack.WithView(Controls.Html(
+                        $"<pre style=\"margin:0; white-space:pre-wrap; max-height:45px; overflow:hidden; font-size:0.72rem;\">{System.Web.HttpUtility.HtmlEncode(preview)}</pre>"));
+                }
+
+                // Row 2: Tool call chips (non-delegation)
+                var regularCalls = msg.ToolCalls.Where(tc => string.IsNullOrEmpty(tc.DelegationPath)).ToList();
+                if (regularCalls.Count > 0)
+                {
+                    var chips = string.Join(" ", regularCalls.Select(tc =>
+                    {
+                        var icon = tc.Result != null ? "&#10003;" : "&#9679;";
+                        var color = tc.Result != null ? "var(--neutral-foreground-hint)" : "var(--accent-fill-rest)";
+                        var name = (tc.DisplayName ?? tc.Name);
+                        if (name.Length > 25) name = name[..22] + "...";
+                        return $"<span style=\"font-size:0.68rem; color:{color};\">{icon} {System.Web.HttpUtility.HtmlEncode(name)}</span>";
+                    }));
+                    stack = stack.WithView(Controls.Html($"<div style=\"display:flex; flex-wrap:wrap; gap:3px;\">{chips}</div>"));
+                }
+
+                // Row 3: Delegation sub-threads (recursive — embed their StreamingArea)
+                foreach (var tc in msg.ToolCalls.Where(tc => !string.IsNullOrEmpty(tc.DelegationPath)))
+                {
+                    var icon = tc.Result != null ? "&#10003;" : "&#10041;";
+                    var name = (tc.DisplayName ?? tc.Name);
+                    if (name.Length > 30) name = name[..27] + "...";
+
+                    var delStack = Controls.Stack
+                        .WithStyle("border-left:2px solid var(--accent-fill-rest); padding-left:6px; margin-top:2px;");
+
+                    delStack = delStack.WithView(Controls.Html(
+                        $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:var(--accent-fill-rest); text-decoration:none; font-weight:500;\">{icon} {System.Web.HttpUtility.HtmlEncode(name)}</a>"));
+
+                    if (tc.Result == null)
+                    {
+                        // Recurse: embed sub-thread's StreamingArea
+                        delStack = delStack.WithView(
+                            new LayoutAreaControl(tc.DelegationPath!, new LayoutAreaReference(ThreadNodeType.StreamingArea)));
+                    }
+
+                    stack = stack.WithView(delStack);
+                }
+
+                return (UiControl?)stack;
+            });
+    }
+
+    /// <summary>
+    /// Handles content updates from thread execution.
+    /// Runs ON the response message grain — updates local workspace → sync stream → clients.
+    /// </summary>
+    private static IMessageDelivery HandleUpdateContent(
+        IMessageHub hub, IMessageDelivery<UpdateThreadMessageContent> delivery)
+    {
+        var msg = delivery.Message;
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.AI.MsgLayout");
+        logger?.LogInformation("[MsgLayout] HANDLE_UPDATE: hub={Hub}, textLen={TextLen}, toolCalls={ToolCalls}",
+            hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
+        hub.GetWorkspace().UpdateMeshNode(node =>
+        {
+            var current = node.Content as ThreadMessage ?? new ThreadMessage { Id = node.Id, Role = "assistant", Text = "" };
+            return node with
+            {
+                Content = current with
+                {
+                    Text = msg.Text ?? current.Text,
+                    ToolCalls = msg.ToolCalls ?? current.ToolCalls,
+                    AgentName = msg.AgentName ?? current.AgentName,
+                    ModelName = msg.ModelName ?? current.ModelName,
+                    DelegationPath = msg.DelegationPath ?? current.DelegationPath
+                }
+            };
+        });
+        return delivery.Processed();
+    }
+
+    /// <summary>
     /// Renders the Overview area for a ThreadMessage node.
-    /// Emits control ONCE (Take(1)) based on initial role/author/type.
-    /// - EditingPrompt: inline editor with Submit/Cancel buttons
-    /// - ExecutedInput: bubble + Edit/Resubmit/Delete action buttons
-    /// - AgentResponse: bubble + Delete action button
-    /// Text is data-bound via JsonPointerReference — only text updates during streaming.
+    /// Emits control once from first node emission. Text and tool calls are data-bound
+    /// via JsonPointerReference — updates flow through host.UpdateData, no control rebuilds.
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -50,61 +153,23 @@ public static class ThreadMessageLayoutAreas
         var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
         var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
 
-        var nodeStream = host.Workspace.GetStream<MeshNode>();
+        // Subscribe to the MeshNodeReference sync stream — receives updates from
+        // responseStream.Update() / PatchDataChangeRequest. Map to ThreadMessageViewModel
+        // and push to data section. The bubble binds to the view model via JsonPointerReference.
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
 
-        // Push ThreadMessage text to data section for data-bound rendering
-        // Convert @path references to clickable markdown links (absolute paths)
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
+        host.SubscribeToDataStream(MessageDataKey, syncStream!
+            .Select(change => change.Value?.Content as ThreadMessage)
+            .Where(m => m != null)
+            .Select(m => (object)(ThreadMessageViewModel.FromMessage(m!) with
             {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return msg?.Text ?? "";
-            })
-            .DistinctUntilChanged()
-            .Subscribe(text => host.UpdateData("text", ConvertReferencesToLinks(text))));
+                Text = ConvertReferencesToLinks(m!.Text ?? "")
+            })));
 
-        // Push IsExecuting flag to data section
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return msg?.IsExecuting ?? false;
-            })
-            .DistinctUntilChanged()
-            .Subscribe(isExec => host.UpdateData("isExecuting", isExec)));
-
-        // Push ExecutionStatus to data section
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return msg?.ExecutionStatus ?? "";
-            })
-            .DistinctUntilChanged()
-            .Subscribe(status => host.UpdateData("executionStatus", status)));
-
-        // Push ToolCalls to data section
-        host.RegisterForDisposal(nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                var msg = node?.Content as ThreadMessage;
-                return (object)(msg?.ToolCalls ?? System.Collections.Immutable.ImmutableList<ToolCallEntry>.Empty);
-            })
-            .DistinctUntilChanged()
-            .Subscribe(calls => host.UpdateData("toolCalls", calls)));
-
-        // Emit control ONCE — role/author/type are fixed, text is data-bound
-        return nodeStream!
-            .Select(nodes =>
-            {
-                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
-                return node?.Content as ThreadMessage;
-            })
-            .Where(msg => msg != null)
+        // Emit control once — role/author are static, text/toolCalls are data-bound.
+        return syncStream!
+            .Select(change => change.Value?.Content as ThreadMessage)
+            .Where(m => m != null)
             .Take(1)
             .Select(msg =>
             {
@@ -116,8 +181,8 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Builds the Overview for ExecutedInput/AgentResponse messages:
-    /// ThreadMessageBubbleControl + action buttons (Edit, Resubmit, Delete).
+    /// Builds the Overview for messages. Role/author are static from the initial message.
+    /// Text and tool calls are data-bound via JsonPointerReference.
     /// </summary>
     private static UiControl BuildMessageOverview(
         LayoutAreaHost host, ThreadMessage msg, string threadPath, string messageId)
@@ -125,24 +190,16 @@ public static class ThreadMessageLayoutAreas
         var isUser = msg.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
         var authorName = msg.AuthorName ?? (isUser ? "You" : msg.AgentName ?? "Assistant");
 
+        // Bind to ThreadMessageViewModel in data section
+        var dataPointer = LayoutAreaReference.GetDataPointer(MessageDataKey);
         var bubble = new ThreadMessageBubbleControl()
             .WithRole(msg.Role)
             .WithAuthorName(authorName)
             .WithModelName(msg.ModelName)
             .WithTimestamp(msg.Timestamp)
-            .WithText(new JsonPointerReference(LayoutAreaReference.GetDataPointer("text")))
-            .WithIsExecuting(new JsonPointerReference(LayoutAreaReference.GetDataPointer("isExecuting")))
-            .WithExecutionStatus(new JsonPointerReference(LayoutAreaReference.GetDataPointer("executionStatus")))
-            .WithToolCalls(new JsonPointerReference(LayoutAreaReference.GetDataPointer("toolCalls")))
-            .WithThreadPath(threadPath)
-            .WithClickAction(_ =>
-            {
-                // Cancel execution — posted when the bubble's cancel button is clicked
-                host.Hub.Post(new CancelThreadStreamRequest
-                {
-                    ThreadPath = threadPath
-                }, o => o.WithTarget(new Address(threadPath)));
-            });
+            .WithText(new JsonPointerReference($"{dataPointer}/text"))
+            .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
+            .WithThreadPath(threadPath);
 
         // Action buttons — small stealth icon buttons, right-aligned
         // Hidden during execution via CSS :has() on the parent container
@@ -201,33 +258,28 @@ public static class ThreadMessageLayoutAreas
             .WithStyle(isUser ? "align-items: flex-end;" : "")
             .WithView(bubble);
 
-        // For assistant messages: show delegation sub-threads with inline preview
+        // For assistant messages: show delegation sub-threads as clickable links
         if (!isUser)
         {
             var messagePath = $"{threadPath}/{messageId}";
-            var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
-            if (meshService != null)
+            container = container.WithView((h, c) =>
             {
-                // Poll for sub-threads and their last message's live state
-                host.RegisterForDisposal(
-                    Observable.Timer(TimeSpan.Zero, TimeSpan.FromSeconds(1))
-                        .SelectMany(_ => Observable.FromAsync(async () =>
-                        {
-                            try
-                            {
-                                var subs = await meshService
-                                    .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
-                                    .ToListAsync();
-                                return await BuildDelegationHtmlAsync(subs, meshService);
-                            }
-                            catch { return ""; }
-                        }))
-                        .DistinctUntilChanged()
-                        .Subscribe(html => host.UpdateData("delegationsHtml", html)));
+                var meshService = h.Hub.ServiceProvider.GetService<IMeshService>();
+                if (meshService == null) return Observable.Return<UiControl?>(null);
 
-                container = container.WithView(
-                    Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("delegationsHtml"))));
-            }
+                return Observable.FromAsync(async () =>
+                {
+                    try
+                    {
+                        var subs = await meshService
+                            .QueryAsync<MeshNode>($"namespace:{messagePath} nodeType:{ThreadNodeType.NodeType}")
+                            .ToListAsync();
+                        if (subs.Count == 0) return (UiControl?)null;
+                        return (UiControl?)BuildDelegationLinks(subs);
+                    }
+                    catch { return (UiControl?)null; }
+                });
+            });
         }
 
         container = container.WithView(actionRow);
@@ -235,15 +287,11 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
-    /// Builds HTML for delegation sub-threads recursively: link + inline preview + nested sub-delegations.
-    /// Shows the sub-agent's execution status or last lines of response text.
-    /// Recurses up to maxDepth levels for nested delegations.
+    /// Builds simple navigation links for delegation sub-threads.
+    /// Each sub-thread is rendered as a clickable link showing its name.
     /// </summary>
-    private static async Task<string> BuildDelegationHtmlAsync(
-        IReadOnlyList<MeshNode> subThreads, IMeshService meshService, int depth = 0, int maxDepth = 4)
+    private static UiControl BuildDelegationLinks(IReadOnlyList<MeshNode> subThreads)
     {
-        if (subThreads.Count == 0 || depth > maxDepth) return "";
-
         var sb = new System.Text.StringBuilder();
         sb.Append("<div style=\"margin: 4px 0 8px 0;\">");
 
@@ -251,80 +299,15 @@ public static class ThreadMessageLayoutAreas
         {
             var name = System.Web.HttpUtility.HtmlEncode(
                 st.Name?.Length > 80 ? st.Name[..77] + "..." : st.Name ?? st.Id);
-            var href = $"/{st.Path}/{ThreadNodeType.ThreadArea}";
+            var href = $"/{st.Path}";
 
-            // Header link — indent deeper levels
             sb.Append($"<a href=\"{href}\" style=\"display: flex; align-items: center; gap: 6px; padding: 2px 0; " +
                        $"font-size: 0.8rem; color: var(--accent-fill-rest); text-decoration: none;\">" +
                        $"<span style=\"font-size: 10px;\">&#8618;</span> {name}</a>");
-
-            // Get last message's live state
-            var thread = st.Content as AI.Thread;
-            if (thread?.Messages.Count > 0)
-            {
-                var lastMsgId = thread.Messages.Last();
-                var lastMsgPath = $"{st.Path}/{lastMsgId}";
-                try
-                {
-                    await foreach (var msgNode in meshService.QueryAsync<MeshNode>($"path:{lastMsgPath}"))
-                    {
-                        if (msgNode.Content is ThreadMessage tmsg)
-                        {
-                            // During execution: show live status/preview
-                            // After completion: collapse to just the link (no preview text)
-                            if (tmsg.IsExecuting)
-                            {
-                                string preview;
-                                if (!string.IsNullOrEmpty(tmsg.ExecutionStatus))
-                                {
-                                    preview = System.Web.HttpUtility.HtmlEncode(tmsg.ExecutionStatus);
-                                }
-                                else if (!string.IsNullOrEmpty(tmsg.Text))
-                                {
-                                    var lines = tmsg.Text.Split('\n');
-                                    var lastLines = lines.Length > 4 ? lines[^4..] : lines;
-                                    preview = System.Web.HttpUtility.HtmlEncode(
-                                        string.Join("\n", lastLines).Trim());
-                                    if (preview.Length > 300) preview = "..." + preview[^297..];
-                                }
-                                else
-                                {
-                                    preview = "Processing...";
-                                }
-
-                                sb.Append($"<div style=\"font-size: 0.72rem; color: var(--neutral-foreground-hint); " +
-                                           $"white-space: pre-wrap; padding: 2px 8px; border-left: 2px solid var(--accent-fill-rest); " +
-                                           $"margin: 2px 0 4px 12px; max-height: 80px; overflow: auto;\">{preview}</div>");
-                            }
-
-                            // Recurse: check if this message has its own sub-delegations
-                            if (depth < maxDepth)
-                            {
-                                try
-                                {
-                                    var nestedSubs = await meshService
-                                        .QueryAsync<MeshNode>($"namespace:{lastMsgPath} nodeType:{ThreadNodeType.NodeType}")
-                                        .ToListAsync();
-                                    if (nestedSubs.Count > 0)
-                                    {
-                                        var nestedHtml = await BuildDelegationHtmlAsync(nestedSubs, meshService, depth + 1, maxDepth);
-                                        if (!string.IsNullOrEmpty(nestedHtml))
-                                        {
-                                            sb.Append($"<div style=\"margin-left: 16px;\">{nestedHtml}</div>");
-                                        }
-                                    }
-                                }
-                                catch { /* ignore nested query errors */ }
-                            }
-                        }
-                    }
-                }
-                catch { /* ignore preview errors */ }
-            }
         }
 
         sb.Append("</div>");
-        return sb.ToString();
+        return Controls.Html(sb.ToString());
     }
 
     /// <summary>
@@ -487,7 +470,7 @@ public static class ThreadMessageLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}")));
         }
 
         return Controls.Stack
@@ -533,18 +516,18 @@ public static class ThreadMessageLayoutAreas
             ? $"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-bottom: 4px;\">{System.Web.HttpUtility.HtmlEncode(message.ModelName)}</div>"
             : "";
 
-        // Show progress indicator when response text is empty (agent is generating)
+        // Show animated dots when response text is empty (agent is generating)
+        // Progress status is shown separately above the chat input
         UiControl contentView;
         if (string.IsNullOrEmpty(message.Text))
         {
             contentView = Controls.Html(
                 "<div style=\"display: flex; align-items: center; gap: 8px; padding: 8px 0;\">" +
                 "<span style=\"display: inline-flex; gap: 4px;\">" +
-                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0s;\"></span>" +
-                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.2s;\"></span>" +
-                "<span style=\"width: 6px; height: 6px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.4s;\"></span>" +
+                "<span style=\"width: 5px; height: 5px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0s;\"></span>" +
+                "<span style=\"width: 5px; height: 5px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.2s;\"></span>" +
+                "<span style=\"width: 5px; height: 5px; border-radius: 50%; background: var(--neutral-foreground-hint); animation: agent-dots-blink 1.4s infinite both; animation-delay: 0.4s;\"></span>" +
                 "</span>" +
-                "<span style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint);\">Generating response...</span>" +
                 "</div>" +
                 "<style>@keyframes agent-dots-blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }</style>");
         }
@@ -567,7 +550,7 @@ public static class ThreadMessageLayoutAreas
                 .WithOrientation(Orientation.Horizontal)
                 .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
                 .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}/{ThreadNodeType.ThreadArea}")));
+                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}")));
         }
 
         return Controls.Stack

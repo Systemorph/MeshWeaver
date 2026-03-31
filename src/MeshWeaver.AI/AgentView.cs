@@ -1,4 +1,5 @@
-﻿using System.Reactive.Linq;
+﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
@@ -216,16 +217,16 @@ public static class AgentView
 
     private static string BuildAttributeBadges(AgentConfiguration agent)
     {
-        var badges = new List<string>();
+        var badges = ImmutableList<string>.Empty;
 
         if (agent.IsDefault)
-            badges.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(40, 167, 69, 0.2); color: #28a745; border-radius: 16px; font-size: 13px; font-weight: 600;'>Default Agent</span>");
+            badges = badges.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(40, 167, 69, 0.2); color: #28a745; border-radius: 16px; font-size: 13px; font-weight: 600;'>Default Agent</span>");
 
         if (agent.ExposedInNavigator)
-            badges.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(3, 102, 214, 0.2); color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>Exposed in Navigator</span>");
+            badges = badges.Add("<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(3, 102, 214, 0.2); color: #0366d6; border-radius: 16px; font-size: 13px; font-weight: 600;'>Exposed in Navigator</span>");
 
         if (agent.Delegations is { Count: > 0 })
-            badges.Add($"<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(255, 193, 7, 0.2); color: #ffc107; border-radius: 16px; font-size: 13px; font-weight: 600;'>{agent.Delegations.Count} Delegation{(agent.Delegations.Count != 1 ? "s" : "")}</span>");
+            badges = badges.Add($"<span style='display: inline-block; margin: 4px 8px 4px 0; padding: 6px 12px; background: rgba(255, 193, 7, 0.2); color: #ffc107; border-radius: 16px; font-size: 13px; font-weight: 600;'>{agent.Delegations.Count} Delegation{(agent.Delegations.Count != 1 ? "s" : "")}</span>");
 
         return string.Join("", badges);
     }

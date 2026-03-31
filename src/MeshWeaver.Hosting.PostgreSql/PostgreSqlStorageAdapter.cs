@@ -396,6 +396,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         string? userId = null,
         string? basePath = null,
         string? activityUserId = null,
+        IReadOnlyCollection<string>? excludedNodeTypes = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         // Resolve the target table based on the query path or nodeType and partition definition.
@@ -434,7 +435,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         // and is NOT thread-safe. Concurrent fan-out queries share the same adapter.
         var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
-            activityTable, userActivityTable);
+            activityTable, userActivityTable, excludedNodeTypes);
         if (!string.IsNullOrEmpty(effectivePath))
         {
             var (scopeClause, scopeParams) = generator.GenerateScopeClause(

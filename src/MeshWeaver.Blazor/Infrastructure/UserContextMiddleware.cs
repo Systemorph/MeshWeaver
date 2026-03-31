@@ -83,6 +83,7 @@ public class UserContextMiddleware(RequestDelegate next, ILogger<UserContextMidd
             ObjectId = response.UserName ?? response.UserEmail!,
             Name = response.UserName ?? "",
             Email = response.UserEmail!,
+            IsApiToken = true,
         };
     }
 

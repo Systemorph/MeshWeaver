@@ -57,8 +57,8 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
     }
 
     /// <summary>
-    /// Verifies that Orchestrator agent gets ALL mesh tools including write operations.
-    /// The Orchestrator uses explicit plugins: [Mesh] which provides all tools via CreateAllTools().
+    /// Verifies that Orchestrator agent gets all mesh tools including write operations
+    /// because it has explicit Mesh plugin configured.
     /// </summary>
     [Fact]
     public async Task OrchestratorAgent_ShouldGetAllMeshTools()
@@ -80,13 +80,12 @@ public class AgentToolWiringIntegrationTest : MonolithMeshTestBase
 
         Output.WriteLine($"Orchestrator tools ({toolNames.Count}): {string.Join(", ", toolNames)}");
 
-        // Orchestrator has explicit plugins: [Mesh] which gives all tools
         toolNames.Should().Contain("Get", "Orchestrator should have Get tool");
         toolNames.Should().Contain("Search", "Orchestrator should have Search tool");
         toolNames.Should().Contain("NavigateTo", "Orchestrator should have NavigateTo tool");
-        toolNames.Should().Contain("Create", "Orchestrator should have Create (full-access agent)");
-        toolNames.Should().Contain("Update", "Orchestrator should have Update (full-access agent)");
-        toolNames.Should().Contain("Delete", "Orchestrator should have Delete (full-access agent)");
+        toolNames.Should().Contain("Create", "Orchestrator has explicit Mesh plugin with all tools");
+        toolNames.Should().Contain("Update", "Orchestrator has explicit Mesh plugin with all tools");
+        toolNames.Should().Contain("Patch", "Orchestrator has explicit Mesh plugin with all tools");
     }
 
     /// <summary>

@@ -201,17 +201,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     public Func<MessageHubConfiguration, MessageHubConfiguration>? GetCachedHubConfiguration(string nodeTypePath)
     {
-        var hubConfig = _hubConfigurations.GetValueOrDefault(nodeTypePath);
-        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
-
-        // Return combined config if both exist
-        // Apply defaultConfig first (sets defaults like DetailsArea),
-        // then hubConfig (node type can override, e.g., Markdown sets $Content)
-        if (hubConfig != null && defaultConfig != null)
-            return config => hubConfig(defaultConfig(config));
-
-        // Return whichever one exists, or null if neither
-        return hubConfig ?? defaultConfig;
+        // Return the raw cached config — composition with DefaultNodeHubConfiguration
+        // is done by IMeshNodeHubFactory.ResolveHubConfigurationAsync.
+        return _hubConfigurations.GetValueOrDefault(nodeTypePath);
     }
 
     internal void InvalidateCache(string nodeTypePath)
@@ -525,7 +517,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var node = await meshStorage.GetNodeAsync(nodeTypePath, ct);
         if (node == null)
         {
-            logger.LogDebug("No node found for {NodeTypePath}", nodeTypePath);
+            var msg = $"NodeType definition not found at path '{nodeTypePath}'. Check that the NodeType node exists in persistence or a static node provider.";
+            logger.LogWarning(msg);
+            _compilationErrors[nodeTypePath] = msg;
             return (null, null);
         }
 
@@ -533,7 +527,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var definition = node.Content as NodeTypeDefinition;
         if (definition == null)
         {
-            logger.LogDebug("Node at {NodeTypePath} has no NodeTypeDefinition content", nodeTypePath);
+            var msg = $"Node at '{nodeTypePath}' exists but has no NodeTypeDefinition content (actual content type: {node.Content?.GetType().Name ?? "null"}).";
+            logger.LogWarning(msg);
+            _compilationErrors[nodeTypePath] = msg;
             return (null, null);
         }
 
@@ -554,6 +550,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshStorage, ct);
             }
+        }
+
+        if (codeFiles.Count == 0)
+        {
+            logger.LogWarning("NodeType '{NodeTypePath}' has no code files under /_Source. Hub will use default configuration only.", nodeTypePath);
         }
 
         var code = codeFiles.Count > 0 ? string.Join("\n\n", codeFiles) : null;

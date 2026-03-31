@@ -391,15 +391,27 @@
     }
 }
 
-/* Subtle splitter bar — thin line, visible on hover */
+/* Splitter bar — wide drag area with thin centered visual line */
 ::deep .body-splitter .fluent-multi-splitter-bar {
     background: transparent !important;
-    opacity: 0.3;
-    transition: opacity 0.2s;
+    position: relative;
+    transition: background 0.2s;
 }
 
-::deep .body-splitter .fluent-multi-splitter-bar:hover {
-    opacity: 0.8;
+::deep .body-splitter .fluent-multi-splitter-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    /* Horizontal splitter: thin vertical line centered */
+    margin: 0 auto;
+    width: 1px;
+    background: var(--neutral-stroke-rest, rgba(128, 128, 128, 0.3));
+    transition: width 0.15s, background 0.15s;
+}
+
+::deep .body-splitter .fluent-multi-splitter-bar:hover::after {
+    width: 3px;
+    background: var(--neutral-stroke-strong-hover, rgba(128, 128, 128, 0.6));
 }
 
 /* Hide splitter bar and second pane when panel is collapsed */

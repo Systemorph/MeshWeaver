@@ -43,7 +43,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Name = "Roland's test thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         }, ct);
 
         // Query by path — should find it
@@ -65,7 +65,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Name = "Roland visible thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         }, ct);
 
         // Query as Roland — scope:descendants matches the real portal fan-out behavior
@@ -87,7 +87,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Name = "Roland private thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         }, ct);
 
         // Switch to Samuel — RLS self-access only grants User/Samuel/... scope,
@@ -112,7 +112,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Name = "Roland ns thread",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         }, ct);
 
         // Query with namespace scope (like MeshNodeLayoutAreas.Threads uses)
@@ -134,7 +134,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             Name = "Getting Started",
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         }, ct);
 
         // Global search: same query as ThreadChatView sidebar history.
@@ -159,7 +159,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             LastModified = DateTimeOffset.UtcNow.AddDays(-10),
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         };
         await NodeFactory.CreateNodeAsync(oldThread, ct);
 
@@ -169,7 +169,7 @@ public class ThreadVisibilityTest(ITestOutputHelper output) : MonolithMeshTestBa
             NodeType = ThreadNodeType.NodeType,
             MainNode = $"User/{RolandId}/_Thread",
             LastModified = DateTimeOffset.UtcNow,
-            Content = new MeshThread { ParentPath = $"User/{RolandId}" }
+            Content = new MeshThread()
         };
         await NodeFactory.CreateNodeAsync(newThread, ct);
 

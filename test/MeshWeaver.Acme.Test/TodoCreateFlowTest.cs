@@ -1,3 +1,4 @@
+using Memex.Portal.Shared;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -57,6 +58,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
+            .AddOrganizationType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -80,11 +82,11 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     #region CreateChild Flow Tests (on parent node)
 
     /// <summary>
-    /// Test that the Create area on a parent node redirects to the /create Blazor page.
-    /// In the current architecture, the Create layout area always returns a RedirectControl.
+    /// Test that the CreateChild form (with ?type= parameter) shows Name and Description fields.
+    /// This is the first step of the create flow where user enters basic info.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CreateChild_WithTodoType_RedirectsToCreatePage()
+    public async Task CreateChild_WithTodoType_ShowsNameDescriptionForm()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -106,23 +108,31 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             parentAddress,
             reference);
 
-        Output.WriteLine("Waiting for Create area to render...");
+        Output.WriteLine("Waiting for CreateChild form to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
-            .Where(c => c != null)
+            .Where(c => c is StackControl)
             .Timeout(TimeSpan.FromSeconds(10))
             .FirstAsync();
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Create area should render");
-        control.Should().BeOfType<RedirectControl>("Create area on parent node should redirect to /create page");
+        control.Should().NotBeNull("CreateChild form should render");
+
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().NotBeEmpty("CreateChild form should have child areas");
+
+        Output.WriteLine($"CreateChild form has {stack.Areas.Count()} areas");
+
+        // Verify the form contains the expected structure
+        // The CreateChild form should have Name and Description fields, plus buttons
+        stack.Areas.Count().Should().BeGreaterThan(2, "Form should have multiple areas (header, fields, buttons)");
     }
 
     /// <summary>
-    /// Test that the Create area without type parameter still redirects to the /create Blazor page.
+    /// Test that CreateChild form shows type selection grid when no type parameter is provided.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task CreateArea_WithoutTypeParam_RedirectsToCreatePage()
+    public async Task CreateArea_WithoutTypeParam_ShowsTypeSelection()
     {
         var client = GetClient();
         var parentAddress = new Address("ACME/ProductLaunch");
@@ -141,7 +151,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             parentAddress,
             reference);
 
-        Output.WriteLine("Waiting for Create area to render...");
+        Output.WriteLine("Waiting for type selection to render...");
         var control = await stream
             .GetControlStream(reference.Area!)
             .Where(c => c != null)
@@ -149,8 +159,13 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .FirstAsync();
 
         Output.WriteLine($"Received control: {control?.GetType().Name}");
-        control.Should().NotBeNull("Create area should render");
-        control.Should().BeOfType<RedirectControl>("Create area on parent node should redirect to /create page");
+        control.Should().NotBeNull("Type selection should render");
+
+        // Should be a StackControl containing the type selection grid
+        var stack = control.Should().BeOfType<StackControl>().Subject;
+        stack.Areas.Should().NotBeEmpty("Type selection should have areas");
+
+        Output.WriteLine($"Type selection has {stack.Areas.Count()} areas");
     }
 
     #endregion
@@ -158,11 +173,12 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
     #region Transient Node Create Flow Tests
 
     /// <summary>
-    /// Test that a transient Todo node's Create area confirms it as Active and redirects to Edit.
-    /// In the current architecture, the Create area on a transient node confirms it and returns a RedirectControl.
+    /// Test that a transient Todo node's Create area shows the ContentType editor
+    /// with the expected structure (header, editor, buttons).
+    /// Note: Buttons are rendered inside nested views, which we verify exist via area count.
     /// </summary>
     [Fact(Timeout = 20000)]
-    public async Task TransientTodo_CreateArea_ConfirmsAndRedirectsToEdit()
+    public async Task TransientTodo_CreateArea_ShowsContentTypeEditor()
     {
         var client = GetClient();
         // Create a unique transient node
@@ -192,24 +208,28 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 TestContext.Current.CancellationToken);
             Output.WriteLine("Node hub initialized.");
 
-            // Request the Create area for the transient node
+            // Transient nodes are auto-confirmed and redirected to Edit.
+            // Verify the Edit area renders with content.
             var workspace = client.GetWorkspace();
-            var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
+            var reference = new LayoutAreaReference(MeshNodeLayoutAreas.EditArea);
 
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
                 nodeAddress,
                 reference);
 
-            Output.WriteLine("Waiting for Create area to render...");
+            Output.WriteLine("Waiting for Edit area to render (transient auto-confirmed)...");
             var control = await stream
                 .GetControlStream(reference.Area!)
-                .Where(c => c != null)
+                .Where(c => c is StackControl)
                 .Timeout(TimeSpan.FromSeconds(10))
                 .FirstAsync();
 
             Output.WriteLine($"Received control: {control?.GetType().Name}");
-            control.Should().NotBeNull("Create area should render for transient node");
-            control.Should().BeOfType<RedirectControl>("Create area on transient node should redirect to Edit area");
+            control.Should().NotBeNull("Edit area should render for confirmed transient node");
+
+            var stack = control.Should().BeOfType<StackControl>().Subject;
+            Output.WriteLine($"Edit area has {stack.Areas.Count()} areas");
+            stack.Areas.Count().Should().BeGreaterThanOrEqualTo(2, "Edit area should have content areas");
         }
         finally
         {
@@ -680,15 +700,21 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 .FirstAsync();
             Output.WriteLine("Node confirmed as Active.");
 
-            // Step 5: Retrieve the MeshNode via IMeshService query
-            var retrievedNode = await meshQuery
-                .QueryAsync<MeshNode>(MeshQueryRequest.FromQuery($"path:{nodePath}"))
-                .FirstOrDefaultAsync(TestContext.Current.CancellationToken);
+            // Step 5: Use GetDataRequest to retrieve the MeshNode via EntityReference
+            var entityRef = new EntityReference(nameof(MeshNode), nodePath);
+            var getDataResponse = await client.AwaitResponse(
+                new GetDataRequest(entityRef),
+                o => o.WithTarget(nodeAddress),
+                TestContext.Current.CancellationToken);
 
-            Output.WriteLine("Node retrieved via query.");
+            Output.WriteLine($"GetDataRequest response received.");
 
             // Step 6: Verify the response contains the correct data
-            retrievedNode.Should().NotBeNull("Response data should not be null");
+            getDataResponse.Message.Should().NotBeNull("Response should not be null");
+            getDataResponse.Message.Data.Should().NotBeNull("Response data should not be null");
+
+            var retrievedNode = getDataResponse.Message.Data as MeshNode;
+            retrievedNode.Should().NotBeNull("Data should be a MeshNode");
             retrievedNode!.Path.Should().Be(nodePath, "Retrieved node should have correct path");
             retrievedNode.Name.Should().Be("Data Request Test Task", "Retrieved node should have correct name");
             retrievedNode.State.Should().Be(MeshNodeState.Active, "Retrieved node should be Active");

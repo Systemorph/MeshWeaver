@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Collections.Immutable;
+using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Services;
@@ -33,6 +34,12 @@ public static class ThreadNodeType
     /// Used by the side panel to avoid rendering the full-page header.
     /// </summary>
     public const string ThreadChatArea = "ThreadChat";
+
+    /// <summary>
+    /// Layout area showing current execution progress: streaming response message.
+    /// Parent threads subscribe to this.
+    /// </summary>
+    public const string StreamingArea = "Streaming";
 
     /// <summary>
     /// Layout area for delegation sub-thread history.
@@ -80,7 +87,8 @@ public static class ThreadNodeType
         {
             Name = name,
             NodeType = NodeType,
-            Content = new Thread { ParentPath = contextPath, CreatedBy = createdBy }
+            MainNode = contextPath,
+            Content = new Thread { CreatedBy = createdBy }
         };
     }
 
@@ -118,7 +126,7 @@ public static class ThreadNodeType
             Name = "Thread",
             Icon = "/static/NodeTypeIcons/chat.svg",
             IsSatelliteType = true,
-            ExcludeFromContext = new HashSet<string> { "search" },
+            ExcludeFromContext = ImmutableHashSet.Create("search"),
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             HubConfiguration = config => config
                 .AddThreadLayoutAreas()

@@ -14,7 +14,7 @@ public static class NodeCopyHelper
     /// Copies a node and all its descendants to a target namespace.
     /// The source node's Id is preserved; paths are rewritten under the target namespace.
     /// </summary>
-    internal static async Task<int> CopyNodeTreeAsync(
+    public static async Task<int> CopyNodeTreeAsync(
         IMeshService meshQuery,
         IMeshService nodeFactory,
         IMessageHub hub,

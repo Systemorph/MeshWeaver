@@ -101,7 +101,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         await securityService.RemoveUserRoleAsync("Carol", "Admin", "ACME", TestTimeout);
 
         var permissions = await securityService.GetEffectivePermissionsAsync("ACME", "Carol", TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Only Viewer role should remain after removing Admin");
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Only Viewer role should remain after removing Admin");
     }
 
     #endregion
@@ -133,8 +133,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permChild = await securityService.GetEffectivePermissionsAsync("ACME/ProductLaunch", "Alice", TestTimeout);
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "Alice", TestTimeout);
 
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread);
-        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread);
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
+        permChild.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
         permMeshWeaver.Should().Be(Permission.None);
     }
 
@@ -158,8 +158,8 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permMeshWeaver = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "MultiUser", TestTimeout);
         var permACME = await securityService.GetEffectivePermissionsAsync("ACME", "MultiUser", TestTimeout);
 
-        permMeshWeaver.Should().Be(Permission.Read | Permission.Execute);
-        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread);
+        permMeshWeaver.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
+        permACME.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
     }
 
     #endregion
@@ -194,9 +194,9 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permSpecial = await securityService.GetEffectivePermissionsAsync("Org/Special", "OverrideUser", TestTimeout);
         var permOther = await securityService.GetEffectivePermissionsAsync("Org/Other", "OverrideUser", TestTimeout);
 
-        permOrg.Should().Be(Permission.Read | Permission.Execute);
+        permOrg.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
         permSpecial.Should().Be(Permission.All); // Admin at Org/Special + Viewer from parent
-        permOther.Should().Be(Permission.Read | Permission.Execute); // Only Viewer inherited from Org
+        permOther.Should().Be(Permission.Read | Permission.Execute | Permission.Api); // Only Viewer inherited from Org
     }
 
     #endregion
@@ -212,7 +212,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
         var permissions = await securityService.GetEffectivePermissionsAsync("MeshWeaver", "", TestTimeout);
 
-        permissions.Should().Be(Permission.Read | Permission.Execute);
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
     [Fact]
@@ -291,7 +291,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permPublicDocs = await securityService.GetEffectivePermissionsAsync("Private/PublicDocs", "", TestTimeout);
 
         permPrivate.Should().Be(Permission.None);
-        permPublicDocs.Should().Be(Permission.Read | Permission.Execute);
+        permPublicDocs.Should().Be(Permission.Read | Permission.Execute | Permission.Api);
     }
 
     #endregion
@@ -309,7 +309,7 @@ public class UserAccessTests(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var permAuthUser = await securityService.GetEffectivePermissionsAsync("Restricted", "AuthUser", TestTimeout);
 
         permAnonymous.Should().Be(Permission.None);
-        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread);
+        permAuthUser.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export);
     }
 
     [Fact]

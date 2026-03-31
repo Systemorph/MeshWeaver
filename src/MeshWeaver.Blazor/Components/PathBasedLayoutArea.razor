@@ -4,7 +4,12 @@
 
 @if (IsLoading)
 {
-    <div class="layout-area-loading" style="padding: 8px; color: #666;">Loading @Path...</div>
+    <div class="skeleton-placeholder">
+        <span style="font-size: 0.75rem; opacity: 0.45; letter-spacing: 0.02em;">@ShortName</span>
+        <div class="skeleton-line" style="width: 35%;"></div>
+        <div class="skeleton-line" style="width: 80%;"></div>
+        <div class="skeleton-line" style="width: 55%;"></div>
+    </div>
 }
 else if (ErrorMessage != null)
 {
@@ -23,8 +28,11 @@ else
     [Parameter]
     public string? Path { get; set; }
 
+    private string ShortName => Path?.Contains('/') == true ? Path[(Path.LastIndexOf('/') + 1)..] : Path ?? "";
+
     private bool IsLoading { get; set; } = true;
     private string? ErrorMessage { get; set; }
+    private string? DiagInfo { get; set; }
     private LayoutAreaControl? ResolvedViewModel { get; set; }
 
     protected override async Task OnParametersSetAsync()
@@ -58,8 +66,12 @@ else
                 )
                 {
                     ShowProgress = true,
-                    ProgressMessage = $"Loading {Path}..."
+                    SpinnerType = Layout.SpinnerType.Skeleton,
+                    ProgressMessage = ShortName
                 };
+                DiagInfo = $"Resolved: {resolution.Prefix}" +
+                    (area != null ? $" area={area}" : "") +
+                    (id != null ? $" id={id}" : "");
             }
             else
             {

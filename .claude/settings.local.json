@@ -125,8 +125,8 @@
       "mcp__aspire__select_apphost",
       "Bash(git ls-remote:*)",
       "Bash(git push:*)",
-      "Bash(rm -rf /tmp/MeshWeaverFutuReTests)",
-      "Read(//private/var/folders/tj/9333kthd35s1v3hqxrrh569h0000gn/T/MeshWeaverFutuReTests/.mesh-cache/**)"
+      "Bash(exit 0)",
+      "WebFetch(domain:gist.github.com)"
     ],
     "deny": []
   },

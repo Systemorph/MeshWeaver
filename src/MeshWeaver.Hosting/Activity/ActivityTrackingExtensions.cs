@@ -13,6 +13,12 @@ namespace MeshWeaver.Hosting.Activity;
 public static class ActivityTrackingExtensions
 {
     /// <summary>
+    /// Checks if a path is within a satellite partition (contains /_ segments
+    /// — e.g., /_Thread/, /_Comment/, /_Access/, /_activity/).
+    /// </summary>
+    private static bool IsSatellitePath(string path) => path.Contains("/_");
+
+    /// <summary>
     /// Adds activity tracking via ActivityLogBundler which persists bundled activity logs
     /// directly to IMeshStorage (bypassing message handlers to avoid infinite loops).
     /// </summary>
@@ -28,8 +34,13 @@ public static class ActivityTrackingExtensions
                 var persistence = sp.GetRequiredService<IMeshStorage>();
                 return new ActivityLogBundler(hub, async log =>
                 {
-                    // Skip activity tracking for satellite node hubs (MainNode != Path).
-                    // Only main entities should have activity records.
+                    // Skip activity tracking for satellite node hubs.
+                    // Satellite paths contain /_X/ segments (e.g., /_Thread/, /_Comment/, /_Access/).
+                    // These generate too many updates during streaming and shouldn't have activity logs.
+                    if (log.HubPath != null && IsSatellitePath(log.HubPath))
+                        return;
+
+                    // Also check MainNode != Path for non-satellite-path nodes
                     var hubNode = log.HubPath != null ? await persistence.GetNodeAsync(log.HubPath) : null;
                     if (hubNode != null && hubNode.MainNode != hubNode.Path)
                         return;

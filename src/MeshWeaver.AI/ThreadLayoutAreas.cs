@@ -43,6 +43,7 @@ public static class ThreadLayoutAreas
                 .WithDefaultArea(ThreadNodeType.ThreadArea)
                 .WithView(ThreadNodeType.ThreadArea, ThreadView)
                 .WithView(ThreadNodeType.ThreadChatArea, ThreadChatView)
+                .WithView(ThreadNodeType.StreamingArea, StreamingView)
                 .WithView(ThreadNodeType.HistoryArea, HistoryView)
                 .WithView(MeshNodeLayoutAreas.ThumbnailArea, Thumbnail)
                 .WithView(MeshNodeLayoutAreas.ThreadsArea, ThreadsCatalog));
@@ -131,16 +132,21 @@ public static class ThreadLayoutAreas
         {
             var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
-            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? threadContent.ParentPath : hubPath;
-            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
+            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
+            var contextDisplayName = node?.MainNode != node?.Path
+                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
             return new ThreadViewModel
             {
                 Messages = threadContent?.Messages ?? [],
                 ThreadPath = hubPath,
                 InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName
+                InitialContextDisplayName = contextDisplayName,
+                IsExecuting = threadContent?.IsExecuting ?? false,
+                ExecutionStatus = threadContent?.ExecutionStatus,
+                StreamingText = threadContent?.StreamingText,
+                StreamingToolCalls = threadContent?.StreamingToolCalls,
+                TokensUsed = threadContent?.TokensUsed ?? 0,
+                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
@@ -170,7 +176,7 @@ public static class ThreadLayoutAreas
         var header = Controls.Stack
             .WithClass("thread-full-header")
             .WithWidth("100%")
-            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); flex-shrink: 0;")
+            .WithStyle("padding: 16px 24px 24px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest);")
             .WithView(Controls.Html(new JsonPointerReference(LayoutAreaReference.GetDataPointer("contextLink"))))
             .WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
@@ -183,12 +189,11 @@ public static class ThreadLayoutAreas
         // Static container — never rebuilt
         return Controls.Stack
             .WithWidth("100%")
-            .WithHeight("100%")
-            .WithStyle("display: flex; flex-direction: column;")
+            .WithStyle("flex: 1; min-height: 0; display: flex; flex-direction: column;")
             .WithView(header)
             .WithView(new ThreadChatControl()
                 .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)))
-                .WithStyle("flex: 1; overflow: hidden;"));
+                .WithStyle("flex: 1; min-height: 0; overflow: hidden;"));
     }
 
     /// <summary>
@@ -205,16 +210,21 @@ public static class ThreadLayoutAreas
         {
             var node = nodes!.First(n => n.Path == hubPath);
             var threadContent = node?.Content as MeshThread;
-            var contextPath = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? threadContent.ParentPath : hubPath;
-            var contextDisplayName = !string.IsNullOrEmpty(threadContent?.ParentPath)
-                ? GetContextDisplayName(threadContent.ParentPath) : GetThreadTitle(node);
+            var contextPath = node?.MainNode != node?.Path ? node?.MainNode : hubPath;
+            var contextDisplayName = node?.MainNode != node?.Path
+                ? GetContextDisplayName(node!.MainNode) : GetThreadTitle(node);
             return new ThreadViewModel
             {
                 Messages = threadContent?.Messages ?? [],
                 ThreadPath = hubPath,
                 InitialContext = contextPath,
-                InitialContextDisplayName = contextDisplayName
+                InitialContextDisplayName = contextDisplayName,
+                IsExecuting = threadContent?.IsExecuting ?? false,
+                ExecutionStatus = threadContent?.ExecutionStatus,
+                StreamingText = threadContent?.StreamingText,
+                StreamingToolCalls = threadContent?.StreamingToolCalls,
+                TokensUsed = threadContent?.TokensUsed ?? 0,
+                ExecutionStartedAt = threadContent?.ExecutionStartedAt,
             };
         });
         host.RegisterForDisposal(vmStream.DistinctUntilChanged().Subscribe(vm => host.UpdateData(ThreadDataKey, vm)));
@@ -229,6 +239,36 @@ public static class ThreadLayoutAreas
 
         return new ThreadChatControl()
             .WithThreadViewModel(new JsonPointerReference(LayoutAreaReference.GetDataPointer(ThreadDataKey)));
+    }
+
+    /// <summary>
+    /// Streaming area: shows the active response message cell and any delegation sub-threads.
+    /// Reactive — emits null when idle, a LayoutAreaControl for the streaming cell when executing.
+    /// Parent threads subscribe to child threads' Streaming area to see cascading progress.
+    /// Returns IObservable so it updates reactively as execution state changes.
+    /// </summary>
+    public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var stream = host.Workspace.GetStream<MeshNode>();
+
+        return stream!
+            .Select(nodes =>
+            {
+                var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
+                var thread = node?.Content as MeshThread;
+                return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
+            })
+            .DistinctUntilChanged()
+            .Select(state =>
+            {
+                if (!state.IsExecuting || string.IsNullOrEmpty(state.ActiveMessageId))
+                    return (UiControl?)null;
+
+                var responsePath = $"{hubPath}/{state.ActiveMessageId}";
+                return (UiControl?)new LayoutAreaControl(responsePath,
+                    new LayoutAreaReference("Streaming"));
+            });
     }
 
     /// <summary>
@@ -454,8 +494,8 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Handles ResubmitMessageRequest — truncates Messages from the given message onwards,
-    /// then posts a new SubmitMessageRequest with the provided text.
+    /// Handles ResubmitMessageRequest — keeps the user message, removes the response
+    /// (and anything after it), then creates only a new output cell and starts execution.
     /// </summary>
     private static IMessageDelivery HandleResubmitMessage(
         IMessageHub hub,
@@ -466,30 +506,73 @@ public static class ThreadLayoutAreas
         logger.LogInformation("HandleResubmitMessage: threadPath={ThreadPath}, messageId={MessageId}",
             request.ThreadPath, request.MessageId);
 
-        hub.InvokeAsync(() =>
+        var workspace = hub.GetWorkspace();
+        workspace.GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
         {
-            hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+            var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
+            var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
+
+            var msgIndex = currentContent.Messages.IndexOf(request.MessageId);
+            if (msgIndex < 0) return;
+
+            // Keep the user message (msgIndex), remove everything after it
+            var updatedMsgList = currentContent.Messages.Take(msgIndex + 1).ToImmutableList();
+
+            // Create new response cell only
+            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+            var responsePath = $"{request.ThreadPath}/{responseMsgId}";
+            var mainEntity = threadNode?.MainNode ?? request.ThreadPath;
+            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+
+            meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
             {
-                var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-                var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
+                NodeType = ThreadMessageNodeType.NodeType,
+                MainNode = mainEntity,
+                Content = new ThreadMessage
+                {
+                    Id = responseMsgId,
+                    Role = "assistant",
+                    Text = "",
+                    Timestamp = DateTime.UtcNow,
+                    Type = ThreadMessageType.AgentResponse
+                }
+            }).Subscribe(_ =>
+            {
+                // Update thread: keep user msg, add new response, start execution
+                workspace.UpdateMeshNode(node =>
+                {
+                    var thread = node.Content as MeshThread ?? new MeshThread();
+                    return node with
+                    {
+                        Content = thread with
+                        {
+                            Messages = updatedMsgList.Add(responseMsgId),
+                            IsExecuting = true,
+                            ActiveMessageId = responseMsgId,
+                            ExecutionStatus = null,
+                            TokensUsed = 0,
+                            ExecutionStartedAt = DateTime.UtcNow,
+                            StreamingText = null,
+                            StreamingToolCalls = null
+                        }
+                    };
+                });
 
-                var msgList = currentContent.Messages.ToList();
-                var msgIndex = msgList.IndexOf(request.MessageId);
-                if (msgIndex < 0) return;
+                // Start execution on hosted hub
+                var executionHub = hub.GetHostedHub(
+                    new Address($"{hub.Address}/_Exec"),
+                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+                    HostedHubCreation.Always);
 
-                var updatedMsgList = msgList.Take(msgIndex).ToImmutableList();
-                var newContent = currentContent with { Messages = updatedMsgList };
-                var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
-                hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-
-                // Resubmit the message
-                hub.Post(new SubmitMessageRequest
+                executionHub!.Post(new SubmitMessageRequest
                 {
                     ThreadPath = request.ThreadPath,
-                    UserMessageText = request.UserMessageText
-                }, o => o.WithTarget(hub.Address));
-            });
+                    UserMessageText = request.UserMessageText,
+                    ResponsePath = responsePath,
+                    ContextPath = mainEntity
+                }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
+            },
+            ex => logger.LogError(ex, "HandleResubmitMessage: failed to create response cell for {ThreadPath}", request.ThreadPath));
         });
 
         return delivery.Processed();

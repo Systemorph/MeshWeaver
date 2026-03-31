@@ -186,7 +186,6 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = ThreadNodeType.NodeType,
             Content = new AI.Thread
             {
-                ParentPath = "User/Roland",
                 Messages = ["msg1"]
             }
         };
@@ -231,7 +230,6 @@ public class AddressResolutionTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = ThreadNodeType.NodeType,
             Content = new AI.Thread
             {
-                ParentPath = "User/Roland",
                 Messages = ["m1"]
             }
         };

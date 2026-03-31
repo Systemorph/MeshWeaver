@@ -78,7 +78,7 @@ public class CrossPartitionSatelliteFanOutTests
             NodeType = "Thread",
             MainNode = "OrgAlpha",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "OrgAlpha", CreatedBy = "user1" },
+            Content = new MeshThread { CreatedBy = "user1" },
         }, _options, ct);
 
         await partitions["OrgBeta"].Adapter.WriteAsync(new MeshNode("thread-b1", "OrgBeta/_Thread")
@@ -87,7 +87,7 @@ public class CrossPartitionSatelliteFanOutTests
             NodeType = "Thread",
             MainNode = "OrgBeta",
             State = MeshNodeState.Active,
-            Content = new MeshThread { ParentPath = "OrgBeta", CreatedBy = "user1" },
+            Content = new MeshThread { CreatedBy = "user1" },
         }, _options, ct);
 
         // Query each partition individually with namespace: prefix

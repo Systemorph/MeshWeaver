@@ -134,7 +134,6 @@ public class UserDashboardThreadQueryTests(ITestOutputHelper output) : MonolithM
             MainNode = "Shared/_Thread",
             Content = new MeshThread
             {
-                ParentPath = "Shared",
                 CreatedBy = otherUserId
             }
         }, TestTimeout);

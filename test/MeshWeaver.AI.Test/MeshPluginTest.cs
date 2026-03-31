@@ -332,20 +332,18 @@ public class MeshPluginTest : MonolithMeshTestBase
         });
         await plugin.Create(createJson);
 
-        // Get the node first (as the Update contract requires the complete node)
-        var getBeforeUpdate = await plugin.Get($"@ACME/{uniqueId}");
-        var nodeFromGet = JsonSerializer.Deserialize<JsonElement>(getBeforeUpdate);
-
-        // Now update it with the complete node (including content from Get)
-        var updateNode = new Dictionary<string, object>
+        // Now update it
+        var updateJson = JsonSerializer.Serialize(new object[]
         {
-            ["id"] = uniqueId,
-            ["namespace"] = "ACME",
-            ["name"] = "Updated Name",
-            ["nodeType"] = "Markdown",
-            ["content"] = nodeFromGet.TryGetProperty("content", out var content) ? content : new { }
-        };
-        var updateJson = JsonSerializer.Serialize(new[] { updateNode });
+            new
+            {
+                id = uniqueId,
+                @namespace = "ACME",
+                name = "Updated Name",
+                nodeType = "Markdown",
+                content = new { text = "updated" }
+            }
+        });
 
         var result = await plugin.Update(updateJson);
 
@@ -519,17 +517,18 @@ public class MeshPluginTest : MonolithMeshTestBase
         getResult.Should().NotStartWith("Not found");
         getResult.Should().Contain("CRUD Test Node");
 
-        // 3. Update (Get -> modify -> Update pattern, must include content)
-        var nodeFromGet = JsonSerializer.Deserialize<JsonElement>(getResult);
-        var updateNode = new Dictionary<string, object>
+        // 3. Update (Get -> modify -> Update pattern)
+        var updateJson = JsonSerializer.Serialize(new object[]
         {
-            ["id"] = uniqueId,
-            ["namespace"] = "ACME",
-            ["name"] = "Updated CRUD Test Node",
-            ["nodeType"] = "Markdown",
-            ["content"] = nodeFromGet.TryGetProperty("content", out var content) ? content : new { }
-        };
-        var updateJson = JsonSerializer.Serialize(new[] { updateNode });
+            new
+            {
+                id = uniqueId,
+                @namespace = "ACME",
+                name = "Updated CRUD Test Node",
+                nodeType = "Markdown",
+                content = new { text = "updated" }
+            }
+        });
         var updateResult = await plugin.Update(updateJson);
         updateResult.Should().Contain("Updated:");
 
@@ -553,7 +552,8 @@ public class MeshPluginTest : MonolithMeshTestBase
     [Fact]
     public async Task WriteToolWiring_WorkerAgent_GetsWriteTools()
     {
-        // The Worker agent uses explicit plugins: [Mesh] which provides all tools via CreateAllTools()
+        // The Worker agent uses explicit Plugins (Mesh, WebSearch, etc.)
+        // which gives it all tools including write operations
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
@@ -562,9 +562,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var worker = agents.FirstOrDefault(a => a.Name == "Worker");
         worker.Should().NotBeNull("Worker agent should be loaded from test data");
         worker!.AgentConfiguration.Should().NotBeNull();
-        // Worker description mentions CRUD operations
-        worker.AgentConfiguration!.Description.Should().Contain("CRUD",
-            "Worker description should mention CRUD operations");
+        worker.AgentConfiguration!.Plugins.Should().NotBeNullOrEmpty(
+            "Worker should have explicit plugins configured for write tool access");
     }
 
     [Fact]

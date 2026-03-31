@@ -32,7 +32,8 @@ public class CommentNodeLoadingTest(ITestOutputHelper output) : MonolithMeshTest
             .ConfigureServices(services =>
                 services.AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData))
             .AddDoc()
-            .AddGraph();
+            .AddGraph()
+            .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
     }
 
     /// <summary>

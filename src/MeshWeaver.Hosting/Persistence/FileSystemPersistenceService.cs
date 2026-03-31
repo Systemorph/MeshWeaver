@@ -173,6 +173,38 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         if (await _storageAdapter.ExistsAsync(targetPath, ct))
             throw new InvalidOperationException($"Target path already exists: {targetPath}");
 
+        // Collect all descendants first (before modifying anything)
+        var descendants = new List<MeshNode>();
+        await CollectDescendantsAsync(sourcePath, options, descendants, ct);
+
+        // Move descendants first (children before parents are deleted)
+        foreach (var descendant in descendants)
+        {
+            var newDescPath = targetPath + descendant.Path[sourcePath.Length..];
+            var movedDesc = MeshNode.FromPath(newDescPath) with
+            {
+                Name = descendant.Name,
+                NodeType = descendant.NodeType,
+                Icon = descendant.Icon,
+                Order = descendant.Order,
+                Content = descendant.Content,
+                AssemblyLocation = descendant.AssemblyLocation,
+                HubConfiguration = descendant.HubConfiguration,
+                GlobalServiceConfigurations = descendant.GlobalServiceConfigurations
+            };
+
+            await _storageAdapter.WriteAsync(movedDesc, options, ct);
+            await _storageAdapter.DeleteAsync(descendant.Path, ct);
+
+            var descSourceKey = NormalizePath(descendant.Path);
+            var descTargetKey = NormalizePath(newDescPath);
+            _cache.Remove(descSourceKey);
+            _cache.Set(descTargetKey, movedDesc, _cacheOptions);
+            _changeNotifier?.NotifyChange(DataChangeNotification.Deleted(descSourceKey, descendant));
+            _changeNotifier?.NotifyChange(DataChangeNotification.Created(descTargetKey, movedDesc));
+        }
+
+        // Move the root node
         var movedNode = MeshNode.FromPath(targetPath) with
         {
             Name = sourceNode.Name,
@@ -199,6 +231,24 @@ public class FileSystemPersistenceService : IStorageService, IDisposable
         _changeNotifier?.NotifyChange(DataChangeNotification.Created(targetKey, movedNode));
 
         return movedNode;
+    }
+
+    private async Task CollectDescendantsAsync(string parentPath, JsonSerializerOptions options, List<MeshNode> descendants, CancellationToken ct)
+    {
+        var (nodePaths, directoryPaths) = await _storageAdapter.ListChildPathsAsync(parentPath, ct);
+
+        foreach (var nodePath in nodePaths)
+        {
+            var node = await _storageAdapter.ReadAsync(nodePath, options, ct);
+            if (node != null)
+                descendants.Add(node);
+            await CollectDescendantsAsync(nodePath, options, descendants, ct);
+        }
+
+        foreach (var dirPath in directoryPaths)
+        {
+            await CollectDescendantsAsync(dirPath, options, descendants, ct);
+        }
     }
 
     public async IAsyncEnumerable<MeshNode> SearchAsync(string? parentPath, string query, JsonSerializerOptions options)

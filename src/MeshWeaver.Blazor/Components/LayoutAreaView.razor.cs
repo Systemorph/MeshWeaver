@@ -117,8 +117,13 @@ public partial class LayoutAreaView
                 : Workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(Address!, ViewModel.Reference);
             DialogStream = SetupDialogAreaMonitoring(AreaStream!);
             DialogStream?.RegisterForDisposal(DialogStream.DistinctUntilChanged().Subscribe(el => OnDialogStreamChanged(el.Value)));
-            MenuStream = SetupMenuAreaMonitoring(AreaStream!);
-            MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value)));
+            // Only monitor menu from the top-level (main page) LayoutAreaView.
+            // Side panel LayoutAreaViews must not overwrite the main page's node menu.
+            if (Top)
+            {
+                MenuStream = SetupMenuAreaMonitoring(AreaStream!);
+                MenuStream?.RegisterForDisposal(MenuStream.DistinctUntilChanged().Subscribe(el => OnMenuStreamChanged(el.Value)));
+            }
         }
     }
 

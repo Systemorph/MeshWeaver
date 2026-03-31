@@ -37,6 +37,11 @@ public partial class ContentPage : ComponentBase, IDisposable
     public string? ContentType { get; set; }
     public string? ErrorMessage { get; set; }
 
+    // CSV support
+    public string[]? CsvHeaders { get; set; }
+    public List<string[]>? CsvRows { get; set; }
+    public int CsvVisibleRows { get; set; } = 50;
+
     [Inject] public PortalApplication PortalApplication { get; set; } = null!;
     private IContentService ContentService => PortalApplication.Hub.ServiceProvider.GetRequiredService<IContentService>();
 
@@ -131,6 +136,11 @@ public partial class ContentPage : ComponentBase, IDisposable
         {
             Content = await collection.GetContentAsync(ResolvedPath!);
         }
+
+        if (ContentType == "text/csv" && Content != null)
+        {
+            ParseCsv(Content);
+        }
     }
 
     public byte[] ReadStream(Stream stream)
@@ -149,6 +159,75 @@ public partial class ContentPage : ComponentBase, IDisposable
     public void Dispose()
     {
         Content?.Dispose();
+    }
+
+    private void ParseCsv(Stream stream)
+    {
+        using var reader = new StreamReader(stream);
+        var lines = new List<string>();
+        while (reader.ReadLine() is { } line)
+            lines.Add(line);
+
+        if (lines.Count == 0)
+            return;
+
+        CsvHeaders = ParseCsvLine(lines[0]);
+        CsvRows = lines.Skip(1)
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Select(ParseCsvLine)
+            .ToList();
+    }
+
+    private static string[] ParseCsvLine(string line)
+    {
+        var fields = new List<string>();
+        var inQuotes = false;
+        var field = new System.Text.StringBuilder();
+
+        for (var i = 0; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        field.Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = false;
+                    }
+                }
+                else
+                {
+                    field.Append(c);
+                }
+            }
+            else if (c == '"')
+            {
+                inQuotes = true;
+            }
+            else if (c == ',')
+            {
+                fields.Add(field.ToString());
+                field.Clear();
+            }
+            else
+            {
+                field.Append(c);
+            }
+        }
+
+        fields.Add(field.ToString());
+        return fields.ToArray();
+    }
+
+    private void LoadMoreCsvRows()
+    {
+        CsvVisibleRows += 50;
     }
 
     /// <summary>

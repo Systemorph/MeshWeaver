@@ -155,7 +155,7 @@ public class SatelliteTableTests : IAsyncLifetime
             Name = "Discussion Thread",
             NodeType = "Thread",
             MainNode = "TestOrg",
-            Content = new { ParentPath = "TestOrg" }
+            Content = new { }
         };
         await _adapter.WriteAsync(thread, _options, ct);
 

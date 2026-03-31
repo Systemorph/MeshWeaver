@@ -119,6 +119,7 @@ public static class GraphConfigurationExtensions
                     services.AddSingleton<IMeshNodeCompilationService>(sp => sp.GetRequiredService<MeshNodeCompilationService>());
                     services.AddSingleton<INodeTypeService, NodeTypeService>();
                     services.AddSingleton<INodeConfigurationResolver, NodeConfigurationResolver>();
+                    services.AddSingleton<IMeshNodeHubFactory, MeshNodeHubFactory>();
                     return services;
                 })
                 .WithHandler<GetDataRequest>(HandleNodeTypeRequest));

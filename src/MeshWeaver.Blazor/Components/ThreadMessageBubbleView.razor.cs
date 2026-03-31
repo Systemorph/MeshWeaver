@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using MeshWeaver.Layout;
+using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -8,35 +10,9 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private bool IsUser => ViewModel.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
 
     private string? messageText;
-    private bool isExecuting;
-    private string? executionStatus;
-    private ImmutableList<ToolCallEntry>? toolCalls;
+    private IReadOnlyList<ToolCallEntry>? toolCalls;
 
-    private bool ShowSpinner => isExecuting && string.IsNullOrEmpty(messageText);
-    private bool ShowExecutingIndicator => isExecuting && !string.IsNullOrEmpty(messageText);
     private bool HasToolCalls => toolCalls is { Count: > 0 };
-
-    /// <summary>First line of executionStatus (the formatted tool name / delegation status).</summary>
-    private string StatusTitle
-    {
-        get
-        {
-            if (string.IsNullOrEmpty(executionStatus)) return "Generating response...";
-            var nl = executionStatus.IndexOf('\n');
-            return nl > 0 ? executionStatus[..nl] : executionStatus;
-        }
-    }
-
-    /// <summary>Remaining lines of executionStatus (arguments, delegation detail).</summary>
-    private string? StatusDetail
-    {
-        get
-        {
-            if (string.IsNullOrEmpty(executionStatus)) return null;
-            var nl = executionStatus.IndexOf('\n');
-            return nl > 0 ? executionStatus[(nl + 1)..] : null;
-        }
-    }
 
     private MarkdownControl MarkdownVm => new MarkdownControl(messageText ?? "")
         .WithStyle("background: transparent;");
@@ -45,16 +21,45 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     {
         base.BindData();
         DataBind(ViewModel.Text, x => x.messageText);
-        DataBind(ViewModel.IsExecuting, x => x.isExecuting);
-        DataBind(ViewModel.ExecutionStatus, x => x.executionStatus);
-        DataBind(ViewModel.ToolCalls, x => x.toolCalls);
+        DataBind(ViewModel.ToolCalls, x => x.toolCalls, (val, prev) =>
+        {
+            IReadOnlyList<ToolCallEntry>? result = val switch
+            {
+                null => null,
+                IReadOnlyList<ToolCallEntry> list => list,
+                JsonElement je => je.Deserialize<List<ToolCallEntry>>(Hub.JsonSerializerOptions),
+                _ => null
+            };
+            Logger.LogDebug("[BubbleView] TOOLCALLS_BIND: type={Type}, count={Count}, area={Area}",
+                val?.GetType().Name ?? "null", result?.Count ?? -1, Area);
+            return result;
+        });
     }
 
-    private void OnCancelClick()
+    private static string FormatToolCallSummary(ToolCallEntry call)
     {
-        if (!string.IsNullOrEmpty(ViewModel.ThreadPath) && Stream != null)
+        if (!string.IsNullOrEmpty(call.DelegationPath))
         {
-            OnClick();
+            // Delegation: extract agent name from DisplayName (e.g., "Delegating to Coder..." → "Coder")
+            var name = call.DisplayName ?? call.Name;
+            if (name.Contains("Delegating to "))
+                name = name.Replace("Delegating to ", "").TrimEnd('.', ' ');
+            return name;
         }
+
+        // Regular tool calls: friendly verb
+        var target = call.Arguments?.Split('\n').FirstOrDefault()?.Trim() ?? "";
+        return call.Name switch
+        {
+            "Get" or "get_node" => $"Getting {target}",
+            "Search" or "search_nodes" => $"Searching {target}",
+            "Create" or "create_node" => $"Creating {target}",
+            "Update" or "update_node" => $"Updating {target}",
+            "Patch" or "patch_node" => $"Patching {target}",
+            "Delete" or "delete_node" => $"Deleting {target}",
+            "NavigateTo" or "navigate_to" => $"Navigating to {target}",
+            "store_plan" => "Storing plan",
+            _ => call.DisplayName ?? call.Name
+        };
     }
 }

@@ -70,10 +70,13 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
 
     private async Task WaitForMessageCompleteAsync(string messagePath, CancellationToken ct)
     {
+        // Derive thread path from message path (parent directory)
+        var threadPath = messagePath[..messagePath.LastIndexOf('/')];
         for (var i = 0; i < 50; i++)
         {
-            var node = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
-            if (node?.Content is ThreadMessage { IsExecuting: false, Text.Length: > 0 })
+            var threadNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}").FirstOrDefaultAsync(ct);
+            var msgNode = await MeshQuery.QueryAsync<MeshNode>($"path:{messagePath}").FirstOrDefaultAsync(ct);
+            if (threadNode?.Content is MeshThread { IsExecuting: false } && msgNode?.Content is ThreadMessage { Text.Length: > 0 })
                 return;
             await Task.Delay(200, ct);
         }
@@ -241,7 +244,7 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         public IReadOnlyList<string> Models => ["fake-model"];
         public int Order => 0;
 
-        public Task<ChatClientAgent> CreateAgentAsync(
+        public ChatClientAgent CreateAgent(
             AgentConfiguration config, IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
             IReadOnlyList<AgentConfiguration> hierarchyAgents,
@@ -252,8 +255,15 @@ public class ThreadResumeTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 instructions: config.Instructions ?? "You are a test assistant.",
                 name: config.Id, description: config.Description ?? config.Id,
                 tools: [], loggerFactory: null, services: null);
-            return Task.FromResult(agent);
+            return agent;
         }
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion

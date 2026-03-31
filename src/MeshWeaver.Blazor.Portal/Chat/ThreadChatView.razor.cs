@@ -216,11 +216,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             if (node == null)
                 return cleanPath;
 
-            // For Thread nodes: use ParentPath (the original content node), not MainNode
-            if (node.Content is AI.Thread threadContent && !string.IsNullOrEmpty(threadContent.ParentPath))
-                return threadContent.ParentPath;
-
-            // For other satellite nodes: use MainNode
+            // For satellite nodes (threads, comments): use MainNode (content entity)
             if (node.MainNode != node.Path)
                 return node.MainNode;
         }
@@ -566,6 +562,33 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
+    private void CancelExecution()
+    {
+        if (string.IsNullOrEmpty(threadPath) || isCancelling)
+            return;
+
+        isCancelling = true;
+        StateHasChanged();
+
+        var delivery = Hub.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
+            o => o.WithTarget(new Address(threadPath)));
+
+        if (delivery != null)
+        {
+            _ = Hub.RegisterCallback(delivery, (response, _) =>
+            {
+                isCancelling = false;
+                InvokeAsync(StateHasChanged);
+                return Task.FromResult(response);
+            }, CancellationToken.None);
+        }
+        else
+        {
+            isCancelling = false;
+            StateHasChanged();
+        }
+    }
+
     /// <summary>
     /// Checks if the navigation context has changed since the last message and updates the context attachment if needed.
     /// </summary>
@@ -795,7 +818,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             .WithHiddenQuery(hiddenQuery)
             .WithPlaceholder("Search threads...")
             .WithRenderMode(MeshSearchRenderMode.Flat)
-            .WithGridBreakpoints(xs: 12, sm: 12, md: 12, lg: 12)
+            .WithMaxColumns(1)
             .WithDisableNavigation();
 
         viewMode = ChatViewMode.ResumeThreads;

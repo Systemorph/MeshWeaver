@@ -260,12 +260,29 @@ public class MeshImportService : IMeshImportService
     /// </summary>
     private static List<MeshNode> RemapPaths(List<MeshNode> nodes, string targetRootPath)
     {
+        // Detect common root prefix from source nodes to avoid doubling.
+        // E.g., if targetRootPath = "PartnerRe/AIConsulting" and source nodes have
+        // paths like "AIConsulting/100DayPlan", strip "AIConsulting/" to avoid
+        // "PartnerRe/AIConsulting/AIConsulting/100DayPlan".
+        var targetSegments = targetRootPath.Split('/');
+        var lastTargetSegment = targetSegments[^1];
+
         return nodes.Select(n =>
         {
-            var newPath = $"{targetRootPath}/{n.Path}";
+            var sourcePath = n.Path;
+
+            // Strip leading segment if it matches the target's last segment
+            if (sourcePath.StartsWith(lastTargetSegment + "/", StringComparison.OrdinalIgnoreCase))
+                sourcePath = sourcePath[(lastTargetSegment.Length + 1)..];
+            else if (sourcePath.Equals(lastTargetSegment, StringComparison.OrdinalIgnoreCase))
+                sourcePath = ""; // The root node itself
+
+            var newPath = string.IsNullOrEmpty(sourcePath)
+                ? targetRootPath
+                : $"{targetRootPath}/{sourcePath}";
             var parts = newPath.Split('/');
             var newId = parts[^1];
-            var newNamespace = string.Join("/", parts[..^1]);
+            var newNamespace = parts.Length > 1 ? string.Join("/", parts[..^1]) : "";
             return n with { Id = newId, Namespace = newNamespace, MainNode = newPath };
         }).ToList();
     }

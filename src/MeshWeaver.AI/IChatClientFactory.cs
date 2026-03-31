@@ -44,4 +44,15 @@ public interface IChatClientFactory
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null);
+
+    /// <summary>
+    /// Creates a ChatClientAgent synchronously — no await, no deadlock.
+    /// Default implementation delegates to CreateAgentAsync (for backward compatibility).
+    /// </summary>
+    ChatClientAgent CreateAgent(
+        AgentConfiguration config,
+        IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null);
 }

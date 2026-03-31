@@ -183,7 +183,7 @@ public static class AccessControlLayoutArea
             .WithHiddenQuery($"namespace:{nodePath}/_Access nodeType:AccessAssignment")
             .WithPlaceholder("Search assignments...")
             .WithItemArea(MeshNodeLayoutAreas.ThumbnailArea)
-            .WithGridBreakpoints(xs: 12, sm: 6, md: 4, lg: 3)
+            .WithMaxColumns(4)
             .WithReactiveMode(true)
             .WithDisableNavigation()
             .WithStyle("width:100%;"));
