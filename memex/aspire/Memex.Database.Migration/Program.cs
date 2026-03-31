@@ -433,6 +433,21 @@ if (currentVersion < 5)
     logger.LogInformation("Repair v5 completed.");
 }
 
+// ── Data repair v6: Fix search_across_schemas to enforce partition_access ──
+// Bug: public_read node types bypassed partition_access entirely, leaking
+// cross-partition data in search (e.g., meshweaver user could see PartnerRe).
+// Fix: partition_access is now always required; public_read only skips
+// node-level permission checks within accessible partitions.
+// The stored proc is re-created by InitializePublicSchemaAsync (idempotent).
+if (currentVersion < 6)
+{
+    logger.LogInformation("Running repair v6: Fix search_across_schemas access control...");
+    // Re-create the stored procedure with fixed access control logic
+    await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(dataSource);
+    currentVersion = 6;
+    logger.LogInformation("Repair v6 completed — search_across_schemas updated.");
+}
+
 // ── Always: populate searchable_schemas from remaining content partitions ──
 // This runs every time (not versioned) since it's idempotent and schemas may change.
 {

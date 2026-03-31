@@ -64,20 +64,22 @@ public static class PostgreSqlSchemaInitializer
                         || 'FROM %I.mesh_nodes n WHERE n.main_node = n.path',
                         schema_rec.schema_name);
 
-                    -- Add access control per schema
+                    -- Add access control per schema.
+                    -- partition_access is ALWAYS required — public_read only skips
+                    -- node-level permission checks, not the partition check.
                     IF user_list IS NOT NULL THEN
                         union_sql := union_sql || format(
                             ' AND ('
-                            || 'EXISTS (SELECT 1 FROM %I.node_type_permissions ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)'
-                            || ' OR ('
                             || 'EXISTS (SELECT 1 FROM public.partition_access pa WHERE pa.user_id IN (%s) AND pa.partition = %L)'
-                            || ' AND (SELECT uep.is_allow FROM %I.user_effective_permissions uep'
+                            || ' AND ('
+                            || 'EXISTS (SELECT 1 FROM %I.node_type_permissions ntp WHERE ntp.node_type = n.node_type AND ntp.public_read = true)'
+                            || ' OR (SELECT uep.is_allow FROM %I.user_effective_permissions uep'
                             || '  WHERE uep.user_id IN (%s) AND uep.permission = ''Read'''
                             || '  AND n.main_node LIKE uep.node_path_prefix || ''%%'''
                             || '  ORDER BY LENGTH(uep.node_path_prefix) DESC LIMIT 1) = true'
                             || '))',
-                            schema_rec.schema_name,
                             user_list, schema_rec.schema_name,
+                            schema_rec.schema_name,
                             schema_rec.schema_name,
                             user_list);
                     END IF;
