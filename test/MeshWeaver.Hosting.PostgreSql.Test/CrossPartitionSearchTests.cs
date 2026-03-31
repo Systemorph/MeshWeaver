@@ -308,13 +308,13 @@ public class CrossPartitionSearchTests
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
         await PopulateSearchableSchemasAsync(schemas, ct);
 
-        // Text search for "Partner"
-        var textFilter = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'') ILIKE '%partner%'";
+        // Text search for "FutuRe"
+        var textFilter = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'') ILIKE '%future%'";
         var results = await CallSearchAcrossSchemasAsync(textFilter, null, "last_modified DESC", 50, ct);
 
         results.Should().NotBeEmpty("should find FutuRe by text search");
         results.Select(n => n.Id).Should().Contain("FutuRe");
-        results.Should().NotContain(n => n.Id == "ACME", "ACME doesn't match 'partner'");
+        results.Should().NotContain(n => n.Id == "ACME", "ACME doesn't match 'future'");
     }
 
     [Fact(Timeout = 60000)]
