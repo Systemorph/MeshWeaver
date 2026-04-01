@@ -3,6 +3,7 @@
     <ProjectGuid>{8B5E3C7D-9A2F-4B1E-8D6C-3F7A9E1B4C2D}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" />
     <ProjectReference Include="..\..\src\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.ContentCollections\MeshWeaver.ContentCollections.csproj" />
   </ItemGroup>
