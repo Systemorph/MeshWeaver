@@ -453,3 +453,34 @@ To browse all available documentation:
 Search('namespace:Doc scope:descendants')
 ```
 Then read any article with `Get('@Doc/...')`.
+
+## Binary Attachments (PDF, Images)
+
+Chat threads support binary file attachments from content collections. When a `content:` path references a binary file, it is sent to the AI model as native binary content (base64).
+
+### Supported Binary Formats
+
+| Extension | MIME Type | Sent As |
+|-----------|-----------|---------|
+| `.pdf` | `application/pdf` | Document block (Claude analyzes text + layout) |
+| `.png` | `image/png` | Image block |
+| `.jpg`/`.jpeg` | `image/jpeg` | Image block |
+| `.gif` | `image/gif` | Image block |
+| `.webp` | `image/webp` | Image block |
+
+### Attachment Path Resolution
+
+- **Local**: `content:report.pdf` → resolved against thread's context path
+- **Absolute**: `@OrgA/Doc/content:report.pdf` → explicit path
+
+### Delegation
+
+Delegation creates an isolated sub-thread for a target agent. The delegation tool:
+1. Creates a Thread node under the parent message
+2. Posts `SubmitMessageRequest` to the sub-thread
+3. Waits for `ExecutionCompleted` response via callback re-registration
+4. Returns the result to the parent agent
+
+**Depth limit**: Maximum 2 delegation levels to prevent infinite recursion.
+
+**Identity**: All tool calls run with the original user's identity, restored via `AccessContextAIFunction` wrapper.
