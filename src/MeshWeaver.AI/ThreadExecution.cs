@@ -62,20 +62,43 @@ public static class ThreadExecution
             logger?.LogInformation("[ThreadExec] Recovery: stale execution on {ThreadPath}, activeMsg={ActiveMsg}",
                 threadPath, thread.ActiveMessageId);
 
-            // Cancel pending tool calls on the active response message
+            // Cancel pending tool calls on the active response message.
+            // For delegation tool calls, check if the sub-thread actually completed.
             if (!string.IsNullOrEmpty(thread.ActiveMessageId))
             {
                 var responsePath = $"{threadPath}/{thread.ActiveMessageId}";
-                // Mark all pending tool calls as cancelled
-                var cancelledToolCalls = thread.StreamingToolCalls?
-                    .Select(tc => tc.Result == null
-                        ? tc with { Result = "Cancelled (server restarted)", IsSuccess = false }
-                        : tc)
+                var meshService = hub.ServiceProvider.GetService<IMeshService>();
+
+                var updatedToolCalls = thread.StreamingToolCalls?
+                    .Select(tc =>
+                    {
+                        if (tc.Result != null) return tc; // Already completed
+
+                        // For delegations: check sub-thread status
+                        if (!string.IsNullOrEmpty(tc.DelegationPath) && meshService != null)
+                        {
+                            try
+                            {
+                                var subThreadNode = meshService.QueryAsync<MeshNode>(
+                                    $"path:{tc.DelegationPath}").ToListAsync().AsTask().GetAwaiter().GetResult();
+                                var subThread = subThreadNode.FirstOrDefault()?.Content as Thread;
+                                if (subThread is { IsExecuting: false })
+                                {
+                                    // Sub-thread completed — mark as done
+                                    return tc with { Result = "Completed", IsSuccess = true };
+                                }
+                            }
+                            catch { /* ignore query errors during recovery */ }
+                        }
+
+                        return tc with { Result = "Cancelled (server restarted)", IsSuccess = false };
+                    })
                     .ToImmutableList();
+
                 hub.Post(new UpdateThreadMessageContent
                 {
                     Text = "*Cancelled (server restarted)*",
-                    ToolCalls = cancelledToolCalls
+                    ToolCalls = updatedToolCalls
                 }, o => o.WithTarget(new Address(responsePath)));
             }
 
