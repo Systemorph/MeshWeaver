@@ -242,11 +242,8 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Streaming area: shows thread title (linked) + the executing message's default area.
-    /// Reactive — emits null when idle.
-    /// When executing: shows thread name as a link, plus the active response message's
-    /// default layout area (Overview — the bubble with text + tool calls).
-    /// No recursive embedding — delegation links are static within the bubble.
+    /// Streaming area: if thread has an executing cell, returns its default layout area.
+    /// Otherwise null. Simple passthrough — no title, no wrapping.
     /// </summary>
     public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
     {
@@ -258,11 +255,7 @@ public static class ThreadLayoutAreas
             {
                 var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
                 var thread = node?.Content as MeshThread;
-                return (
-                    Name: GetThreadTitle(node),
-                    IsExecuting: thread?.IsExecuting ?? false,
-                    thread?.ActiveMessageId
-                );
+                return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
             })
             .DistinctUntilChanged()
             .Select(state =>
@@ -271,15 +264,8 @@ public static class ThreadLayoutAreas
                     return (UiControl?)null;
 
                 var responsePath = $"{hubPath}/{state.ActiveMessageId}";
-                var encodedName = System.Web.HttpUtility.HtmlEncode(state.Name);
-
-                return (UiControl?)Controls.Stack
-                    .WithStyle("gap: 4px;")
-                    .WithView(Controls.Html(
-                        $"<a href=\"/{hubPath}\" style=\"font-size: 0.8rem; font-weight: 600; " +
-                        $"color: var(--accent-fill-rest); text-decoration: none;\">{encodedName}</a>"))
-                    .WithView(new LayoutAreaControl(responsePath,
-                        new LayoutAreaReference(ThreadMessageNodeType.OverviewArea)));
+                return (UiControl?)new LayoutAreaControl(responsePath,
+                    new LayoutAreaReference(ThreadMessageNodeType.OverviewArea));
             });
     }
 

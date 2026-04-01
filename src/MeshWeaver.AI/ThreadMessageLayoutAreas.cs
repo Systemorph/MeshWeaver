@@ -84,21 +84,29 @@ public static class ThreadMessageLayoutAreas
                     stack = stack.WithView(Controls.Html($"<div style=\"display:flex; flex-wrap:wrap; gap:3px;\">{chips}</div>"));
                 }
 
-                // Row 3: Delegation sub-threads — show link + status.
-                // Do NOT recursively embed sub-thread StreamingArea — this caused infinite
-                // grain activations when the sub-thread doesn't exist (CreateNode failed).
+                // Row 3: Delegation sub-threads
                 foreach (var tc in msg.ToolCalls.Where(tc => !string.IsNullOrEmpty(tc.DelegationPath)))
                 {
-                    var icon = tc.Result != null ? "&#10003;" : "&#9679;";
-                    var color = tc.Result != null ? "var(--neutral-foreground-hint)" : "var(--accent-fill-rest)";
                     var name = (tc.DisplayName ?? tc.Name);
                     if (name.Length > 30) name = name[..27] + "...";
 
                     var delStack = Controls.Stack
                         .WithStyle("border-left:2px solid var(--accent-fill-rest); padding-left:6px; margin-top:2px;");
 
-                    delStack = delStack.WithView(Controls.Html(
-                        $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:{color}; text-decoration:none; font-weight:500;\">{icon} {System.Web.HttpUtility.HtmlEncode(name)}</a>"));
+                    if (tc.Result != null)
+                    {
+                        // Completed: show title with link
+                        delStack = delStack.WithView(Controls.Html(
+                            $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:var(--neutral-foreground-hint); text-decoration:none; font-weight:500;\">&#10003; {System.Web.HttpUtility.HtmlEncode(name)}</a>"));
+                    }
+                    else
+                    {
+                        // Running: embed sub-thread's Streaming area
+                        delStack = delStack.WithView(Controls.Html(
+                            $"<span style=\"font-size:0.7rem; color:var(--accent-fill-rest); font-weight:500;\">&#9679; {System.Web.HttpUtility.HtmlEncode(name)}</span>"));
+                        delStack = delStack.WithView(
+                            new LayoutAreaControl(tc.DelegationPath!, new LayoutAreaReference(ThreadNodeType.StreamingArea)));
+                    }
 
                     stack = stack.WithView(delStack);
                 }
