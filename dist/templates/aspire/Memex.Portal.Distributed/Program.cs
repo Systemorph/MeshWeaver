@@ -10,7 +10,7 @@ using Orleans.Configuration;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
-builder.Logging.AddFilter("MeshWeaver.Messaging", LogLevel.Warning);
+// Log levels controlled via appsettings.Development.json
 
 // Register Aspire-injected clients
 builder.AddKeyedAzureTableServiceClient("orleans-clustering");

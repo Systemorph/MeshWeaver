@@ -221,8 +221,8 @@ public partial class MarkdownFileParser : IFileFormatParser
     {
         if (string.IsNullOrEmpty(iconValue))
             return DefaultMarkdownIcon;
-        // Already absolute — use as-is
-        if (iconValue.StartsWith("/") || iconValue.StartsWith("http") || iconValue.StartsWith("data:"))
+        // Already absolute or inline SVG — use as-is
+        if (iconValue.StartsWith("/") || iconValue.StartsWith("http") || iconValue.StartsWith("data:") || iconValue.StartsWith("<svg"))
             return iconValue;
         // Relative file path (contains /) — resolve to content URL
         if (iconValue.Contains('/') && !string.IsNullOrEmpty(ns))

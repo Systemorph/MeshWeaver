@@ -817,14 +817,18 @@ public class AgentChatClient : IAgentChat
         var tcs = new TaskCompletionSource();
 
         // Use ObserveQuery (IObservable) — NOT QueryAsync. No await, no deadlock.
-        var contextQuery = string.IsNullOrEmpty(contextPath)
+        // Use scope:subtree on root namespace to find deeply nested agents (e.g. ACME/Project/TodoAgent).
+        // Previously used scope:selfAndAncestors which only searched direct children of ancestors.
+        var rootNamespace = contextPath?.Split('/').FirstOrDefault(s => !string.IsNullOrEmpty(s)) ?? "";
+        var contextQuery = string.IsNullOrEmpty(rootNamespace)
             ? "nodeType:Agent"
-            : $"nodeType:Agent namespace:{contextPath} scope:selfAndAncestors";
+            : $"nodeType:Agent path:{rootNamespace} scope:subtree";
 
         var contextAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery(contextQuery));
-        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("namespace:Agent nodeType:Agent"));
+        var globalAgents = meshQuery.ObserveQuery<MeshNode>(MeshQueryRequest.FromQuery("path:Agent nodeType:Agent scope:subtree"));
 
         var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
+        var dictLock = new object();
         var queriesCompleted = 0;
 
         void OnAgentQueryResult(QueryResultChange<MeshNode> change)
@@ -832,10 +836,13 @@ public class AgentChatClient : IAgentChat
             if (change.ChangeType != QueryChangeType.Initial)
                 return;
 
-            foreach (var node in change.Items)
+            lock (dictLock)
             {
-                if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
-                    agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+                foreach (var node in change.Items)
+                {
+                    if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
+                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
+                }
             }
 
             if (Interlocked.Increment(ref queriesCompleted) < 2)
@@ -869,10 +876,15 @@ public class AgentChatClient : IAgentChat
             }
         }
 
-        contextAgents.Subscribe(OnAgentQueryResult,
-            ex => { logger.LogWarning(ex, "Context agent query failed"); Interlocked.Increment(ref queriesCompleted); });
-        globalAgents.Subscribe(OnAgentQueryResult,
-            ex => { logger.LogWarning(ex, "Global agent query failed"); Interlocked.Increment(ref queriesCompleted); });
+        void OnQueryError(Exception ex, string queryName)
+        {
+            logger.LogWarning(ex, "{QueryName} agent query failed", queryName);
+            if (Interlocked.Increment(ref queriesCompleted) >= 2)
+                tcs.TrySetResult(); // Resolve with whatever agents were found (possibly empty)
+        }
+
+        contextAgents.Subscribe(OnAgentQueryResult, ex => OnQueryError(ex, "Context"));
+        globalAgents.Subscribe(OnAgentQueryResult, ex => OnQueryError(ex, "Global"));
 
         return tcs.Task;
     }
@@ -1209,7 +1221,7 @@ public class AgentChatClient : IAgentChat
             // Recreate agent instances for new context
             agentsInitialized = false;
             agents = ImmutableDictionary<string, ChatClientAgent>.Empty;
-            await CreateAgentsAsync();
+            CreateAgentsSync();
         }
 
         return loadedAgents;

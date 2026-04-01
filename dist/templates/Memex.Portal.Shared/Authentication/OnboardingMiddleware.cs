@@ -102,8 +102,9 @@ public class OnboardingMiddleware(RequestDelegate next, ILogger<OnboardingMiddle
                                 Name = node.Name ?? username,
                                 Roles = roles
                             };
+                            // Set per-request context only. CircuitAccessHandler handles
+                            // per-circuit persistence via CreateInboundActivityHandler.
                             accessService.SetContext(updatedContext);
-                            accessService.SetCircuitContext(updatedContext);
                         }
                         catch (Exception ex)
                         {
