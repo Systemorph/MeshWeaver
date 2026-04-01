@@ -110,24 +110,31 @@ public class DelegationCompletionTest(ITestOutputHelper output) : TestBase(outpu
             o => o.WithTarget(new Address(threadPath)));
         delivery.Should().NotBeNull("Post should return delivery");
 
-        _ = client.RegisterCallback((IMessageDelivery)delivery!, cb =>
+        // RegisterCallback removes after first invocation — re-register for second response
+        void RegisterForResponse(IMessageDelivery del)
         {
-            if (cb is IMessageDelivery<SubmitMessageResponse> sr)
+            _ = client.RegisterCallback(del, cb =>
             {
-                var msg = sr.Message;
-                Output.WriteLine($"Response: Status={msg.Status}, Success={msg.Success}, Error={msg.Error}, TextLen={msg.ResponseText?.Length ?? 0}");
-                responses.Add((msg.Status, msg.Success, msg.ResponseText));
+                if (cb is IMessageDelivery<SubmitMessageResponse> sr)
+                {
+                    var msg = sr.Message;
+                    Output.WriteLine($"Response: Status={msg.Status}, Success={msg.Success}, Error={msg.Error}, TextLen={msg.ResponseText?.Length ?? 0}");
+                    responses.Add((msg.Status, msg.Success, msg.ResponseText));
 
-                if (msg.Status != SubmitMessageStatus.CellsCreated)
-                    completionTcs.TrySetResult(msg.Success);
-            }
-            else if (cb is IMessageDelivery<DeliveryFailure> df)
-            {
-                Output.WriteLine($"DeliveryFailure: {df.Message.Message}");
-                completionTcs.TrySetResult(false);
-            }
-            return cb;
-        });
+                    if (msg.Status == SubmitMessageStatus.CellsCreated)
+                        RegisterForResponse(del); // Re-register for completion
+                    else
+                        completionTcs.TrySetResult(msg.Success);
+                }
+                else if (cb is IMessageDelivery<DeliveryFailure> df)
+                {
+                    Output.WriteLine($"DeliveryFailure: {df.Message.Message}");
+                    completionTcs.TrySetResult(false);
+                }
+                return cb;
+            });
+        }
+        RegisterForResponse((IMessageDelivery)delivery!);
 
         // Wait for execution to complete (with timeout)
         var timeoutTask = Task.Delay(45_000, ct);
