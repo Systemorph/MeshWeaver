@@ -452,8 +452,8 @@ public static class ThreadExecution
                         IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                     });
-                    // Notify parent thread that delegation completed
-                    NotifyParentCompletion(parentHub, threadPath, finalText, true);
+                    // Notify parent via SubmitMessageResponse so delegation callback resolves
+                    NotifyParentCompletion(parentHub, threadPath, finalText, true, delivery);
                     }
                     catch (OperationCanceledException)
                     {
@@ -465,7 +465,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, threadPath, cancelText, false);
+                        NotifyParentCompletion(parentHub, threadPath, cancelText, false, delivery);
                     }
                     catch (Exception ex)
                     {
@@ -477,7 +477,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, threadPath, errorText, false);
+                        NotifyParentCompletion(parentHub, threadPath, errorText, false, delivery);
                     }
                 }, ex =>
                 {
@@ -538,19 +538,27 @@ public static class ThreadExecution
     /// The parent's delegation tool handler resolves its TaskCompletionSource.
     /// Only posts if this thread IS a child (path has a parent response message segment).
     /// </summary>
-    private static void NotifyParentCompletion(IMessageHub hub, string threadPath, string responseText, bool success)
+    private static void NotifyParentCompletion(
+        IMessageHub hub, string threadPath, string responseText, bool success,
+        IMessageDelivery<SubmitMessageRequest> execDelivery)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("[ThreadExec] NOTIFY_PARENT: threadPath={ThreadPath}, success={Success}, textLen={TextLen}",
-            threadPath, success, responseText.Length);
-        var completed = DelegationTracker.TryComplete(new DelegationCompletedEvent
+        var status = success ? SubmitMessageStatus.ExecutionCompleted
+            : SubmitMessageStatus.ExecutionFailed;
+        logger.LogInformation("[ThreadExec] NOTIFY_PARENT: threadPath={ThreadPath}, status={Status}, textLen={TextLen}",
+            threadPath, status, responseText.Length);
+
+        // Post completion response on the PARENT hub (thread hub), targeting the
+        // original sender of the SubmitMessageRequest. The parent grain's delegation
+        // callback (RegisterCallback) will receive this as a second response.
+        // We use the _Exec delivery's sender chain — the parent hub is the _Exec's host.
+        var parentHub = hub.Configuration.ParentHub;
+        (parentHub ?? hub).Post(new SubmitMessageResponse
         {
-            ThreadPath = threadPath,
-            ResponseText = Truncate(responseText, 500),
-            Success = success
-        });
-        logger.LogInformation("[ThreadExec] NOTIFY_PARENT_RESULT: threadPath={ThreadPath}, resolved={Resolved}",
-            threadPath, completed);
+            Success = success,
+            Status = status,
+            ResponseText = Truncate(responseText, 500)
+        }, o => o.ResponseFor(execDelivery));
     }
 
     private static string? SerializeArgs(IDictionary<string, object?>? args)
