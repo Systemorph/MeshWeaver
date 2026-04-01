@@ -137,16 +137,36 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
 
         tools = tools.Append(PlanStorageTool.Create(Hub, chat));
 
+        // Wrap all tools to restore user access context before invocation.
+        // AsyncLocal doesn't flow through the AI framework's streaming + tool invocation,
+        // so each tool call must explicitly restore the user identity from the
+        // thread's execution context. This is the single injection point for ALL tools.
+        var accessService = Hub.ServiceProvider.GetService<AccessService>();
+        var wrappedTools = tools.Select(tool => WrapToolWithAccessContext(tool, chat, accessService)).ToList();
+
         var agent = new ChatClientAgent(
             chatClient: chatClient, instructions: instructions,
             name: name, description: description,
-            tools: tools.ToList(), loggerFactory: null, services: null);
+            tools: wrappedTools, loggerFactory: null, services: null);
 
         var functionInvoker = agent.ChatClient.GetService<Microsoft.Extensions.AI.FunctionInvokingChatClient>();
         if (functionInvoker != null)
             functionInvoker.AllowConcurrentInvocation = true;
 
         return agent;
+    }
+
+    /// <summary>
+    /// Wraps an AITool so that the user's access context is restored before each invocation.
+    /// This is the single injection point for ALL tool calls — delegation, MeshPlugin, etc.
+    /// </summary>
+    private static AITool WrapToolWithAccessContext(AITool tool, IAgentChat chat, AccessService? accessService)
+    {
+        if (accessService == null || tool is not AIFunction aiFunction)
+            return tool;
+
+        // Create a wrapper AIFunction that restores access context before delegating
+        return new AccessContextAIFunction(aiFunction, chat, accessService);
     }
 
     /// <summary>
@@ -258,12 +278,8 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     var tcs = new TaskCompletionSource<DelegationResult>();
                     var meshService = Hub.ServiceProvider.GetRequiredService<IMeshService>();
                     var workspace = Hub.GetWorkspace();
-                    var accessService = Hub.ServiceProvider.GetService<AccessService>();
 
-                    // Restore user access context — AsyncLocal doesn't flow through
-                    // the AI framework's async streaming + tool invocation chain.
-                    if (execCtx.UserAccessContext != null)
-                        accessService?.SetContext(execCtx.UserAccessContext);
+                    // Access context is restored by WrapToolWithAccessContext — no need to set it here.
 
                     var subThreadId = ThreadNodeType.GenerateSpeakingId(task);
                     var parentMsgPath = $"{execCtx.ThreadPath}/{execCtx.ResponseMessageId}";
@@ -338,7 +354,6 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                             // Execution completed/cancelled/failed — resolve delegation
                                             Logger.LogInformation("[Delegation] Child finished: {Path}, status={Status}, textLen={TextLen}",
                                                 subThreadPath, msg.Status, msg.ResponseText?.Length ?? 0);
-                                            using var __ = accessService?.SwitchAccessContext(execCtx.UserAccessContext);
                                             tcs.TrySetResult(new DelegationResult
                                             {
                                                 AgentName = targetId, Task = task,
@@ -539,5 +554,31 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         }
 
         return result;
+    }
+}
+
+/// <summary>
+/// AIFunction wrapper that restores the user's access context before each invocation.
+/// This is the single injection point for ALL tool calls — delegation, MeshPlugin, etc.
+/// </summary>
+internal sealed class AccessContextAIFunction : DelegatingAIFunction
+{
+    private readonly IAgentChat _chat;
+    private readonly AccessService _accessService;
+
+    public AccessContextAIFunction(AIFunction inner, IAgentChat chat, AccessService accessService)
+        : base(inner)
+    {
+        _chat = chat;
+        _accessService = accessService;
+    }
+
+    protected override ValueTask<object?> InvokeCoreAsync(
+        AIFunctionArguments arguments, CancellationToken cancellationToken)
+    {
+        var userCtx = _chat.ExecutionContext?.UserAccessContext;
+        if (userCtx != null)
+            _accessService.SetContext(userCtx);
+        return base.InvokeCoreAsync(arguments, cancellationToken);
     }
 }
