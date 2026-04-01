@@ -29,52 +29,34 @@
                 var isPending = call.Result == null;
                 var summary = FormatToolCallSummary(call);
 
-                @if (isDelegation)
-                {
-                    <div class="thread-msg-delegation-entry">
-                        <div class="thread-msg-delegation-header">
-                            @if (isPending)
-                            {
-                                <span class="thread-msg-delegation-pulse">&#10041;</span>
-                            }
-                            else
-                            {
-                                <span class="thread-msg-tool-done">@(call.IsSuccess ? "✓" : "✗")</span>
-                            }
-                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
-                        </div>
+                <details class="thread-msg-tool-entry @(isDelegation ? "thread-msg-delegation-entry" : "")">
+                    <summary class="thread-msg-tool-entry-name">
                         @if (isPending)
                         {
-                            <div class="thread-msg-delegation-stream">
-                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
-                            </div>
+                            <span class="@(isDelegation ? "thread-msg-delegation-pulse" : "thread-msg-tool-pending")">@(isDelegation ? "✹" : "●")</span>
                         }
-                    </div>
-                }
-                else
-                {
-                    <details class="thread-msg-tool-entry">
-                        <summary class="thread-msg-tool-entry-name">
-                            @if (isPending)
-                            {
-                                <span class="thread-msg-tool-pending">●</span>
-                            }
-                            else
-                            {
-                                <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
-                            }
+                        else
+                        {
+                            <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                        }
+                        @if (isDelegation)
+                        {
+                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@summary</a>
+                        }
+                        else
+                        {
                             <span>@summary</span>
-                        </summary>
-                        @if (!string.IsNullOrEmpty(call.Arguments))
-                        {
-                            <pre class="thread-msg-tool-args">@call.Arguments</pre>
                         }
-                        @if (!string.IsNullOrEmpty(call.Result))
-                        {
-                            <pre class="thread-msg-tool-result">@call.Result</pre>
-                        }
-                    </details>
-                }
+                    </summary>
+                    @if (!string.IsNullOrEmpty(call.Arguments))
+                    {
+                        <pre class="thread-msg-tool-args">@call.Arguments</pre>
+                    }
+                    @if (!string.IsNullOrEmpty(call.Result))
+                    {
+                        <pre class="thread-msg-tool-result">@call.Result</pre>
+                    }
+                </details>
             }
         </div>
     }
