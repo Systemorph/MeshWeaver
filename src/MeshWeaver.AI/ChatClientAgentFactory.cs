@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Text;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
