@@ -246,16 +246,28 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     var execCtx = chat.ExecutionContext;
                     var userIdentity = execCtx?.UserAccessContext?.ObjectId ?? "(no-user)";
 
-                    // Guard: limit delegation depth to prevent infinite recursion
-                    var depth = execCtx?.ThreadPath?.Split("/_Thread/").Length - 1 ?? 0;
-                    if (depth >= 3)
+                    // Guard: limit delegation depth to prevent recursive delegation.
+                    // Count segments after _Thread/ — each delegation adds msgId/subThreadId (2 segments per level).
+                    // Root thread: Org/_Thread/threadId → 0 extra segments → depth 0
+                    // 1st delegation: Org/_Thread/threadId/msgId/subId → 2 extra → depth 1
+                    // 2nd delegation: Org/_Thread/threadId/msgId/subId/msgId2/subId2 → 4 extra → depth 2
+                    var threadPath = execCtx?.ThreadPath ?? "";
+                    var threadIdx = threadPath.IndexOf("/_Thread/");
+                    var depth = 0;
+                    if (threadIdx >= 0)
                     {
-                        Logger.LogWarning("[Delegation] Max delegation depth ({Depth}) reached for {Source} → {Target}",
-                            depth, agentConfig.Id, targetId);
+                        var afterThread = threadPath[(threadIdx + "/_Thread/".Length)..];
+                        var segments = afterThread.Split('/').Length;
+                        depth = (segments - 1) / 2; // subtract the thread id, each delegation = 2 segments
+                    }
+                    if (depth >= 2)
+                    {
+                        Logger.LogWarning("[Delegation] Max delegation depth ({Depth}) reached at {ThreadPath} for {Source} → {Target}",
+                            depth, threadPath, agentConfig.Id, targetId);
                         return Task.FromResult(new DelegationResult
                         {
                             AgentName = targetId, Task = task,
-                            Result = $"Maximum delegation depth reached ({depth}). Cannot delegate further — handle the task directly.",
+                            Result = $"Maximum delegation depth reached ({depth}). You must handle this task directly without further delegation.",
                             Success = false
                         });
                     }
