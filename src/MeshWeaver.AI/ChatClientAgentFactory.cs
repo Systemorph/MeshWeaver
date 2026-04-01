@@ -348,25 +348,35 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                 return;
                             }
 
-                            Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+                            // Register callback for the first response (CellsCreated).
+                            // RegisterCallback removes the callback after first invocation,
+                            // so we re-register for the completion response.
+                            void RegisterCompletionCallback(IMessageDelivery del)
                             {
-                                    if (response is IMessageDelivery<SubmitMessageResponse> sr)
+                                Hub.RegisterCallback(del, completionResponse =>
+                                {
+                                    if (completionResponse is IMessageDelivery<SubmitMessageResponse> sr)
                                     {
                                         var msg = sr.Message;
+                                        Logger.LogInformation("[Delegation] Response: {Path}, status={Status}, success={Success}",
+                                            subThreadPath, msg.Status, msg.Success);
                                         if (!msg.Success)
                                         {
-                                            Logger.LogWarning("[Delegation] Submit failed: {Error}", msg.Error);
                                             tcs.TrySetResult(new DelegationResult
                                             {
                                                 AgentName = targetId, Task = task,
                                                 Result = $"Submit failed: {msg.Error}", Success = false
                                             });
                                         }
-                                        else if (msg.Status != SubmitMessageStatus.CellsCreated)
+                                        else if (msg.Status == SubmitMessageStatus.CellsCreated)
                                         {
-                                            // Execution completed/cancelled/failed — resolve delegation
-                                            Logger.LogInformation("[Delegation] Child finished: {Path}, status={Status}, textLen={TextLen}",
-                                                subThreadPath, msg.Status, msg.ResponseText?.Length ?? 0);
+                                            // First response — cells created, execution starting.
+                                            // Re-register callback for the completion response.
+                                            RegisterCompletionCallback(del);
+                                        }
+                                        else
+                                        {
+                                            // ExecutionCompleted/Failed/Cancelled — resolve delegation
                                             tcs.TrySetResult(new DelegationResult
                                             {
                                                 AgentName = targetId, Task = task,
@@ -375,10 +385,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                                 ThreadId = subThreadPath
                                             });
                                         }
-                                        // CellsCreated = initial response, keep waiting for completion
                                     }
-                                    return response;
+                                    return completionResponse;
                                 });
+                            }
+                            RegisterCompletionCallback((IMessageDelivery)delivery);
                         },
                         error =>
                         {

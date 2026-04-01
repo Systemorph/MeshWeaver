@@ -26,6 +26,7 @@ public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
     /// The execution hub uses this to post streaming progress updates.
     /// </summary>
     public string? ResponsePath { get; init; }
+
 }
 
 /// <summary>

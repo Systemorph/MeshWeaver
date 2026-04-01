@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text;
 using System.Text.Json;
@@ -25,6 +26,14 @@ public static class ThreadExecution
     /// Registers thread execution handlers on a hub configuration.
     /// Includes a startup recovery check for stale executing cells from crashed sessions.
     /// </summary>
+    /// <summary>
+    /// Stores completion callbacks keyed by thread path.
+    /// Used to route ExecutionCompleted responses from the _Exec hub
+    /// back to the original client delivery on the thread hub.
+    /// Safe: thread hub + _Exec hub always run on the same grain/process.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, Action<SubmitMessageResponse>> CompletionCallbacks = new();
+
     public static MessageHubConfiguration AddThreadExecution(this MessageHubConfiguration configuration)
         => configuration
             .WithHandler<SubmitMessageRequest>(HandleSubmitMessage)
@@ -185,7 +194,16 @@ public static class ThreadExecution
                     };
                 });
 
-                // 3) Start execution on hosted hub — forward user's AccessContext
+                // 3) Register completion callback so _Exec can notify original client
+                CompletionCallbacks[threadPath] = completionResponse =>
+                {
+                    logger?.LogInformation("[ThreadExec] Forwarding {Status} to client for {ThreadPath}",
+                        completionResponse.Status, threadPath);
+                    hub.Post(completionResponse, o => o.ResponseFor(delivery));
+                    CompletionCallbacks.TryRemove(threadPath, out _);
+                };
+
+                // 4) Start execution on hosted hub — forward user's AccessContext
                 var executionHub = hub.GetHostedHub(
                     new Address($"{hub.Address}/_Exec"),
                     config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
@@ -452,8 +470,10 @@ public static class ThreadExecution
                         IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                         ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                     });
-                    // Notify parent via SubmitMessageResponse so delegation callback resolves
-                    NotifyParentCompletion(parentHub, threadPath, finalText, true, delivery);
+                    // Notify parent via SubmitMessageResponse so delegation callback resolves.
+                    // Must post on the _Exec hub (hub) — the SubmitMessageResponse handler
+                    // is registered there and forwards to the thread hub via ResponseFor.
+                    NotifyParentCompletion(hub, threadPath, finalText, true, delivery);
                     }
                     catch (OperationCanceledException)
                     {
@@ -465,7 +485,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, threadPath, cancelText, false, delivery);
+                        NotifyParentCompletion(hub, threadPath, cancelText, false, delivery);
                     }
                     catch (Exception ex)
                     {
@@ -477,7 +497,7 @@ public static class ThreadExecution
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
                             ExecutionStartedAt = null, StreamingText = null, StreamingToolCalls = null
                         });
-                        NotifyParentCompletion(parentHub, threadPath, errorText, false, delivery);
+                        NotifyParentCompletion(hub, threadPath, errorText, false, delivery);
                     }
                 }, ex =>
                 {
@@ -540,7 +560,7 @@ public static class ThreadExecution
     /// </summary>
     private static void NotifyParentCompletion(
         IMessageHub hub, string threadPath, string responseText, bool success,
-        IMessageDelivery<SubmitMessageRequest> execDelivery)
+        IMessageDelivery<SubmitMessageRequest> delivery)
     {
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
         var status = success ? SubmitMessageStatus.ExecutionCompleted
@@ -548,17 +568,22 @@ public static class ThreadExecution
         logger.LogInformation("[ThreadExec] NOTIFY_PARENT: threadPath={ThreadPath}, status={Status}, textLen={TextLen}",
             threadPath, status, responseText.Length);
 
-        // Post completion response on the PARENT hub (thread hub), targeting the
-        // original sender of the SubmitMessageRequest. The parent grain's delegation
-        // callback (RegisterCallback) will receive this as a second response.
-        // We use the _Exec delivery's sender chain — the parent hub is the _Exec's host.
-        var parentHub = hub.Configuration.ParentHub;
-        (parentHub ?? hub).Post(new SubmitMessageResponse
+        // Invoke the completion callback registered by HandleSubmitMessage.
+        // This posts a SubmitMessageResponse(ExecutionCompleted) via ResponseFor(originalDelivery)
+        // on the thread hub, which routes back to the client's RegisterCallback.
+        if (CompletionCallbacks.TryGetValue(threadPath, out var callback))
         {
-            Success = success,
-            Status = status,
-            ResponseText = Truncate(responseText, 500)
-        }, o => o.ResponseFor(execDelivery));
+            callback(new SubmitMessageResponse
+            {
+                Success = success,
+                Status = status,
+                ResponseText = Truncate(responseText, 500)
+            });
+        }
+        else
+        {
+            logger.LogWarning("[ThreadExec] No completion callback for {ThreadPath}", threadPath);
+        }
     }
 
     private static string? SerializeArgs(IDictionary<string, object?>? args)
