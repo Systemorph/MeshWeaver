@@ -242,10 +242,11 @@ public static class ThreadLayoutAreas
     }
 
     /// <summary>
-    /// Streaming area: shows the active response message cell and any delegation sub-threads.
-    /// Reactive — emits null when idle, a LayoutAreaControl for the streaming cell when executing.
-    /// Parent threads subscribe to child threads' Streaming area to see cascading progress.
-    /// Returns IObservable so it updates reactively as execution state changes.
+    /// Streaming area: shows thread title (linked) + the executing message's default area.
+    /// Reactive — emits null when idle.
+    /// When executing: shows thread name as a link, plus the active response message's
+    /// default layout area (Overview — the bubble with text + tool calls).
+    /// No recursive embedding — delegation links are static within the bubble.
     /// </summary>
     public static IObservable<UiControl?> StreamingView(LayoutAreaHost host, RenderingContext _)
     {
@@ -257,7 +258,11 @@ public static class ThreadLayoutAreas
             {
                 var node = nodes!.FirstOrDefault(n => n.Path == hubPath);
                 var thread = node?.Content as MeshThread;
-                return (IsExecuting: thread?.IsExecuting ?? false, thread?.ActiveMessageId);
+                return (
+                    Name: GetThreadTitle(node),
+                    IsExecuting: thread?.IsExecuting ?? false,
+                    thread?.ActiveMessageId
+                );
             })
             .DistinctUntilChanged()
             .Select(state =>
@@ -266,8 +271,15 @@ public static class ThreadLayoutAreas
                     return (UiControl?)null;
 
                 var responsePath = $"{hubPath}/{state.ActiveMessageId}";
-                return (UiControl?)new LayoutAreaControl(responsePath,
-                    new LayoutAreaReference("Streaming"));
+                var encodedName = System.Web.HttpUtility.HtmlEncode(state.Name);
+
+                return (UiControl?)Controls.Stack
+                    .WithStyle("gap: 4px;")
+                    .WithView(Controls.Html(
+                        $"<a href=\"/{hubPath}\" style=\"font-size: 0.8rem; font-weight: 600; " +
+                        $"color: var(--accent-fill-rest); text-decoration: none;\">{encodedName}</a>"))
+                    .WithView(new LayoutAreaControl(responsePath,
+                        new LayoutAreaReference(ThreadMessageNodeType.OverviewArea)));
             });
     }
 
