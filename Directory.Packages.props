@@ -37,6 +37,7 @@
     <PackageVersion Include="ClaudeAgentSdk" Version="0.2.1" />
     <PackageVersion Include="Radzen.Blazor" Version="8.7.4" />
     <PackageVersion Include="Castle.Core" Version="5.1.1" />
+    <PackageVersion Include="DocSharp.Markdown" Version="0.17.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.0" />
     <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
