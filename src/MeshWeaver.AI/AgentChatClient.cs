@@ -191,7 +191,24 @@ public class AgentChatClient : IAgentChat
     /// Builds the static system prompt (agent instructions + tool docs) once,
     /// then appends dynamic parts (context, attachments, history) on each call.
     /// </summary>
-    private async Task<string> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
+    private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"
+    };
+
+    private static readonly Dictionary<string, string> ExtensionToMediaType = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".pdf"] = "application/pdf",
+        [".png"] = "image/png",
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".gif"] = "image/gif",
+        [".webp"] = "image/webp",
+        [".bmp"] = "image/bmp",
+        [".tiff"] = "image/tiff"
+    };
+
+    private async Task<(string Text, ImmutableList<DataContent> BinaryAttachments)> BuildMessageWithContextAsync(IReadOnlyCollection<ChatMessage> messages, string? agentName = null)
     {
         var messageText = new StringBuilder();
 
@@ -293,49 +310,68 @@ public class AgentChatClient : IAgentChat
             messageText.AppendLine();
         }
 
-        // Load and add attachment content
+        // Load and add attachment content (text + binary)
         var attachmentPaths = currentAttachments;
+        var binaryAttachments = ImmutableList<DataContent>.Empty;
         if (attachmentPaths is { Count: > 0 })
         {
             var meshPlugin = new MeshPlugin(hub, this);
-            var loadTasks = attachmentPaths.Select(async path =>
+            var contentService = hub.ServiceProvider.GetService<ContentCollections.IContentService>();
+
+            foreach (var path in attachmentPaths)
             {
                 try
                 {
-                    // Skip agent attachments — they override agent selection, not context content
                     var cleanPath = path.TrimStart('@');
                     if (agentAttachmentPaths?.Contains(cleanPath) == true)
-                        return (Path: path, Content: (string?)null);
+                        continue;
 
+                    // Check for content: prefix — binary file from content collection
+                    var contentIdx = cleanPath.IndexOf("content:", StringComparison.OrdinalIgnoreCase);
+                    if (contentIdx >= 0 && contentService != null)
+                    {
+                        var nodePath = contentIdx > 0 ? cleanPath[..(contentIdx - 1)]
+                            : (Context?.Path ?? Context?.Address?.ToString());
+                        var fileName = cleanPath[(contentIdx + "content:".Length)..];
+                        var ext = System.IO.Path.GetExtension(fileName);
+
+                        if (BinaryExtensions.Contains(ext))
+                        {
+                            // Load binary from content collection on the node's hub
+                            var effectivePath = nodePath ?? Context?.Path;
+                            var stream = await contentService.GetContentAsync("content", fileName);
+                            if (stream != null)
+                            {
+                                using (stream)
+                                {
+                                    using var ms = new MemoryStream();
+                                    await stream.CopyToAsync(ms);
+                                    var mediaType = ExtensionToMediaType.GetValueOrDefault(ext, "application/octet-stream");
+                                    binaryAttachments = binaryAttachments.Add(
+                                        new DataContent(ms.ToArray(), mediaType) { Name = fileName });
+                                    logger.LogInformation("Loaded binary attachment: {FileName} ({MediaType}, {Size} bytes)",
+                                        fileName, mediaType, ms.Length);
+                                }
+                            }
+                            continue;
+                        }
+                    }
+
+                    // Text attachment — load via MeshPlugin.Get
                     var content = await meshPlugin.Get($"@{cleanPath}");
                     if (!string.IsNullOrEmpty(content) && !content.StartsWith("Not found") && !content.StartsWith("Error"))
                     {
-                        // Truncate individual attachments to prevent prompt overflow
                         if (content.Length > 8000)
                             content = content[..8000] + "\n... (truncated)";
-                        return (Path: path, Content: content);
+                        messageText.AppendLine($"## Attachment: {path}");
+                        messageText.AppendLine();
+                        messageText.AppendLine(content);
+                        messageText.AppendLine();
                     }
                 }
                 catch (Exception ex)
                 {
                     logger.LogDebug(ex, "Error loading attachment content for: {Path}", path);
-                }
-                return (Path: path, Content: (string?)null);
-            });
-
-            var results = await Task.WhenAll(loadTasks);
-            var loadedAttachments = results.Where(r => r.Content != null).ToList();
-
-            if (loadedAttachments.Count > 0)
-            {
-                messageText.AppendLine("# Attached Content");
-                messageText.AppendLine();
-                foreach (var (path, content) in loadedAttachments)
-                {
-                    messageText.AppendLine($"## Attachment: {path}");
-                    messageText.AppendLine();
-                    messageText.AppendLine(content);
-                    messageText.AppendLine();
                 }
             }
         }
@@ -364,7 +400,7 @@ public class AgentChatClient : IAgentChat
             messageText.Append(text);
         }
 
-        return messageText.ToString();
+        return (messageText.ToString(), binaryAttachments);
     }
 
     /// <summary>
@@ -425,11 +461,14 @@ public class AgentChatClient : IAgentChat
         var thread = await GetOrCreateThreadAsync(agent);
 
         // Build the user message with context and agent instructions
-        var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
+        var (userText, binaryParts) = await BuildMessageWithContextAsync(messages, currentAgentName);
         currentAttachments = null; // Clear after use
 
+        // Build ChatMessage with mixed content (text + binary attachments)
+        var chatMessage = BuildChatMessage(userText, binaryParts);
+
         // Get response from the agent with thread
-        var response = await agent.RunAsync(userMessage, thread, cancellationToken: cancellationToken);
+        var response = await agent.RunAsync(chatMessage, thread, cancellationToken: cancellationToken);
 
         // Save the updated thread
         await SaveThreadAsync(agent, thread);
@@ -542,11 +581,14 @@ public class AgentChatClient : IAgentChat
         var thread = await GetOrCreateThreadAsync(agent);
 
         // Build the user message with context and agent instructions
-        var userMessage = await BuildMessageWithContextAsync(messages, currentAgentName);
+        var (userText, binaryParts) = await BuildMessageWithContextAsync(messages, currentAgentName);
         currentAttachments = null; // Clear after use
 
+        // Build ChatMessage with mixed content (text + binary attachments)
+        var chatMessage = BuildChatMessage(userText, binaryParts);
+
         // Get streaming response from the agent with thread
-        await foreach (var update in agent.RunStreamingAsync(userMessage, thread, cancellationToken: cancellationToken))
+        await foreach (var update in agent.RunStreamingAsync(chatMessage, thread, cancellationToken: cancellationToken))
         {
             // Forward the complete update with all contents (including FunctionCallContent)
             if (update.Contents.Count > 0)
@@ -1252,6 +1294,20 @@ public class AgentChatClient : IAgentChat
         return loadedAgents.Any(a =>
             (a.Path != null && a.Path.Equals(path, StringComparison.OrdinalIgnoreCase)) ||
             a.Name.Equals(path.Split('/').Last(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Builds a ChatMessage with mixed content: text + binary attachments (PDFs, images).
+    /// If no binary attachments, returns a simple text-only message.
+    /// </summary>
+    private static ChatMessage BuildChatMessage(string text, ImmutableList<DataContent> binaryAttachments)
+    {
+        if (binaryAttachments.Count == 0)
+            return new ChatMessage(ChatRole.User, text);
+
+        var contents = new List<AIContent> { new TextContent(text) };
+        contents.AddRange(binaryAttachments);
+        return new ChatMessage(ChatRole.User, contents);
     }
 
     private void DetectAgentAttachments()
