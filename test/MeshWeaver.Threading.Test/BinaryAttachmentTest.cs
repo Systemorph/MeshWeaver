@@ -27,7 +27,7 @@ public class BinaryAttachmentTest
 
         // Verify base64 encoding
         var base64 = Convert.ToBase64String(dataContent.Data.ToArray());
-        base64.Should().Be("JVBER");
+        base64.Should().Be("JVBERg==");
 
         // Verify it's classified as "document" (not "image")
         var type = dataContent.MediaType.StartsWith("image/") ? "image" : "document";
@@ -133,7 +133,7 @@ public class BinaryAttachmentTest
         // Absolute path: OrgA/Doc/content:chart.png
         var path2 = "OrgA/Doc/content:chart.png";
         var idx2 = path2.IndexOf("content:", StringComparison.OrdinalIgnoreCase);
-        idx2.Should().Be(8); // after "OrgA/Doc/"
+        idx2.Should().Be(9); // after "OrgA/Doc/"
         var nodePath2 = path2[..(idx2 - 1)]; // strip trailing /
         var fileName2 = path2[(idx2 + "content:".Length)..];
         nodePath2.Should().Be("OrgA/Doc");
