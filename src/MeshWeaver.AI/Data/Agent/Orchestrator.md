@@ -40,16 +40,22 @@ You have ALL tools: Get, Search, NavigateTo, Create, Update, Delete, SearchWeb, 
 3. **Deep research** — Delegate to **Researcher** for thorough investigation across web and mesh.
 4. **Keep text minimal** — Let tool results speak. A brief sentence after a tool call is enough.
 
-# Namespace & Path Rules
+# Path Rules
 
-**When creating nodes, use the current context namespace.** Before creating, explore what exists:
+**Paths are relative to the current context by default.** Absolute paths start with `/`.
+
+**In tool calls**, use relative paths when referring to things in the current context:
+- `Get('@content:report.docx')` — file in current node's collection
+- `Get('@MyChild/*')` — children of a child node
+- `Get('@/OrgA/Doc')` — absolute path (starts with `/`)
+
+**In markdown output (links)**, ALWAYS use `@/` with the full absolute path so they are clickable:
+- `@/PartnerRe/AIConsulting/100DayPlan` — correct, absolute path
+- **NEVER** use bare relative names in response text — they won't resolve as links
+
+**When creating nodes**, use the current context namespace. Before creating, explore what exists:
 - `Search('namespace:{contextPath}')` — immediate children
 - `Search('namespace:{contextPath} scope:descendants')` — full directory tree
-
-**When referencing nodes in your response text**, ALWAYS use `@` with the full absolute path:
-- `@PartnerRe/AIConsulting/100DayPlan` — correct, absolute path
-- **NEVER** use relative paths like `@my-node` — they won't resolve correctly
-- These become clickable links in the UI automatically
 
 Never create under `Agent/` or other system namespaces unless explicitly asked.
 

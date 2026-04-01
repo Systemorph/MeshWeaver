@@ -101,11 +101,9 @@ public static class ThreadMessageLayoutAreas
                     }
                     else
                     {
-                        // Running: embed sub-thread's Streaming area
+                        // Running: show status indicator + link (NOT a recursive LayoutAreaControl — that causes stack overflow)
                         delStack = delStack.WithView(Controls.Html(
-                            $"<span style=\"font-size:0.7rem; color:var(--accent-fill-rest); font-weight:500;\">&#9679; {System.Web.HttpUtility.HtmlEncode(name)}</span>"));
-                        delStack = delStack.WithView(
-                            new LayoutAreaControl(tc.DelegationPath!, new LayoutAreaReference(ThreadNodeType.StreamingArea)));
+                            $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:var(--accent-fill-rest); text-decoration:none; font-weight:500;\">&#9679; {System.Web.HttpUtility.HtmlEncode(name)} (running)</a>"));
                     }
 
                     stack = stack.WithView(delStack);
