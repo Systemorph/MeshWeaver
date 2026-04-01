@@ -29,7 +29,7 @@ public static class ToolStatusFormatter
             "NavigateTo" => FormatArg("Navigating to {0}", args, "path"),
             "SearchWeb" => FormatArg("Searching web for \"{0}\"", args, "query"),
             "FetchWebPage" => FormatArg("Fetching {0}", args, "url"),
-            "delegate_to_agent" => FormatArg("Delegating to {0}...", args, "agentName"),
+            "delegate_to_agent" => FormatDelegation(args),
             "handoff_to_agent" => FormatArg("Handing off to {0}...", args, "agentName"),
             "store_plan" => "Storing plan...",
             "AddComment" => FormatArg("Adding comment on \"{0}\"...", args, "selectedText"),
@@ -38,6 +38,18 @@ public static class ToolStatusFormatter
             _ when name.StartsWith("delegate_to_") => $"Delegating to {name["delegate_to_".Length..]}...",
             _ => $"Calling {name}..."
         };
+    }
+
+    private static string FormatDelegation(IDictionary<string, object?>? args)
+    {
+        var agent = GetArg(args, "agentName");
+        var task = GetArg(args, "task");
+        // Strip "Agent/" prefix for cleaner display
+        if (agent != null && agent.Contains('/'))
+            agent = agent.Split('/').Last();
+        if (!string.IsNullOrEmpty(task))
+            return $"{agent ?? "Agent"}: {Truncate(task)}";
+        return $"Delegating to {agent ?? "Agent"}...";
     }
 
     private static string FormatArg(string template, IDictionary<string, object?>? args, string key)
