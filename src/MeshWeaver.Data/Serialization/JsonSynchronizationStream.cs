@@ -147,7 +147,19 @@ public static class JsonSynchronizationStream
         );
 
 
-
+        // Keep the remote owner grain alive while this subscription exists.
+        // HeartBeatEvent is a no-op in monolith mode (no GrainKeepAliveCallback).
+        if (!owner.Equals(hub.Address))
+        {
+            reduced.RegisterForDisposal(
+                Observable.Interval(TimeSpan.FromSeconds(45))
+                    .Subscribe(_ =>
+                    {
+                        if (hub.RunLevel <= MessageHubRunLevel.Started)
+                            hub.Post(new HeartBeatEvent(), o => o.WithTarget(owner));
+                    })
+            );
+        }
 
         return reduced;
     }
