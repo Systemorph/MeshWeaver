@@ -65,12 +65,26 @@ public static class MeshExtensions
 
     /// <summary>
     /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
+    /// Walks up the parent hub chain because GrainKeepAliveCallback is set on the
+    /// grain's top-level hub, not on child hubs (threads, messages, _Exec).
     /// In monolith mode, no GrainKeepAliveCallback is registered → no-op.
     /// </summary>
     private static IMessageDelivery HandleHeartBeat(
         IMessageHub hub, IMessageDelivery<HeartBeatEvent> delivery)
     {
-        hub.Configuration.Get<GrainKeepAliveCallback>()?.KeepAlive();
+        var current = hub;
+        while (current != null)
+        {
+            var callback = current.Configuration.Get<GrainKeepAliveCallback>();
+            if (callback != null)
+            {
+                callback.KeepAlive();
+                break;
+            }
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
         return delivery.Processed();
     }
 
