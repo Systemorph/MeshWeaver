@@ -108,6 +108,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 this.GetPrimaryKeyString(), msgType, userId ?? "(null)", deliveryUser ?? "(null)",
                 delivery.AccessContext?.ObjectId ?? "(null)");
 
+        // Keep grain alive during long-running operations (AI streaming, delegations).
+        // DelayDeactivation is called directly on the grain scheduler — no heartbeat
+        // messages or parent chain walking needed. Check by type name to avoid
+        // referencing MeshWeaver.AI from the Orleans hosting layer.
+        if (msgType is "SubmitMessageRequest" or "HeartBeatEvent")
+        {
+            DelayDeactivation(TimeSpan.FromMinutes(10));
+            if (msgType == "SubmitMessageRequest")
+                logger.LogInformation("Grain {GrainId}: DelayDeactivation(10min) for {MessageType}",
+                    this.GetPrimaryKeyString(), msgType);
+        }
+
         var ret = Hub!.DeliverMessage(delivery);
         return Task.FromResult(ret);
     }
