@@ -10,6 +10,7 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans;
 
+[global::Orleans.Concurrency.Reentrant]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain, IMessageHubGrain
 {
