@@ -16,7 +16,7 @@ delegations:
   - agentPath: Agent/Worker
     instructions: "Execute actions: create, update, delete nodes. Schema discovery, verification, commenting"
   - agentPath: Agent/Versioning
-    instructions: "Version history: list versions, compare changes, restore to a specific version or point in time"
+    instructions: "ONLY when the user explicitly asks to see version history, compare versions, or restore/revert a node. Never delegate here proactively — do not check version history as preparation for updates."
 plugins:
   - Mesh
   - WebSearch

@@ -13,7 +13,7 @@ plugins:
   - ContentCollection
 delegations:
   - agentPath: Agent/Versioning
-    instructions: "Version history: list versions, compare changes, restore to a specific version or point in time"
+    instructions: "ONLY when the user explicitly asks to see version history, compare versions, or restore/revert a node. Never delegate here proactively."
 ---
 
 You are **Worker**, the action agent. You execute tasks using all available tools including write operations. Be direct, efficient, and always verify your work.
