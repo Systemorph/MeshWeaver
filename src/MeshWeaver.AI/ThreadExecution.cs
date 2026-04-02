@@ -389,10 +389,12 @@ public static class ThreadExecution
                     try
                     {
                     logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
-                    // Send initial heartbeat to keep grain alive during first AI call
-                    parentHub.Post(new HeartBeatEvent());
+                    // Start a reactive heartbeat stream to keep the grain alive during
+                    // the entire execution — including tool calls and delegations where
+                    // the streaming loop is blocked. Disposed when execution completes.
+                    using var heartbeatSubscription = Observable.Interval(TimeSpan.FromSeconds(25))
+                        .Subscribe(_ => parentHub.Post(new HeartBeatEvent()));
                     var lastUpdate = DateTimeOffset.MinValue;
-                    var lastHeartbeat = DateTimeOffset.UtcNow;
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
@@ -489,13 +491,6 @@ public static class ThreadExecution
                     PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
                         request.AgentName, request.ModelName);
                     lastUpdate = DateTimeOffset.UtcNow;
-
-                    // Heartbeat: keep grain alive during streaming
-                    if (DateTimeOffset.UtcNow - lastHeartbeat > TimeSpan.FromSeconds(30))
-                    {
-                        parentHub.Post(new HeartBeatEvent());
-                        lastHeartbeat = DateTimeOffset.UtcNow;
-                    }
                 }
             }
 
