@@ -245,7 +245,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
         if (finalResponse != null)
         {
-            Output.WriteLine($"7. PASS: Response text='{finalResponse.Text}' ({finalResponse.Text.Length} chars)");
+            Output.WriteLine($"7. PASS: Response text='{finalResponse.Text}' ({finalResponse.Text!.Length} chars)");
             Output.WriteLine($"   Tool calls: {finalResponse.ToolCalls.Count}");
             foreach (var tc in finalResponse.ToolCalls)
                 Output.WriteLine($"   - {tc.DisplayName ?? tc.Name}: success={tc.IsSuccess}, delegation={tc.DelegationPath ?? "(none)"}");

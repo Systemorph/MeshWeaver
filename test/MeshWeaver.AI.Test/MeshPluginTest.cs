@@ -613,7 +613,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         var files = await collection!.GetFilesAsync("/");
@@ -626,7 +626,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         var folders = await collection!.GetFoldersAsync("/");
@@ -638,7 +638,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         var files = await collection!.GetFilesAsync("/images");
@@ -650,7 +650,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         // Upload a new file
@@ -673,11 +673,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
         // Read file content directly via service
-        await using var stream = await contentService.GetContentAsync("test-content", "/readme.md");
+        await using var stream = await contentService.GetContentAsync("test-content", "/readme.md", TestContext.Current.CancellationToken);
         stream.Should().NotBeNull();
 
         using var reader = new StreamReader(stream!);
-        var text = await reader.ReadToEndAsync();
+        var text = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         text.Should().Contain("Hello");
         text.Should().Contain("test file");
     }
@@ -688,11 +688,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        await using var stream = await contentService.GetContentAsync("test-content", "/images/logo.svg");
+        await using var stream = await contentService.GetContentAsync("test-content", "/images/logo.svg", TestContext.Current.CancellationToken);
         stream.Should().NotBeNull();
 
         using var reader = new StreamReader(stream!);
-        var text = await reader.ReadToEndAsync();
+        var text = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         text.Should().Contain("svg");
     }
 

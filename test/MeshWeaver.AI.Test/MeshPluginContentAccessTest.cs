@@ -80,10 +80,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         var nodePath = $"ContentTest_{_testId}_A";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
-        await File.WriteAllTextAsync(Path.Combine(contentDir, "Input_Markus.txt"), "Hello from Markus");
+        await File.WriteAllTextAsync(Path.Combine(contentDir, "Input_Markus.txt"), "Hello from Markus", TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Test Org", NodeType = "Markdown" });
+            new MeshNode(nodePath) { Name = "Test Org", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:Input_Markus.txt");
@@ -107,10 +107,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
         await File.WriteAllTextAsync(Path.Combine(contentDir, "Input_Markus.txt"),
-            "Interview notes for Markus about AI Consulting");
+            "Interview notes for Markus about AI Consulting", TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Interviews", NodeType = "Markdown" });
+            new MeshNode(nodePath) { Name = "Interviews", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:Input_Markus.txt");
@@ -131,10 +131,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         var nodePath = $"ContentTest_{_testId}_C";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
-        await File.WriteAllTextAsync(Path.Combine(contentDir, "report.md"), "# Report Content");
+        await File.WriteAllTextAsync(Path.Combine(contentDir, "report.md"), "# Report Content", TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Test Org 2", NodeType = "Markdown" });
+            new MeshNode(nodePath) { Name = "Test Org 2", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
 
         var plugin = new MeshPlugin(Mesh, new MockAgentChat());
         var result = await plugin.Get($"{nodePath}/content:content/report.md");
@@ -155,10 +155,10 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         var nodePath = $"ContentTest_{_testId}_D";
         var contentDir = Path.Combine(ContentBasePath, nodePath);
         Directory.CreateDirectory(contentDir);
-        await File.WriteAllTextAsync(Path.Combine(contentDir, "data.txt"), "Direct access content");
+        await File.WriteAllTextAsync(Path.Combine(contentDir, "data.txt"), "Direct access content", TestContext.Current.CancellationToken);
 
         await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" });
+            new MeshNode(nodePath) { Name = "Direct Test", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
 
         var client = GetClient();
         var response = await client.AwaitResponse(
@@ -186,7 +186,7 @@ public class MeshPluginContentAccessTest : MonolithMeshTestBase
         Directory.CreateDirectory(contentDir);
 
         await NodeFactory.CreateNodeAsync(
-            new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" });
+            new MeshNode(nodePath) { Name = "Collection Test", NodeType = "Markdown" }, TestContext.Current.CancellationToken);
 
         var client = GetClient();
         var response = await client.AwaitResponse(
