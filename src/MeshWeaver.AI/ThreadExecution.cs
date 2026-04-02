@@ -362,14 +362,20 @@ public static class ThreadExecution
                     // the streaming loop is blocked during tool execution so the
                     // throttle block never runs. This ensures the parent message
                     // shows the delegation link while the sub-thread executes.
-                    // Use DelegationPaths dictionary for parallel-safe matching.
                     if (chatClient.DelegationPaths.TryGetValue(status, out var delPath))
                     {
+                        // Stamp the path on the first unmatched delegation tool call
+                        var stamped = false;
                         toolCallLog = toolCallLog.Select(e =>
-                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null && e.DisplayName == status
-                                ? e with { DelegationPath = delPath }
-                                : e).ToImmutableList();
-                        // Preserve any previously streamed text (don't pass empty string)
+                        {
+                            if (!stamped && e.Name.StartsWith("delegate_to") && e.DelegationPath == null)
+                            {
+                                stamped = true;
+                                return e with { DelegationPath = delPath };
+                            }
+                            return e;
+                        }).ToImmutableList();
+                        // Preserve any previously streamed text
                         PushToResponseMessage(capturedResponseText?.ToString() ?? "", toolCallLog, nodeChangeLog,
                             request.AgentName, request.ModelName);
                     }
@@ -481,14 +487,15 @@ public static class ThreadExecution
                 // Push streaming content at ~1/sec via responseStream.Update
                 if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(1000))
                 {
-                    // Stamp delegation paths from the parallel-safe dictionary
-                    foreach (var kvp in chatClient.DelegationPaths)
+                    // Stamp delegation paths on any unmatched delegation tool calls
+                    var pathValues = chatClient.DelegationPaths.Values.ToList();
+                    var pathIdx = 0;
+                    toolCallLog = toolCallLog.Select(e =>
                     {
-                        toolCallLog = toolCallLog.Select(e =>
-                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null && e.DisplayName == kvp.Key
-                                ? e with { DelegationPath = kvp.Value }
-                                : e).ToImmutableList();
-                    }
+                        if (e.Name.StartsWith("delegate_to") && e.DelegationPath == null && pathIdx < pathValues.Count)
+                            return e with { DelegationPath = pathValues[pathIdx++] };
+                        return e;
+                    }).ToImmutableList();
 
                     PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
                         request.AgentName, request.ModelName);
