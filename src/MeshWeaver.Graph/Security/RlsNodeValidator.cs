@@ -40,8 +40,13 @@ public class RlsNodeValidator : INodeValidator
 
     public async Task<NodeValidationResult> ValidateAsync(NodeValidationContext context, CancellationToken ct = default)
     {
-        // Self-access: hubs always have full control of their own nodes
+        // System identity bypass: SecurityService uses WellKnownUsers.System for internal
+        // operations (creating AccessAssignment, PartitionAccessPolicy nodes).
+        // These must not be blocked by the permissions they manage.
         var userId = GetUserId(context);
+        if (userId == WellKnownUsers.System)
+            return NodeValidationResult.Valid();
+
         if (!string.IsNullOrEmpty(userId))
         {
             // Check MainNode match (original check)
@@ -112,7 +117,7 @@ public class RlsNodeValidator : INodeValidator
                 return NodeValidationResult.Valid();
             }
 
-            _logger.LogDebug(
+            _logger.LogWarning(
                 "RLS: Custom access rule denied {UserId} - {Operation} on {Path} (NodeType: {NodeType})",
                 userId ?? "(anonymous)", context.Operation, context.Node.Path, context.Node.NodeType);
             return NodeValidationResult.Unauthorized(
@@ -150,7 +155,7 @@ public class RlsNodeValidator : INodeValidator
         {
             var displayUserId = userId ?? "(anonymous)";
 
-            _logger.LogDebug(
+            _logger.LogWarning(
                 "RLS: Access denied for user {UserId} - {Operation} on {Path} requires {Permission}",
                 displayUserId,
                 context.Operation,

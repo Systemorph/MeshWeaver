@@ -62,7 +62,9 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (node.HubConfiguration is null)
             throw new ArgumentException($"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
 
-        Hub = meshHub.GetHostedHub(address, node.HubConfiguration)!;
+        Hub = meshHub.GetHostedHub(address, config =>
+            node.HubConfiguration(config)
+                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10)))))!;
     }
 
 
@@ -120,12 +122,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             try
             {
+                // Cancel any active execution (e.g., AI streaming) — this triggers the
+                // OperationCanceledException path which saves state and notifies the parent.
+                Hub.CancelCurrentExecution();
+
                 Hub.Dispose();
-                // Wait for disposal (includes async flush of pending saves)
+                // Wait for disposal (includes async flush of pending saves and
+                // cancellation of active thread executions via hosted _Exec hubs).
+                // Allow up to 120s for AI streaming to cancel, save state, and flush.
                 var disposalTask = Hub.Disposal!;
-                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(120), cancellationToken));
                 if (completed != disposalTask)
-                    logger.LogWarning("Grain {GrainId}: hub disposal timed out after 10s — pending saves may be lost!", grainId);
+                    logger.LogWarning("Grain {GrainId}: hub disposal timed out after 120s — pending saves may be lost!", grainId);
                 else
                     logger.LogInformation("Grain {GrainId}: hub disposal completed", grainId);
             }

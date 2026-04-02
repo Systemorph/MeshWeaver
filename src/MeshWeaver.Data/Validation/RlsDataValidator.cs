@@ -66,7 +66,7 @@ public class RlsDataValidator : IDataValidator
                     var userId = accessRestrictionContext.UserContext?.ObjectId ?? "(anonymous)";
                     var restrictionName = restriction.Name ?? "unnamed";
 
-                    _logger.LogDebug(
+                    _logger.LogWarning(
                         "RLS: Access denied for user {UserId} - {Operation} on {EntityType} (rule: {RuleName})",
                         userId,
                         context.Operation,
@@ -139,7 +139,7 @@ public class RlsDataValidator : IDataValidator
                 var allowed = await restriction.Restriction(action, type, accessRestrictionContext, ct);
                 if (!allowed)
                 {
-                    _logger.LogDebug(
+                    _logger.LogWarning(
                         "RLS: Type-level access denied - {Action} on {Type} (rule: {RuleName})",
                         action,
                         type.Name,

@@ -136,7 +136,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 30000)]
-    public async Task DynamicallyCreated_OrganizationNode_IsPubliclyReadable()
+    public async Task DynamicallyCreated_OrganizationNode_RequiresPartitionAccess()
     {
         // Create an Organization dynamically (simulates runtime creation)
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -155,7 +155,7 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
         created.Should().NotBeNull();
         Output.WriteLine($"Created: {created.Path}");
 
-        // Now query as a different unprivileged user
+        // Unprivileged user cannot see the org (partition access controls visibility)
         LoginAsUnprivilegedUser();
 
         var results = await MeshQuery.QueryAsync<MeshNode>(
@@ -163,7 +163,18 @@ public class UserPublicReadTest(ITestOutputHelper output) : MonolithMeshTestBase
             ct: TestContext.Current.CancellationToken
         ).ToArrayAsync(TestContext.Current.CancellationToken);
 
-        results.Should().HaveCount(1, "Dynamically created Organization should be publicly readable");
-        results[0].Name.Should().Be("Globex Corp");
+        results.Should().BeEmpty("Organization instances require partition-level access, not public read");
+
+        // Grant Alice (the unprivileged user) Viewer role on Globex
+        await securityService.AddUserRoleAsync("Alice", "Viewer", "Globex", "system",
+            TestContext.Current.CancellationToken);
+
+        var resultsAfterGrant = await MeshQuery.QueryAsync<MeshNode>(
+            "path:Globex",
+            ct: TestContext.Current.CancellationToken
+        ).ToArrayAsync(TestContext.Current.CancellationToken);
+
+        resultsAfterGrant.Should().HaveCount(1, "Organization should be readable after granting Viewer role");
+        resultsAfterGrant[0].Name.Should().Be("Globex Corp");
     }
 }
