@@ -134,13 +134,28 @@ public static class MessageHubExtensions
     }
 
     /// <summary>
-    /// Starts a periodic heartbeat to keep the Orleans grain alive during long-running operations.
-    /// Dispose the returned IDisposable to stop the heartbeat.
-    /// In monolith mode, HeartBeatEvent is a no-op (no GrainKeepAliveCallback registered).
+    /// Starts a long-running operation scope that keeps the Orleans grain alive.
+    /// Uses GrainLongRunningOperationCallback (RegisterGrainTimer + DelayDeactivation)
+    /// when running in Orleans, falls back to Observable.Interval heartbeat otherwise.
+    /// Dispose the returned IDisposable when the operation completes.
+    /// In monolith mode, returns a no-op disposable.
     /// </summary>
-    public static IDisposable BeginAsyncOperation(this IMessageHub hub, TimeSpan? interval = null)
+    public static IDisposable BeginAsyncOperation(this IMessageHub hub)
     {
-        return Observable.Interval(interval ?? TimeSpan.FromSeconds(25))
+        // Walk parent chain to find the grain-level callback
+        var current = hub;
+        while (current != null)
+        {
+            var callback = current.Configuration.Get<GrainLongRunningOperationCallback>();
+            if (callback != null)
+                return callback.BeginOperation();
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
+
+        // Fallback: heartbeat via Observable.Interval (monolith or no grain callback)
+        return Observable.Interval(TimeSpan.FromSeconds(25))
             .Subscribe(_ => hub.Post(new HeartBeatEvent()));
     }
 }

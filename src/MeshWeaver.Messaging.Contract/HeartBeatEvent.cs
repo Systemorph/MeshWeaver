@@ -13,3 +13,11 @@ public record HeartBeatEvent;
 /// In monolith mode, no callback is set — HeartBeatEvent is a no-op.
 /// </summary>
 public record GrainKeepAliveCallback(Action KeepAlive);
+
+/// <summary>
+/// Callback registered by Orleans grain to support long-running operations.
+/// The hub calls BeginOperation before starting an async operation (AI streaming, etc.).
+/// The returned IDisposable stops the keep-alive when disposed.
+/// In monolith mode, no callback is set — returns a no-op disposable.
+/// </summary>
+public record GrainLongRunningOperationCallback(Func<IDisposable> BeginOperation);
