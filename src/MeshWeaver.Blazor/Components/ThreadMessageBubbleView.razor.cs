@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Blazor.Components;
@@ -8,14 +9,40 @@ namespace MeshWeaver.Blazor.Components;
 public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 {
     private bool IsUser => ViewModel.Role.Equals("user", StringComparison.OrdinalIgnoreCase);
+    private bool CanEdit => !string.IsNullOrEmpty(ViewModel.ThreadPath) && !string.IsNullOrEmpty(ViewModel.MessageId);
 
     private string? messageText;
     private IReadOnlyList<ToolCallEntry>? toolCalls;
+    private bool isEditing;
+    private string? editText;
 
     private bool HasToolCalls => toolCalls is { Count: > 0 };
 
     private MarkdownControl MarkdownVm => new MarkdownControl(messageText ?? "")
         .WithStyle("background: transparent;");
+
+    private void StartEdit()
+    {
+        editText = messageText;
+        isEditing = true;
+    }
+
+    private void CancelEdit()
+    {
+        isEditing = false;
+    }
+
+    private void SubmitEdit()
+    {
+        if (!CanEdit) return;
+        isEditing = false;
+        Hub.Post(new ResubmitMessageRequest
+        {
+            ThreadPath = ViewModel.ThreadPath!,
+            MessageId = ViewModel.MessageId!,
+            UserMessageText = editText ?? messageText ?? ""
+        }, o => o.WithTarget(new Address(ViewModel.ThreadPath!)));
+    }
 
     protected override void BindData()
     {

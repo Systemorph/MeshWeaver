@@ -1,5 +1,6 @@
 @inherits BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 @using MeshWeaver.Layout
+@using MeshWeaver.Messaging
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
@@ -17,7 +18,24 @@
         </div>
     }
 
-    <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+    @if (isEditing)
+    {
+        <textarea @bind="editText" class="thread-msg-edit-textarea" rows="6"></textarea>
+        <div class="thread-msg-edit-actions">
+            <button class="thread-msg-edit-cancel" @onclick="CancelEdit">Cancel</button>
+            <button class="thread-msg-edit-submit" @onclick="SubmitEdit">Submit</button>
+        </div>
+    }
+    else
+    {
+        <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+        @if (IsUser && CanEdit)
+        {
+            <div class="thread-msg-inline-actions">
+                <button class="thread-msg-action-btn" @onclick="StartEdit" title="Edit">&#9998;</button>
+            </div>
+        }
+    }
 
     @* Tool calls — shown inline, each as a compact entry *@
     @if (HasToolCalls)
@@ -298,5 +316,73 @@
     @@keyframes thread-dots-blink {
         0%, 80%, 100% { opacity: 0.3; }
         40% { opacity: 1; }
+    }
+
+    .thread-msg-edit-textarea {
+        width: 100%;
+        min-height: 100px;
+        padding: 8px 12px;
+        border: 1px solid var(--accent-fill-rest);
+        border-radius: 6px;
+        background: var(--neutral-layer-1);
+        color: var(--neutral-foreground-rest);
+        font-family: inherit;
+        font-size: 0.9rem;
+        resize: vertical;
+        outline: none;
+    }
+    .thread-msg-edit-textarea:focus {
+        border-color: var(--accent-fill-hover);
+        box-shadow: 0 0 0 1px var(--accent-fill-hover);
+    }
+    .thread-msg-edit-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 8px;
+    }
+    .thread-msg-edit-cancel,
+    .thread-msg-edit-submit {
+        padding: 6px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.85rem;
+    }
+    .thread-msg-edit-cancel {
+        border: 1px solid var(--neutral-stroke-rest);
+        background: transparent;
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-edit-submit {
+        border: none;
+        background: var(--accent-fill-rest);
+        color: white;
+        font-weight: 600;
+    }
+    .thread-msg-edit-submit:hover {
+        background: var(--accent-fill-hover);
+    }
+    .thread-msg-inline-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 4px;
+        opacity: 0;
+        transition: opacity 0.15s;
+    }
+    .thread-msg-bubble:hover .thread-msg-inline-actions {
+        opacity: 0.6;
+    }
+    .thread-msg-action-btn {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: var(--neutral-foreground-hint);
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+    .thread-msg-action-btn:hover {
+        background: var(--neutral-layer-3);
+        color: var(--accent-fill-rest);
     }
 </style>

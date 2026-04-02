@@ -84,29 +84,19 @@ public static class ThreadMessageLayoutAreas
                     stack = stack.WithView(Controls.Html($"<div style=\"display:flex; flex-wrap:wrap; gap:3px;\">{chips}</div>"));
                 }
 
-                // Row 3: Delegation sub-threads
-                foreach (var tc in msg.ToolCalls.Where(tc => !string.IsNullOrEmpty(tc.DelegationPath)))
+                // Row 3: Delegation sub-threads as simple chips (no nesting — prevents visual noise)
+                var delegationCalls = msg.ToolCalls.Where(tc => !string.IsNullOrEmpty(tc.DelegationPath)).ToList();
+                if (delegationCalls.Count > 0)
                 {
-                    var name = (tc.DisplayName ?? tc.Name);
-                    if (name.Length > 30) name = name[..27] + "...";
-
-                    var delStack = Controls.Stack
-                        .WithStyle("border-left:2px solid var(--accent-fill-rest); padding-left:6px; margin-top:2px;");
-
-                    if (tc.Result != null)
+                    var delChips = string.Join(" ", delegationCalls.Select(tc =>
                     {
-                        // Completed: show title with link
-                        delStack = delStack.WithView(Controls.Html(
-                            $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:var(--neutral-foreground-hint); text-decoration:none; font-weight:500;\">&#10003; {System.Web.HttpUtility.HtmlEncode(name)}</a>"));
-                    }
-                    else
-                    {
-                        // Running: show status indicator + link (NOT a recursive LayoutAreaControl — that causes stack overflow)
-                        delStack = delStack.WithView(Controls.Html(
-                            $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.7rem; color:var(--accent-fill-rest); text-decoration:none; font-weight:500;\">&#9679; {System.Web.HttpUtility.HtmlEncode(name)} (running)</a>"));
-                    }
-
-                    stack = stack.WithView(delStack);
+                        var name = (tc.DisplayName ?? tc.Name);
+                        if (name.Length > 25) name = name[..22] + "...";
+                        var icon = tc.Result != null ? "&#10003;" : "&#9679;";
+                        var color = tc.Result != null ? "var(--neutral-foreground-hint)" : "var(--accent-fill-rest)";
+                        return $"<a href=\"/{tc.DelegationPath}\" style=\"font-size:0.68rem; color:{color}; text-decoration:none;\">{icon} {System.Web.HttpUtility.HtmlEncode(name)}</a>";
+                    }));
+                    stack = stack.WithView(Controls.Html($"<div style=\"display:flex; flex-wrap:wrap; gap:3px; border-left:2px solid var(--accent-fill-rest); padding-left:6px; margin-top:2px;\">{delChips}</div>"));
                 }
 
                 return (UiControl?)stack;
@@ -203,7 +193,8 @@ public static class ThreadMessageLayoutAreas
             .WithTimestamp(msg.Timestamp)
             .WithText(new JsonPointerReference($"{dataPointer}/text"))
             .WithToolCalls(new JsonPointerReference($"{dataPointer}/toolCalls"))
-            .WithThreadPath(threadPath);
+            .WithThreadPath(threadPath)
+            .WithMessageId(messageId);
 
         // Action buttons — small stealth icon buttons, right-aligned
         // Hidden during execution via CSS :has() on the parent container
@@ -214,20 +205,9 @@ public static class ThreadMessageLayoutAreas
 
         if (isUser)
         {
+            // Edit and Resubmit are handled client-side in the Blazor ThreadMessageBubbleView
+            // (MessageId + ThreadPath are set on the bubble control)
             actionRow = actionRow
-                .WithView(Controls.Button("")
-                    .WithIconStart(FluentIcons.Edit(IconSize.Size16))
-                    .WithAppearance(Appearance.Stealth)
-                    .WithLabel("Edit")
-                    .WithClickAction(_ =>
-                    {
-                        host.Hub.Post(new EditMessageRequest
-                        {
-                            ThreadPath = threadPath,
-                            MessageId = messageId,
-                            MessageText = msg.Text
-                        }, o => o.WithTarget(new Address(threadPath)));
-                    }))
                 .WithView(Controls.Button("")
                     .WithIconStart(FluentIcons.ArrowSync(IconSize.Size16))
                     .WithAppearance(Appearance.Stealth)
