@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.Reactive.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Domain;
@@ -130,5 +131,16 @@ public static class MessageHubExtensions
 
         var resultProperty = await hub.AwaitResponse(request, options, resultSelector, cancellationToken);
         return resultProperty;
+    }
+
+    /// <summary>
+    /// Starts a periodic heartbeat to keep the Orleans grain alive during long-running operations.
+    /// Dispose the returned IDisposable to stop the heartbeat.
+    /// In monolith mode, HeartBeatEvent is a no-op (no GrainKeepAliveCallback registered).
+    /// </summary>
+    public static IDisposable BeginAsyncOperation(this IMessageHub hub, TimeSpan? interval = null)
+    {
+        return Observable.Interval(interval ?? TimeSpan.FromSeconds(25))
+            .Subscribe(_ => hub.Post(new HeartBeatEvent()));
     }
 }

@@ -351,6 +351,8 @@ public static class ThreadExecution
 
                 var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
                 var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
+                // responseText is captured after InvokeAsync creates it (see below)
+                StringBuilder? capturedResponseText = null;
                 client.ForwardNodeChange = entry => { nodeChangeLog = nodeChangeLog.Add(entry); };
                 string? currentStatus = null;
                 client.UpdateDelegationStatus = status =>
@@ -367,7 +369,8 @@ public static class ThreadExecution
                             e.Name.StartsWith("delegate_to") && e.DelegationPath == null && e.DisplayName == status
                                 ? e with { DelegationPath = delPath }
                                 : e).ToImmutableList();
-                        PushToResponseMessage("", toolCallLog, nodeChangeLog,
+                        // Preserve any previously streamed text (don't pass empty string)
+                        PushToResponseMessage(capturedResponseText?.ToString() ?? "", toolCallLog, nodeChangeLog,
                             request.AgentName, request.ModelName);
                     }
                 };
@@ -386,14 +389,13 @@ public static class ThreadExecution
                 hub.InvokeAsync(async ct =>
                 {
                     var responseText = new StringBuilder();
+                    capturedResponseText = responseText;
                     try
                     {
                     logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
-                    // Start a reactive heartbeat stream to keep the grain alive during
-                    // the entire execution — including tool calls and delegations where
-                    // the streaming loop is blocked. Disposed when execution completes.
-                    using var heartbeatSubscription = Observable.Interval(TimeSpan.FromSeconds(25))
-                        .Subscribe(_ => parentHub.Post(new HeartBeatEvent()));
+                    // Keep the grain alive during the entire execution — including tool calls
+                    // and delegations where the streaming loop is blocked.
+                    using var heartbeatSubscription = parentHub.BeginAsyncOperation();
                     var lastUpdate = DateTimeOffset.MinValue;
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
