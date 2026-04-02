@@ -64,7 +64,48 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         Hub = meshHub.GetHostedHub(address, config =>
             node.HubConfiguration(config)
-                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10)))))!;
+                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
+                .Set(new GrainLongRunningOperationCallback(() => BeginLongRunningOperation())))!;
+    }
+
+    /// <summary>
+    /// Starts a long-running operation scope on the grain.
+    /// Calls DelayDeactivation immediately and registers a grain timer for rolling renewal.
+    /// Disposing the returned IDisposable stops the timer and calls ReactivateOnIdle.
+    /// </summary>
+    private IDisposable BeginLongRunningOperation()
+    {
+        var grainId = this.GetPrimaryKeyString();
+        logger.LogInformation("Grain {GrainId}: starting long-running operation", grainId);
+
+        DelayDeactivation(TimeSpan.FromMinutes(10));
+
+        var timer = this.RegisterGrainTimer(
+            _ =>
+            {
+                DelayDeactivation(TimeSpan.FromMinutes(10));
+                return Task.CompletedTask;
+            },
+            new GrainTimerCreationOptions
+            {
+                DueTime = TimeSpan.FromMinutes(5),
+                Period = TimeSpan.FromMinutes(5),
+                Interleave = true // allow other messages while timer fires
+            });
+
+        return new LongRunningOperationScope(timer, () =>
+        {
+            logger.LogInformation("Grain {GrainId}: long-running operation completed", grainId);
+        });
+    }
+
+    private sealed class LongRunningOperationScope(IGrainTimer timer, Action onDispose) : IDisposable
+    {
+        public void Dispose()
+        {
+            timer.Dispose();
+            onDispose();
+        }
     }
 
 
@@ -107,18 +148,6 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 "GrainDeliver: grain={Grain}, message={MessageType}, requestContextUserId={RequestContextUser}, deliveryUser={DeliveryUser}, finalUser={FinalUser}",
                 this.GetPrimaryKeyString(), msgType, userId ?? "(null)", deliveryUser ?? "(null)",
                 delivery.AccessContext?.ObjectId ?? "(null)");
-
-        // Keep grain alive during long-running operations (AI streaming, delegations).
-        // DelayDeactivation is called directly on the grain scheduler — no heartbeat
-        // messages or parent chain walking needed. Check by type name to avoid
-        // referencing MeshWeaver.AI from the Orleans hosting layer.
-        if (msgType is "SubmitMessageRequest" or "HeartBeatEvent")
-        {
-            DelayDeactivation(TimeSpan.FromMinutes(10));
-            if (msgType == "SubmitMessageRequest")
-                logger.LogInformation("Grain {GrainId}: DelayDeactivation(10min) for {MessageType}",
-                    this.GetPrimaryKeyString(), msgType);
-        }
 
         var ret = Hub!.DeliverMessage(delivery);
         return Task.FromResult(ret);
