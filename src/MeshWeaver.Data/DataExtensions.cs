@@ -569,6 +569,9 @@ public static class DataExtensions
         var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
         if (!validationResult.IsValid)
         {
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.AccessControl");
+            logger?.LogWarning("HandleGetDataRequest: Access denied for {Sender} at {Hub}, ref={Ref}: {Error}",
+                request.Sender, hub.Address, request.Message.Reference, validationResult.ErrorMessage);
             hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
                 o => o.ResponseFor(request));
             return request.Processed();
