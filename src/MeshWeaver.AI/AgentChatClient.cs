@@ -1,4 +1,5 @@
-﻿using System.Collections.Immutable;
+﻿using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -64,6 +65,9 @@ public class AgentChatClient : IAgentChat
 
     /// <inheritdoc />
     public string? LastDelegationPath { get; set; }
+
+    /// <inheritdoc />
+    public ConcurrentDictionary<string, string> DelegationPaths { get; } = new();
 
     /// <inheritdoc />
     public Action<string>? UpdateDelegationStatus { get; set; }

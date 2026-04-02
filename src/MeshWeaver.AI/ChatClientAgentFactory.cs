@@ -308,11 +308,12 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         Content = new MeshThread()
                     };
 
-                    // Set delegation path and notify — the streaming loop is blocked
-                    // during tool execution, so the throttle never fires. The callback
-                    // pushes the tool call with DelegationPath immediately.
-                    chat.LastDelegationPath = subThreadPath;
-                    chat.UpdateDelegationStatus?.Invoke($"Delegating to {targetId}...");
+                    // Store delegation path keyed by display name for parallel-safe lookup.
+                    // The streaming callback matches pending tool call entries by name.
+                    var delegationDisplayName = $"Delegating to {targetId}...";
+                    chat.DelegationPaths[delegationDisplayName] = subThreadPath;
+                    chat.LastDelegationPath = subThreadPath; // backward compat
+                    chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
 
                     meshService.CreateNode(subThreadNode).Subscribe(
                         _ =>

@@ -356,11 +356,12 @@ public static class ThreadExecution
                     // the streaming loop is blocked during tool execution so the
                     // throttle block never runs. This ensures the parent message
                     // shows the delegation link while the sub-thread executes.
-                    if (!string.IsNullOrEmpty(chatClient.LastDelegationPath))
+                    // Use DelegationPaths dictionary for parallel-safe matching.
+                    if (chatClient.DelegationPaths.TryGetValue(status, out var delPath))
                     {
                         toolCallLog = toolCallLog.Select(e =>
-                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null
-                                ? e with { DelegationPath = chatClient.LastDelegationPath }
+                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null && e.DisplayName == status
+                                ? e with { DelegationPath = delPath }
                                 : e).ToImmutableList();
                         PushToResponseMessage("", toolCallLog,
                             request.AgentName, request.ModelName);
@@ -435,8 +436,10 @@ public static class ThreadExecution
                             string? delegationPath = null;
                             if (originalCall.Name.StartsWith("delegate_to"))
                             {
-                                delegationPath = chatClient.LastDelegationPath;
-                                chatClient.LastDelegationPath = null;
+                                // Extract delegation path from the DelegationResult in the tool output.
+                                // This is safe for parallel delegations (unlike the old LastDelegationPath
+                                // shared state which got overwritten by the last concurrent delegation).
+                                delegationPath = ExtractDelegationPath(functionResult.Result?.ToString());
                                 firstDelegationPath ??= delegationPath;
                             }
 
@@ -467,11 +470,12 @@ public static class ThreadExecution
                 // Push streaming content at ~1/sec via responseStream.Update
                 if (DateTimeOffset.UtcNow - lastUpdate > TimeSpan.FromMilliseconds(1000))
                 {
-                    if (!string.IsNullOrEmpty(chatClient.LastDelegationPath))
+                    // Stamp delegation paths from the parallel-safe dictionary
+                    foreach (var kvp in chatClient.DelegationPaths)
                     {
                         toolCallLog = toolCallLog.Select(e =>
-                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null
-                                ? e with { DelegationPath = chatClient.LastDelegationPath }
+                            e.Name.StartsWith("delegate_to") && e.DelegationPath == null && e.DisplayName == kvp.Key
+                                ? e with { DelegationPath = kvp.Value }
                                 : e).ToImmutableList();
                     }
 
@@ -645,6 +649,30 @@ public static class ThreadExecution
         if (value == null || value.Length <= maxLength)
             return value;
         return value[..(maxLength - 3)] + "...";
+    }
+
+    /// <summary>
+    /// Extracts the delegation path (ThreadId) from a serialized DelegationResult in tool output.
+    /// This is parallel-safe — each tool result carries its own thread path.
+    /// </summary>
+    private static string? ExtractDelegationPath(string? toolResult)
+    {
+        if (string.IsNullOrEmpty(toolResult))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(toolResult);
+            if (doc.RootElement.TryGetProperty("threadId", out var threadIdProp) ||
+                doc.RootElement.TryGetProperty("ThreadId", out threadIdProp))
+            {
+                return threadIdProp.GetString();
+            }
+        }
+        catch
+        {
+            // Not JSON or no ThreadId — fall back to null
+        }
+        return null;
     }
 
     private static IMessageDelivery HandleCancelStream(
