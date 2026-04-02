@@ -62,50 +62,57 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (node.HubConfiguration is null)
             throw new ArgumentException($"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
 
-        Hub = meshHub.GetHostedHub(address, config =>
-            node.HubConfiguration(config)
-                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
-                .Set(new GrainLongRunningOperationCallback(() => BeginLongRunningOperation())))!;
-    }
-
-    /// <summary>
-    /// Starts a long-running operation scope on the grain.
-    /// Calls DelayDeactivation immediately and registers a grain timer for rolling renewal.
-    /// Disposing the returned IDisposable stops the timer and calls ReactivateOnIdle.
-    /// </summary>
-    private IDisposable BeginLongRunningOperation()
-    {
-        var grainId = this.GetPrimaryKeyString();
-        logger.LogInformation("Grain {GrainId}: starting long-running operation", grainId);
-
-        DelayDeactivation(TimeSpan.FromMinutes(10));
-
-        var timer = this.RegisterGrainTimer(
+        // Register a keep-alive timer that renews DelayDeactivation while
+        // long-running operations are active. The timer runs on the grain's scheduler.
+        // Operations increment/decrement the counter; timer only acts when > 0.
+        _keepAliveTimer = this.RegisterGrainTimer(
             _ =>
             {
-                DelayDeactivation(TimeSpan.FromMinutes(10));
+                if (Volatile.Read(ref _activeOperations) > 0)
+                    DelayDeactivation(TimeSpan.FromMinutes(10));
                 return Task.CompletedTask;
             },
             new GrainTimerCreationOptions
             {
-                DueTime = TimeSpan.FromMinutes(5),
-                Period = TimeSpan.FromMinutes(5),
-                Interleave = true // allow other messages while timer fires
+                DueTime = TimeSpan.FromMinutes(1),
+                Period = TimeSpan.FromMinutes(1),
+                Interleave = true
             });
 
-        return new LongRunningOperationScope(timer, () =>
+        Hub = meshHub.GetHostedHub(address, config =>
+            node.HubConfiguration(config)
+                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
+                .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
+    }
+
+    private IGrainTimer? _keepAliveTimer;
+    private int _activeOperations;
+
+    /// <summary>
+    /// Starts a long-running operation scope.
+    /// Increments the active operation counter and calls DelayDeactivation immediately.
+    /// The grain timer periodically renews while counter > 0.
+    /// Thread-safe: can be called from any thread (streaming loop, thread pool).
+    /// </summary>
+    private IDisposable BeginLongRunningOperation()
+    {
+        Interlocked.Increment(ref _activeOperations);
+        // DelayDeactivation is thread-safe in Orleans
+        DelayDeactivation(TimeSpan.FromMinutes(10));
+        logger.LogInformation("Grain {GrainId}: long-running operation started (active={Count})",
+            this.GetPrimaryKeyString(), Volatile.Read(ref _activeOperations));
+
+        return new LongRunningOperationScope(() =>
         {
-            logger.LogInformation("Grain {GrainId}: long-running operation completed", grainId);
+            var remaining = Interlocked.Decrement(ref _activeOperations);
+            logger.LogInformation("Grain {GrainId}: long-running operation completed (active={Count})",
+                this.GetPrimaryKeyString(), remaining);
         });
     }
 
-    private sealed class LongRunningOperationScope(IGrainTimer timer, Action onDispose) : IDisposable
+    private sealed class LongRunningOperationScope(Action onDispose) : IDisposable
     {
-        public void Dispose()
-        {
-            timer.Dispose();
-            onDispose();
-        }
+        public void Dispose() => onDispose();
     }
 
 
