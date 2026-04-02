@@ -34,7 +34,7 @@ public static class MarkdownEditLayoutArea
 
         return Controls.Stack
             .WithWidth("100%")
-            .WithHeight("100%")
+            .WithStyle("height: calc(100vh - 100px); display: flex; flex-direction: column;")
             .WithView((h, ctx) => nodeStream.Take(1).Select(nodes =>
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == hubPath);
@@ -51,11 +51,11 @@ public static class MarkdownEditLayoutArea
         string initialContent,
         bool trackChanges)
     {
-        var backHref = $"/{hubPath}";
+        var backHref = MeshNodeLayoutAreas.BuildUrl(hubPath, MarkdownLayoutAreas.OverviewArea);
 
         var container = Controls.Stack
             .WithWidth("100%")
-            .WithHeight("100%");
+            .WithStyle("flex: 1; display: flex; flex-direction: column; min-height: 0;");
 
         // Set up data binding for node name (used in title bar)
         string? dataId = null;
@@ -116,7 +116,7 @@ public static class MarkdownEditLayoutArea
 
         var editorWrapper = Controls.Stack
             .WithWidth("100%")
-            .WithStyle("flex: 1; width: 100%; padding: 0; min-height: 0;")
+            .WithStyle("flex: 1; width: 100%; padding: 0; margin-top: 8px; min-height: 0; overflow: hidden;")
             .WithView(editor);
 
         container = container.WithView(editorWrapper);

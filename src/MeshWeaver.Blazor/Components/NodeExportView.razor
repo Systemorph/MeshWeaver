@@ -1,0 +1,186 @@
+@using MeshWeaver.Mesh
+@using MeshWeaver.Mesh.Services
+@using Microsoft.Extensions.DependencyInjection
+@using Microsoft.JSInterop
+@using System.IO.Compression
+@inherits BlazorView<NodeExportControl, NodeExportView>
+
+<div class="node-export-view" style="max-width: 800px;">
+    <p style="color: var(--neutral-foreground-hint); margin-bottom: 24px;">
+        Export <strong>@(NodeName ?? SourcePath)</strong> and its subtree as a ZIP archive
+        with native file formats (.md, .cs, .json).
+    </p>
+
+    @if (SatelliteTypes.Count > 0 && !IsExporting && !ExportDone)
+    {
+        <div style="margin-bottom: 24px;">
+            <p style="font-weight: 600; margin-bottom: 8px;">Include satellite data:</p>
+            @foreach (var satType in SatelliteTypes)
+            {
+                var st = satType;
+                <FluentCheckbox Value="@IsIncluded(st)"
+                                ValueChanged="@(v => ToggleSatellite(st, v))"
+                                Label="@st"
+                                Style="margin-bottom: 4px;" />
+            }
+        </div>
+    }
+
+    @if (!IsExporting && ExportError == null && !ExportDone)
+    {
+        <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                      IconStart="@(new Icons.Regular.Size16.ArrowExport())"
+                      OnClick="@ExportAndDownloadAsync">
+            Export &amp; Download ZIP
+        </FluentButton>
+    }
+
+    @if (IsExporting)
+    {
+        <FluentProgress Visible="true" />
+        <p style="margin-top: 8px; color: var(--neutral-foreground-hint);">@ProgressMessage</p>
+    }
+
+    @if (ExportDone)
+    {
+        <FluentCard Style="padding: 16px; margin-top: 16px;">
+            <h3 style="color: var(--success); margin: 0 0 12px 0;">Export Complete</h3>
+            <p><strong>Nodes exported:</strong> @NodesExported</p>
+            <p>The ZIP file has been downloaded to your browser.</p>
+        </FluentCard>
+
+        <div style="margin-top: 16px; display: flex; gap: 8px;">
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Accent"
+                          OnClick="@Reset">Export Again</FluentButton>
+        </div>
+    }
+
+    @if (ExportError != null)
+    {
+        <FluentCard Style="padding: 16px; margin-top: 16px; border-left: 4px solid var(--error);">
+            <p style="color: var(--error); margin: 0;">@ExportError</p>
+        </FluentCard>
+
+        <div style="margin-top: 16px;">
+            <FluentButton Appearance="Microsoft.FluentUI.AspNetCore.Components.Appearance.Neutral"
+                          OnClick="@Reset">Try Again</FluentButton>
+        </div>
+    }
+</div>
+
+@code
+{
+    private string? SourcePath;
+    private string? NodeName;
+    private IReadOnlyList<string> SatelliteTypes = [];
+    private HashSet<string> ExcludedSatellites = new();
+    private bool IsExporting;
+    private bool ExportDone;
+    private string ProgressMessage = "";
+    private int NodesExported;
+    private string? ExportError;
+
+    // Default excluded satellites (ephemeral/internal types)
+    private static readonly HashSet<string> DefaultExcluded = new()
+    {
+        "Thread", "ThreadMessage", "Activity", "ActivityLog", "UserActivity",
+        "Notification", "KernelSession"
+    };
+
+    protected override void BindData()
+    {
+        base.BindData();
+        SourcePath = ViewModel?.SourcePath;
+        NodeName = ViewModel?.NodeName;
+        SatelliteTypes = ViewModel?.AvailableSatelliteTypes ?? [];
+
+        // By default, exclude ephemeral satellite types; include Comment, TrackedChange, Approval, AccessAssignment
+        ExcludedSatellites = new HashSet<string>();
+        foreach (var st in SatelliteTypes)
+        {
+            if (DefaultExcluded.Contains(st))
+                ExcludedSatellites.Add(st);
+        }
+    }
+
+    private bool IsIncluded(string satelliteType) => !ExcludedSatellites.Contains(satelliteType);
+
+    private void ToggleSatellite(string satelliteType, bool included)
+    {
+        if (included)
+            ExcludedSatellites.Remove(satelliteType);
+        else
+            ExcludedSatellites.Add(satelliteType);
+    }
+
+    private async Task ExportAndDownloadAsync()
+    {
+        if (string.IsNullOrEmpty(SourcePath)) return;
+
+        IsExporting = true;
+        ExportError = null;
+        ExportDone = false;
+        ProgressMessage = "Exporting nodes...";
+        StateHasChanged();
+
+        string? tempDir = null;
+        try
+        {
+            var exportService = Hub.ServiceProvider.GetRequiredService<IMeshExportService>();
+
+            tempDir = Path.Combine(Path.GetTempPath(), $"meshexport_{Guid.NewGuid():N}");
+
+            IReadOnlySet<string>? excluded = ExcludedSatellites.Count > 0
+                ? ExcludedSatellites
+                : null;
+
+            var result = await exportService.ExportToDirectoryAsync(SourcePath, tempDir, excluded);
+
+            if (!result.Success)
+            {
+                ExportError = result.Error;
+                IsExporting = false;
+                StateHasChanged();
+                return;
+            }
+
+            NodesExported = result.NodesExported;
+            ProgressMessage = $"Zipping {NodesExported} nodes...";
+            StateHasChanged();
+
+            // Create ZIP in memory
+            using var memoryStream = new MemoryStream();
+            ZipFile.CreateFromDirectory(tempDir, memoryStream, CompressionLevel.Optimal, includeBaseDirectory: false);
+            memoryStream.Position = 0;
+
+            // Trigger browser download via JS interop
+            var nodeId = SourcePath.Split('/').LastOrDefault() ?? "export";
+            var fileName = $"{nodeId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.zip";
+
+            using var streamRef = new DotNetStreamReference(memoryStream);
+            await JSRuntime.InvokeVoidAsync("meshweaverDownloadFileFromStream", fileName, streamRef);
+
+            IsExporting = false;
+            ExportDone = true;
+        }
+        catch (Exception ex)
+        {
+            ExportError = $"Export failed: {ex.Message}";
+            IsExporting = false;
+        }
+        finally
+        {
+            if (tempDir != null && Directory.Exists(tempDir))
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            StateHasChanged();
+        }
+    }
+
+    private void Reset()
+    {
+        IsExporting = false;
+        ExportDone = false;
+        ExportError = null;
+        ProgressMessage = "";
+    }
+}

@@ -43,7 +43,24 @@ public enum Permission
     Execute = 32,
 
     /// <summary>
-    /// All permissions (Read, Create, Update, Delete, Comment, Execute).
+    /// Permission to create and use threads (chat conversations).
     /// </summary>
-    All = Read | Create | Update | Delete | Comment | Execute
+    Thread = 64,
+
+    /// <summary>
+    /// Permission to access nodes via API tokens (MCP / programmatic access).
+    /// Included in all built-in roles by default.
+    /// </summary>
+    Api = 128,
+
+    /// <summary>
+    /// Permission to export nodes (download as files).
+    /// Granted to Editor and Admin roles, not to Viewer.
+    /// </summary>
+    Export = 256,
+
+    /// <summary>
+    /// All permissions (Read, Create, Update, Delete, Comment, Execute, Thread, Api, Export).
+    /// </summary>
+    All = Read | Create | Update | Delete | Comment | Execute | Thread | Api | Export
 }

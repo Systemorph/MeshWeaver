@@ -1,4 +1,5 @@
-﻿using System.Text.RegularExpressions;
+﻿using System.Collections.Immutable;
+using System.Text.RegularExpressions;
 using MeshWeaver.Data;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Services;
@@ -29,6 +30,18 @@ public static class ThreadNodeType
     public const string ThreadArea = "Thread";
 
     /// <summary>
+    /// Layout area for just the chat control (messages + input), without the header.
+    /// Used by the side panel to avoid rendering the full-page header.
+    /// </summary>
+    public const string ThreadChatArea = "ThreadChat";
+
+    /// <summary>
+    /// Layout area showing current execution progress: streaming response message.
+    /// Parent threads subscribe to this.
+    /// </summary>
+    public const string StreamingArea = "Streaming";
+
+    /// <summary>
     /// Layout area for delegation sub-thread history.
     /// </summary>
     public const string HistoryArea = "History";
@@ -52,6 +65,31 @@ public static class ThreadNodeType
         // Append short unique suffix to avoid collisions
         var suffix = Guid.NewGuid().ToString("N")[..4];
         return string.IsNullOrEmpty(slug) ? suffix : $"{slug}-{suffix}";
+    }
+
+    /// <summary>
+    /// Builds a MeshNode for a new thread. Use with CreateNodeRequest.
+    /// </summary>
+    /// <param name="contextPath">The namespace/context path (e.g., "User/Roland")</param>
+    /// <param name="messageText">First message text — used for name and speaking ID</param>
+    /// <param name="createdBy">User ID who creates the thread</param>
+    public static MeshNode BuildThreadNode(string contextPath, string messageText, string? createdBy = null)
+    {
+        var speakingId = GenerateSpeakingId(messageText);
+        var ns = string.IsNullOrEmpty(contextPath)
+            ? ThreadPartition
+            : $"{contextPath}/{ThreadPartition}";
+        var name = messageText.Length > 60
+            ? messageText[..57] + "..."
+            : messageText;
+
+        return new MeshNode(speakingId, ns)
+        {
+            Name = name,
+            NodeType = NodeType,
+            MainNode = contextPath,
+            Content = new Thread { CreatedBy = createdBy }
+        };
     }
 
     /// <summary>
@@ -88,10 +126,11 @@ public static class ThreadNodeType
             Name = "Thread",
             Icon = "/static/NodeTypeIcons/chat.svg",
             IsSatelliteType = true,
-            ExcludeFromContext = new HashSet<string> { "search" },
+            ExcludeFromContext = ImmutableHashSet.Create("search"),
             AssemblyLocation = typeof(ThreadNodeType).Assembly.Location,
             HubConfiguration = config => config
                 .AddThreadLayoutAreas()
+                .AddThreadExecution()
                 .AddMeshDataSource(source => source
                     .WithContentType<Thread>())
         };

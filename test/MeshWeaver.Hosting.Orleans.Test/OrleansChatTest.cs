@@ -32,7 +32,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
 /// End-to-end chat test on Orleans infrastructure with FileSystem persistence.
-/// Verifies CreateThreadRequest, SubmitMessageRequest, ThreadMessages streaming,
+/// Verifies CreateNodeRequest, SubmitMessageRequest, ThreadMessages streaming,
 /// and GetDataRequest on Thread + ThreadMessage nodes.
 /// </summary>
 public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
@@ -76,10 +76,10 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
         var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = ContextPath, UserMessageText = text },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ContextPath, text)),
             o => o.WithTarget(new Address(ContextPath)), ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.ThreadPath!;
+        return response.Message.Node!.Path!;
     }
 
     private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
@@ -90,14 +90,16 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
-                return (IReadOnlyList<string>)(content?.ThreadMessages ?? []);
+                return (IReadOnlyList<string>)(content?.Messages ?? []);
             });
     }
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
+        // MeshNode key is Id (last segment), not full path
+        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), path)),
+            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
@@ -147,8 +149,8 @@ public class OrleansChatTest(ITestOutputHelper output) : TestBase(output)
         // 5. Verify Thread content via GetDataRequest
         var threadContent = await GetHubContentAsync<MeshThread>(client, threadPath, ct);
         threadContent.Should().NotBeNull("Thread hub should return Thread content");
-        threadContent!.ThreadMessages.Should().HaveCount(2);
-        Output.WriteLine($"Thread.ThreadMessages verified: {threadContent.ThreadMessages.Count}");
+        threadContent!.Messages.Should().HaveCount(2);
+        Output.WriteLine($"Thread.Messages verified: {threadContent.Messages.Count}");
 
         // 6. Verify user message via GetDataRequest
         var userContent = await GetHubContentAsync<ThreadMessage>(
@@ -203,7 +205,6 @@ public class ChatSiloConfigurator : ISiloConfigurator, IHostConfigurator
             .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })

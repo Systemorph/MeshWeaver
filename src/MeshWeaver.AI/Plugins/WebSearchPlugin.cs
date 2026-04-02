@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
@@ -76,13 +77,13 @@ public class WebSearchPlugin : IAgentPlugin
             var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
 
-            var results = new List<object>();
+            var results = ImmutableList<object>.Empty;
             if (doc.RootElement.TryGetProperty("webPages", out var webPages) &&
                 webPages.TryGetProperty("value", out var pages))
             {
                 foreach (var page in pages.EnumerateArray())
                 {
-                    results.Add(new
+                    results = results.Add(new
                     {
                         title = page.GetProperty("name").GetString(),
                         url = page.GetProperty("url").GetString(),

@@ -72,6 +72,7 @@ public static class UserNodeType
         Name = "User",
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
+        ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(UserNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "User", RestrictedToNamespaces = ["User"] },
         HubConfiguration = config => config
@@ -254,7 +255,7 @@ public static class UserNodeType
     }
 
     /// <summary>
-    /// Post-creation handler that grants the user Read access on their own User/{userId} scope.
+    /// Post-creation handler that grants the user Admin access on their own User/{userId} scope.
     /// Materialized into user_effective_permissions so the standard access control SQL
     /// handles visibility for all satellite nodes (threads, activities, etc.) under the user.
     /// </summary>
@@ -264,15 +265,15 @@ public static class UserNodeType
 
         public async Task HandleAsync(MeshNode createdNode, string? createdBy, CancellationToken ct)
         {
-            // Grant the user Viewer role on their own User node path.
-            // This materializes into user_effective_permissions as Read on User/{userId}/...
-            // so all satellite nodes (threads, activities) are visible to the user.
+            // Grant the user Admin role on their own User node path.
+            // This materializes into user_effective_permissions with full access on User/{userId}/...
+            // so the user can manage all their own content (threads, activities, etc.).
             var userId = createdNode.Id;
             if (string.IsNullOrEmpty(userId))
                 return;
 
             var userPath = createdNode.Path ?? $"User/{userId}";
-            await securityService.AddUserRoleAsync(userId, Role.Viewer.Id, userPath, assignedBy: "system", ct);
+            await securityService.AddUserRoleAsync(userId, Role.Admin.Id, userPath, assignedBy: "system", ct);
         }
     }
 }

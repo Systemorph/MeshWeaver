@@ -1,0 +1,93 @@
+.dev-login-container {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 40px 20px;
+    background: var(--neutral-layer-4);
+}
+
+.dev-login-card {
+    background: var(--neutral-layer-1);
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+    padding: 32px;
+    max-width: 500px;
+    width: 100%;
+}
+
+.dev-login-header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+
+.dev-login-header h1 {
+    margin: 12px 0 8px;
+    font-size: 1.5rem;
+}
+
+.dev-login-subtitle {
+    color: var(--neutral-foreground-hint);
+    margin: 0;
+}
+
+.loading-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 32px;
+}
+
+.person-card {
+    display: flex;
+    align-items: center;
+    padding: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.person-card:hover {
+    background: var(--neutral-layer-2);
+}
+
+.avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    object-fit: cover;
+}
+
+div.avatar {
+    background: #0078d4;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    font-size: 14px;
+}
+
+.person-name {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.person-role {
+    font-size: 0.8rem;
+    color: var(--neutral-foreground-hint);
+    background: var(--neutral-layer-3);
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+.person-email {
+    font-size: 0.875rem;
+    color: var(--neutral-foreground-hint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+

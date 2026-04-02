@@ -72,14 +72,20 @@ public class PostgreSqlFixture : IAsyncLifetime
         dsBuilder.UseVector();
         var schemaDs = dsBuilder.Build();
 
-        // Initialize mesh_nodes table in the schema
-        await PostgreSqlSchemaInitializer.InitializeAsync(schemaDs, Options);
+        // Initialize mesh_nodes table in the schema — pass schema name so that
+        // rebuild_user_effective_permissions() gets the correct search_path hardcoded.
+        var schemaOptions = new PostgreSqlStorageOptions
+        {
+            VectorDimensions = Options.VectorDimensions,
+            Schema = schemaName
+        };
+        await PostgreSqlSchemaInitializer.InitializeAsync(schemaDs, schemaOptions);
 
         // Create satellite tables if partition definition has mappings
         if (partitionDef?.TableMappings is { Count: > 0 })
         {
             await PostgreSqlSchemaInitializer.CreateSatelliteTablesAsync(
-                schemaDs, Options, partitionDef.TableMappings.Values, ct);
+                schemaDs, schemaOptions, partitionDef.TableMappings.Values, ct);
         }
 
         var adapter = new PostgreSqlStorageAdapter(schemaDs, partitionDefinition: partitionDef);

@@ -76,6 +76,7 @@ public class SidePanelStateService
         if (State.ContentPath != contentPath)
         {
             State = State with { ContentPath = contentPath };
+            NotifyStateChanged();
         }
     }
 

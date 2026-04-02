@@ -102,11 +102,17 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             fanOutQuery += " is:main";
 
         // Cross-schema query: single UNION ALL across all searchable schemas (PostgreSQL only).
-        // Only used for global search and activity feed — never for namespace-scoped queries
-        // (those are routed to a single partition above via routing hints or path extraction).
-        if (_crossSchemaProvider != null)
+        // Only for queries on mesh_nodes — satellite queries (source:activity, source:accessed)
+        // and satellite node types (Thread, ThreadMessage) require per-partition fan-out
+        // because the stored proc only searches mesh_nodes.
+        var satelliteNodeType = parsed.ExtractNodeType() is { } nt
+            && PartitionDefinition.NodeTypeToSuffix.ContainsKey(nt);
+        var useCrossSchema = _crossSchemaProvider != null
+            && parsed.Source == QuerySource.Default
+            && !satelliteNodeType;
+        if (useCrossSchema)
         {
-            var schemas = await _crossSchemaProvider.GetSearchableSchemasAsync(ct);
+            var schemas = await _crossSchemaProvider!.GetSearchableSchemasAsync(ct);
             var crossParsed = _parser.Parse(fanOutQuery);
             var userId = GetEffectiveUserId();
 
@@ -132,6 +138,18 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
             foreach (var item in crossSorted)
                 yield return item;
+
+            // Also query in-memory partitions not covered by cross-schema (e.g., static Doc partition)
+            var searchableSchemas = new HashSet<string>(schemas, StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, p) in _router.QueryProviders)
+            {
+                if (searchableSchemas.Contains(key)) continue; // Already queried via cross-schema
+                await foreach (var item in p.QueryAsync(
+                    request with { Query = fanOutQuery }, options, ct))
+                {
+                    yield return item;
+                }
+            }
             yield break;
         }
 
@@ -236,6 +254,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             yield break;
         }
 
+        // Discover and provision any new partitions (lazy init)
+        await foreach (var _ in _router.DiscoverNewProvidersAsync(ct))
+        { /* provisioning happens as a side effect */ }
+
         // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
         // Use searchable_schemas from cross-schema provider if available.
         var searchableSchemas = _crossSchemaProvider != null
@@ -296,6 +318,10 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
                 yield return s;
             yield break;
         }
+
+        // Discover and provision any new partitions (lazy init)
+        await foreach (var _ in _router.DiscoverNewProvidersAsync(ct))
+        { /* provisioning happens as a side effect */ }
 
         // Fan out: only to searchable partitions (excludes Admin, Portal, Kernel).
         var searchableSchemas = _crossSchemaProvider != null
@@ -409,6 +435,8 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             var initialCount = 0;
             var initialTarget = observables.Count;
             var gate = new object();
+            var fanOutParsed = _parser.Parse(fanOutQuery);
+            var globalLimit = request.Limit ?? fanOutParsed.Limit;
 
             var subscriptions = new List<IDisposable>();
 
@@ -426,7 +454,17 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
 
                                 if (initialCount == initialTarget)
                                 {
-                                    observer.OnNext(change with { Items = initialItems.ToList() });
+                                    // Re-sort merged results across all partitions
+                                    IEnumerable<T> merged = initialItems;
+                                    if (fanOutParsed.OrderBy != null)
+                                    {
+                                        var evaluator = new QueryEvaluator();
+                                        merged = evaluator.OrderResults(merged, fanOutParsed.OrderBy);
+                                    }
+                                    if (globalLimit.HasValue)
+                                        merged = merged.Take(globalLimit.Value);
+
+                                    observer.OnNext(change with { Items = merged.ToList() });
                                 }
                             }
                         }

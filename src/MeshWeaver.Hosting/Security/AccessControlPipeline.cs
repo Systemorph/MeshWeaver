@@ -1,8 +1,9 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -33,7 +34,7 @@ public static class AccessControlPipeline
 
             var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                ?.CreateLogger("AccessControlPipeline");
+                ?.CreateLogger("MeshWeaver.AccessContext");
 
             // Hub-level permission rules (e.g., WithPublicRead) — checked before ISecurityService
             var hubPermissions = hub.Configuration.Get<HubPermissionRuleSet>();
@@ -45,6 +46,19 @@ public static class AccessControlPipeline
                     return await next.Invoke(delivery, ct);
 
                 var userId = ResolveIdentity(delivery, accessService);
+
+                // Log identity resolution details for debugging access issues
+                if (string.IsNullOrEmpty(userId))
+                    logger?.LogWarning(
+                        "AccessControlPipeline: ANONYMOUS delivery — hub={Hub}, message={MessageType}, " +
+                        "delivery.AccessContext={DeliveryContext}, accessService.Context={ServiceContext}, " +
+                        "circuitContext={CircuitContext}, sender={Sender}",
+                        hub.Address,
+                        delivery.Message.GetType().Name,
+                        delivery.AccessContext?.ObjectId ?? "(null)",
+                        accessService.Context?.ObjectId ?? "(null)",
+                        accessService.CircuitContext?.ObjectId ?? "(null)",
+                        delivery.Sender);
 
                 var hubPath = string.Join("/", hub.Address.Segments);
 

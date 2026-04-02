@@ -78,6 +78,13 @@ public record AgentConfiguration
     public string? PreferredModel { get; init; }
 
     /// <summary>
+    /// Model tier for this agent: "heavy" (most capable), "standard" (balanced), "light" (fast/cheap).
+    /// Resolved at runtime via ModelTierConfiguration to an actual model name.
+    /// Takes effect only when PreferredModel is not set.
+    /// </summary>
+    public string? ModelTier { get; init; }
+
+    /// <summary>
     /// RSQL pattern for context matching.
     /// If set, agent activates when context matches this pattern.
     /// Example: "address.type==pricing" or "address.path=like=*Todo*"

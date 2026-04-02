@@ -50,10 +50,6 @@ public static class CreateLayoutArea
     {
         var currentPath = host.Hub.Address.ToString();
 
-        // Check current node state once (Take(1)) to decide which view to show.
-        // We must NOT react to every nodeStream emission, because BuildCreateEditor
-        // calls host.UpdateData which resets form data — causing the editor to lose
-        // user input and rebuild the UI on every stream emission.
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return<MeshNode[]>(Array.Empty<MeshNode>());
 
@@ -61,40 +57,18 @@ public static class CreateLayoutArea
         {
             var currentNode = nodes.FirstOrDefault(n => n.Path == currentPath);
 
-            // If current node is Transient, show Create editor (own node)
+            // If current node is Transient, confirm it (set Active) and redirect to Edit
             if (currentNode?.State == MeshNodeState.Transient)
             {
-                return (UiControl?)BuildCreateEditor(host, currentNode);
+                var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
+                var activeNode = currentNode with { State = MeshNodeState.Active };
+                await nodeFactory.UpdateNodeAsync(activeNode);
+
+                var editUrl = MeshNodeLayoutAreas.BuildUrl(currentPath, MeshNodeLayoutAreas.EditArea);
+                return (UiControl?)Controls.Redirect(editUrl);
             }
 
-            // Permission gate: check Create permission on current path
-            var canCreate = await PermissionHelper.CanCreateAsync(host.Hub, currentPath);
-            if (!canCreate)
-            {
-                // Fallback: in cross-hub layout rendering, ISecurityService may not have
-                // the real user's context (ImpersonateAsHub sets hub identity instead).
-                // Check if a DI-registered INodeTypeAccessRule supports Create for this type;
-                // if so, show the form and let the backend (RlsNodeValidator) enforce actual security.
-                var accessRules = host.Hub.ServiceProvider.GetServices<INodeTypeAccessRule>();
-
-                // Match by nodeType field or by hub path (NodeType hubs have path == type name)
-                var nodeType = currentNode?.NodeType;
-                var rule = accessRules.FirstOrDefault(r =>
-                    (!string.IsNullOrEmpty(nodeType) && r.NodeType.Equals(nodeType, StringComparison.OrdinalIgnoreCase))
-                    || r.NodeType.Equals(currentPath, StringComparison.OrdinalIgnoreCase));
-
-                if (rule != null && rule.SupportedOperations.Contains(NodeOperation.Create))
-                    canCreate = true;
-            }
-            if (!canCreate)
-            {
-                return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
-                    .WithView(Controls.H2("Access Denied").WithStyle("margin: 0 0 16px 0;"))
-                    .WithView(Controls.Html(
-                        "<p style=\"color: var(--neutral-foreground-hint);\">You do not have permission to create nodes here.</p>"));
-            }
-
-            // Show unified Create New form
+            // Not transient — show the Create New form inline
             return (UiControl?)BuildCreateNewForm(host, nodes, currentPath);
         });
     }
@@ -131,8 +105,8 @@ public static class CreateLayoutArea
         }
 
         var cancelUrl = !string.IsNullOrEmpty(parentPath)
-            ? MeshNodeLayoutAreas.BuildUrl(parentPath, MeshNodeLayoutAreas.OverviewArea)
-            : MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
+            ? $"/{parentPath}"
+            : $"/{nodePath}";
         var nodeFactory = host.Hub.ServiceProvider.GetRequiredService<IMeshService>();
         var logger = host.Hub.ServiceProvider.GetService<ILogger<LayoutAreaHost>>();
 
@@ -145,7 +119,7 @@ public static class CreateLayoutArea
         };
         host.UpdateData(metadataDataId, metadataFormData);
 
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
+        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; height: 100%; display: flex; flex-direction: column;");
 
         // Header: "Create {Name}" - data-bound to name field
         stack = stack.WithView((h, _) =>
@@ -175,7 +149,7 @@ public static class CreateLayoutArea
             host.UpdateData(dataId, contentInstance);
 
             var editor = Layout.Domain.EditLayoutArea.Overview(host, contentType, dataId, canEdit: true, isToggleable: false);
-            stack = stack.WithView(editor);
+            stack = stack.WithView(Controls.Stack.WithStyle("flex: 1; min-height: 0;").WithView(editor));
 
             // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
@@ -239,16 +213,16 @@ public static class CreateLayoutArea
             var editor = new MarkdownEditorControl()
                 .WithDocumentId(nodePath)
                 .WithValue(rawContent ?? "")
-                .WithHeight("400px")
+                .WithHeight("100%")
                 .WithPlaceholder("Start writing your markdown content...")
                 .WithAutoSave(host.Hub.Address.ToString(), nodePath);
-            stack = stack.WithView(editor);
+            stack = stack.WithView(Controls.Stack.WithStyle("flex: 1; min-height: 0;").WithView(editor));
 
             // Buttons: Cancel on left, Create on right
             stack = stack.WithView(Controls.Stack
                 .WithOrientation(Orientation.Horizontal)
                 .WithHorizontalGap(12)
-                .WithStyle("margin-top: 24px; justify-content: flex-start;")
+                .WithStyle("margin-top: 12px; flex-shrink: 0; justify-content: flex-start;")
                 .WithView(Controls.Button("Cancel")
                     .WithAppearance(Appearance.Neutral)
                     .WithClickAction(async ctx =>
@@ -364,8 +338,7 @@ public static class CreateLayoutArea
                 if (task.IsCompletedSuccessfully)
                 {
                     logger?.LogInformation("Successfully confirmed node at {NodePath}", nodePath);
-                    var overviewUrl = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
-                    ctx.NavigateTo(overviewUrl, replace: true);
+                    ctx.NavigateTo($"/{nodePath}");
                 }
                 else if (task.IsFaulted)
                 {
@@ -415,23 +388,19 @@ public static class CreateLayoutArea
                 {
                     logger?.LogInformation("Successfully created node at {NewPath}", newPath);
 
-                    // Delete the transient node asynchronously
-                    _ = Task.Run(async () =>
+                    // Delete the transient node on the hub's execution pipeline
+                    host.Hub.InvokeAsync(async ct =>
                     {
-                        try
-                        {
-                            await nodeFactory.DeleteNodeAsync(transientPath);
-                            logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
-                        }
-                        catch (Exception ex)
-                        {
-                            logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
-                        }
+                        await nodeFactory.DeleteNodeAsync(transientPath);
+                        logger?.LogInformation("Deleted transient node at {TransientPath}", transientPath);
+                    }, ex =>
+                    {
+                        logger?.LogWarning(ex, "Failed to delete transient node at {TransientPath}", transientPath);
+                        return Task.CompletedTask;
                     });
 
                     // Navigate to the new node
-                    var overviewUrl = MeshNodeLayoutAreas.BuildUrl(newPath, MeshNodeLayoutAreas.OverviewArea);
-                    ctx.NavigateTo(overviewUrl, replace: true);
+                    ctx.NavigateTo($"/{newPath}");
                 }
                 else if (task.IsFaulted)
                 {
@@ -549,39 +518,15 @@ public static class CreateLayoutArea
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 16px;"));
 
-        // 5. Id field with auto-generation from Name
-        var lastAutoId = "";
-        var isAutoUpdating = false;
-        host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
-            .Subscribe(data =>
-            {
-                if (isAutoUpdating || data == null) return;
-                var name = data.GetValueOrDefault("name")?.ToString() ?? "";
-                var currentId = data.GetValueOrDefault("id")?.ToString() ?? "";
-                if (string.IsNullOrWhiteSpace(name)) return;
-
-                var generatedId = GenerateIdFromName(name);
-                if (string.IsNullOrEmpty(generatedId)) return;
-
-                // Auto-update if id is empty or matches the last auto-generated value
-                if (currentId != generatedId && (string.IsNullOrEmpty(currentId) || currentId == lastAutoId))
-                {
-                    lastAutoId = generatedId;
-                    isAutoUpdating = true;
-                    var updated = new Dictionary<string, object?>(data) { ["id"] = generatedId };
-                    host.UpdateData(formId, updated);
-                    isAutoUpdating = false;
-                }
-            });
-
+        // 5. Id field (optional — auto-generated from Name at submit time if left empty)
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("id"))
         {
-            Label = "Id",
-            Placeholder = "Auto-generated from name...",
+            Label = "Id (optional)",
+            Placeholder = "Leave empty to auto-generate from name",
             Immediate = true,
             DataContext = dataContext
         }.WithStyle("width: 100%; margin-bottom: 4px;"));
-        stack = stack.WithView(Controls.Body("This will be used as the node's identifier in the path")
+        stack = stack.WithView(Controls.Body("Leave empty to auto-generate from the name (e.g. \"My Article\" → \"MyArticle\")")
             .WithStyle("color: var(--neutral-foreground-hint); font-size: 12px; margin-bottom: 16px;"));
 
         // 6. Type picker (or readonly label if restricted to single value)

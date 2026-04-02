@@ -66,6 +66,7 @@ public static class LayoutExtensions
                 .WithServices(services => services
                     .AddScoped<IUiControlService, UiControlService>()
                     .AddScoped<IAutocompleteProvider, LayoutAreaAutocompleteProvider>())
+                .WithHandler<GetDataRequest>(HandleLayoutAreasRequest)
                 .AddData(data =>
                 {
                     // Register the area: prefix resolver for UnifiedReference (only if not already registered)
@@ -579,5 +580,38 @@ public static class LayoutExtensions
         );
 
         return stream;
+    }
+
+    /// <summary>
+    /// Handles GetDataRequest for layoutAreas: prefix directly, bypassing the
+    /// Observable/SynchronizationStream/FirstAsync chain that can race.
+    /// AreaDefinitions are immutable and fully known at config time.
+    /// </summary>
+    private static Task<IMessageDelivery> HandleLayoutAreasRequest(
+        IMessageHub hub,
+        IMessageDelivery<GetDataRequest> request,
+        CancellationToken ct)
+    {
+        // Only handle UnifiedReference with "layoutAreas:" prefix
+        if (request.Message.Reference is not UnifiedReference uRef
+            || !uRef.Path.StartsWith("layoutAreas", StringComparison.OrdinalIgnoreCase))
+            return Task.FromResult<IMessageDelivery>(request); // Pass through to next handler
+
+        var uiControlService = hub.ServiceProvider.GetService<IUiControlService>();
+        if (uiControlService == null)
+        {
+            hub.Post(new GetDataResponse(null, 0) { Error = "Layout not configured" },
+                o => o.ResponseFor(request));
+            return Task.FromResult(request.Processed());
+        }
+
+        var areas = uiControlService.LayoutDefinition
+            .AreaDefinitions
+            .Values
+            .Where(l => l.IsVisible())
+            .ToList();
+
+        hub.Post(new GetDataResponse(areas, hub.Version), o => o.ResponseFor(request));
+        return Task.FromResult(request.Processed());
     }
 }

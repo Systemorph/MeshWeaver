@@ -16,7 +16,17 @@ public enum SpinnerType
     /// <summary>
     /// Discreet three blinking dots indicator.
     /// </summary>
-    Dots
+    Dots,
+
+    /// <summary>
+    /// Ghost box skeleton placeholder (pulsing lines).
+    /// </summary>
+    Skeleton,
+
+    /// <summary>
+    /// No spinner — empty space while loading.
+    /// </summary>
+    None
 }
 
 /// <summary>

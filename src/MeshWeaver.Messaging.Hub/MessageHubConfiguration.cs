@@ -202,7 +202,7 @@ public record MessageHubConfiguration
     private SyncPipelineConfig UserServicePostPipeline(SyncPipelineConfig syncPipeline)
     {
         var userService = syncPipeline.Hub.ServiceProvider.GetService<AccessService>();
-        var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("PostPipeline");
+        var logger = syncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
         return syncPipeline.AddPipeline((d, next) =>
         {
             // If AccessContext was pre-set by ImpersonateAsHub(), don't overwrite
@@ -210,7 +210,7 @@ public record MessageHubConfiguration
                 return next(d);
 
             // Context = per-request AsyncLocal (delivery pipeline).
-            // CircuitContext = persistent Blazor session context (for component-initiated posts).
+            // CircuitContext = per-circuit AsyncLocal (set by CircuitAccessHandler).
             var context = userService?.Context ?? userService?.CircuitContext;
             if (context is not null)
                 d = d.SetAccessContext(context);
@@ -225,7 +225,7 @@ public record MessageHubConfiguration
                 });
             }
             logger?.LogDebug(
-                "PostPipeline: hub={Hub}, message={MessageType}, resolvedUser={User} (asyncLocal={AsyncLocal}, circuit={Circuit})",
+                "PostPipeline: hub={Hub}, message={MessageType}, user={User} (context={Context}, circuit={Circuit})",
                 syncPipeline.Hub.Address,
                 d.Message?.GetType().Name ?? "(null)",
                 d.AccessContext?.ObjectId ?? "(no-context)",
@@ -265,13 +265,14 @@ public record MessageHubConfiguration
     /// </summary>
     /// <param name="deferred">Whether to defer initialization (default: true)</param>
     /// <returns>Updated configuration</returns>
-    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) => this with { DeferredInitialization = deferred };
+    public MessageHubConfiguration WithDeferredInitialization(bool deferred = true) =>
+        this with { DeferredInitialization = deferred };
 
     public MessageHubConfiguration AddDeliveryPipeline(Func<AsyncPipelineConfig, AsyncPipelineConfig> pipeline) => this with { DeliveryPipeline = DeliveryPipeline.Add(pipeline) };
     private AsyncPipelineConfig UserServiceDeliveryPipeline(AsyncPipelineConfig asyncPipeline)
     {
         var userService = asyncPipeline.Hub.ServiceProvider.GetService<AccessService>();
-        var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("DeliveryPipeline");
+        var logger = asyncPipeline.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.AccessContext");
         return asyncPipeline.AddPipeline(async (d, ct, next) =>
         {
             var accessContext = d.AccessContext;

@@ -3,6 +3,7 @@ using MeshWeaver.Blazor.Portal.Resize;
 using MeshWeaver.Blazor.Portal.SidePanel;
 using MeshWeaver.Blazor.Services;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -20,6 +21,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     [Inject] protected IMessageHub Hub { get; set; } = null!;
     [Inject] protected INavigationService NavigationService { get; set; } = null!;
     [Inject] protected IMenuItemsProvider MenuItemsProvider { get; set; } = null!;
+    [Inject] protected IPathResolver PathResolver { get; set; } = null!;
 
     // Splitter pane sizes - default 3:1 ratio (75% main, 25% side panel)
     private string MainPaneSize => SidePanelState.Width.HasValue ? $"{100 - SidePanelState.Width.Value}%" : "75%";
@@ -64,6 +66,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         base.OnInitialized();
         SidePanelState.OnStateChanged += OnSidePanelStateChanged;
+        NavigationService.SidePanelNavigationRequested += OnSidePanelNavigation;
+        NavigationService.OnNavigationContextChanged += OnNavigationContextChanged;
         _menuSubscription = MenuItemsProvider.MenuItems.Subscribe(items =>
         {
             _menuItems = items;
@@ -75,6 +79,7 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     {
         await base.OnInitializedAsync();
         await NavigationService.InitializeAsync();
+        await ResolveSidePanelContentAsync();
     }
 
     private void ToggleNodeMenu()
@@ -122,6 +127,43 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         return _menuItems;
     }
 
+    private static readonly NodeMenuItemDefinition Separator = new("", "_separator");
+
+    /// <summary>
+    /// Flattens hierarchical menu items: parent items with Children are replaced by
+    /// a separator followed by their children inline.
+    /// </summary>
+    private static IReadOnlyList<NodeMenuItemDefinition> FlattenMenuItems(IReadOnlyList<NodeMenuItemDefinition> items)
+    {
+        var hasChildren = false;
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+            {
+                hasChildren = true;
+                break;
+            }
+        }
+        if (!hasChildren)
+            return items;
+
+        var result = new List<NodeMenuItemDefinition>();
+        foreach (var item in items)
+        {
+            if (item.Children is { Count: > 0 })
+            {
+                if (result.Count > 0)
+                    result.Add(Separator);
+                result.AddRange(item.Children);
+            }
+            else
+            {
+                result.Add(item);
+            }
+        }
+        return result;
+    }
+
     /// <summary>
     /// Navigates to the Create page for a specific node type (fallback/legacy method).
     /// </summary>
@@ -148,11 +190,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
                 dotNetRef = DotNetObjectReference.Create(this);
                 await jsModule!.InvokeVoidAsync("initialize", dotNetRef);
 
-                // Apply persisted size if available
-                if (SidePanelState.IsVisible && (SidePanelState.Width.HasValue || SidePanelState.Height.HasValue))
-                {
-                    await ApplyPersistedSizeAsync();
-                }
+                // Restore side panel state from localStorage
+                await RestoreSidePanelStateAsync();
             }
             catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
             {
@@ -161,8 +200,70 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         }
     }
 
+    private async Task RestoreSidePanelStateAsync()
+    {
+        try
+        {
+            var saved = await jsModule!.InvokeAsync<SidePanelState?>("loadSidePanelState");
+            if (saved != null)
+            {
+                SidePanelState.State = saved;
+                await ResolveSidePanelContentAsync();
+                StateHasChanged();
+            }
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected
+        }
+    }
+
+    private async Task SaveSidePanelStateAsync()
+    {
+        try
+        {
+            await EnsureJsModuleAsync();
+            await jsModule!.InvokeVoidAsync("saveSidePanelState", SidePanelState.State);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or JSDisconnectedException)
+        {
+            // Circuit disconnected
+        }
+    }
+
+    private void OnSidePanelNavigation(string path)
+    {
+        SidePanelState.SetContentPath(path);
+        if (!SidePanelState.IsVisible)
+            SidePanelState.SetVisible(true);
+    }
+
     private void OnSidePanelStateChanged()
     {
+        InvokeAsync(async () =>
+        {
+            await ResolveSidePanelContentAsync();
+            await SaveSidePanelStateAsync();
+            StateHasChanged();
+
+            // When panel becomes visible, trigger window resize so Monaco editors
+            // inside re-layout and re-activate keybindings (e.g., Alt+Enter)
+            if (SidePanelState.IsVisible)
+            {
+                await Task.Delay(50); // Let render complete
+                try
+                {
+                    await JSRuntime.InvokeVoidAsync("eval", "window.dispatchEvent(new Event('resize'))");
+                }
+                catch (Exception) { /* ignore JS errors */ }
+            }
+        });
+    }
+
+    private void OnNavigationContextChanged(NavigationContext? _)
+    {
+        // Context changed (user navigated) — invalidate cached side panel control
+        // so next render picks up the new context path
         InvokeAsync(StateHasChanged);
     }
 
@@ -201,16 +302,15 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
         if (context?.Node != null && ThreadNodeType.IsThreadNodeType(context.Node.NodeType))
         {
             var threadPath = context.Namespace;
-            var threadContent = context.Node.Content as MeshWeaver.AI.Thread;
-            var parentPath = threadContent?.ParentPath;
+            var mainNode = context.Node.MainNode;
 
-            // Navigate to parent (or home if no parent path)
-            var navigateTo = string.IsNullOrEmpty(parentPath) ? "/" : $"/{parentPath}";
+            // Navigate to content entity (or home if self-referencing)
+            var navigateTo = mainNode != context.Node.Path ? $"/{mainNode}" : "/";
             NavigationManager.NavigateTo(navigateTo);
 
-            // Open panel with thread
+            // Open panel with thread and set title
+            SidePanelState.SetTitle(context.Node.Name ?? "Thread");
             SidePanelState.OpenWithContent(threadPath);
-            sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
             await ApplyPersistedSizeAsync();
         }
         else
@@ -240,10 +340,52 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
 
 
     // Side panel content state
-    private string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
+    private readonly string sidePanelContentKey = Guid.NewGuid().ToString("N")[..8];
     private ThreadChatControl? _cachedSidePanelControl;
     private string? _cachedContentPath;
     private string? _cachedContextPath;
+
+    private LayoutAreaControl? sidePanelViewModel;
+    private string? resolvedSidePanelPath;
+
+    /// <summary>
+    /// Resolves ContentPath via IPathResolver (same as AreaPage) and builds LayoutAreaControl.
+    /// </summary>
+    private async Task ResolveSidePanelContentAsync()
+    {
+        var contentPath = SidePanelState.ContentPath;
+        if (contentPath == resolvedSidePanelPath)
+            return;
+
+        resolvedSidePanelPath = contentPath;
+
+        if (string.IsNullOrEmpty(contentPath))
+        {
+            sidePanelViewModel = null;
+            return;
+        }
+
+        var resolution = await PathResolver.ResolvePathAsync(contentPath);
+        if (resolution == null)
+        {
+            sidePanelViewModel = null;
+            return;
+        }
+
+        var (area, id) = ParseSidePanelRemainder(resolution.Remainder);
+        var reference = new LayoutAreaReference(area) { Id = id ?? "" };
+        sidePanelViewModel = Controls.LayoutArea((Address)resolution.Prefix, reference);
+    }
+
+    private static (string? Area, string? Id) ParseSidePanelRemainder(string? remainder)
+    {
+        if (string.IsNullOrEmpty(remainder))
+            return (null, null);
+        var parts = remainder.Split('/', 2);
+        var area = parts[0];
+        var id = parts.Length > 1 ? parts[1] : null;
+        return (area, id);
+    }
 
     private ThreadChatControl GetSidePanelControl()
     {
@@ -270,6 +412,8 @@ public partial class PortalLayoutBase : LayoutComponentBase, IDisposable
     public void Dispose()
     {
         SidePanelState.OnStateChanged -= OnSidePanelStateChanged;
+        NavigationService.SidePanelNavigationRequested -= OnSidePanelNavigation;
+        NavigationService.OnNavigationContextChanged -= OnNavigationContextChanged;
         _menuSubscription?.Dispose();
         dotNetRef?.Dispose();
         jsModule?.DisposeAsync();

@@ -178,7 +178,7 @@ Virtual nodes inherit the template's configuration.
 
 # Query Patterns
 
-Navigate the hierarchy with queries. See [Unified Path](Doc/DataMesh/UnifiedPath) for complete syntax.
+Navigate the hierarchy with queries. See [Unified Path](../../DataMesh/UnifiedPath) for complete syntax.
 
 ```
 // All children of Claims
@@ -194,7 +194,7 @@ nodeType:Type/Claim
 namespace:Insurance/Claims nodeType:Type/Claim status:Open
 ```
 
-See also: [Query Syntax Reference](Doc/DataMesh/QuerySyntax)
+See also: [Query Syntax Reference](../../DataMesh/QuerySyntax)
 
 # Benefits
 

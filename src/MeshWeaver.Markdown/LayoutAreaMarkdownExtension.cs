@@ -1,11 +1,11 @@
-﻿using Markdig;
+using Markdig;
 using Markdig.Renderers;
 
 namespace MeshWeaver.Markdown;
 
-public class LayoutAreaMarkdownExtension() : IMarkdownExtension
+public class LayoutAreaMarkdownExtension(string? currentNodePath = null) : IMarkdownExtension
 {
-    public LayoutAreaMarkdownParser MarkdownParser { get; } = new();
+    public LayoutAreaMarkdownParser MarkdownParser { get; } = new(currentNodePath);
     private readonly LayoutAreaMarkdownRenderer layoutAreaRenderer = new();
 
     public void Setup(MarkdownPipelineBuilder pipeline)

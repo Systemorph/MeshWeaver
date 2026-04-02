@@ -9,6 +9,11 @@ namespace MeshWeaver.Blazor.Portal.Chat;
 public partial class ChatSidePanel : ComponentBase
 {
     /// <summary>
+    /// Title displayed in the side panel header. Defaults to "AI Chat".
+    /// </summary>
+    [Parameter] public string Title { get; set; } = "AI Chat";
+
+    /// <summary>
     /// Main content rendered inside the panel body.
     /// </summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }

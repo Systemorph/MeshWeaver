@@ -18,7 +18,6 @@ namespace MeshWeaver.Hosting.PostgreSql;
 public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
-    private readonly PostgreSqlSqlGenerator _sqlGenerator;
     private readonly IEmbeddingProvider _embeddingProvider;
     private readonly PartitionDefinition? _partitionDefinition;
     private readonly string? _schemaName;
@@ -36,7 +35,6 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         _embeddingProvider = embeddingProvider ?? NullEmbeddingProvider.Instance;
         _partitionDefinition = partitionDefinition;
         _schemaName = partitionDefinition?.Schema;
-        _sqlGenerator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
         _logger = logger;
     }
 
@@ -398,6 +396,7 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         string? userId = null,
         string? basePath = null,
         string? activityUserId = null,
+        IReadOnlyCollection<string>? excludedNodeTypes = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         // Resolve the target table based on the query path or nodeType and partition definition.
@@ -431,11 +430,15 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         // Non-partitioned setups store everything in mesh_nodes (no satellite tables).
         var activityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("Activity") ?? "mesh_nodes");
         var userActivityTable = QualifyTable(_partitionDefinition?.ResolveTableByNodeType("UserActivity") ?? "mesh_nodes");
-        var (sql, parameters) = _sqlGenerator.GenerateSelectQuery(query, userId, activityUserId, tableName,
-            activityTable, userActivityTable);
+
+        // Create a fresh generator per call — the generator has mutable state (_paramIndex, _parameters)
+        // and is NOT thread-safe. Concurrent fan-out queries share the same adapter.
+        var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
+        var (sql, parameters) = generator.GenerateSelectQuery(query, userId, activityUserId, tableName,
+            activityTable, userActivityTable, excludedNodeTypes);
         if (!string.IsNullOrEmpty(effectivePath))
         {
-            var (scopeClause, scopeParams) = _sqlGenerator.GenerateScopeClause(
+            var (scopeClause, scopeParams) = generator.GenerateScopeClause(
                 effectivePath, query.Scope);
 
             if (!string.IsNullOrEmpty(scopeClause))
@@ -459,17 +462,26 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
                 _logger.LogDebug("  Param {Name} = {Value}", name, value);
         }
 
-        await using var cmd = _dataSource.CreateCommand(sql);
-        foreach (var (name, value) in parameters)
+        NpgsqlDataReader? reader = null;
+        try
         {
-            var p = new NpgsqlParameter(name, value ?? DBNull.Value);
-            cmd.Parameters.Add(p);
-        }
+            await using var cmd = _dataSource.CreateCommand(sql);
+            foreach (var (name, value) in parameters)
+            {
+                var p = new NpgsqlParameter(name, value ?? DBNull.Value);
+                cmd.Parameters.Add(p);
+            }
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+            reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                yield return ReadMeshNode(reader, options);
+            }
+        }
+        finally
         {
-            yield return ReadMeshNode(reader, options);
+            if (reader != null)
+                await reader.DisposeAsync();
         }
 
     }
@@ -486,7 +498,8 @@ public class PostgreSqlStorageAdapter : IStorageAdapter, IAsyncDisposable
         int topK = 10,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (sql, parameters) = _sqlGenerator.GenerateVectorSearchQuery(
+        var generator = new PostgreSqlSqlGenerator { SchemaName = _schemaName };
+        var (sql, parameters) = generator.GenerateVectorSearchQuery(
             filter, queryVector, userId, topK);
 
         if (!string.IsNullOrEmpty(namespacePath))

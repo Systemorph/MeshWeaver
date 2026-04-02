@@ -1,16 +1,16 @@
 @using MeshWeaver.Mesh.Services
 
 <div class="search-bar-container">
-    <FluentTextField @ref="textField"
-                     Value="@searchTerm"
-                     ValueChanged="OnSearchTermChanged"
-                     Immediate="true"
-                     AutoComplete="off"
-                     Placeholder="@SearchPlaceholder"
-                     @onkeydown="HandleKeyDown"
-                     @onfocus="OnFocus"
-                     @onblur="OnBlur"
-                     Style="width: 100%;" />
+    <input @key="_inputKey"
+           @ref="inputRef"
+           type="text"
+           @oninput="OnInput"
+           @onkeydown="HandleKeyDown"
+           @onfocus="OnFocus"
+           @onblur="OnBlur"
+           autocomplete="off"
+           placeholder="@SearchPlaceholder"
+           class="search-input" />
 
     @if (showDropdown && (isLoading || suggestions.Length > 0))
     {
@@ -29,8 +29,16 @@
                          @onmousedown="() => NavigateToSuggestion(suggestion)"
                          @onmousedown:preventDefault>
                         <div class="search-dropdown-icon">
-                            @{ var iconUrl = MeshWeaver.Graph.MeshNodeImageHelper.GetIconAsImageUrl(suggestion.Icon); }
-                            @if (iconUrl != null)
+                            @{ var iconUrl = MeshWeaver.Graph.MeshNodeImageHelper.GetIconForRendering(suggestion.Icon); }
+                            @if (iconUrl != null && iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                            {
+                                <div style="width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">@((MarkupString)iconUrl)</div>
+                            }
+                            else if (iconUrl != null && !iconUrl.Contains('/') && !iconUrl.StartsWith("data:"))
+                            {
+                                <span style="font-size: 1.4em;">@iconUrl</span>
+                            }
+                            else if (iconUrl != null)
                             {
                                 <img src="@iconUrl" alt="" />
                             }
@@ -51,6 +59,10 @@
                         </div>
                     </div>
                 }
+            }
+            @if (isLoading && suggestions.Length > 0)
+            {
+                <div class="search-dropdown-progress"></div>
             }
         </div>
     }

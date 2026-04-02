@@ -13,8 +13,8 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 
 | Article | Description |
 |---------|-------------|
-| [Agentic AI](Doc/AI/AgenticAI) | Understand the paradigm shift to proactive, goal-oriented AI agents |
-| [Vibe Coding](Doc/AI/VibeCoding) | Can AI build complex business apps? Watch the Mesh Bros put it to the test |
+| [Agentic AI](AgenticAI) | Understand the paradigm shift to proactive, goal-oriented AI agents |
+| [Vibe Coding](VibeCoding) | Can AI build complex business apps? Watch the Mesh Bros put it to the test |
 
 ---
 
@@ -22,10 +22,9 @@ MeshWeaver provides comprehensive AI capabilities through agents, tools, and nat
 
 | I want to... | Go here |
 |--------------|---------|
-| Use mesh tools in agents | [MeshPlugin Tools](Doc/AI/Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
-| Understand agent architecture | [Agentic AI](Doc/Architecture/AgenticAI) - Multi-agent patterns |
-| Connect external AI via MCP | [MCP Integration](Doc/Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
-| See AI in action | [ACME Case Studies](Software/Documentation) - Practical examples |
+| Use mesh tools in agents | [MeshPlugin Tools](Tools/MeshPlugin) - Get, Search, Create, Update, Delete, NavigateTo |
+| Understand agent architecture | [Agentic AI](../Architecture/AgenticAI) - Multi-agent patterns |
+| Connect external AI via MCP | [MCP Integration](../Architecture/AgenticAI#exposing-meshweaver-as-mcp-server) - Claude Code, Copilot, Snowflake |
 
 ---
 
@@ -49,7 +48,7 @@ Get supports **Unified Path prefixes** for accessing schemas and data models:
 - `Get('@path/schema:TypeName')` — Schema for a specific type (nodes with multiple data types)
 - `Get('@path/model:')` — Full data model
 
-[Read more: MeshPlugin Tools](Doc/AI/Tools/MeshPlugin)
+[Read more: MeshPlugin Tools](Tools/MeshPlugin)
 
 ---
 

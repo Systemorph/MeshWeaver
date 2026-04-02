@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
@@ -112,7 +113,6 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 return services;
             })
             .AddGraph()
@@ -204,5 +204,8 @@ public class InlineReferenceResolverIntegrationTest : MonolithMeshTestBase
         public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
             => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
         public void SetSelectedAgent(string? agentName) { }
+        public ThreadExecutionContext? ExecutionContext => null;
+        public string? LastDelegationPath { get; set; }
+        public Action<string>? UpdateDelegationStatus { get; set; }
     }
 }

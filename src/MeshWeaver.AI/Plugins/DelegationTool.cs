@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -124,17 +125,17 @@ public static class DelegationTool
     public static AITool CreateUnifiedDelegationTool(
         AgentConfiguration currentAgent,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
-        Func<string, string, CancellationToken, Task<DelegationResult>> executeAsync,
+        Func<string, string, string?, CancellationToken, Task<DelegationResult>> executeAsync,
         ILogger? logger = null)
     {
-        var delegationInfo = new List<DelegationInfo>();
+        var delegationInfo = ImmutableList<DelegationInfo>.Empty;
 
         // Add explicit delegations from current agent
         if (currentAgent.Delegations != null)
         {
             foreach (var d in currentAgent.Delegations)
             {
-                delegationInfo.Add(new DelegationInfo(
+                delegationInfo = delegationInfo.Add(new DelegationInfo(
                     d.AgentPath,
                     d.Instructions ?? "Specialized agent for this task"));
             }
@@ -145,7 +146,7 @@ public static class DelegationTool
         {
             if (!delegationInfo.Any(d => d.AgentPath == agent.Id || d.AgentPath.EndsWith($"/{agent.Id}")))
             {
-                delegationInfo.Add(new DelegationInfo(
+                delegationInfo = delegationInfo.Add(new DelegationInfo(
                     agent.Id,
                     agent.Description ?? $"Agent {agent.Id}"));
             }
@@ -160,13 +161,14 @@ public static class DelegationTool
         async Task<string> Delegate(
             [Description("The name of the agent to delegate to. Use the agentPath from the available agents.")] string agentName,
             [Description("The task or instructions for the delegated agent. Be specific about what you need.")] string task,
-            CancellationToken cancellationToken)
+            [Description("Optional: the node path to use as context for this delegation (e.g., 'OrgA/my-doc'). When omitted, inherits the parent context. Set explicitly when delegating parallel work on different documents.")] string? context = null,
+            CancellationToken cancellationToken = default)
         {
-            logger?.LogInformation("Delegating to {AgentName}: {Task}", agentName, task);
+            logger?.LogInformation("Delegating to {AgentName}: {Task}, context={Context}", agentName, task, context ?? "(inherited)");
 
             try
             {
-                var result = await executeAsync(agentName, task, cancellationToken);
+                var result = await executeAsync(agentName, task, context, cancellationToken);
 
                 if (result.Success)
                 {
@@ -195,6 +197,10 @@ public static class DelegationTool
             Delegate to a specialized agent when the request matches their expertise.
             Each delegation runs in an isolated context - the agent won't see previous conversation history.
             Wait for the result before continuing with your response.
+
+            When delegating parallel work on different documents, set the 'context' parameter to the
+            specific node path for each delegation. This ensures each agent sees the correct document.
+            When omitted, the parent's context is inherited.
 
             Available agents:
             {agentsJson}

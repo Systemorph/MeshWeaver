@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,6 +20,8 @@ using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Markdown;
+using MeshWeaver.Markdown.Collaboration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -414,5 +417,134 @@ public class NewCommentFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
         // Cleanup
         await NodeFactory.DeleteNodeAsync(created.Path!, ct: TestTimeout);
         Output.WriteLine("Cleanup done");
+    }
+
+    /// <summary>
+    /// Tests the CreateCommentRequest handler end-to-end:
+    ///   1. Send CreateCommentRequest to a markdown node's hub address
+    ///   2. Handler inserts comment markers into the markdown content
+    ///   3. Handler creates a Comment MeshNode in _Comment partition
+    ///   4. Verify both the updated content and the Comment node
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateCommentRequest_ShouldInsertMarkersAndCreateNode()
+    {
+        var client = GetClient();
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var docAddress = new Address(docPath);
+
+        // Initialize the document hub
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), TestTimeout);
+
+        // 0) Subscribe to markdown stream BEFORE sending request — wait for markers
+        var workspace = client.GetWorkspace();
+        string? capturedMarkerId = null;
+        var markersAppeared = workspace.GetRemoteStream<MeshNode>(docAddress)!
+            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == docPath))
+            .Where(n => n?.Content is MarkdownContent)
+            .Select(n => ((MarkdownContent)n!.Content!).Content ?? "")
+            .Where(content => content.Contains("<!--comment:") && content.Contains("TestAuthor"))
+            .FirstAsync()
+            .ToTask(TestTimeout);
+
+        // 1) Send CreateCommentRequest via Post + RegisterCallback (never await)
+        var tcs = new TaskCompletionSource<CreateCommentResponse>();
+        var delivery = client.Post(
+            new CreateCommentRequest
+            {
+                DocumentId = docPath,
+                SelectedText = "satellite entities",
+                CommentText = "This is a test comment via CreateCommentRequest",
+                Author = "TestAuthor"
+            },
+            o => o.WithTarget(docAddress));
+
+        await client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
+        {
+            tcs.TrySetResult(response.Message);
+            return response;
+        });
+
+        // 2) Wait for response
+        var commentResponse = await tcs.Task;
+        commentResponse.Success.Should().BeTrue("CreateCommentRequest should succeed");
+        commentResponse.MarkerId.Should().NotBeNullOrEmpty();
+        capturedMarkerId = commentResponse.MarkerId;
+        Output.WriteLine($"Response: MarkerId={capturedMarkerId}");
+
+        // 3) Wait for markers to appear in markdown stream
+        var updatedContent = await markersAppeared;
+        updatedContent.Should().Contain($"<!--comment:{capturedMarkerId}",
+            "Comment markers should appear in the markdown stream");
+        Output.WriteLine("Markers verified in markdown stream.");
+
+        // 4) Verify comment node via GetDataRequest
+        var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{capturedMarkerId}";
+        var commentNodeResponse = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(nameof(MeshNode), capturedMarkerId)),
+            o => o.WithTarget(new Address(commentPath)), TestTimeout);
+        var commentNode = commentNodeResponse.Message.Data as MeshNode;
+        commentNode.Should().NotBeNull($"Comment MeshNode should exist at {commentPath}");
+        var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
+        comment.Text.Should().Be("This is a test comment via CreateCommentRequest");
+        comment.Author.Should().Be("TestAuthor");
+        comment.MarkerId.Should().Be(capturedMarkerId);
+        comment.HighlightedText.Should().Be("satellite entities");
+        Output.WriteLine($"Comment node verified: {commentNode.Path}");
+
+        // Cleanup
+        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
+    }
+
+    /// <summary>
+    /// Tests creating a page-level comment (no text selection) via CreateCommentRequest.
+    /// The handler should create a Comment MeshNode without inserting markers.
+    /// </summary>
+    [Fact(Timeout = 30000)]
+    public async Task CreateCommentRequest_PageLevel_ShouldCreateNodeWithoutMarkers()
+    {
+        var client = GetClient();
+        var docPath = "Doc/DataMesh/CollaborativeEditing";
+        var docAddress = new Address(docPath);
+
+        // Initialize the document hub
+        await client.AwaitResponse(new PingRequest(), o => o.WithTarget(docAddress), TestTimeout);
+
+        // Send via Post + RegisterCallback (no await)
+        var tcs = new TaskCompletionSource<CreateCommentResponse>();
+        var delivery = client.Post(
+            new CreateCommentRequest
+            {
+                DocumentId = docPath,
+                SelectedText = "",
+                CommentText = "A page-level comment",
+                Author = "TestAuthor"
+            },
+            o => o.WithTarget(docAddress));
+
+        await client.RegisterCallback<CreateCommentResponse>(delivery!, response =>
+        {
+            tcs.TrySetResult(response.Message);
+            return response;
+        });
+
+        var commentResponse = await tcs.Task;
+        commentResponse.Success.Should().BeTrue();
+        Output.WriteLine($"Page-level comment created: MarkerId={commentResponse.MarkerId}");
+
+        // Verify comment node via GetDataRequest
+        var commentPath = $"{docPath}/{CommentsExtensions.CommentPartition}/{commentResponse.MarkerId}";
+        var commentNodeResponse = await client.AwaitResponse(
+            new GetDataRequest(new EntityReference(nameof(MeshNode), commentResponse.MarkerId!)),
+            o => o.WithTarget(new Address(commentPath)), TestTimeout);
+        var commentNode = commentNodeResponse.Message.Data as MeshNode;
+
+        commentNode.Should().NotBeNull();
+        var comment = commentNode!.Content.Should().BeOfType<Comment>().Subject;
+        comment.Text.Should().Be("A page-level comment");
+        comment.MarkerId.Should().BeNull("Page-level comments have no MarkerId");
+
+        // Cleanup
+        await NodeFactory.DeleteNodeAsync(commentPath, ct: TestTimeout);
     }
 }

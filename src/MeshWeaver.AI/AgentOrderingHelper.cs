@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 
@@ -18,7 +19,7 @@ public static class AgentOrderingHelper
         string? contextPath,
         string? nodeTypePath)
     {
-        var agentsDict = new Dictionary<string, (AgentConfiguration Config, string Path)>();
+        var agentsDict = ImmutableDictionary<string, (AgentConfiguration Config, string Path)>.Empty;
 
         // 1. Query agents from the NodeType namespace (higher priority)
         // Use hierarchy scope to find agents that are children of the NodeType path
@@ -31,7 +32,7 @@ public static class AgentOrderingHelper
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {
-                        agentsDict[config.Id] = (config, node.Path ?? "");
+                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
                     }
                 }
             }
@@ -54,7 +55,7 @@ public static class AgentOrderingHelper
                 {
                     if (node.Content is AgentConfiguration config && !agentsDict.ContainsKey(config.Id))
                     {
-                        agentsDict[config.Id] = (config, node.Path ?? "");
+                        agentsDict = agentsDict.SetItem(config.Id, (config, node.Path ?? ""));
                     }
                 }
             }
@@ -78,7 +79,7 @@ public static class AgentOrderingHelper
                 CustomIconSvg = x.Config.CustomIconSvg,
                 AgentConfiguration = x.Config
             })
-            .ToList();
+            .ToImmutableList();
     }
 
     /// <summary>
@@ -91,7 +92,7 @@ public static class AgentOrderingHelper
 
         try
         {
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self"))
+            await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}"))
             {
                 if (!string.IsNullOrEmpty(node.NodeType) && node.NodeType != "Agent" && node.NodeType != "Markdown")
                 {
@@ -118,6 +119,6 @@ public static class AgentOrderingHelper
         return agents
             .OrderBy(a => a.Order)
             .ThenBy(a => a.AgentConfiguration.DisplayName ?? a.Name)
-            .ToList();
+            .ToImmutableList();
     }
 }

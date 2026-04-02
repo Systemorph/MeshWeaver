@@ -1,31 +1,59 @@
 ---
 Name: Node Menu Items
 Category: Documentation
-Description: How node types register custom menu items in the portal's context menu
+Description: How node types register custom menu items in the portal's context menu, including hierarchical sub-menus
 ---
 
-The portal's node context menu (cube icon) is fully data-driven. Menu items are registered in the node's `HubConfiguration` via `IAsyncEnumerable` providers and rendered during the layout pipeline. A predicate-based renderer evaluates all providers and stores results at `$Menu` in the entity store (same pattern as `$Dialog`). The portal reads `$Menu` from the layout stream — no separate RPC needed.
+The portal's node context menu (cube icon) is fully data-driven. Menu items are registered in the node's `HubConfiguration` via `IAsyncEnumerable` providers and rendered during the layout pipeline. A predicate-based renderer evaluates all providers and stores results at `$Menu` in the entity store (same pattern as `$Dialog`). The portal reads `$Menu` from the layout stream -- no separate RPC needed.
 
 # Default Menu Items
 
 `AddDefaultMeshMenu()` (called automatically by `AddDefaultLayoutAreas()`) registers these items for all node types:
 
+**Top-level items:**
+
 | Item | Area | Permission | Order | Notes |
 |------|------|------------|-------|-------|
-| Create | `Create` | `Create` | 0 | |
-| Import | `ImportMeshNodes` | `Create` | 1 | |
-| *node.Name* | *node.NodeType* | None | 10 | Navigates to NodeType definition via `Href` |
+| Edit | `Edit` | `Update` | -10 | |
+| Files | `Files` | `Read` | 25 | |
 | Threads | `Threads` | None | 50 | |
-| Settings | `Settings` | None | 90 | |
-| Delete | `Delete` | `Delete` | 100 | |
+| Versions | `Versions` | `Read` | 55 | |
+| Settings | `Settings` | `Read` | 90 | |
 
-The node-name item only appears when the MeshNode has a `NodeType` set. It uses `Href` for absolute navigation to the NodeType definition node instead of appending the area to the current path.
+**Actions sub-menu** (Order: 95, contains grouped items):
 
-Items with a required permission are checked inline within the provider. Only visible items are yielded. Only visible items reach the portal.
+| Item | Area | Permission | Notes |
+|------|------|------------|-------|
+| Create | `Create` | `Create` | |
+| Copy | `Copy` | `Create` | Copies node subtree to new location |
+| Move | `Move` | `Delete` | Moves node subtree (requires Delete on source) |
+| Import | `ImportMeshNodes` | `Create` | File/folder upload or copy from mesh |
+| Export | `Export` | `Export` | Exports subtree as ZIP with native file formats |
+| Delete | `Delete` | `Delete` | |
+
+Items with a required permission are checked inline within the provider. Only visible items reach the portal.
+
+# Hierarchical Menus
+
+Menu items can contain child items via the `Children` property. The portal renders parent items with a sub-menu that expands on hover.
+
+```csharp
+// Group multiple items under a parent
+var children = new List<NodeMenuItemDefinition>();
+children.Add(new("Action 1", "Action1Area", Order: 1));
+children.Add(new("Action 2", "Action2Area", Order: 2));
+
+yield return new NodeMenuItemDefinition(
+    "More Actions", "MoreActions",
+    Order: 50,
+    Children: children);
+```
+
+The `DefaultMenuProvider` groups Create, Copy, Move, Import, Export, and Delete under an "Actions" parent item using this pattern.
 
 # Server-Side Permission Filtering
 
-Permission checks happen inside `NodeMenuItemProvider` delegates evaluated during layout rendering on the node hub. The portal receives only items the user is allowed to see — no client-side filtering needed.
+Permission checks happen inside `NodeMenuItemProvider` delegates evaluated during layout rendering on the node hub. The portal receives only items the user is allowed to see -- no client-side filtering needed.
 
 ```
 Portal (LayoutAreaView)
@@ -76,7 +104,8 @@ Items from `AddNodeMenuItems()` are merged with the defaults and sorted by `Orde
 | `Icon` | `string?` | Optional emoji or SVG URL; `null` to skip |
 | `RequiredPermission` | `Permission` | Permission the user must have (e.g., `Permission.Update`) |
 | `Order` | `int` | Sort order within the menu (lower = earlier) |
-| `Href` | `string?` | Optional absolute href — when set, navigates directly instead of using Area |
+| `Href` | `string?` | Optional absolute href -- when set, navigates directly instead of using Area |
+| `Children` | `IReadOnlyList<NodeMenuItemDefinition>?` | Child items for hierarchical sub-menus |
 
 ## NodeMenuItemProvider
 
@@ -92,25 +121,49 @@ config.AddNodeMenuItems(
     }))
 ```
 
+## Named Menu Contexts
+
+Register menu items for specific UI contexts (e.g., side panel) using a context name:
+
+```csharp
+config.AddNodeMenuItems("SidePanel",
+    new NodeMenuItemDefinition("Quick Action", "QuickAction", Order: 1));
+```
+
+Named contexts are stored at `$Menu:{context}` and rendered independently from the main menu.
+
+# Node Operations
+
+## Export
+
+The Export action exports a node and its entire subtree as a ZIP archive using native file formats:
+- Markdown nodes (`.md`) with YAML front matter
+- Code nodes (`.cs`) as plain C# files
+- Agent nodes (`.md`) with agent-specific YAML
+- Other nodes (`.json`) with polymorphic `$type` content
+
+The exported ZIP is structurally identical to the file system layout, ensuring round-trip compatibility with Import. Export requires the `Permission.Export` flag, which is included in the Editor and Admin roles but not Viewer.
+
+## Copy
+
+The Copy action duplicates a node and all its descendants to a new namespace. The source node's ID is preserved under the target namespace. Use the "Force" option to overwrite existing nodes at the destination.
+
+## Move
+
+The Move action relocates a node and all its descendants to a new path. It requires Delete permission on the source and Create permission on the target. The operation is atomic per node -- descendants are moved first, then the root.
+
 # Generic Navigation
 
-Menu items navigate to their declared `Area` by appending it to the current path (e.g., `/TestOrg/Project/Settings`). When `Href` is set, the portal navigates to that absolute URL instead — used for cross-node navigation like the node-name → NodeType link.
+Menu items navigate to their declared `Area` by appending it to the current path (e.g., `/TestOrg/Project/Settings`). When `Href` is set, the portal navigates to that absolute URL instead -- used for cross-node navigation like the node-name -> NodeType link.
 
 # MenuControl
 
-`MenuControl` is stored at `$Menu` in the entity store (same pattern as `DialogControl` at `$Dialog`). It wraps an `IReadOnlyList<NodeMenuItemDefinition>`.
+`MenuControl` is stored at `$Menu` in the entity store (same pattern as `DialogControl` at `$Dialog`). It wraps an `IReadOnlyList<NodeMenuItemDefinition>` which can contain hierarchical items with children.
 
 The `LayoutAreaView` component monitors the `$Menu` slot and publishes items to `IMenuItemsProvider`, which `PortalLayoutBase` subscribes to for rendering.
 
-# Built-in Registrations
-
-**All nodes** (via `AddDefaultMeshMenu`):
-- Create, Import, *node.Name* → NodeType, Threads, Settings, Delete
-
-**Markdown** nodes additionally register:
-- **Suggest** (area: `Suggest`, permission: `Update`, order: 11) — editor with track changes
-
 # See Also
 
-- [DataBinding](Doc/GUI/DataBinding) - How data flows through controls
-- [Editor](Doc/GUI/Editor) - The editor control for form rendering
+- [DataBinding](../DataBinding) - How data flows through controls
+- [Editor](../Editor) - The editor control for form rendering
+- [Access Control](../../Architecture/AccessControl) - Permission system

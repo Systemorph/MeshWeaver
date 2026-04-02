@@ -86,15 +86,11 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
         };
         await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
 
-        // Verify the AccessAssignment MeshNode was created by PostCreationHandler
-        var assignmentPath = $"{orgId}/{creatorId}_Access";
-        var assignmentNode = await MeshQuery
-            .QueryAsync<MeshNode>($"path:{assignmentPath}")
-            .FirstOrDefaultAsync(TestTimeout);
-
-        Output.WriteLine($"AccessAssignment at {assignmentPath}: {assignmentNode?.NodeType}");
-        assignmentNode.Should().NotBeNull("PostCreationHandler should create AccessAssignment for creator");
-        assignmentNode!.NodeType.Should().Be("AccessAssignment");
+        // Verify the creator has Admin permissions (PostCreationHandler calls AddUserRoleAsync)
+        var securityService2 = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
+        var creatorCheck = await securityService2.HasPermissionAsync(
+            orgId, creatorId, Permission.Update, TestTimeout);
+        creatorCheck.Should().BeTrue("PostCreationHandler should grant Admin role to creator");
 
         // Now check that a NON-admin user without claim-based roles has NO permissions
         var securityService = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
@@ -152,7 +148,7 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
     {
         var orgId = $"TestOrg_{Guid.NewGuid():N}"[..20];
 
-        // Create Organization (post-creation handler creates Overview markdown page)
+        // Create Organization
         var orgNode = MeshNode.FromPath(orgId) with
         {
             Name = "Test Organization",
@@ -160,6 +156,10 @@ public class OrganizationMenuAndAccessTest(ITestOutputHelper output) : MonolithM
             Content = new Organization { Name = "Test Organization" }
         };
         await NodeFactory.CreateNodeAsync(orgNode, TestTimeout);
+
+        // Create a child node under the organization
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("Overview", orgId) { Name = "Overview", NodeType = "Markdown" }, TestTimeout);
 
         // Query children under the organization namespace
         var children = await MeshQuery

@@ -1,0 +1,30 @@
+{
+  "id": "LandingPageDesign",
+  "namespace": "ACME/ProductLaunch/Todo",
+  "path": "ACME/ProductLaunch/Todo/LandingPageDesign",
+  "name": "Design landing page wireframes",
+  "nodeType": "ACME/Project/Todo",
+  "icon": "/static/storage/content/ACME/Project/Todo/icon.svg",
+  "description": "Create wireframes for the TaskFlow product landing page",
+  "category": "Tasks",
+  "addressSegments": 0,
+  "isPersistent": true,
+  "lastModified": "2026-01-12T07:43:17.8314811+00:00",
+  "version": 4,
+  "state": "Active",
+  "isVirtual": false,
+  "content": {
+    "$type": "Todo",
+    "title": "Design landing page wireframes",
+    "description": "Design high-fidelity wireframes for taskflow.io landing page. Include hero section, feature highlights, pricing table, and demo request form.",
+    "category": "Design",
+    "priority": "High",
+    "assignee": "Emma",
+    "dueDate": "2026-01-22T00:00:00+01:00",
+    "dueDateOffsetDays": 3,
+    "status": "InProgress",
+    "createdAt": "2026-01-19T20:23:16.388212+00:00"
+  },
+  "routingType": "Shared",
+  "instantiationType": "HubConfiguration"
+}

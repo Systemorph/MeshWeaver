@@ -326,7 +326,8 @@
                 detail = i.Detail ?? "",
                 category = i.Category ?? "",
                 path = i.Path ?? "",
-                iconUrl = i.IconUrl ?? ""
+                iconUrl = i.IconUrl ?? "",
+                sortKey = i.SortKey ?? ""
             }).ToArray<object>();
         }
         catch (Exception ex)
@@ -334,6 +335,30 @@
             Logger.LogError(ex, "Error getting async completions for query: {Query}", query);
             return [];
         }
+    }
+
+    /// <summary>
+    /// Pushes updated completion items to the editor and re-triggers the suggest widget.
+    /// Used for progressive streaming: fast local results first, remote results merge in later.
+    /// </summary>
+    public async Task PushCompletionUpdateAsync(CompletionItem[] items)
+    {
+        if (jsModule == null)
+            return;
+
+        var mapped = items.Select(i => new
+        {
+            label = i.Label,
+            insertText = i.InsertText ?? i.Label,
+            description = i.Description ?? "",
+            detail = i.Detail ?? "",
+            category = i.Category ?? "",
+            path = i.Path ?? "",
+            iconUrl = i.IconUrl ?? "",
+            sortKey = i.SortKey ?? ""
+        }).ToArray<object>();
+
+        await jsModule.InvokeVoidAsync("pushCompletionUpdate", EditorId, mapped);
     }
 
     public async ValueTask<string> GetValueAsync()

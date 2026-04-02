@@ -54,7 +54,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 Name = "My Thread",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = $"User/{userId}" }
+                Content = new MeshThread()
             };
 
             var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
@@ -86,7 +86,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 Name = "Thread for Messages",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = $"User/{userId}" }
+                Content = new MeshThread()
             }, TestTimeout);
 
             // Create message under thread
@@ -131,7 +131,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 Name = "Malicious Thread",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = "User/victim" }
+                Content = new MeshThread()
             };
 
             var act = async () => await NodeFactory.CreateNodeAsync(node, TestTimeout);
@@ -158,7 +158,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         {
             Name = "Private Thread",
             NodeType = ThreadNodeType.NodeType,
-            Content = new MeshThread { ParentPath = $"User/{owner}" }
+            Content = new MeshThread()
         }, TestTimeout);
 
         // Switch to attacker
@@ -223,7 +223,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 Name = "Shared Thread",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = sharedPath }
+                Content = new MeshThread()
             };
 
             // Should fail because Thread requires Update, not Create
@@ -258,7 +258,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 Name = "Editor Thread",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = sharedPath }
+                Content = new MeshThread()
             };
 
             var created = await NodeFactory.CreateNodeAsync(node, TestTimeout);
@@ -289,7 +289,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
             {
                 Name = "Readable Thread",
                 NodeType = ThreadNodeType.NodeType,
-                Content = new MeshThread { ParentPath = $"User/{userId}" }
+                Content = new MeshThread()
             }, TestTimeout);
 
             // Read back
@@ -321,7 +321,7 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
         {
             Name = "Private Thread",
             NodeType = ThreadNodeType.NodeType,
-            Content = new MeshThread { ParentPath = $"User/{owner}" }
+            Content = new MeshThread()
         }, TestTimeout);
 
         // Switch to different user

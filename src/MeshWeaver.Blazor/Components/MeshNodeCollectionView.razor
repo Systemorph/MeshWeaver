@@ -25,7 +25,15 @@
             <div class="mesh-node-collection-item" @onclick="() => NavigateToItem(capturedNode.Path)">
                 @if (!string.IsNullOrEmpty(imageUrl))
                 {
-                    @if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                    @if (imageUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        <div class="mesh-node-collection-avatar" style="background: transparent; padding: 2px;">@((MarkupString)imageUrl)</div>
+                    }
+                    else if (!imageUrl.Contains('/') && !imageUrl.StartsWith("data:"))
+                    {
+                        <div class="mesh-node-collection-avatar" style="background: transparent; font-size: 24px;">@imageUrl</div>
+                    }
+                    else if (imageUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
                     {
                         <div style="--icon-url: url('@imageUrl')" class="mesh-node-collection-avatar-icon"></div>
                     }
@@ -97,6 +105,6 @@
             if (json.TryGetProperty("logo", out var l) && l.ValueKind == System.Text.Json.JsonValueKind.String) return l.GetString();
             if (json.TryGetProperty("Logo", out var L) && L.ValueKind == System.Text.Json.JsonValueKind.String) return L.GetString();
         }
-        return MeshNodeImageHelper.GetIconAsImageUrl(node.Icon);
+        return MeshNodeImageHelper.ResolveNodeIcon(node);
     }
 }

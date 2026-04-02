@@ -11,7 +11,7 @@ Tags:
   - "References"
 ---
 
-This document demonstrates unified references in the Northwind analytics sample. For the complete Unified Path syntax reference, see [Unified Path](Doc/DataMesh/UnifiedPath).
+This document demonstrates unified references in the Northwind analytics sample. For the complete Unified Path syntax reference, see [Unified Path](/Doc/DataMesh/UnifiedPath).
 
 It covers namespace hierarchy, data queries, and layout areas specific to the Northwind sample.
 
@@ -53,7 +53,7 @@ Northwind/                           # Root namespace
 
 # Data References
 
-See [Data Prefix](Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
+See [Data Prefix](/Doc/DataMesh/UnifiedPath/DataPrefix) for the generic data reference syntax.
 
 ## Data Types
 
@@ -95,7 +95,7 @@ Northwind exposes these data types through the AnalyticsCatalog:
 
 # Layout Area References
 
-See [Area Prefix](Doc/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
+See [Area Prefix](/Doc/DataMesh/UnifiedPath/AreaPrefix) for layout area syntax.
 
 ## Dashboard
 

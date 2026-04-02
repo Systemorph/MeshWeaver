@@ -21,61 +21,48 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
     public override async Task OnActivateAsync(CancellationToken cancellationToken)
     {
-
         var streamId = this.GetPrimaryKeyString();
-
         var address = meshHub.GetAddress(streamId);
+        var addressPath = address.ToString();
+
         // Use unprotected read — the grain needs its own node to activate,
         // and it's not the correct hub identity for security checks.
-        var node = await persistence.GetNodeAsync(address.ToString(), cancellationToken);
+        var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
+
+        // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
+        if (node is null)
+        {
+            var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+            meshConfig?.Nodes.TryGetValue(addressPath, out node);
+        }
 
         // Fallback to static node providers (e.g., DocumentationNodeProvider)
         // for nodes that are never persisted but served as embedded resources.
         node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
             .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, address.ToString(), StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
 
         if (node is null)
-            throw new MeshException(
-                $"Cannot instantiate Node {streamId}. No {nameof(MeshNode.HubConfiguration)} is specified.");
-
-        // Enrich with node type info (triggers compilation if needed, sets HubConfiguration + AssemblyLocation)
-        var nodeTypeService = meshHub.ServiceProvider.GetService<INodeTypeService>();
-        if (nodeTypeService != null)
         {
-            node = await nodeTypeService.EnrichWithNodeTypeAsync(node, cancellationToken);
+            // Throw so Orleans immediately rejects the message without forwarding attempts.
+            // Using DeactivateOnIdle() here would leave a zombie activation that triggers
+            // forwarding loops (ForwardCount=2 → OrleansMessageRejectionException).
+            throw new InvalidOperationException(
+                $"Cannot activate grain {streamId}: node not found at {addressPath}.");
         }
 
-        Hub = await InstantiateFromHubConfiguration(address, node);
-    }
+        // Resolve hub configuration (triggers compilation if needed, composes with default config)
+        var hubFactory = meshHub.ServiceProvider.GetService<IMeshNodeHubFactory>();
+        if (hubFactory != null)
+            node = await hubFactory.ResolveHubConfigurationAsync(node, cancellationToken);
 
-    private async Task<IMessageHub> InstantiateFromHubConfiguration(Address address, MeshNode node)
-    {
-        if (node.AssemblyLocation is null)
-            throw new ArgumentException(
-                $"Assembly location is not configured for node {node.Path}."
-            );
-        var assembly = Assembly.LoadFrom(node.AssemblyLocation);
-        if (assembly is null)
-            throw new ArgumentException(
-                $"Could not load assembly {node.AssemblyLocation}."
-            );
+        if (node.AssemblyLocation is not null)
+            Assembly.LoadFrom(node.AssemblyLocation);
 
+        if (node.HubConfiguration is null)
+            throw new ArgumentException($"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
 
-        var nodeConfig = node.HubConfiguration;
-        if (nodeConfig is null)
-            throw new ArgumentException(
-                $"No hub configuration is specified for {node.Path}."
-            );
-
-        // Compose with DefaultNodeHubConfiguration (same as MonolithRoutingService)
-        var meshConfig = meshHub.ServiceProvider.GetRequiredService<MeshConfiguration>();
-        var defaultConfig = meshConfig.DefaultNodeHubConfiguration;
-        var hubConfig = defaultConfig != null
-            ? (Func<MessageHubConfiguration, MessageHubConfiguration>)(config => nodeConfig(defaultConfig(config)))
-            : nodeConfig;
-
-        return meshHub.GetHostedHub(address, hubConfig)!;
+        Hub = meshHub.GetHostedHub(address, node.HubConfiguration)!;
     }
 
 
@@ -92,59 +79,60 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
 
         Hub?.RegisterForDisposal(_ => DeactivateOnIdle());
 
-        // Apply user identity from Orleans RequestContext.
+        // Apply user identity from Orleans RequestContext to the delivery.
         // The client-side OrleansRoutingService sets UserId/UserName which Orleans
-        // propagates across process boundaries. Grains have no CircuitContext,
-        // so we must set the AccessService.Context (AsyncLocal) for this call scope.
+        // propagates across process boundaries. We set it on the delivery itself
+        // so the hub's delivery pipeline (UserServiceDeliveryPipeline) picks it up
+        // and sets AccessService.Context for the entire async processing chain.
         var userId = RequestContext.Get("UserId") as string;
         var userName = RequestContext.Get("UserName") as string;
-        var accessService = Hub!.ServiceProvider.GetService<AccessService>();
+        var msgType = delivery.Message?.GetType().Name ?? "(null)";
+        var deliveryUser = delivery.AccessContext?.ObjectId;
 
-        if (!string.IsNullOrEmpty(userId) && accessService != null)
+        if (!string.IsNullOrEmpty(userId) &&
+            (delivery.AccessContext == null || delivery.AccessContext.ObjectId != userId))
         {
-            using (new AccessScope(accessService, new AccessContext
+            delivery = delivery.SetAccessContext(new AccessContext
             {
                 ObjectId = userId,
                 Name = userName ?? userId
-            }))
-            {
-                var ret = Hub.DeliverMessage(delivery);
-                return Task.FromResult(ret);
-            }
+            });
         }
 
-        var result = Hub.DeliverMessage(delivery);
-        return Task.FromResult(result);
-    }
+        // Log identity chain for debugging — Warning level for identity-sensitive messages
+        if (string.IsNullOrEmpty(userId) || msgType.Contains("Submit", StringComparison.Ordinal))
+            logger.LogDebug(
+                "GrainDeliver: grain={Grain}, message={MessageType}, requestContextUserId={RequestContextUser}, deliveryUser={DeliveryUser}, finalUser={FinalUser}",
+                this.GetPrimaryKeyString(), msgType, userId ?? "(null)", deliveryUser ?? "(null)",
+                delivery.AccessContext?.ObjectId ?? "(null)");
 
-    /// <summary>
-    /// Sets AccessService.Context for the duration of a grain call,
-    /// then clears it to prevent leaking to other callers.
-    /// </summary>
-    private sealed class AccessScope : IDisposable
-    {
-        private readonly AccessService _accessService;
-
-        public AccessScope(AccessService accessService, AccessContext context)
-        {
-            _accessService = accessService;
-            _accessService.SetContext(context);
-        }
-
-        public void Dispose()
-        {
-            _accessService.SetContext(null);
-        }
+        var ret = Hub!.DeliverMessage(delivery);
+        return Task.FromResult(ret);
     }
 
 
     public override async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken cancellationToken)
     {
+        var grainId = this.GetPrimaryKeyString();
+        logger.LogInformation("Grain {GrainId} deactivating: reason={Reason}", grainId, reason.ReasonCode);
 
         if (Hub != null)
         {
-            Hub.Dispose();
-            await Hub.Disposal!;
+            try
+            {
+                Hub.Dispose();
+                // Wait for disposal (includes async flush of pending saves)
+                var disposalTask = Hub.Disposal!;
+                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+                if (completed != disposalTask)
+                    logger.LogWarning("Grain {GrainId}: hub disposal timed out after 10s — pending saves may be lost!", grainId);
+                else
+                    logger.LogInformation("Grain {GrainId}: hub disposal completed", grainId);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Grain {GrainId}: hub disposal failed — pending saves may be lost!", grainId);
+            }
         }
         Hub = null;
         if (loadContext != null)

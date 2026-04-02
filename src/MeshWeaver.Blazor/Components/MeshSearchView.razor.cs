@@ -29,6 +29,7 @@ public partial class MeshSearchView : IDisposable
     private IDisposable? _reactiveSubscription;
     private HashSet<string> _collapsedGroups = new();
     private string _lastBoundVisibleQuery = "";
+    private string _lastBoundHiddenQuery = "";
     private bool _showSearchOptions;
     private string _editableHiddenQuery = "";
     private string? _overriddenHiddenQuery;
@@ -38,6 +39,9 @@ public partial class MeshSearchView : IDisposable
 
     [Inject]
     private NavigationManager Navigation { get; set; } = default!;
+
+    [Inject]
+    private MeshWeaver.Messaging.IMessageHub Hub { get; set; } = default!;
 
     [Parameter]
     public MeshSearchControl? ViewModel { get; set; }
@@ -62,6 +66,7 @@ public partial class MeshSearchView : IDisposable
     public string? SelectedPath { get; set; }
 
     // Basic properties
+    private string? BoundTitle => ViewModel?.Title?.ToString();
     private string BoundHiddenQuery => _overriddenHiddenQuery ?? ViewModel?.HiddenQuery?.ToString() ?? "";
     private string BoundVisibleQuery => ViewModel?.VisibleQuery?.ToString() ?? "";
     private string BoundPlaceholder => ViewModel?.Placeholder?.ToString() ?? "Search...";
@@ -175,11 +180,25 @@ public partial class MeshSearchView : IDisposable
             _lastBoundVisibleQuery = BoundVisibleQuery;
         }
 
-        // Re-query when VisibleQuery changes from parent (e.g. picker typing)
+        if (!_initialized)
+        {
+            _lastBoundHiddenQuery = BoundHiddenQuery;
+        }
+
+        // Re-query when VisibleQuery or HiddenQuery changes from parent
         if (_initialized && BoundVisibleQuery != _lastBoundVisibleQuery)
         {
             _lastBoundVisibleQuery = BoundVisibleQuery;
             _currentValue = BoundVisibleQuery;
+            if (!IsPrecomputedMode)
+            {
+                _ = LoadResultsAsync();
+            }
+        }
+
+        if (_initialized && BoundHiddenQuery != _lastBoundHiddenQuery)
+        {
+            _lastBoundHiddenQuery = BoundHiddenQuery;
             if (!IsPrecomputedMode)
             {
                 _ = LoadResultsAsync();
@@ -445,7 +464,14 @@ public partial class MeshSearchView : IDisposable
     private List<MeshNode> ApplySorting(List<MeshNode> nodes, SortConfig? sorting)
     {
         if (sorting == null || string.IsNullOrEmpty(sorting.SortByProperty))
+        {
+            // If the query already has a sort: directive, preserve the query order
+            // (e.g. source:accessed sort:LastModified-desc should keep access-time order).
+            var query = BuildFullQuery();
+            if (query.Contains("sort:", StringComparison.OrdinalIgnoreCase))
+                return nodes;
             return nodes.OrderBy(n => n.Order).ThenBy(n => n.Name).ToList();
+        }
 
         var sorted = sorting.Ascending
             ? nodes.OrderBy(n => GetSortValue(n, sorting.SortByProperty))
@@ -610,14 +636,16 @@ public partial class MeshSearchView : IDisposable
         }
     }
 
-    private string AreaGridStyle
+    private string CardGridStyle
     {
         get
         {
             var maxCols = BoundMaxColumns;
-            if (maxCols.HasValue)
-                return $"grid-template-columns: repeat({maxCols.Value}, 1fr);";
-            return "";
+            if (!maxCols.HasValue || maxCols.Value <= 0) return "";
+            if (maxCols.Value == 1) return "grid-template-columns: 1fr;";
+            // Container-responsive: auto-fill capped at maxCols via percentage minimum
+            var pct = 100.0 / maxCols.Value;
+            return $"grid-template-columns: repeat(auto-fill, minmax(max({pct:F1}% - 8px, 200px), 1fr));";
         }
     }
 

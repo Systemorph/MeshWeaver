@@ -17,6 +17,7 @@ using MeshWeaver.Layout.Client;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -127,13 +128,19 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
     [Fact(Timeout = 20000)]
     public async Task AccessControl_NestedNode_ShowsInheritedAssignments()
     {
-        // Seed assignments at parent and at a deeper nested path
+        // Create actual nodes so the hubs exist
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("ACME", TestPartition) { Name = "ACME", NodeType = "Group" }, TestTimeout);
+        await NodeFactory.CreateNodeAsync(
+            new MeshNode("Documentation", $"{TestPartition}/ACME") { Name = "Documentation", NodeType = "Markdown" }, TestTimeout);
+
+        // Seed assignments
         var svc = Mesh.ServiceProvider.GetRequiredService<ISecurityService>();
-        await svc.AddUserRoleAsync("ParentUser", "Viewer", "ACME", "system", TestTimeout);
-        await svc.AddUserRoleAsync("NestedUser", "Editor", "ACME/Documentation", "system", TestTimeout);
+        await svc.AddUserRoleAsync("ParentUser", "Viewer", $"{TestPartition}/ACME", "system", TestTimeout);
+        await svc.AddUserRoleAsync("NestedUser", "Editor", $"{TestPartition}/ACME/Documentation", "system", TestTimeout);
 
         var client = GetClient();
-        var nestedPath = "ACME/Documentation";
+        var nestedPath = $"{TestPartition}/ACME/Documentation";
         var nodeAddress = new Address(nestedPath);
 
         await client.AwaitResponse(
@@ -174,7 +181,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         rootPerms.Should().Be(Permission.All, "RootUser with Admin at Org should have all permissions on deeply nested path");
         divPerms.Should().HaveFlag(Permission.Update, "DivUser with Editor at Org/Division should have update on deeply nested path");
-        deepPerms.Should().Be(Permission.Read | Permission.Execute, "DeepUser with Viewer at exact path should have read + execute permissions");
+        deepPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "DeepUser with Viewer at exact path should have read + execute + api permissions");
     }
 
     [Fact(Timeout = 20000)]
@@ -196,7 +203,7 @@ public class AccessControlLayoutAreaTest(ITestOutputHelper output) : MonolithMes
 
         globalPerms.Should().Be(Permission.All, "GlobalAdmin with global Admin role should have all permissions");
         orgPerms.Should().HaveFlag(Permission.Update, "OrgEditor with Editor at MyOrg should have update on nested path");
-        projectPerms.Should().Be(Permission.Read | Permission.Execute, "ProjectViewer with Viewer at exact path should have read + execute");
+        projectPerms.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "ProjectViewer with Viewer at exact path should have read + execute + api");
 
         Output.WriteLine($"GlobalAdmin permissions at {nestedPath}: {globalPerms}");
         Output.WriteLine($"OrgEditor permissions at {nestedPath}: {orgPerms}");

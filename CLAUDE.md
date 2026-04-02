@@ -10,7 +10,7 @@ Documentation is embedded in `src/MeshWeaver.Documentation/` and served under th
 
 The documentation on the architecture is accessible via src/MeshWeaver.Documentation/Data/Architecture/
 
-Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence
+Topics: Message-based communication, Actor model, UI streaming, AI agents, Data versioning, Serialization, Access control, Partitioned persistence, Business rules & calculations
 
 ### DataMesh
 
@@ -29,6 +29,12 @@ Topics: Container controls (Stack, Tabs, Toolbar, Splitter), Layout grid, DataGr
 The documentation on AI integration is accessible via src/MeshWeaver.Documentation/Data/AI/
 
 Topics: Agentic AI, MCP authentication, MeshPlugin tools (Get, Search, Create, Update, Delete, NavigateTo)
+
+### Deployment
+
+The documentation on deployment is accessible via src/MeshWeaver.Documentation/Data/Architecture/Deployment.md
+
+Topics: Aspire CLI deployment, deployment modes (local/test/prod/monolith), secrets management, Azure Container Apps, PostgreSQL, Orleans clustering, infrastructure provisioning
 
 ### Agents
 
@@ -86,6 +92,17 @@ dotnet run --project memex/aspire/Memex.AppHost
 # Access Aspire dashboard for service management
 # Requires Docker for dependencies
 ```
+
+## Collections Policy
+
+**NEVER use mutable collections.** Always use `System.Collections.Immutable`:
+- `List<T>` → `ImmutableList<T>.Empty` + `= list.Add(item)`
+- `Dictionary<K,V>` → `ImmutableDictionary<K,V>.Empty` + `= dict.SetItem(key, val)`
+- `HashSet<T>` → `ImmutableHashSet<T>.Empty` + `= set.Add(item)`
+- `Queue<T>` → `ImmutableQueue<T>.Empty` + `= queue.Enqueue(item)` / `= queue.Dequeue(out var item)`
+- `.ToList()` → `.ToImmutableList()`, `.ToHashSet()` → `.ToImmutableHashSet()`
+
+The codebase is distributed (Orleans, reactive streams). Mutable collections cause race conditions and unpredictable behavior. The only exception is `ConcurrentDictionary` for thread-safe concurrent mutation patterns.
 
 ## Architecture Overview
 
@@ -261,6 +278,18 @@ Tests use xUnit v3 with structured logging and test parallelization configured v
 - `methodTimeout: 60000ms` (1 minute per test method)
 
 **No mocking.** Tests that need infrastructure (persistence, messaging, DI) must use `MonolithMeshTestBase` or `OrleansTestBase` — never mock `IMessageHub`, `IMeshService`, or other core interfaces.
+
+### Satellite Entity Patterns
+
+For implementing and testing satellite entities (comments, threads, tracked changes), see `src/MeshWeaver.Documentation/Data/Architecture/SatelliteEntityPatterns.md`.
+
+**Key rules:**
+- Handler must be synchronous (`IMessageDelivery`, not `async Task<IMessageDelivery>`)
+- Use `meshService.CreateNode()` (Observable) + `.Subscribe(onNext, onError)` — never `await`
+- Use `workspace.UpdateMeshNode()` for parent node content updates (in-memory, persisted via debounce)
+- Post response inside the `Subscribe(onNext)` callback, not before
+- Orleans tests: client configurator must call `AddGraph()` for type registry alignment
+- Verify via `GetDataRequest` or `GetRemoteStream` — never `QueryAsync` in distributed tests
 
 ### Running Tests
 

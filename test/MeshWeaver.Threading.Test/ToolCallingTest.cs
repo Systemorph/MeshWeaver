@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
@@ -10,7 +10,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.AI.Persistence;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
@@ -37,13 +36,12 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
     {
         return base.ConfigureMesh(builder)
+            .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
-                services.AddSingleton<IChatClientFactory>(sp => new ToolCallingFakeChatClientFactory(sp));
+                services.AddSingleton<IChatClientFactory>(new ToolCallingFakeChatClientFactory());
                 return services;
             })
-            .AddAI()
             .AddSampleUsers();
     }
 
@@ -56,14 +54,12 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
 
     private async Task<string> CreateThreadAsync(IMessageHub client, string text, CancellationToken ct)
     {
-        var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = ContextPath, UserMessageText = text },
-            o => o.WithTarget(new Address(ContextPath)), ct);
-        response.Message.Success.Should().BeTrue(response.Message.Error);
-        return response.Message.ThreadPath!;
+        var threadNode = ThreadNodeType.BuildThreadNode(ContextPath, text);
+        var created = await NodeFactory.CreateNodeAsync(threadNode, ct);
+        return created.Path;
     }
 
-    private IObservable<IReadOnlyList<string>> ObserveThreadMessages(IMessageHub client, string threadPath)
+    private IObservable<IReadOnlyList<string>> ObserveMessages(IMessageHub client, string threadPath)
     {
         var workspace = client.GetWorkspace();
         return workspace.GetRemoteStream<MeshNode>(new Address(threadPath))!
@@ -71,14 +67,16 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
             {
                 var node = nodes?.FirstOrDefault(n => n.Path == threadPath);
                 var content = node?.Content as MeshThread;
-                return (IReadOnlyList<string>)(content?.ThreadMessages ?? []);
+                return (IReadOnlyList<string>)(content?.Messages ?? []);
             });
     }
 
     private async Task<T?> GetHubContentAsync<T>(IMessageHub client, string path, CancellationToken ct) where T : class
     {
+        // MeshNode key is Id (last segment), not full path
+        var nodeId = path.Contains('/') ? path[(path.LastIndexOf('/') + 1)..] : path;
         var response = await client.AwaitResponse(
-            new GetDataRequest(new EntityReference(nameof(MeshNode), path)),
+            new GetDataRequest(new EntityReference(nameof(MeshNode), nodeId)),
             o => o.WithTarget(new Address(path)), ct);
         var node = response.Message.Data as MeshNode;
         if (node == null && response.Message.Data is JsonElement je)
@@ -112,8 +110,8 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         var threadPath = await CreateThreadAsync(client, "Tool calling test", ct);
         Output.WriteLine($"Thread created: {threadPath}");
 
-        // 3. Subscribe to ThreadMessages
-        var twoMessages = ObserveThreadMessages(client, threadPath)
+        // 3. Subscribe to Messages
+        var twoMessages = ObserveMessages(client, threadPath)
             .Where(ids => ids.Count >= 2).FirstAsync().ToTask(ct);
 
         // 4. Submit message — the ToolCallingFakeChatClient will:
@@ -133,7 +131,7 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         // 5. Wait for message IDs
         var msgIds = await twoMessages;
         msgIds.Should().HaveCount(2);
-        Output.WriteLine($"ThreadMessages: [{string.Join(", ", msgIds)}]");
+        Output.WriteLine($"Messages: [{string.Join(", ", msgIds)}]");
 
         // 6. Wait for response to complete (poll until stable)
         ThreadMessage? responseContent = null;
@@ -232,30 +230,32 @@ public class ToolCallingTest(ITestOutputHelper output) : MonolithMeshTestBase(ou
         public void Dispose() { }
     }
 
-    private class ToolCallingFakeChatClientFactory(IServiceProvider sp) : IChatClientFactory
+    private class ToolCallingFakeChatClientFactory : IChatClientFactory
     {
         public string Name => "ToolCallingFakeFactory";
         public IReadOnlyList<string> Models => ["tool-calling-model"];
         public int Order => 0;
+
+        public ChatClientAgent CreateAgent(
+            AgentConfiguration config, IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+        {
+            var agent = new ChatClientAgent(
+                chatClient: new ToolCallingFakeChatClient(),
+                instructions: config.Instructions ?? "You are a helpful test assistant that uses tools.",
+                name: config.Id, description: config.Description ?? config.Id,
+                tools: [], loggerFactory: null, services: null);
+            return agent;
+        }
 
         public Task<ChatClientAgent> CreateAgentAsync(
             AgentConfiguration config, IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
             IReadOnlyList<AgentConfiguration> hierarchyAgents,
             string? modelName = null)
-        {
-            // Wire the real MeshPlugin tools so the agent can actually execute them
-            var hub = sp.GetRequiredService<IMessageHub>();
-            var meshPlugin = new MeshPlugin(hub, chat);
-            var tools = meshPlugin.CreateTools(); // Get, Search, NavigateTo
-
-            var agent = new ChatClientAgent(
-                chatClient: new ToolCallingFakeChatClient(),
-                instructions: config.Instructions ?? "You are a helpful test assistant that uses tools.",
-                name: config.Id, description: config.Description ?? config.Id,
-                tools: tools.ToList(), loggerFactory: null, services: null);
-            return Task.FromResult(agent);
-        }
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion

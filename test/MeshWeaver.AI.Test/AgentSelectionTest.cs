@@ -66,12 +66,12 @@ public class AgentSelectionTest
             Content = todoAgentConfig
         };
 
-        // Mock: Query for current node to get NodeType
+        // Mock: Query for current node to get NodeType (no nodeType: filter in query)
+        // Note: QueryAsync<MeshNode> does NOT add $type:MeshNode (it's the base type)
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("scope:self") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    !r.Query.Contains("nodeType:")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
@@ -79,9 +79,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{nodeTypePath}") &&
-                    r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:hierarchy") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    r.Query.Contains("nodeType:Agent")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(todoAgentNode));
 
@@ -89,9 +87,7 @@ public class AgentSelectionTest
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:selfAndAncestors") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    r.Query.Contains("nodeType:Agent")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>());
 
@@ -130,39 +126,37 @@ public class AgentSelectionTest
         };
 
         // A root-level agent
-        var navigatorConfig = new AgentConfiguration
+        var orchestratorConfig = new AgentConfiguration
         {
-            Id = "Navigator",
-            DisplayName = "Navigator",
+            Id = "Orchestrator",
+            DisplayName = "Orchestrator",
             Description = "General navigation agent",
             IsDefault = true
         };
 
-        var navigatorNode = new MeshNode("Navigator", null)
+        var orchestratorNode = new MeshNode("Orchestrator", null)
         {
-            Name = "Navigator",
+            Name = "Orchestrator",
             NodeType = "Agent",
-            Content = navigatorConfig
+            Content = orchestratorConfig
         };
 
-        // Mock: Query for current node
+        // Mock: Query for current node (no nodeType: filter in query)
+        // Note: QueryAsync<MeshNode> does NOT add $type:MeshNode (it's the base type)
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("scope:self") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    !r.Query.Contains("nodeType:")),
                 Arg.Any<CancellationToken>())
             .Returns(ToAsyncEnumerable<object>(productLaunchNode));
 
-        // Mock: Query for agents in context path namespace returns Navigator
+        // Mock: Query for agents in context path namespace returns Orchestrator
         _meshQuery.QueryAsync(
                 Arg.Is<MeshQueryRequest>(r =>
                     r.Query.Contains($"path:{contextPath}") &&
-                    r.Query.Contains("nodeType:Agent") &&
-                    r.Query.Contains("scope:selfAndAncestors") &&
-                    r.Query.Contains("$type:MeshNode")),
+                    r.Query.Contains("nodeType:Agent")),
                 Arg.Any<CancellationToken>())
-            .Returns(ToAsyncEnumerable<object>(navigatorNode));
+            .Returns(ToAsyncEnumerable<object>(orchestratorNode));
 
         // Act - Call the REAL AgentOrderingHelper implementation
         var detectedNodeType = await AgentOrderingHelper.GetNodeTypeAsync(_meshQuery, contextPath);
@@ -170,8 +164,8 @@ public class AgentSelectionTest
 
         // Assert
         detectedNodeType.Should().BeNull("Markdown NodeType should be ignored");
-        foundAgents.Should().ContainSingle(a => a.Name == "Navigator",
-            "Navigator should be found from path hierarchy");
+        foundAgents.Should().ContainSingle(a => a.Name == "Orchestrator",
+            "Orchestrator should be found from path hierarchy");
     }
 
     /// <summary>
@@ -185,10 +179,10 @@ public class AgentSelectionTest
         {
             new()
             {
-                Name = "Navigator",
+                Name = "Orchestrator",
                 Order = -1,
                 Description = "Navigation",
-                AgentConfiguration = new AgentConfiguration { Id = "Navigator", DisplayName = "Navigator" }
+                AgentConfiguration = new AgentConfiguration { Id = "Orchestrator", DisplayName = "Orchestrator" }
             },
             new()
             {
@@ -212,7 +206,7 @@ public class AgentSelectionTest
         // Assert - Ordered by Order: -10, -1, 0
         ordered.Should().HaveCount(3);
         ordered[0].Name.Should().Be("TodoAgent", "Order -10 comes first");
-        ordered[1].Name.Should().Be("Navigator", "Order -1 comes second");
+        ordered[1].Name.Should().Be("Orchestrator", "Order -1 comes second");
         ordered[2].Name.Should().Be("ACMEAgent", "Order 0 comes last");
     }
 
@@ -234,10 +228,10 @@ public class AgentSelectionTest
             ExposedInNavigator = true
         };
 
-        var navigatorConfig = new AgentConfiguration
+        var orchestratorConfig = new AgentConfiguration
         {
-            Id = "Navigator",
-            DisplayName = "Navigator",
+            Id = "Orchestrator",
+            DisplayName = "Orchestrator",
             Description = "General navigation agent",
             Order = -1,
             IsDefault = false
@@ -248,10 +242,10 @@ public class AgentSelectionTest
         {
             new()
             {
-                Name = navigatorConfig.Id,
-                Order = navigatorConfig.Order,
-                Description = navigatorConfig.Description ?? "",
-                AgentConfiguration = navigatorConfig
+                Name = orchestratorConfig.Id,
+                Order = orchestratorConfig.Order,
+                Description = orchestratorConfig.Description ?? "",
+                AgentConfiguration = orchestratorConfig
             },
             new()
             {
@@ -265,10 +259,10 @@ public class AgentSelectionTest
         // Act - Order by Order
         var ordered = AgentOrderingHelper.OrderByRelevance(displayInfos, null, null);
 
-        // Assert - TodoAgent (-10) comes before Navigator (-1)
+        // Assert - TodoAgent (-10) comes before Orchestrator (-1)
         ordered.Should().HaveCount(2);
         ordered[0].Name.Should().Be("TodoAgent", "Order -10 comes first");
-        ordered[1].Name.Should().Be("Navigator", "Order -1 comes second");
+        ordered[1].Name.Should().Be("Orchestrator", "Order -1 comes second");
     }
 
     #region Helper Methods

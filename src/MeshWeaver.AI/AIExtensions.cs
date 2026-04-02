@@ -1,7 +1,8 @@
-﻿using MeshWeaver.AI.Persistence;
-using MeshWeaver.AI.Plugins;
-using MeshWeaver.AI.Threading;
+﻿using MeshWeaver.AI.Plugins;
+using MeshWeaver.Data;
 using MeshWeaver.Domain;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.AI;
@@ -22,9 +23,44 @@ public static class AIExtensions
                     .AddThreadType()
                     .AddAgentType()
                     .ConfigureServices(services => services.AddAgentChatServices())
-                    .ConfigureDefaultNodeHub(config => config.AddThreadSupport())
+                    .ConfigureDefaultNodeHub(config =>
+                    {
+                        config.TypeRegistry.AddAITypes();
+                        return config
+                            .WithHandler<Plugins.SaveContentRequest>(HandleSaveContent);
+                    })
                 ;
         }
+    }
+
+    private static async Task<IMessageDelivery> HandleSaveContent(
+        IMessageHub hub, IMessageDelivery<Plugins.SaveContentRequest> delivery, CancellationToken ct)
+    {
+        var request = delivery.Message;
+        var fileProvider = hub.ServiceProvider.GetService<IFileContentProvider>();
+
+        if (fileProvider == null)
+        {
+            hub.Post(new Plugins.SaveContentResponse { Success = false, Error = "Content collections not configured on this node" },
+                o => o.ResponseFor(delivery));
+            return delivery.Processed();
+        }
+
+        try
+        {
+            var stream = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(request.TextContent));
+            var result = await fileProvider.SaveFileContentAsync(request.CollectionName, request.FilePath, stream, ct);
+
+            hub.Post(new Plugins.SaveContentResponse { Success = result.Success, Error = result.Error },
+                o => o.ResponseFor(delivery));
+        }
+        catch (Exception ex)
+        {
+            hub.Post(new Plugins.SaveContentResponse { Success = false, Error = ex.Message },
+                o => o.ResponseFor(delivery));
+        }
+
+        return delivery.Processed();
     }
 
     public static ITypeRegistry AddAITypes(this ITypeRegistry typeRegistry)
@@ -35,12 +71,17 @@ public static class AIExtensions
             // MessageViewModel is not registered — handled as JsonElement on the wire
             .WithType(typeof(SubmitMessageRequest), nameof(SubmitMessageRequest))
             .WithType(typeof(SubmitMessageResponse), nameof(SubmitMessageResponse))
-            .WithType(typeof(CreateThreadRequest), nameof(CreateThreadRequest))
-            .WithType(typeof(CreateThreadResponse), nameof(CreateThreadResponse))
-            .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
+.WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
-            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest));
+            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
+            .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
+            .WithType(typeof(UpdateThreadMessageContent), nameof(UpdateThreadMessageContent))
+            .WithType(typeof(DelegationCompletedEvent), nameof(DelegationCompletedEvent))
+            .WithType(typeof(NodeChangeEntry), nameof(NodeChangeEntry))
+            .WithType(typeof(ThreadExecutionContext), nameof(ThreadExecutionContext))
+            .WithType(typeof(SaveContentRequest), nameof(SaveContentRequest))
+            .WithType(typeof(SaveContentResponse), nameof(SaveContentResponse));
 
     extension(IServiceCollection services)
     {
@@ -51,7 +92,8 @@ public static class AIExtensions
         /// </summary>
         public IServiceCollection AddAgentChatServices()
         {
-            services.AddMemoryChatPersistence();
+            services.AddOptions<ModelTierConfiguration>()
+                .BindConfiguration("ModelTier");
             return services;
         }
 

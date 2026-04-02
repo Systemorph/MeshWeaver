@@ -1,5 +1,7 @@
 using System.Text.Json;
+using MeshWeaver.Data.Completion;
 using MeshWeaver.Hosting.Activity;
+using MeshWeaver.Hosting.Completion;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Activity;
@@ -259,7 +261,9 @@ public static class PersistenceExtensions
 
         // Core services remain singletons (for shared caches)
         services.AddSingleton(persistenceServiceCore);
-        services.TryAddSingleton<IMeshQueryProvider, InMemoryMeshQuery>();
+        services.TryAddSingleton<InMemoryMeshQuery>();
+        services.TryAddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
+        services.TryAddSingleton<IMeshQueryCore>(sp => sp.GetRequiredService<InMemoryMeshQuery>());
 
         // Always add static node provider (picks up IStaticNodeProvider registrations + MeshConfiguration.Nodes)
         services.AddSingleton<IMeshQueryProvider>(sp =>
@@ -270,16 +274,21 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import service (scoped — needs IMessageHub for JsonSerializerOptions)
+        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
         services.TryAddScoped<IMeshImportService, MeshImportService>();
+        services.TryAddScoped<IMeshExportService, MeshExportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>()));
+        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
+            new ChatCompletionOrchestrator(
+                sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
     }
@@ -410,16 +419,21 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import service (scoped — needs IMessageHub for JsonSerializerOptions)
+        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
         services.TryAddScoped<IMeshImportService, MeshImportService>();
+        services.TryAddScoped<IMeshExportService, MeshExportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>()));
+        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
+            new ChatCompletionOrchestrator(
+                sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
     }
@@ -457,16 +471,21 @@ public static class PersistenceExtensions
         // Register MeshCatalog and its interfaces
         services.AddMeshCatalog();
 
-        // Import service (scoped — needs IMessageHub for JsonSerializerOptions)
+        // Import/Export services (scoped — need IMessageHub for JsonSerializerOptions)
         services.TryAddScoped<IMeshImportService, MeshImportService>();
+        services.TryAddScoped<IMeshExportService, MeshExportService>();
 
         // Wrapper services are scoped (per hub)
         services.AddScoped<IMeshStorage, PersistenceService>();
         services.AddScoped<IMeshService>(sp =>
             new MeshService(
                 sp.GetServices<IMeshQueryProvider>(),
+                sp.GetRequiredService<IMessageHub>()));
+        services.TryAddScoped<IChatCompletionOrchestrator>(sp =>
+            new ChatCompletionOrchestrator(
+                sp.GetRequiredService<IMeshService>(),
                 sp.GetRequiredService<IMessageHub>(),
-                sp.GetRequiredService<MeshCatalog>()));
+                sp.GetService<ILogger<ChatCompletionOrchestrator>>()));
 
         return services;
     }

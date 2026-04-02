@@ -66,25 +66,49 @@
     {
         var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
         if (meshQuery == null)
-        {
             return Enumerable.Empty<QuerySuggestion>();
-        }
 
         try
         {
-            // Use AutocompleteAsync with RelevanceFirst mode
-            var suggestions = await meshQuery.AutocompleteAsync(
-                basePath: Options.BasePath,
-                prefix: searchText ?? "",
-                mode: AutocompleteMode.RelevanceFirst,
-                limit: Options.Limit * 3 // Get more to account for filtering
-            ).ToListAsync();
+            List<QuerySuggestion> suggestions;
+
+            if (Options.Queries is { Length: > 0 })
+            {
+                // Query mode: run provided queries, append user text, merge results
+                var userText = (searchText ?? "").Trim();
+                var tasks = Options.Queries.Select(async baseQuery =>
+                {
+                    var fullQuery = string.IsNullOrEmpty(userText)
+                        ? baseQuery
+                        : $"{baseQuery} {userText}";
+                    try
+                    {
+                        return await meshQuery.QueryAsync<MeshNode>(fullQuery)
+                            .Select(n => new QuerySuggestion(n.Path, n.Name ?? n.Id, n.NodeType, 1.0, n.Icon))
+                            .ToListAsync();
+                    }
+                    catch { return new List<QuerySuggestion>(); }
+                });
+                var all = await Task.WhenAll(tasks);
+                suggestions = all.SelectMany(x => x)
+                    .GroupBy(s => s.Path, StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.First())
+                    .ToList();
+            }
+            else
+            {
+                // Autocomplete mode (default)
+                suggestions = await meshQuery.AutocompleteAsync(
+                    basePath: Options.BasePath,
+                    prefix: searchText ?? "",
+                    mode: AutocompleteMode.RelevanceFirst,
+                    limit: Options.Limit * 3
+                ).ToListAsync();
+            }
 
             // If filtering by creatable type, post-filter results
             if (!string.IsNullOrEmpty(EffectiveCreatableTypeFilter))
-            {
                 suggestions = await FilterByCreatableTypeAsync(suggestions, EffectiveCreatableTypeFilter);
-            }
 
             return suggestions.Take(Options.Limit);
         }

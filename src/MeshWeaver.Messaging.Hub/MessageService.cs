@@ -408,7 +408,7 @@ public class MessageService : IMessageService
                     if (!isDisposing && delivery is { State: MessageDeliveryState.Ignored, Message: not DeliveryFailure }
                                             && (ignoredTargetWithoutHost == null || ignoredTargetWithoutHost.Equals(hub.Address))
                                             && !delivery.Message.GetType().HasAttribute<CanBeIgnoredAttribute>())
-                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}"));
+                        ReportFailure(delivery.WithProperty("Error", $"No handler found for delivery {delivery.Message.GetType().FullName}: {delivery.Message}"));
                 }
                 else
                 {
@@ -483,7 +483,7 @@ public class MessageService : IMessageService
 
             var ret = PostImpl(message, opt);
             if (ShouldLogMessage(message))
-                logger.LogInformation("Posting message {Delivery} (ID: {MessageId}) in {Address}",
+                logger.LogDebug("Posting message {Delivery} (ID: {MessageId}) in {Address}",
                     JsonSerializer.Serialize(ret, LoggingSerializerOptions), ret.Id, Address);
             return ret;
         }

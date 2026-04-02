@@ -47,6 +47,7 @@ public static class VUserNodeType
         Name = "Virtual User",
         Icon = "/static/NodeTypeIcons/person.svg",
         NodeType = NodeType,
+        ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(VUserNodeType).Assembly.Location,
         Content = new NodeTypeDefinition { DefaultNamespace = "VUser", RestrictedToNamespaces = ["VUser"] },
         HubConfiguration = config => config

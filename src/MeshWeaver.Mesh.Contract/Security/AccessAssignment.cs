@@ -64,6 +64,12 @@ public record PartitionAccessPolicy
     /// <summary>false = deny Execute at this scope and below. null = inherit (default: allowed).</summary>
     public bool? Execute { get; init; }
 
+    /// <summary>false = deny Thread at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Thread { get; init; }
+
+    /// <summary>false = deny Api (programmatic/MCP access) at this scope and below. null = inherit (default: allowed).</summary>
+    public bool? Api { get; init; }
+
     /// <summary>
     /// When true, role assignments from ancestor scopes are discarded at this
     /// namespace boundary. Only roles assigned at this scope or deeper take effect
@@ -84,6 +90,8 @@ public record PartitionAccessPolicy
         if (Delete == false) cap &= ~Permission.Delete;
         if (Comment == false) cap &= ~Permission.Comment;
         if (Execute == false) cap &= ~Permission.Execute;
+        if (Thread == false) cap &= ~Permission.Thread;
+        if (Api == false) cap &= ~Permission.Api;
         return cap;
     }
 }

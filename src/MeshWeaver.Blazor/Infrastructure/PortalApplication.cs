@@ -38,7 +38,13 @@ public class PortalApplication : IDisposable
             .AddContentCollections()
             .WithHandler<NavigationRequest>((_, delivery) =>
             {
-                navigationService.NavigateTo(delivery.Message.Uri, delivery.Message.ForceLoad, delivery.Message.Replace);
+                var msg = delivery.Message;
+                navigationService.NavigateTo(new NavigationOptions(msg.Uri)
+                {
+                    ForceLoad = msg.ForceLoad,
+                    Replace = msg.Replace,
+                    Target = msg.Target
+                });
                 return delivery.Processed();
             });
 

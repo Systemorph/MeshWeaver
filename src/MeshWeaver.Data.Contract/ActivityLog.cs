@@ -34,10 +34,10 @@ public record ActivityLog(string Category)
             End = DateTime.UtcNow,
         };
 
-    public ActivityLog Finish(int version, ActivityStatus? _) =>
+    public ActivityLog Finish(int version, ActivityStatus? overrideStatus) =>
         this with
         {
-            Status = GetFinalStatus(),
+            Status = overrideStatus > GetFinalStatus() ? overrideStatus.Value : GetFinalStatus(),
             End = DateTime.UtcNow,
             Version = version
         };

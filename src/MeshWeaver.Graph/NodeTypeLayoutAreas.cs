@@ -47,6 +47,17 @@ public static class NodeTypeLayoutAreas
     }
 
     /// <summary>
+    /// Adds NodeType catalog views plus all standard node views (Settings, Files, Threads, Chat,
+    /// AccessControl, etc.). Use this for NodeType definitions that should also support
+    /// the full node management experience (e.g., Organization, custom domain types).
+    /// </summary>
+    public static MessageHubConfiguration AddNodeTypeLayoutAreas(this MessageHubConfiguration configuration)
+        => configuration
+            .AddDefaultLayoutAreas()
+            .AddNodeTypeView()
+            .AddLayout(layout => layout.WithDefaultArea(SearchArea));
+
+    /// <summary>
     /// Adds the NodeType views to the hub's layout for NodeType nodes.
     /// Uses the standard MeshNodeLayoutAreas.Search with NodeTypeCatalogMode to dynamically query instances.
     /// Includes UCR areas ($Data, $Schema, $Model) for unified content references.
@@ -140,7 +151,9 @@ public static class NodeTypeLayoutAreas
                     .WithWidth("100%")
                     .WithStyle(MeshNodeLayoutAreas.GetContainerStyle(host, typeDef) + " margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
                     .WithView(Controls.MeshSearch
-                        .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
+                        .WithHiddenQuery(typeDef?.DefaultNamespace != null
+                            ? $"nodeType:{hubPath} namespace:{typeDef.DefaultNamespace}"
+                            : $"nodeType:{hubPath} namespace:{hubPath} scope:descendants")
                         .WithShowSearchBox(false)
                         .WithShowEmptyMessage(false)
                         .WithShowLoadingIndicator(false)
@@ -303,7 +316,7 @@ public static class NodeTypeLayoutAreas
                 var codeConfig = codeNode.Content as CodeConfiguration;
                 var codeHref = new LayoutAreaReference(CodeLayoutAreas.OverviewArea).ToHref(codeNode.Path);
                 codeGroup = codeGroup.WithView(
-                    new NavLinkControl(codeNode.Name ?? codeConfig?.DisplayName ?? codeNode.Id, CustomIcons.CSharp(), codeHref)
+                    new NavLinkControl(codeNode.Name ?? codeNode.Id, CustomIcons.CSharp(), codeHref)
                 );
             }
         }
@@ -742,7 +755,9 @@ public static class NodeTypeLayoutAreas
         var qs = $"type={Uri.EscapeDataString(hubPath)}";
         if (typeDef?.DefaultNamespace != null)
             qs += $"&namespace={Uri.EscapeDataString(typeDef.DefaultNamespace)}";
-        return $"/{hubPath}/{MeshNodeLayoutAreas.CreateNodeArea}?{qs}";
+        if (typeDef?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
+            qs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
+        return $"/create?{qs}";
     }
 
     private static UiControl BuildInfoRow(string label, string value)

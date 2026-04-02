@@ -1,20 +1,22 @@
 @import '/_content/Microsoft.FluentUI.AspNetCore.Components/css/reboot.css';
 
 ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
-    background-clip: padding-box;
-    -webkit-border-radius: 12px;
-    background-color: #c6c6c6;
+    border-radius: 6px;
+    background-color: rgba(128, 128, 128, 0.3);
 }
 
-    ::-webkit-scrollbar-thumb:hover {
-        background-color: #706f6f;
-    }
+::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(128, 128, 128, 0.5);
+}
 
 ::-webkit-scrollbar-button {
     width: 0;
@@ -28,7 +30,7 @@
 
 * {
     scrollbar-width: thin;
-    scrollbar-color: #c6c6c6 white;
+    scrollbar-color: rgba(128, 128, 128, 0.3) transparent;
 }
 
 html, body {

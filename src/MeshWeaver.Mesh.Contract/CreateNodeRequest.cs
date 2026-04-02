@@ -1,14 +1,17 @@
-using MeshWeaver.Mesh.Security;
+﻿using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Security;
 
 namespace MeshWeaver.Mesh;
 
 /// <summary>
 /// Request to create a new MeshNode in the catalog.
 /// The node will be created with Transient state until the hub confirms.
+/// Permission checked depends on node type: Thread/ThreadMessage → Thread,
+/// Comment → Comment, everything else → Create.
 /// </summary>
 /// <param name="Node">The MeshNode to create</param>
-[RequiresPermission(Permission.Create)]
+[CreateNodePermission]
 public record CreateNodeRequest(MeshNode Node) : IRequest<CreateNodeResponse>
 {
     /// <summary>
@@ -254,6 +257,7 @@ public record MoveNodeRequest(string SourcePath, string TargetPath) : IRequest<M
 /// </summary>
 public class MoveNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Update)
 {
+    /// <inheritdoc />
     public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
         IMessageDelivery delivery, string hubPath)
     {
@@ -332,4 +336,35 @@ public enum NodeMoveRejectionReason
     /// Move validation failed.
     /// </summary>
     ValidationFailed
+}
+
+/// <summary>
+/// Permission attribute for CreateNodeRequest that maps the required permission
+/// based on the node type being created. Thread/ThreadMessage nodes require
+/// Thread permission; Comment nodes require Comment permission; all others require Create.
+/// </summary>
+public class CreateNodePermissionAttribute() : RequiresPermissionAttribute(Permission.Create)
+{
+    /// <summary>
+    /// Maps node types to their required permission for creation.
+    /// Thread and ThreadMessage → Thread; Comment → Comment; default → Create.
+    /// </summary>
+    public static Permission GetPermissionForNodeType(string? nodeType)
+        => nodeType switch
+        {
+            "Thread" or "ThreadMessage" => Permission.Thread,
+            "Comment" => Permission.Comment,
+            _ => Permission.Create
+        };
+
+    /// <inheritdoc />
+    public override IEnumerable<(string Path, Permission Permission)> GetPermissionChecks(
+        IMessageDelivery delivery, string hubPath)
+    {
+        var permission = delivery.Message is CreateNodeRequest req
+            ? GetPermissionForNodeType(req.Node.NodeType)
+            : Permission.Create;
+
+        yield return (hubPath, permission);
+    }
 }

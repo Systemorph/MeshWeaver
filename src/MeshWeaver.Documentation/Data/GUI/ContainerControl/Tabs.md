@@ -78,5 +78,5 @@ Configure individual tabs via the skin function:
 
 # See Also
 
-- [Container Control](Doc/GUI/ContainerControl) - Overview of all containers
-- [Stack Control](Doc/GUI/ContainerControl/Stack) - Vertical/horizontal layouts
+- [Container Control](../../ContainerControl) - Overview of all containers
+- [Stack Control](../Stack) - Vertical/horizontal layouts

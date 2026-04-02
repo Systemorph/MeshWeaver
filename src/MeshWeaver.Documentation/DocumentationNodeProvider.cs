@@ -1,12 +1,10 @@
 using System.Reflection;
-using Markdig;
-using Markdig.Extensions.Yaml;
-using Markdig.Syntax;
-using MeshWeaver.Markdown;
+using System.Text.Json;
+using MeshWeaver.Hosting.Persistence.Parsers;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
-using YamlDotNet.Serialization;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Documentation;
 
@@ -18,15 +16,12 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 {
     public const string RootNamespace = "Doc";
 
-    private static readonly Lazy<MeshNode[]> LazyNodes = new(LoadNodes);
+    private readonly Lazy<MeshNode[]> _lazyNodes;
 
-    private static readonly MarkdownPipeline Pipeline = new MarkdownPipelineBuilder()
-        .UseYamlFrontMatter()
-        .Build();
-
-    private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
-        .IgnoreUnmatchedProperties()
-        .Build();
+    public DocumentationNodeProvider(IMessageHub hub)
+    {
+        _lazyNodes = new Lazy<MeshNode[]>(() => LoadNodes(hub.JsonSerializerOptions));
+    }
 
     public IEnumerable<MeshNode> GetStaticNodes()
     {
@@ -40,7 +35,8 @@ public class DocumentationNodeProvider : IStaticNodeProvider
                 Create = false,
                 Update = false,
                 Delete = false,
-                Comment = false
+                Comment = true,
+                Thread = true
             }
         };
 
@@ -57,19 +53,20 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             }
         };
 
-        foreach (var node in LazyNodes.Value)
+        foreach (var node in _lazyNodes.Value)
             yield return node;
     }
 
-    private static MeshNode[] LoadNodes()
+    private static MeshNode[] LoadNodes(JsonSerializerOptions jsonOptions)
     {
         var assembly = typeof(DocumentationNodeProvider).Assembly;
         var prefix = $"{assembly.GetName().Name}.Data.";
+        var parserRegistry = new FileFormatParserRegistry(jsonOptions);
 
         var nodes = new List<MeshNode>();
 
         foreach (var resourceName in assembly.GetManifestResourceNames()
-                     .Where(n => n.StartsWith(prefix) && n.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+                     .Where(n => n.StartsWith(prefix))
                      .Order())
         {
             using var stream = assembly.GetManifestResourceStream(resourceName);
@@ -79,56 +76,17 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             var content = reader.ReadToEnd();
 
             var relativePath = ResourceNameToPath(resourceName, prefix);
-            var node = ParseMarkdownNode(content, relativePath);
+            var extension = Path.GetExtension(relativePath);
+
+            // Use the same parsers as the file system provider
+            var node = parserRegistry.TryParseAsync(extension, relativePath, content,
+                $"{RootNamespace}/{relativePath}", default).GetAwaiter().GetResult();
+
             if (node != null)
                 nodes.Add(node);
         }
 
         return nodes.ToArray();
-    }
-
-    private static MeshNode? ParseMarkdownNode(string content, string relativePath)
-    {
-        var (id, ns) = DeriveIdAndNamespace(relativePath);
-
-        var document = Markdig.Markdown.Parse(content, Pipeline);
-        var yamlBlock = document.Descendants<YamlFrontMatterBlock>().FirstOrDefault();
-
-        FrontMatter? frontMatter = null;
-        if (yamlBlock != null)
-        {
-            try
-            {
-                var yamlContent = yamlBlock.Lines.ToString();
-                frontMatter = YamlDeserializer.Deserialize<FrontMatter>(yamlContent);
-            }
-            catch
-            {
-                // Use defaults if YAML parsing fails
-            }
-        }
-
-        var markdownBody = yamlBlock != null
-            ? content[(yamlBlock.Span.End + 1)..].TrimStart('\r', '\n')
-            : content;
-
-        var markdownDocument = MarkdownContent.Parse(markdownBody, ns) with
-        {
-            Authors = frontMatter?.Authors,
-            Tags = frontMatter?.Tags,
-            Thumbnail = frontMatter?.Thumbnail,
-            Abstract = frontMatter?.Abstract ?? frontMatter?.Description
-        };
-
-        return new MeshNode(id, ns)
-        {
-            NodeType = frontMatter?.NodeType ?? "Markdown",
-            Name = frontMatter?.Name ?? frontMatter?.Title ?? id,
-            Category = frontMatter?.Category,
-            Icon = ResolveIcon(frontMatter?.Icon ?? frontMatter?.Thumbnail, ns),
-            Content = markdownDocument,
-            PreRenderedHtml = markdownDocument.PrerenderedHtml
-        };
     }
 
     /// <summary>
@@ -146,71 +104,5 @@ public class DocumentationNodeProvider : IStaticNodeProvider
             return nameWithoutExt + ext;
         }
         return withoutPrefix.Replace('.', '/');
-    }
-
-    private static (string Id, string? Namespace) DeriveIdAndNamespace(string relativePath)
-    {
-        var pathWithoutExt = relativePath;
-        if (pathWithoutExt.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-            pathWithoutExt = pathWithoutExt[..^3];
-
-        pathWithoutExt = pathWithoutExt.Trim('/').Replace('\\', '/');
-
-        var lastSlash = pathWithoutExt.LastIndexOf('/');
-
-        // index.md files represent their parent namespace root
-        if (lastSlash < 0)
-        {
-            if (pathWithoutExt.Equals("index", StringComparison.OrdinalIgnoreCase))
-                return (RootNamespace, null); // Data/index.md → path "Doc"
-
-            return (pathWithoutExt, RootNamespace);
-        }
-
-        var id = pathWithoutExt[(lastSlash + 1)..];
-        if (id.Equals("index", StringComparison.OrdinalIgnoreCase))
-        {
-            // e.g. AI/index.md → path "Doc/AI" (collapse index into parent)
-            var parentDir = pathWithoutExt[..lastSlash];
-            var parentSlash = parentDir.LastIndexOf('/');
-            if (parentSlash < 0)
-                return (parentDir, RootNamespace);
-            return (parentDir[(parentSlash + 1)..], $"{RootNamespace}/{parentDir[..parentSlash]}");
-        }
-
-        var ns = $"{RootNamespace}/{pathWithoutExt[..lastSlash]}";
-        return (id, ns);
-    }
-
-    private static string ResolveIcon(string? iconValue, string? ns)
-    {
-        if (string.IsNullOrEmpty(iconValue))
-            return "Document";
-        if (iconValue.StartsWith("/") || iconValue.StartsWith("http") || iconValue.StartsWith("data:"))
-            return iconValue;
-        if (!string.IsNullOrEmpty(ns))
-        {
-            // Strip the "Doc/" prefix from namespace since DocContent serves relative to Content/ folder
-            var contentPath = ns.StartsWith($"{RootNamespace}/", StringComparison.OrdinalIgnoreCase)
-                ? ns[(RootNamespace.Length + 1)..]
-                : ns;
-            return $"/static/DocContent/{contentPath}/{iconValue}";
-        }
-        return iconValue;
-    }
-
-    private class FrontMatter
-    {
-        public string? NodeType { get; set; }
-        public string? Name { get; set; }
-        public string? Category { get; set; }
-        public string? Description { get; set; }
-        public string? Icon { get; set; }
-        public string? Title { get; set; }
-        public string? Abstract { get; set; }
-        public string? Published { get; set; }
-        public List<string>? Authors { get; set; }
-        public List<string>? Tags { get; set; }
-        public string? Thumbnail { get; set; }
     }
 }

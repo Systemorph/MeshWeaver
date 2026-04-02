@@ -97,30 +97,20 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
     private async Task<PartitionedStore> CreateStoreInternalAsync(string firstSegment, CancellationToken ct)
     {
         var schemaName = SanitizeSchemaName(firstSegment);
-        var versionsSchemaName = schemaName + "_versions";
-
         // Ensure vector extension exists (must run in public schema context)
         await using var extCmd = _baseDataSource.CreateCommand("CREATE EXTENSION IF NOT EXISTS vector");
         await extCmd.ExecuteNonQueryAsync(ct);
 
-        // Create the org schema and its versions schema
+        // Create the org schema (history table lives in the same schema)
         await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{schemaName}\""))
             await cmd.ExecuteNonQueryAsync(ct);
-        await using (var cmd = _baseDataSource.CreateCommand($"CREATE SCHEMA IF NOT EXISTS \"{versionsSchemaName}\""))
-            await cmd.ExecuteNonQueryAsync(ct);
 
-        // --- DDL phase: temporary SearchPath-scoped data sources, disposed after init ---
+        // --- DDL phase: temporary SearchPath-scoped data source, disposed after init ---
         var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
         {
             SearchPath = $"{schemaName},public"
         };
         var ddlSchemaDataSource = BuildDdlDataSource(builder.ConnectionString, useVector: true);
-
-        var versionsConnBuilder = new NpgsqlConnectionStringBuilder(_baseConnectionString)
-        {
-            SearchPath = $"{versionsSchemaName},public"
-        };
-        var ddlVersionsDataSource = BuildDdlDataSource(versionsConnBuilder.ConnectionString);
 
         var schemaOptions = new PostgreSqlStorageOptions
         {
@@ -128,9 +118,7 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
             VectorDimensions = _options.VectorDimensions,
             Schema = schemaName
         };
-        await PostgreSqlSchemaInitializer.InitializeWithVersionsSchemaAsync(
-            _baseDataSource, ddlSchemaDataSource, ddlVersionsDataSource,
-            schemaOptions, versionsSchemaName, ct);
+        await PostgreSqlSchemaInitializer.InitializeAsync(ddlSchemaDataSource, schemaOptions);
 
         // Sync node type permissions using temporary DDL data source
         if (_nodeTypePermissions.Count > 0)
@@ -160,14 +148,13 @@ public partial class PostgreSqlPartitionedStoreFactory : IPartitionedStoreFactor
                 ddlSchemaDataSource, _options, partitionDef.TableMappings.Values, ct);
         }
 
-        // Dispose DDL data sources — no longer needed
+        // Dispose DDL data source — no longer needed
         await ddlSchemaDataSource.DisposeAsync();
-        await ddlVersionsDataSource.DisposeAsync();
 
         // --- Runtime phase: shared _baseDataSource with schema-qualified SQL ---
         var adapter = new PostgreSqlStorageAdapter(_baseDataSource, _embeddingProvider, partitionDef);
         var queryProvider = new PostgreSqlMeshQuery(adapter, _changeNotifier, _accessService);
-        var versionQuery = new PostgreSqlVersionQuery(_baseDataSource, versionsSchemaName);
+        var versionQuery = new PostgreSqlVersionQuery(_baseDataSource, schemaName);
 
         return new PartitionedStore(adapter, queryProvider, versionQuery);
     }

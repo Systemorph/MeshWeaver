@@ -38,6 +38,7 @@ public static class RoleNodeType
     {
         Name = "Role",
         Icon = "/static/NodeTypeIcons/shield.svg",
+        ExcludeFromContext = new HashSet<string> { "search" },
         AssemblyLocation = typeof(RoleNodeType).Assembly.Location,
         HubConfiguration = config => config
             .AddMeshDataSource(source => source
@@ -63,7 +64,8 @@ public static class RoleNodeType
                     Create = false,
                     Update = false,
                     Delete = false,
-                    Comment = false
+                    Comment = false,
+                    Thread = false
                 }
             },
             new("Admin", "Role") { Name = "Admin", NodeType = NodeType, Content = Role.Admin },

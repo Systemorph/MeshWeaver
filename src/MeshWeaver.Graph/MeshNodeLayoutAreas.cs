@@ -70,6 +70,8 @@ public static class MeshNodeLayoutAreas
     public const string ChatArea = "Chat";
     public const string ImportMeshNodesArea = "ImportMeshNodes";
     public const string ExportArea = "Export";
+    public const string CopyArea = "Copy";
+    public const string MoveArea = "Move";
     public const string VersionsArea = "Versions";
     public const string VersionDiffArea = "VersionDiff";
 
@@ -87,8 +89,6 @@ public static class MeshNodeLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddDefaultLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithNodeOperationHandlers()
-            .AddMeshDataSource()
             .AddDefaultMeshMenu()
             .AddDefaultSettingsMenuItems()
             .WithHandler<RollbackNodeRequest>(VersionLayoutArea.HandleRollbackNodeRequest)
@@ -113,6 +113,8 @@ public static class MeshNodeLayoutAreas
             .WithView(EditArea, EditNode)
             .WithView(ImportMeshNodesArea, ImportLayoutArea.ImportMeshNodes)
             .WithView(ExportArea, ExportLayoutArea.Export)
+            .WithView(CopyArea, CopyLayoutArea.Copy)
+            .WithView(MoveArea, MoveLayoutArea.Move)
             .WithView(VersionsArea, VersionLayoutArea.Versions)
             .WithView(VersionDiffArea, VersionLayoutArea.VersionDiff)
             .WithView(DeleteArea, DeleteLayoutArea.Delete)
@@ -255,7 +257,7 @@ public static class MeshNodeLayoutAreas
     {
         var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
         var title = node?.Name ?? node?.Id ?? host.Hub.Address.ToString();
-        var iconValue = node?.Icon;
+        var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node);
 
         // Build title with icon
         var titleContent = Controls.Stack
@@ -276,9 +278,15 @@ public static class MeshNodeLayoutAreas
                 iconControl = Controls.Html(
                     $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;\">{iconValue}</div>");
             }
-            else
+            else if (MeshNodeImageHelper.IsFluentIconName(iconValue))
             {
                 iconControl = Controls.Icon(new Icon(FluentIcons.Provider, iconValue)).WithStyle("font-size: 48px; color: var(--accent-fill-rest);");
+            }
+            else
+            {
+                // Emoji or other text — render as-is
+                iconControl = Controls.Html(
+                    $"<div style=\"width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
             }
 
             if (canEdit)
@@ -654,10 +662,13 @@ public static class MeshNodeLayoutAreas
             if (isNodeTypeMode && node != null)
             {
                 var nodeTypePath = node.Path;
-                var hiddenQuery = $"namespace:{nodeTypePath}";
-
-                // Build create href pre-populated with type and namespace from NodeTypeDefinition
                 var nodeTypeDefinition = node.Content as NodeTypeDefinition;
+
+                // Build query: always restrict to this nodeType.
+                // If DefaultNamespace is set, scope to that namespace; otherwise scope to current path descendants.
+                var hiddenQuery = nodeTypeDefinition?.DefaultNamespace != null
+                    ? $"nodeType:{nodeTypePath} namespace:{nodeTypeDefinition.DefaultNamespace}"
+                    : $"nodeType:{nodeTypePath} namespace:{nodeTypePath} scope:descendants";
                 var defaultNs = nodeTypeDefinition?.DefaultNamespace;
                 var createNs = !string.IsNullOrEmpty(defaultNs) ? defaultNs : hubPath;
 
@@ -667,7 +678,7 @@ public static class MeshNodeLayoutAreas
                 if (nodeTypeDefinition?.RestrictedToNamespaces is { Count: > 0 } nsRestrictions)
                     createQs += $"&namespaces={string.Join(",", nsRestrictions.Select(Uri.EscapeDataString))}";
 
-                var createHref = $"/{createNs}/{CreateNodeArea}?{createQs}";
+                var createHref = $"/create?{createQs}";
 
                 return (UiControl?)Controls.MeshSearch
                     .WithHiddenQuery(hiddenQuery)
@@ -679,8 +690,8 @@ public static class MeshNodeLayoutAreas
                     .WithCreateHref(createHref);
             }
 
-            // Instance node catalog - excludes satellite and search-excluded types
-            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath} is:main context:search";
+            // Instance node catalog
+            var instanceHiddenQuery = $"namespace:{node?.Namespace ?? hubPath}";
             var instanceNs = node?.Namespace ?? hubPath;
 
             return Controls.MeshSearch
@@ -690,7 +701,7 @@ public static class MeshNodeLayoutAreas
                 .WithPlaceholder("Search... (use @ for references)")
                 .WithRenderMode(MeshSearchRenderMode.Hierarchical)
                 .WithMaxColumns(3)
-                .WithCreateHref($"/{hubPath}/{CreateNodeArea}?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
+                .WithCreateHref($"/create?type=Markdown&namespace={Uri.EscapeDataString(instanceNs)}");
         });
     }
 
@@ -706,6 +717,7 @@ public static class MeshNodeLayoutAreas
         var hubPath = host.Hub.Address.ToString();
 
         return Controls.MeshSearch
+            .WithTitle("Associated")
             .WithHiddenQuery($"namespace:{hubPath} is:main context:search")
             .WithShowSearchBox(false)
             .WithShowEmptyMessage(false)
@@ -720,17 +732,26 @@ public static class MeshNodeLayoutAreas
 
     /// <summary>
     /// Renders the Threads catalog showing child Thread nodes using MeshSearchControl.
-    /// Uses activity-based sorting so the user sees their most recently accessed threads first.
+    /// Includes a "Create Thread" button for starting new conversations.
     /// </summary>
     [Browsable(false)]
     public static UiControl Threads(LayoutAreaHost host, RenderingContext _)
     {
         var hubPath = host.Hub.Address.ToString();
+        var createUrl = $"/{hubPath}/Create?type={Uri.EscapeDataString("Thread")}&namespace={Uri.EscapeDataString($"{hubPath}/_Thread")}";
 
-        return Controls.MeshSearch
-            .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread")
-            .WithNamespace(hubPath)
-            .WithRenderMode(MeshSearchRenderMode.Flat);
+        return Controls.Stack
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithStyle("justify-content: flex-end; padding: 0 0 12px 0;")
+                .WithView(Controls.Button("Create Thread")
+                    .WithAppearance(Appearance.Accent)
+                    .WithIconStart(FluentIcons.Add())
+                    .WithNavigateToHref(createUrl)))
+            .WithView(Controls.MeshSearch
+                .WithHiddenQuery($"nodeType:Thread namespace:{hubPath}/_Thread sort:lastModified-desc")
+                .WithNamespace(hubPath)
+                .WithRenderMode(MeshSearchRenderMode.Flat));
     }
 
     /// <summary>
@@ -1017,9 +1038,13 @@ public static class MeshNodeLayoutAreas
         var iconUrl = !string.IsNullOrEmpty(imageUrl) ? imageUrl : "/static/NodeTypeIcons/document.svg";
         var name = node.Name ?? node.Id;
 
+        var iconHtml = iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
+            ? $"<div style=\"width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;\">{iconUrl}</div>"
+            : $"<img src=\"{iconUrl}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
+
         return Controls.Html($@"
             <div style=""display: flex; align-items: center; gap: 8px;"">
-                <img src=""{iconUrl}"" alt="""" style=""width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;"" />
+                {iconHtml}
                 <span>{name}</span>
             </div>");
     }

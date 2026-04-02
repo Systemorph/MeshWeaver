@@ -181,5 +181,5 @@ public record Employee
 
 # See Also
 
-- [Editor Control](Doc/GUI/Editor) - How attributes are used in forms
-- [DataBinding](Doc/GUI/DataBinding) - How data flows through forms
+- [Editor Control](../Editor) - How attributes are used in forms
+- [DataBinding](../DataBinding) - How data flows through forms

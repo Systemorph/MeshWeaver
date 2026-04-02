@@ -21,11 +21,14 @@ public static class MarkdownOverviewLayoutArea
         var nodeStream = host.Workspace.GetStream<MeshNode>()?.Select(nodes => nodes ?? Array.Empty<MeshNode>())
             ?? Observable.Return(Array.Empty<MeshNode>());
 
-        return nodeStream.SelectMany(async nodes =>
+        // Permissions checked once via Observable (no await, no blocking)
+        var permissionsStream = PermissionHelper.ObservePermissions(host.Hub, hubPath);
+
+        return nodeStream.CombineLatest(permissionsStream, (nodes, perms) =>
         {
             var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-            var canComment = await PermissionHelper.CanCommentAsync(host.Hub, hubPath);
-            var canEdit = await PermissionHelper.CanEditAsync(host.Hub, hubPath);
+            var canComment = perms.HasFlag(Permission.Comment) || perms.HasFlag(Permission.Update);
+            var canEdit = perms.HasFlag(Permission.Update);
             return (UiControl?)BuildOverview(host, node, canComment, canEdit);
         });
     }
@@ -43,8 +46,12 @@ public static class MarkdownOverviewLayoutArea
         // Read-only markdown content
         container = container.WithView(BuildReadOnlyView(host, nodePath, rawContent, canComment, canEdit));
 
-        // Standard children section
-        container = container.WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false));
+        // Standard children section — separated from main content
+        container = container.WithView(
+            Controls.Stack
+                .WithWidth("100%")
+                .WithStyle("margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--neutral-stroke-rest);")
+                .WithView(LayoutAreaControl.Children(host.Hub).WithShowProgress(false)));
 
         // Approvals section (only if enabled and approvals exist)
         if (host.Hub.Configuration.HasApprovals())
@@ -101,7 +108,7 @@ public static class MarkdownOverviewLayoutArea
     /// <summary>
     /// Extracts markdown content from a MeshNode.
     /// </summary>
-    internal static string GetMarkdownContent(MeshNode? node)
+    public static string GetMarkdownContent(MeshNode? node)
     {
         if (node?.Content == null)
             return string.Empty;

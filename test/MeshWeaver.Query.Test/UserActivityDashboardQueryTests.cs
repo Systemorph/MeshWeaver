@@ -149,14 +149,10 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
 
         var client = GetClient();
         var response = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = contextPath,
-                UserMessageText = "Help me with my project"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(contextPath, "Help me with my project")),
             o => o.WithTarget(new Address(contextPath)), ct);
         response.Message.Success.Should().BeTrue(response.Message.Error);
-        var threadPath = response.Message.ThreadPath!;
+        var threadPath = response.Message.Node!.Path!;
         Output.WriteLine($"Thread created at: {threadPath}");
 
         // Act 1: nodeType:Thread with scope:descendants — should find threads
@@ -198,7 +194,7 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
         var ct = new CancellationTokenSource(25.Seconds()).Token;
         var ns = "myItems";
 
-        // Arrange: namespace node first (required for CreateThreadRequest target)
+        // Arrange: namespace node first (required for CreateNodeRequest target)
         await NodeFactory.CreateNodeAsync(
             new MeshNode(ns) { Name = "My Items NS", NodeType = "Markdown" }, ct);
 
@@ -220,14 +216,10 @@ public class UserActivityDashboardQueryTests(ITestOutputHelper output) : Monolit
             Content = new ActivityLog("DataUpdate") { HubPath = $"{ns}/doc1" }
         }, ct);
 
-        // Thread satellite via CreateThreadRequest
+        // Thread satellite via CreateNodeRequest
         var client = GetClient();
         var threadResponse = await client.AwaitResponse(
-            new CreateThreadRequest
-            {
-                Namespace = ns,
-                UserMessageText = "Thread in my items"
-            },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(ns, "Thread in my items")),
             o => o.WithTarget(new Address(ns)), ct);
         threadResponse.Message.Success.Should().BeTrue(threadResponse.Message.Error);
 

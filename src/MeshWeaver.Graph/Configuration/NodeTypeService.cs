@@ -20,7 +20,9 @@ namespace MeshWeaver.Graph.Configuration;
 /// </summary>
 internal class NodeTypeService : INodeTypeService, IDisposable
 {
-    private readonly IMessageHub meshHub;
+    private readonly IMessageHub hub;
+    private readonly IEnumerable<IMeshQueryProvider> queryProviders;
+    private readonly IMeshStorage meshStorage;
     private readonly ILogger<NodeTypeService> logger;
     private readonly MeshNodeCompilationService? compilationService;
     private readonly MeshConfiguration meshConfiguration;
@@ -52,14 +54,18 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     private readonly ConcurrentDictionary<string, INodeTypeAccessRule> _accessRules = new();
 
     public NodeTypeService(
-        IMessageHub meshHub,
+        IMessageHub hub,
+        IEnumerable<IMeshQueryProvider> queryProviders,
         MeshConfiguration meshConfiguration,
+        IMeshStorage meshStorage,
         ILogger<NodeTypeService> logger,
         ICompilationCacheService cacheService,
         IOptions<CompilationCacheOptions> cacheOptions,
         MeshNodeCompilationService? compilationService = null)
     {
-        this.meshHub = meshHub;
+        this.hub = hub;
+        this.queryProviders = queryProviders;
+        this.meshStorage = meshStorage;
         this.meshConfiguration = meshConfiguration;
         this.logger = logger;
         this.cacheService = cacheService;
@@ -85,6 +91,24 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     }
 
     /// <summary>
+    /// Queries all providers and returns typed results. Used instead of IMeshService
+    /// to avoid circular dependency (NodeTypeService must not depend on IMeshService).
+    /// </summary>
+    private async IAsyncEnumerable<T> QueryAsync<T>(string query, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var request = MeshQueryRequest.FromQuery(query);
+        var options = hub.JsonSerializerOptions;
+        foreach (var provider in queryProviders)
+        {
+            await foreach (var item in provider.QueryAsync(request, options, ct))
+            {
+                if (item is T typed)
+                    yield return typed;
+            }
+        }
+    }
+
+    /// <summary>
     /// Caches a hub configuration and extracts CreatableTypesRules and ContentType.
     /// </summary>
     private void CacheHubConfiguration(string nodeTypePath, Func<MessageHubConfiguration, MessageHubConfiguration> hubConfig)
@@ -92,37 +116,8 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         _hubConfigurations[nodeTypePath] = hubConfig;
         logger.LogDebug("Cached HubConfiguration for {Path}", nodeTypePath);
 
-        // Extract rules by applying the configuration to a base config
-        try
-        {
-            var baseConfig = new MessageHubConfiguration(meshHub.ServiceProvider, new Address(nodeTypePath));
-            var configured = hubConfig(baseConfig);
-
-            var rules = configured.GetCreatableTypesRules();
-            if (rules != null)
-            {
-                _creatableTypesRules[nodeTypePath] = rules;
-                logger.LogDebug("Cached CreatableTypesRules for {Path}", nodeTypePath);
-            }
-
-            if (configured.IsNotCreatable())
-            {
-                _notCreatableTypes[nodeTypePath] = true;
-                logger.LogDebug("Marked {Path} as NotCreatable", nodeTypePath);
-            }
-
-            var accessRuleSet = configured.GetNodeAccessRuleSet();
-            if (accessRuleSet != null)
-            {
-                _accessRules[nodeTypePath] = accessRuleSet.ToAccessRule(nodeTypePath);
-                logger.LogDebug("Cached AccessRule for {Path}", nodeTypePath);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Log but don't fail - rules are optional
-            logger.LogDebug(ex, "Could not extract rules from hub config for {Path}", nodeTypePath);
-        }
+        // Rules (CreatableTypesRules, NotCreatable, AccessRules) are extracted
+        // when the hub is actually created — not here. We only cache the lambda.
     }
 
     /// <summary>
@@ -206,17 +201,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     public Func<MessageHubConfiguration, MessageHubConfiguration>? GetCachedHubConfiguration(string nodeTypePath)
     {
-        var hubConfig = _hubConfigurations.GetValueOrDefault(nodeTypePath);
-        var defaultConfig = meshConfiguration.DefaultNodeHubConfiguration;
-
-        // Return combined config if both exist
-        // Apply defaultConfig first (sets defaults like DetailsArea),
-        // then hubConfig (node type can override, e.g., Markdown sets $Content)
-        if (hubConfig != null && defaultConfig != null)
-            return config => hubConfig(defaultConfig(config));
-
-        // Return whichever one exists, or null if neither
-        return hubConfig ?? defaultConfig;
+        // Return the raw cached config — composition with DefaultNodeHubConfiguration
+        // is done by IMeshNodeHubFactory.ResolveHubConfigurationAsync.
+        return _hubConfigurations.GetValueOrDefault(nodeTypePath);
     }
 
     internal void InvalidateCache(string nodeTypePath)
@@ -368,22 +355,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             return node with { Icon = builtInNode.Icon };
         }
         return node;
-    }
-
-    private async Task<Func<MessageHubConfiguration, MessageHubConfiguration>?> GetHubConfigurationAsync(Address address, CancellationToken ct = default)
-    {
-        logger.LogDebug("Getting HubConfiguration for {Address}", address);
-
-        // Subscribe to the node hub with empty DataPathReference to get the MeshNode
-        var workspace = meshHub.GetWorkspace();
-        var stream = workspace.GetRemoteStream<MeshNode, DataPathReference>(
-            address,
-            new DataPathReference(""));
-
-        // Get the first value from the stream
-        var node = await stream.Select(c => c.Value).FirstOrDefaultAsync();
-
-        return await ProcessNodeForHubConfigAsync(node, address);
     }
 
     /// <summary>
@@ -541,18 +512,14 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     {
         // Use IMeshStorage directly to bypass routing/hub creation.
         // This avoids the circular dependency: compilation → routing → hub creation → needs compilation.
-        var meshStorage = meshHub.ServiceProvider.GetService<IMeshStorage>();
-        if (meshStorage == null)
-        {
-            logger.LogWarning("IMeshStorage not available for {NodeTypePath}", nodeTypePath);
-            return (null, null);
-        }
 
         // Get the node directly from persistence (no routing)
         var node = await meshStorage.GetNodeAsync(nodeTypePath, ct);
         if (node == null)
         {
-            logger.LogDebug("No node found for {NodeTypePath}", nodeTypePath);
+            var msg = $"NodeType definition not found at path '{nodeTypePath}'. Check that the NodeType node exists in persistence or a static node provider.";
+            logger.LogWarning(msg);
+            _compilationErrors[nodeTypePath] = msg;
             return (null, null);
         }
 
@@ -560,7 +527,9 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         var definition = node.Content as NodeTypeDefinition;
         if (definition == null)
         {
-            logger.LogDebug("Node at {NodeTypePath} has no NodeTypeDefinition content", nodeTypePath);
+            var msg = $"Node at '{nodeTypePath}' exists but has no NodeTypeDefinition content (actual content type: {node.Content?.GetType().Name ?? "null"}).";
+            logger.LogWarning(msg);
+            _compilationErrors[nodeTypePath] = msg;
             return (null, null);
         }
 
@@ -581,6 +550,11 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             {
                 codeFiles[i] = await compilationService.ResolveCodeIncludesAsync(codeFiles[i], meshStorage, ct);
             }
+        }
+
+        if (codeFiles.Count == 0)
+        {
+            logger.LogWarning("NodeType '{NodeTypePath}' has no code files under /_Source. Hub will use default configuration only.", nodeTypePath);
         }
 
         var code = codeFiles.Count > 0 ? string.Join("\n\n", codeFiles) : null;
@@ -729,13 +703,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         string nodePath,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        var meshQuery = meshHub.ServiceProvider.GetService<IMeshService>();
-
-        if (meshQuery == null)
-        {
-            logger.LogWarning("IMeshService not available for GetCreatableTypesAsync");
-            yield break;
-        }
 
         var addedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         MeshNode? parentNode = null;
@@ -745,7 +712,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         if (!string.IsNullOrEmpty(nodePath))
         {
             var nodeQuery = $"path:{nodePath}";
-            await foreach (var node in meshQuery.QueryAsync<MeshNode>(nodeQuery, ct: ct).WithCancellation(ct))
+            await foreach (var node in QueryAsync<MeshNode>(nodeQuery, ct).WithCancellation(ct))
             {
                 parentNode = node;
                 currentNodeType = node.NodeType;
@@ -763,7 +730,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         {
             // Child NodeTypes under this node's path
             var childQuery = $"namespace:{nodePath} nodeType:NodeType";
-            await foreach (var childType in meshQuery.QueryAsync<MeshNode>(childQuery, ct: ct).WithCancellation(ct))
+            await foreach (var childType in QueryAsync<MeshNode>(childQuery, ct).WithCancellation(ct))
             {
                 creatableTypes.Add(childType.Path);
             }
@@ -773,7 +740,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
             {
                 var nodeTypeChildQuery = $"namespace:{currentNodeType} nodeType:NodeType";
-                await foreach (var childType in meshQuery.QueryAsync<MeshNode>(nodeTypeChildQuery, ct: ct).WithCancellation(ct))
+                await foreach (var childType in QueryAsync<MeshNode>(nodeTypeChildQuery, ct).WithCancellation(ct))
                 {
                     creatableTypes.Add(childType.Path);
                 }
@@ -783,7 +750,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
         {
             // At root: include root-level NodeTypes
             var rootQuery = "nodeType:NodeType";
-            await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(rootQuery, ct: ct).WithCancellation(ct))
+            await foreach (var typeNode in QueryAsync<MeshNode>(rootQuery, ct).WithCancellation(ct))
             {
                 if (!typeNode.Path.Contains('/'))
                     creatableTypes.Add(typeNode.Path);
@@ -820,7 +787,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
             if (!string.IsNullOrEmpty(currentNodeType) && currentNodeType != "NodeType")
             {
                 var nodeTypeQuery = $"path:{currentNodeType}";
-                await foreach (var nodeTypeNode in meshQuery.QueryAsync<MeshNode>(nodeTypeQuery, ct: ct).WithCancellation(ct))
+                await foreach (var nodeTypeNode in QueryAsync<MeshNode>(nodeTypeQuery, ct).WithCancellation(ct))
                 {
                     if (nodeTypeNode.Content is NodeTypeDefinition parentTypeDef)
                     {
@@ -862,7 +829,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
                 continue;
 
             // Try to get type info from cache or query
-            var typeInfo = await GetTypeInfoAsync(typePath, meshQuery, ct);
+            var typeInfo = await GetTypeInfoAsync(typePath, ct);
             if (typeInfo != null)
                 yield return typeInfo;
         }
@@ -873,7 +840,6 @@ internal class NodeTypeService : INodeTypeService, IDisposable
     /// </summary>
     private async Task<CreatableTypeInfo?> GetTypeInfoAsync(
         string typePath,
-        IMeshService meshQuery,
         CancellationToken ct)
     {
         // Check for global types first
@@ -891,7 +857,7 @@ internal class NodeTypeService : INodeTypeService, IDisposable
 
         // Query for the type node
         var typeQuery = $"path:{typePath}";
-        await foreach (var typeNode in meshQuery.QueryAsync<MeshNode>(typeQuery, ct: ct).WithCancellation(ct))
+        await foreach (var typeNode in QueryAsync<MeshNode>(typeQuery, ct).WithCancellation(ct))
         {
             return CreateCreatableTypeInfoFromNode(typeNode);
         }

@@ -1,3 +1,4 @@
+using Memex.Portal.Shared;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -57,6 +58,7 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(dataDirectory)
             .AddAcme()
+            .AddOrganizationType()
             .ConfigureServices(services =>
             {
                 services.Configure<CompilationCacheOptions>(o =>
@@ -206,15 +208,16 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 TestContext.Current.CancellationToken);
             Output.WriteLine("Node hub initialized.");
 
-            // Request the Create area for the transient node
+            // Transient nodes are auto-confirmed and redirected to Edit.
+            // Verify the Edit area renders with content.
             var workspace = client.GetWorkspace();
-            var reference = new LayoutAreaReference(MeshNodeLayoutAreas.CreateNodeArea);
+            var reference = new LayoutAreaReference(MeshNodeLayoutAreas.EditArea);
 
             var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
                 nodeAddress,
                 reference);
 
-            Output.WriteLine("Waiting for Create editor to render...");
+            Output.WriteLine("Waiting for Edit area to render (transient auto-confirmed)...");
             var control = await stream
                 .GetControlStream(reference.Area!)
                 .Where(c => c is StackControl)
@@ -222,22 +225,11 @@ public class TodoCreateFlowTest(ITestOutputHelper output) : MonolithMeshTestBase
                 .FirstAsync();
 
             Output.WriteLine($"Received control: {control?.GetType().Name}");
-            control.Should().NotBeNull("Create editor should render for transient node");
+            control.Should().NotBeNull("Edit area should render for confirmed transient node");
 
             var stack = control.Should().BeOfType<StackControl>().Subject;
-            Output.WriteLine($"Create editor has {stack.Areas.Count()} areas");
-
-            // Log the area IDs for debugging
-            foreach (var area in stack.Areas)
-            {
-                Output.WriteLine($"  Area: {area.Id}");
-            }
-
-            // The Create editor should have multiple areas:
-            // - Header with title and cancel button (area 1)
-            // - EditorControl with all Todo fields (area 2)
-            // - Button row with Create button (area 3)
-            stack.Areas.Count().Should().BeGreaterThanOrEqualTo(3, "Editor should have header, content, and buttons areas");
+            Output.WriteLine($"Edit area has {stack.Areas.Count()} areas");
+            stack.Areas.Count().Should().BeGreaterThanOrEqualTo(2, "Edit area should have content areas");
         }
         finally
         {

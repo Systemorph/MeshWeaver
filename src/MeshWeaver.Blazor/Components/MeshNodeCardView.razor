@@ -18,6 +18,8 @@ else
     private string? Title { get; set; }
     private string? Description { get; set; }
     private string? ImageUrl { get; set; }
+    private bool IsInlineSvg => ImageUrl?.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase) == true;
+    private bool IsEmoji => !string.IsNullOrEmpty(ImageUrl) && !IsInlineSvg && !ImageUrl.Contains('/') && !ImageUrl.StartsWith("data:");
     private string? ItemArea { get; set; }
     private bool DisableNavigation { get; set; }
 
@@ -43,7 +45,18 @@ else
                 <div class="mesh-node-card-content">
                     @if (!string.IsNullOrEmpty(ImageUrl))
                     {
-                        <img src="@ImageUrl" alt="@Title" class="mesh-node-card-image" />
+                        @if (IsInlineSvg)
+                        {
+                            <div class="mesh-node-card-image" style="display: flex; align-items: center; justify-content: center;">@((MarkupString)ImageUrl)</div>
+                        }
+                        else if (IsEmoji)
+                        {
+                            <div class="mesh-node-card-placeholder" style="background: transparent; font-size: 32px;">@ImageUrl</div>
+                        }
+                        else
+                        {
+                            <img src="@ImageUrl" alt="@Title" class="mesh-node-card-image" />
+                        }
                     }
                     else
                     {

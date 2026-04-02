@@ -84,4 +84,10 @@ public record NavigationRequest(string Uri)
     /// Whether to replace the current history entry instead of adding a new one.
     /// </summary>
     public bool Replace { get; init; }
+
+    /// <summary>
+    /// When "SidePanel", the navigation target is the side panel content path
+    /// instead of the main browser location.
+    /// </summary>
+    public string? Target { get; init; }
 }

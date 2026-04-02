@@ -47,7 +47,6 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new FakeChatClientFactory());
                 return services;
             })
@@ -99,7 +98,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         public IReadOnlyList<string> Models => ["fake-model"];
         public int Order => 0;
 
-        public Task<ChatClientAgent> CreateAgentAsync(
+        public ChatClientAgent CreateAgent(
             AgentConfiguration config,
             IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
@@ -107,7 +106,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
             string? modelName = null)
         {
             var chatClient = new FakeChatClient(FakeResponseText);
-            var agent = new ChatClientAgent(
+            return new ChatClientAgent(
                 chatClient: chatClient,
                 instructions: config.Instructions ?? "You are a helpful test assistant.",
                 name: config.Id,
@@ -116,8 +115,15 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
                 loggerFactory: null,
                 services: null
             );
-            return Task.FromResult(agent);
         }
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config,
+            IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion
@@ -146,7 +152,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         {
             Name = "Integration Test Thread",
             NodeType = ThreadNodeType.NodeType,
-            Content = new Thread { ParentPath = "ACME/ProductLaunch" }
+            Content = new Thread()
         };
         await NodeFactory.CreateNodeAsync(threadNode, ct);
 
@@ -171,7 +177,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
         {
             contextNode = node;
             break;
@@ -264,7 +270,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         {
             Name = "Non-Streaming Test Thread",
             NodeType = ThreadNodeType.NodeType,
-            Content = new Thread { ParentPath = "ACME/ProductLaunch" }
+            Content = new Thread()
         }, ct);
 
         // Initialize agent
@@ -272,7 +278,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
         {
             contextNode = node;
             break;
@@ -328,14 +334,14 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         {
             Name = "Thread 1",
             NodeType = ThreadNodeType.NodeType,
-            Content = new Thread { ParentPath = "ACME/ProductLaunch" }
+            Content = new Thread()
         }, ct);
 
         await NodeFactory.CreateNodeAsync(new MeshNode(threadPath2)
         {
             Name = "Thread 2",
             NodeType = ThreadNodeType.NodeType,
-            Content = new Thread { ParentPath = "ACME/ProductLaunch" }
+            Content = new Thread()
         }, ct);
 
         // Initialize agent
@@ -343,7 +349,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         await agentChat.InitializeAsync("ACME/ProductLaunch");
 
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME/ProductLaunch", null, ct))
         {
             contextNode = node;
             break;
@@ -382,12 +388,7 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         response1.ToString().Trim().Should().NotBeEmpty();
         response2.ToString().Trim().Should().NotBeEmpty();
 
-        // Persistence should have saved threads independently
-        var persistenceService = Mesh.ServiceProvider.GetRequiredService<IChatPersistenceService>();
-        var saved1 = await persistenceService.LoadThreadAsync(threadPath1, "shared");
-        var saved2 = await persistenceService.LoadThreadAsync(threadPath2, "shared");
-        saved1.Should().NotBeNull("thread 1 should be persisted");
-        saved2.Should().NotBeNull("thread 2 should be persisted");
+        // Thread persistence is now via MeshNodes — no separate IChatPersistenceService
     }
 
     #endregion

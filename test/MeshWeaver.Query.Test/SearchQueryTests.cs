@@ -4,9 +4,11 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Memex.Portal.Shared;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -39,9 +41,12 @@ public class SearchQueryTests : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddRowLevelSecurity()
+            .AddAcme()
             .AddUserData()
             .AddNorthwind()
             .AddSystemorph()
+            .AddMeshNodes(TestUsers.PublicAdminAccess())
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph();
     }
@@ -221,22 +226,22 @@ public class SearchQueryTests : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Search_GraphSampleData_FindsOrganization()
+    public async Task Search_GraphSampleData_FindsNodeTypes()
     {
-        // Arrange - search for ACME which is a known Organization node
-        var request = new MeshQueryRequest { Query = "nodeType:Organization scope:descendants", Limit = 10 };
+        // Arrange - search for NodeType nodes (e.g. ACME/Project, ACME/Project/Todo)
+        var request = new MeshQueryRequest { Query = "nodeType:NodeType scope:descendants", Limit = 10 };
 
         // Act
         var results = await MeshQuery.QueryAsync<MeshNode>(request, null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        Output.WriteLine($"Found {results.Length} results for 'nodeType:Organization scope:descendants'");
+        Output.WriteLine($"Found {results.Length} results for 'nodeType:NodeType scope:descendants'");
         foreach (var r in results)
             Output.WriteLine($"  - {r.Path}: {r.Name} ({r.NodeType})");
 
-        results.Should().NotBeEmpty("Should find Organization nodes in sample data");
-        results.Should().Contain(n => n.NodeType == "Organization",
-            "Should find nodes with Organization nodeType");
+        results.Should().NotBeEmpty("Should find NodeType nodes in sample data (e.g. ACME/Project)");
+        results.Should().Contain(n => n.NodeType == "NodeType",
+            "Should find nodes with NodeType nodeType");
     }
 
     [Fact(Timeout = 10000)]

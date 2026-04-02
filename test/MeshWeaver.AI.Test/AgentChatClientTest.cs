@@ -41,7 +41,6 @@ public class AgentChatClientTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 return services;
             })
             .AddGraph()
@@ -68,7 +67,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         MeshNode? productLaunchNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", null, TestContext.Current.CancellationToken))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}", null, TestContext.Current.CancellationToken))
         {
             productLaunchNode = node;
             break;
@@ -121,7 +120,7 @@ public class AgentChatClientTest : MonolithMeshTestBase
         // Load the actual node from the file system
         var meshQuery = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         MeshNode? acmeNode = null;
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath} scope:self", null, TestContext.Current.CancellationToken))
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"path:{contextPath}", null, TestContext.Current.CancellationToken))
         {
             acmeNode = node;
             break;

@@ -43,7 +43,9 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             ExpiresAt = expiresAt,
         };
 
-        var node = new MeshNode(hashPrefix, ApiTokenNamespace)
+        // Store the full token under the user's namespace
+        var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
+        var userNode = new MeshNode(hashPrefix, userTokenNamespace)
         {
             Name = $"API Token: {label}",
             NodeType = NodeTypeApiToken,
@@ -51,7 +53,22 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             Content = apiToken,
         };
 
-        var created = await nodeFactory.CreateNodeAsync(node);
+        var created = await nodeFactory.CreateNodeAsync(userNode);
+
+        // Store a lightweight index pointer at the original location for O(1) validation lookup
+        var indexNode = new MeshNode(hashPrefix, ApiTokenNamespace)
+        {
+            Name = $"API Token: {label}",
+            NodeType = NodeTypeApiToken,
+            State = MeshNodeState.Active,
+            Content = new ApiTokenIndex
+            {
+                TokenHash = hash,
+                TokenPath = created.Path,
+            },
+        };
+
+        await nodeFactory.CreateNodeAsync(indexNode);
 
         logger.LogInformation("Created API token {Label} for user {UserId} (hash prefix {HashPrefix})",
             label, userId, hashPrefix);
@@ -66,10 +83,31 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
 
         var hash = HashToken(rawToken);
         var hashPrefix = hash[..12];
-        var path = $"{ApiTokenNamespace}/{hashPrefix}";
+        var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
 
-        var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
-        var apiToken = node?.Content as ApiToken ?? ExtractApiToken(node);
+        var indexNode = await meshQuery.QueryAsync<MeshNode>($"path:{indexPath}").FirstOrDefaultAsync();
+        if (indexNode == null)
+            return null;
+
+        // Follow index pointer to the full token, or handle legacy tokens directly
+        MeshNode? tokenNode;
+        ApiToken? apiToken;
+        var index = indexNode.Content as ApiTokenIndex ?? ExtractApiTokenIndex(indexNode);
+        if (index != null)
+        {
+            // New format: index pointer -> follow to user namespace
+            if (!string.Equals(index.TokenHash, hash, StringComparison.OrdinalIgnoreCase))
+                return null;
+            tokenNode = await meshQuery.QueryAsync<MeshNode>($"path:{index.TokenPath}").FirstOrDefaultAsync();
+            apiToken = tokenNode?.Content as ApiToken ?? ExtractApiToken(tokenNode);
+        }
+        else
+        {
+            // Legacy format: full ApiToken at index path
+            tokenNode = indexNode;
+            apiToken = indexNode.Content as ApiToken ?? ExtractApiToken(indexNode);
+        }
+
         if (apiToken == null)
             return null;
 
@@ -89,19 +127,16 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         }
 
         // Update LastUsedAt (fire-and-forget, non-critical)
-        _ = Task.Run(() =>
+        try
         {
-            try
-            {
-                var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };
-                var updatedNode = node! with { Content = updated };
-                hub.Post(new UpdateNodeRequest(updatedNode));
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Failed to update LastUsedAt for token {HashPrefix}", hashPrefix);
-            }
-        });
+            var updated = apiToken with { LastUsedAt = DateTimeOffset.UtcNow };
+            var updatedNode = tokenNode! with { Content = updated };
+            hub.Post(new UpdateNodeRequest(updatedNode));
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed to update LastUsedAt for token {HashPrefix}", hashPrefix);
+        }
 
         return apiToken;
     }
@@ -120,6 +155,21 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
         var updatedNode = node with { Content = revoked };
         hub.Post(new UpdateNodeRequest(updatedNode));
 
+        // Also revoke the index node at ApiToken/{hashPrefix} if it exists
+        if (apiToken.TokenHash.Length >= 12)
+        {
+            var hashPrefix = apiToken.TokenHash[..12];
+            var indexPath = $"{ApiTokenNamespace}/{hashPrefix}";
+            if (tokenNodePath != indexPath)
+            {
+                var indexNode = await meshQuery.QueryAsync<MeshNode>($"path:{indexPath}").FirstOrDefaultAsync();
+                if (indexNode != null)
+                {
+                    hub.Post(new DeleteNodeRequest(indexPath));
+                }
+            }
+        }
+
         logger.LogInformation("Revoked API token at {Path}", tokenNodePath);
         return true;
     }
@@ -128,10 +178,12 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
     {
         var tokens = new List<ApiTokenInfo>();
 
-        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{ApiTokenNamespace}"))
+        // Query user-scoped tokens (new format)
+        var userTokenNamespace = $"User/{userId}/{ApiTokenNamespace}";
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{userTokenNamespace}"))
         {
             var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
-            if (apiToken == null || apiToken.UserId != userId)
+            if (apiToken == null)
                 continue;
 
             tokens.Add(new ApiTokenInfo
@@ -143,6 +195,30 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
                 LastUsedAt = apiToken.LastUsedAt,
                 IsRevoked = apiToken.IsRevoked,
                 HashPrefix = apiToken.TokenHash.Length >= 8 ? apiToken.TokenHash[..8] : apiToken.TokenHash,
+            });
+        }
+
+        // Fallback: also check legacy tokens at top-level ApiToken namespace
+        await foreach (var node in meshQuery.QueryAsync<MeshNode>($"namespace:{ApiTokenNamespace}"))
+        {
+            var apiToken = node.Content as ApiToken ?? ExtractApiToken(node);
+            if (apiToken == null || apiToken.UserId != userId)
+                continue;
+
+            // Skip if we already found this token in the user namespace
+            var hashPrefix = apiToken.TokenHash.Length >= 8 ? apiToken.TokenHash[..8] : apiToken.TokenHash;
+            if (tokens.Any(t => t.HashPrefix == hashPrefix))
+                continue;
+
+            tokens.Add(new ApiTokenInfo
+            {
+                NodePath = node.Path,
+                Label = apiToken.Label,
+                CreatedAt = apiToken.CreatedAt,
+                ExpiresAt = apiToken.ExpiresAt,
+                LastUsedAt = apiToken.LastUsedAt,
+                IsRevoked = apiToken.IsRevoked,
+                HashPrefix = hashPrefix,
             });
         }
 
@@ -164,6 +240,25 @@ internal class ApiTokenService(IMeshService nodeFactory, IMeshService meshQuery,
             {
                 return System.Text.Json.JsonSerializer.Deserialize<ApiToken>(jsonElement.GetRawText(),
                     new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static ApiTokenIndex? ExtractApiTokenIndex(MeshNode? node)
+    {
+        if (node?.Content is System.Text.Json.JsonElement jsonElement)
+        {
+            try
+            {
+                var index = System.Text.Json.JsonSerializer.Deserialize<ApiTokenIndex>(jsonElement.GetRawText(),
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                // Distinguish from legacy ApiToken: index has TokenPath, ApiToken does not
+                return !string.IsNullOrEmpty(index?.TokenPath) ? index : null;
             }
             catch
             {

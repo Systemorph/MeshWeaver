@@ -5,11 +5,13 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Memex.Portal.Shared;
 using MeshWeaver.Data.Completion;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith;
+using MeshWeaver.Hosting.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -43,9 +45,11 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
         return builder
             .UseMonolithMesh()
             .AddPartitionedFileSystemPersistence(TestPaths.SamplesGraphData)
+            .AddRowLevelSecurity()
             .AddSystemorph()
             .AddAcme()
             .AddUserData()
+            .AddMeshNodes(TestUsers.PublicAdminAccess())
             .ConfigureServices(services => services.Configure<CompilationCacheOptions>(o => o.CacheDirectory = _cacheDirectory))
             .AddGraph()
             .ConfigureHub(hub => hub.AddMeshNavigation());  // Register the autocomplete provider
@@ -173,25 +177,25 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
     }
 
     [Fact(Timeout = 10000)]
-    public async Task Provider_AtOrg_ReturnsOrganizationSuggestion()
+    public async Task Provider_AtPro_ReturnsProjectSuggestion()
     {
         // Arrange - get provider from DI
         var provider = GetUnifiedReferenceProvider();
 
-        // Act - query with "@Org" (partial match for Organization)
-        var items = await provider.GetItemsAsync("@Org", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
+        // Act - query with "@Pro" (partial match for Project)
+        var items = await provider.GetItemsAsync("@Pro", null, TestContext.Current.CancellationToken).ToArrayAsync(TestContext.Current.CancellationToken);
 
         // Assert
-        Output.WriteLine($"Got {items.Count()} suggestions for '@Org':");
+        Output.WriteLine($"Got {items.Count()} suggestions for '@Pro':");
         foreach (var item in items)
         {
             Output.WriteLine($"  - Label: {item.Label}, InsertText: {item.InsertText}");
         }
 
-        var orgItem = items.FirstOrDefault(i =>
-            i.Label.Contains("Organization", StringComparison.OrdinalIgnoreCase));
+        var proItem = items.FirstOrDefault(i =>
+            i.Label.Contains("Project", StringComparison.OrdinalIgnoreCase));
 
-        orgItem.Should().NotBeNull("@Org should match Organization");
+        proItem.Should().NotBeNull("@Pro should match Project");
     }
 
     [Fact(Timeout = 10000)]
@@ -411,8 +415,8 @@ public class UnifiedReferenceAutocompleteProviderTest : MonolithMeshTestBase
 
         var contentItem = items.FirstOrDefault(i => i.Label.Contains("content"));
         contentItem.Should().NotBeNull();
-        contentItem!.InsertText.Should().Contain("@Systemorph/Marketing/content",
-            "keyword InsertText should include full address path");
+        contentItem!.InsertText.Should().Contain("@/Systemorph/Marketing/content",
+            "keyword InsertText should include absolute path with @/ prefix");
     }
 
     #endregion

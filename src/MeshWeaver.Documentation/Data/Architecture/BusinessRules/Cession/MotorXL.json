@@ -1,0 +1,15 @@
+{
+  "id": "MotorXL",
+  "namespace": "Doc/Architecture/BusinessRules/Cession",
+  "name": "Motor XL 500k xs 200k",
+  "nodeType": "Doc/Architecture/BusinessRules/Cession",
+  "description": "Example: 10 motor claims through a 500k xs 200k Excess-of-Loss layer",
+  "icon": "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0%' stop-color='#2196F3'/><stop offset='100%' stop-color='#1565C0'/></linearGradient></defs><rect width='24' height='24' rx='5' fill='url(#g)'/><path d='M4 18h16M4 14h12M4 10h8M4 6h4' stroke='#fff' stroke-width='1.8' stroke-linecap='round'/></svg>",
+  "content": {
+    "$type": "CessionData",
+    "name": "Motor XL 500k xs 200k",
+    "description": "Excess-of-Loss layer: claims between 200k and 700k are partially or fully ceded. Claims below 200k are retained. Claims above 700k are ceded at the 500k limit.",
+    "attachmentPoint": 200000,
+    "limit": 500000
+  }
+}

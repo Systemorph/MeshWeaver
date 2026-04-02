@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Azure.Npgsql" />
+    <PackageReference Include="Aspire.Npgsql" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MeshWeaver.Hosting.PostgreSql" />
+    <ProjectReference Include="..\Memex.Portal.ServiceDefaults\Memex.Portal.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>

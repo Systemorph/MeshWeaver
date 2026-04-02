@@ -44,7 +44,6 @@ public class AttachmentContextTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new CapturingChatClientFactory());
                 return services;
             })
@@ -104,7 +103,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         public IReadOnlyList<string> Models => ["capturing-model"];
         public int Order => 0;
 
-        public Task<ChatClientAgent> CreateAgentAsync(
+        public ChatClientAgent CreateAgent(
             AgentConfiguration config,
             IAgentChat chat,
             IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
@@ -112,7 +111,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
             string? modelName = null)
         {
             var client = new CapturingChatClient(AllCapturedMessages);
-            var agent = new ChatClientAgent(
+            return new ChatClientAgent(
                 chatClient: client,
                 instructions: config.Instructions ?? "Test assistant.",
                 name: config.Id,
@@ -121,8 +120,15 @@ public class AttachmentContextTest : MonolithMeshTestBase
                 loggerFactory: null,
                 services: null
             );
-            return Task.FromResult(agent);
         }
+
+        public Task<ChatClientAgent> CreateAgentAsync(
+            AgentConfiguration config,
+            IAgentChat chat,
+            IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+            IReadOnlyList<AgentConfiguration> hierarchyAgents,
+            string? modelName = null)
+            => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
     }
 
     #endregion
@@ -150,7 +156,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
 
         var query = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
         MeshNode? contextNode = null;
-        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME scope:self", null, ct))
+        await foreach (var node in query.QueryAsync<MeshNode>("path:ACME", null, ct))
         {
             contextNode = node;
             break;
@@ -321,7 +327,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
         // Attach an agent node as an attachment
-        agentChat.SetAttachments(["Agent/Research"]);
+        agentChat.SetAttachments(["Agent/Researcher"]);
 
         const string userText = "Help me find data";
         await foreach (var _ in agentChat.GetResponseAsync(
@@ -332,7 +338,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         assembledPrompt.Should().NotBeNullOrEmpty();
 
         // Agent attachment should NOT appear as context content
-        assembledPrompt.Should().NotContain("## Attachment: Agent/Research",
+        assembledPrompt.Should().NotContain("## Attachment: Agent/Researcherer",
             "agent attachments should be filtered out of context content");
     }
 
@@ -349,7 +355,7 @@ public class AttachmentContextTest : MonolithMeshTestBase
         // The setup already sets a context (Software). Verify it appears in the prompt
         // even when an agent attachment is also present (agent attachments are filtered,
         // but the main context section is a completely separate code path).
-        agentChat.SetAttachments(["Agent/Research"]);
+        agentChat.SetAttachments(["Agent/Researcher"]);
 
         const string userText = "What can you do?";
         await foreach (var _ in agentChat.GetResponseAsync(
@@ -364,12 +370,12 @@ public class AttachmentContextTest : MonolithMeshTestBase
             "main context should always be included, even when agent attachments are present");
 
         // Agent attachment should NOT appear as context content
-        assembledPrompt.Should().NotContain("## Attachment: Agent/Research",
+        assembledPrompt.Should().NotContain("## Attachment: Agent/Researcherer",
             "agent attachments should be filtered, not injected as context content");
     }
 
     /// <summary>
-    /// Verifies that an @Agent/Research reference in message text overrides the combobox-selected agent.
+    /// Verifies that an @Agent/Researcher reference in message text overrides the combobox-selected agent.
     /// </summary>
     [Fact]
     public async Task FirstAgentReferenceInMessage_OverridesComboboxSelection()
@@ -377,14 +383,14 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var ct = TestContext.Current.CancellationToken;
         var (agentChat, factory) = await SetupAgentChatAsync(ct);
 
-        // Explicitly select Navigator via the combobox
-        agentChat.SetSelectedAgent("Navigator");
+        // Explicitly select Orchestrator via the combobox
+        agentChat.SetSelectedAgent("Orchestrator");
 
-        // Send a message that references @Agent/Research (like the UI does when user types @Agent/Research)
-        // Also set Agent/Research as an attachment (the UI adds @references to attachments)
-        agentChat.SetAttachments(["Agent/Research"]);
+        // Send a message that references @Agent/Researcher (like the UI does when user types @Agent/Researcher)
+        // Also set Agent/Researcher as an attachment (the UI adds @references to attachments)
+        agentChat.SetAttachments(["Agent/Researcher"]);
 
-        const string userText = "Please look up sales data @Agent/Research";
+        const string userText = "Please look up sales data @Agent/Researcher";
         await foreach (var _ in agentChat.GetResponseAsync(
             [new ChatMessage(ChatRole.User, userText)], ct)) { }
 
@@ -392,10 +398,10 @@ public class AttachmentContextTest : MonolithMeshTestBase
         var assembledPrompt = GetLastUserMessageText(factory.AllCapturedMessages);
         assembledPrompt.Should().NotBeNullOrEmpty();
 
-        // The agent instructions in the prompt should be Research's, not Navigator's
-        assembledPrompt.Should().Contain("You are **Research**",
-            "the @Agent/Research reference should override the Navigator combobox selection");
-        assembledPrompt.Should().NotContain("You are **Navigator**",
-            "Navigator's instructions should NOT be present when Research was selected via @reference");
+        // The agent instructions in the prompt should be Researcher's, not Orchestrator's
+        assembledPrompt.Should().Contain("You are **Researcher**",
+            "the @Agent/Researcher reference should override the Orchestrator combobox selection");
+        assembledPrompt.Should().NotContain("You are **Orchestrator**",
+            "Orchestrator's instructions should NOT be present when Researcher was selected via @reference");
     }
 }

@@ -9,6 +9,7 @@ namespace MeshWeaver.Blazor.Portal.SidePanel;
 public partial class SidePanel : ComponentBase, IDisposable
 {
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
+    [Inject] private NavigationManager NavigationManager { get; set; } = null!;
 
     /// <summary>
     /// Main content rendered inside the panel body.
@@ -25,8 +26,6 @@ public partial class SidePanel : ComponentBase, IDisposable
     /// </summary>
     [Parameter] public EventCallback OnCloseRequested { get; set; }
 
-    private bool isMenuOpen;
-
     private string DisplayTitle => SidePanelState.Title ?? "New Thread";
     private bool HasThread => !string.IsNullOrEmpty(SidePanelState.ContentPath);
 
@@ -41,26 +40,24 @@ public partial class SidePanel : ComponentBase, IDisposable
         InvokeAsync(StateHasChanged);
     }
 
-    private void ToggleMenu()
-    {
-        isMenuOpen = !isMenuOpen;
-    }
-
-    private void OnMenuOpenChanged(bool open)
-    {
-        isMenuOpen = open;
-    }
-
     private void OnNewThread()
     {
-        isMenuOpen = false;
         SidePanelState.RequestAction("New");
     }
 
     private void OnResumeThread()
     {
-        isMenuOpen = false;
         SidePanelState.RequestAction("Resume");
+    }
+
+    private void MoveToMainPanel()
+    {
+        var contentPath = SidePanelState.ContentPath;
+        SidePanelState.SetContentPath(null);
+        SidePanelState.SetTitle(null);
+        SidePanelState.SetVisible(false);
+        if (!string.IsNullOrEmpty(contentPath))
+            NavigationManager.NavigateTo($"/{contentPath}");
     }
 
     private async Task CloseAsync()

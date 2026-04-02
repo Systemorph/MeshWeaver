@@ -23,14 +23,34 @@ ACME/Projects/Alpha/_Activity/act1         ← Activity log entry
 
 Satellite entities reference their parent via the `MainNode` property, which points back to the primary node path.
 
+**CRITICAL:** When creating satellite nodes in code, always set `MainNode` explicitly to the content entity path. Without this, the node's path becomes its identity for access control, which fails for nested satellites (sub-threads, thread messages). Example:
+
+```csharp
+// CORRECT: MainNode points to content entity
+var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
+{
+    NodeType = "Thread",
+    MainNode = contextPath,  // "PartnerRe/AiConsulting" — the real entity
+    Content = new Thread()
+};
+
+// WRONG: omitting MainNode — defaults to self, access control fails
+var threadNode = new MeshNode(threadId, $"{contextPath}/_Thread")
+{
+    NodeType = "Thread",
+    Content = new Thread()
+};
+// MainNode defaults to "PartnerRe/AiConsulting/_Thread/threadId" — not a real entity
+```
+
 # Sub-Namespace Conventions
 
 Each satellite type has a reserved sub-namespace prefix:
 
 | Sub-Namespace | Node Type | Purpose |
 |---------------|-----------|---------|
-| `_Access` | AccessAssignment | Permission grants and denials (see [Access Control](Doc/Architecture/AccessControl)) |
-| `_Comment` | Comment | Document comments and replies (see [Collaborative Editing](Doc/DataMesh/CollaborativeEditing)) |
+| `_Access` | AccessAssignment | Permission grants and denials (see [Access Control](../../Architecture/AccessControl)) |
+| `_Comment` | Comment | Document comments and replies (see [Collaborative Editing](../CollaborativeEditing)) |
 | `_Tracking` | TrackedChange | Suggested edits / track changes |
 | `_Approval` | Approval | Approval workflow records |
 | `_Thread` | Thread | Chat and discussion threads |
@@ -129,7 +149,7 @@ The `MainNode` property links the satellite back to its primary entity. This is 
 
 ## Access Assignments (`_Access`)
 
-Control who can read, edit, or administer a node and its descendants. See [Access Control Architecture](Doc/Architecture/AccessControl) for the full permission model.
+Control who can read, edit, or administer a node and its descendants. See [Access Control Architecture](../../Architecture/AccessControl) for the full permission model.
 
 ```json
 {
@@ -147,7 +167,7 @@ Control who can read, edit, or administer a node and its descendants. See [Acces
 
 ## Comments (`_Comment`)
 
-Anchored to text ranges in markdown documents via inline markers. See [Collaborative Editing](Doc/DataMesh/CollaborativeEditing).
+Anchored to text ranges in markdown documents via inline markers. See [Collaborative Editing](../CollaborativeEditing).
 
 ## Tracked Changes (`_Tracking`)
 

@@ -8,6 +8,10 @@ MeshPlugin provides tools for interacting with the mesh data graph. All paths su
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
+**LINKS**: Always output **absolute paths** starting with `@/` followed by the main partition and full path. Never use relative references.
+- Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`, `@/Doc/Architecture`
+- **Wrong**: `my-doc`, `../Projects/my-doc`, `Projects/my-doc`
+
 ## Get
 
 Retrieves a node from the mesh. Returns JSON.
@@ -215,16 +219,22 @@ Creates a new node in the mesh. The node is validated before being persisted.
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `id` | string | Yes | Local identifier within namespace (e.g., "NewOrg", "Task1") |
-| `namespace` | string | For nested nodes | Parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
-| `name` | string | Yes | Human-readable display name |
+| `id` | string | Yes | Simple slug identifier — **no slashes** (e.g., "NewOrg", "Task1") |
+| `namespace` | string | For nested nodes | Full parent path (e.g., "ACME", "ACME/Projects"). Omit for root-level nodes. |
+| `name` | string | Yes | Descriptive human-readable title. Make it clear and meaningful. |
 | `nodeType` | string | Yes | Type category (must match an existing NodeType) |
 | `category` | string | No | Grouping category |
-| `icon` | string | No | Icon URL or identifier |
+| `icon` | string | No | Inline SVG icon (start with `<svg`) — always create a unique, visually appealing SVG for the node |
 | `order` | int | No | Sort order (lower values appear first) |
 | `content` | object | Depends on type | Type-specific data model content |
 
 The `path` of a node is derived as `{namespace}/{id}` (or just `{id}` for root-level nodes).
+
+**CRITICAL: `id` must NEVER contain `/` (slashes). The database enforces this with a CHECK constraint — writes with `/` in the id will FAIL.** Use `namespace` for hierarchy. The `id` is just the final segment (the node's own name), `namespace` is the parent path.
+- Correct: `"id": "PricingTool", "namespace": "User/rbuergi"` (path = `User/rbuergi/PricingTool`)
+- Correct: `"id": "NewPage", "namespace": "MyOrg/Projects"` (path = `MyOrg/Projects/NewPage`)
+- **WRONG**: `"id": "User/rbuergi/PricingTool", "namespace": ""` — **WILL FAIL, slashes in id are forbidden**
+- **WRONG**: `"id": "MyOrg/Projects/NewPage"` — **WILL FAIL**
 
 ### Discovering Content Schemas
 
@@ -272,6 +282,28 @@ Updates one or more existing nodes in the mesh. The entire MeshNode is replaced,
 ```
 Update('[{"id": "ExistingPage", "namespace": "MyOrg", "name": "Renamed Page", "nodeType": "Markdown"}]')
 ```
+
+## Patch
+
+Partial update of a single node. Only the specified fields are changed; all other fields are preserved. **Preferred over Update for simple changes** like setting an icon, renaming, or updating content — no need to Get the full node first.
+
+### Parameters
+
+- `path` (string, required) — Path to the node (e.g., `@User/rbuergi/my-node`)
+- `fields` (string, required) — JSON object with only the fields to change
+
+### Examples
+
+```
+Patch('@User/rbuergi/my-node', '{"icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><circle cx=\"50\" cy=\"50\" r=\"40\" fill=\"#2e6da4\"/></svg>"}')
+Patch('@MyOrg/MyPage', '{"name": "Renamed Page"}')
+Patch('@MyOrg/MyPage', '{"content": {"text": "Updated markdown content"}}')
+```
+
+### When to use Patch vs Update
+
+- **Patch**: Simple field changes (icon, name, category, content). No Get needed.
+- **Update**: Complex changes to multiple fields, or when you need full control. Always Get first.
 
 ## Delete
 
@@ -364,9 +396,54 @@ The format is: `@Doc/Architecture/content:{path}` where the path is automaticall
 
 Use double @@ prefix to embed content files inline in markdown. Write the double @@ followed by the node path and content reference at the start of a line. Only embed files that actually exist — use `Get` with the `content:` prefix first to verify the file is available.
 
-Here is a real inline embed of a content file:
+Example syntax: `@@Doc/Architecture/ActorModel` embeds the Actor Model documentation inline.
 
-@@Doc/AI/content:inline-example.md
+### Uploading Content Files
+
+Use `UploadContent` to save text-based files (SVG, markdown, JSON, CSS) to a node's content collection:
+
+```
+UploadContent('@Doc/Architecture', 'diagram.svg', '<svg>...</svg>')
+UploadContent('@Doc/Architecture', 'images/overview.svg', svgContent, 'content')
+```
+
+Parameters:
+- `nodePath` — the node that owns the collection
+- `filePath` — file name/path within the collection (e.g., `diagram.svg`, `images/arch.svg`)
+- `content` — the text content (SVG markup, markdown, JSON, etc.)
+- `collectionName` — collection name (default: `content`)
+
+After uploading, reference the file with `@Doc/Architecture/content:diagram.svg` or embed inline with `@@Doc/Architecture/content:diagram.svg`.
+
+**Tip for icons:** Set a node's `icon` property to inline SVG (starting with `<svg`) and it renders directly — no upload needed.
+
+## Satellite Namespaces
+
+Nodes can have satellite data stored in dedicated sub-namespaces with underscore prefixes. These are persisted in separate database tables per partition.
+
+| Prefix | Table | Node Types | Purpose |
+|--------|-------|------------|---------|
+| `_Thread` | threads | Thread, ThreadMessage | Chat/discussion threads |
+| `_Comment` | comments | Comment | Document comments and replies |
+| `_Activity` | activities | ActivityLog | Activity tracking |
+| `_UserActivity` | user_activities | UserActivity | Per-user activity (recently viewed) |
+| `_Access` | access | AccessAssignment | Permission grants |
+| `_Approval` | approvals | Approval | Approval workflows |
+| `_Tracking` | tracking | TrackedChange | Track changes / collaborative editing |
+
+### Path Patterns
+
+- Satellite nodes: `{parentPath}/{_Prefix}/{nodeId}`
+- Thread messages (children of threads): `{contextPath}/_Thread/{threadId}/{msgId}`
+- Comment replies: `{docPath}/_Comment/{commentId}/{replyId}`
+
+### Querying Satellites
+
+```
+Search('namespace:{parentPath}/_Thread nodeType:Thread')     # Find threads under a node
+Search('namespace:{parentPath}/_Comment nodeType:Comment')   # Find comments
+Search('namespace:{parentPath}/_Activity')                   # Find activity logs
+```
 
 ## Reading Documentation
 

@@ -1,6 +1,6 @@
-using System.Text.RegularExpressions;
 using Markdig;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
 using MeshWeaver.Markdown;
@@ -8,11 +8,14 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using System.Reactive.Linq;
 using System.Text.Json;
-using MarkdownAnnotationParser = MeshWeaver.Markdown.Collaboration.MarkdownAnnotationParser;
+using MeshWeaver.Markdown.Collaboration;
+using AnnotationType = MeshWeaver.Markdown.AnnotationType;
 
 namespace MeshWeaver.Blazor.Components;
 
@@ -43,8 +46,15 @@ public partial class CollaborativeMarkdownView
     private bool jsInitialized;
     private bool commentSelectionInitialized;
 
+    // Comment input state
+    private bool _showCommentInput;
+    private string _pendingSelectionText = "";
+    private string _pendingCommentText = "";
+    private bool _showPageCommentInput;
+    private string _pageCommentText = "";
+
     // Parsed data
-    private string RenderedHtml = "";
+    private string? _processedHtml;
     private List<ParsedAnnotation> Annotations = new();
 
     // Comment data cache (markerId -> Comment), populated by mesh query subscription
@@ -90,26 +100,38 @@ public partial class CollaborativeMarkdownView
         var accessService = Hub.ServiceProvider.GetService<AccessService>();
         CurrentAuthor = (accessService?.Context ?? accessService?.CircuitContext)?.Name ?? "";
 
-        // Subscribe to value changes reactively so we re-process content
-        // when the hub updates (e.g., after accept/reject)
-        var valuePointer = ViewModel.Value as JsonPointerReference;
-        if (Stream != null && valuePointer != null)
+        // Subscribe to workspace stream for reactive content updates.
+        // When workspace.UpdateMeshNode() injects comment markers, the stream
+        // pushes the updated node and the view re-renders with the new content.
+        if (!string.IsNullOrEmpty(BoundHubAddress))
         {
-            AddBinding(Stream
-                .DataBind<string>(valuePointer, DataContext)
-                .Subscribe(value =>
-                {
-                    if (value != null && value != RawContent)
+            var workspace = Hub.GetWorkspace();
+            var remoteStream = workspace.GetRemoteStream<MeshNode>(new Address(BoundHubAddress));
+            if (remoteStream != null)
+            {
+                AddBinding(remoteStream
+                    .Select(nodes => nodes?.FirstOrDefault(n => n.Path == BoundNodePath))
+                    .Where(n => n != null)
+                    .Select(n => MarkdownOverviewLayoutArea.GetMarkdownContent(n))
+                    .DistinctUntilChanged()
+                    .Subscribe(content =>
                     {
-                        RawContent = value;
-                        ProcessContent();
-                        InvokeAsync(StateHasChanged);
-                    }
-                }));
+                        if (content != null && content != RawContent)
+                        {
+                            RawContent = content;
+                            ProcessContent();
+                            InvokeAsync(StateHasChanged);
+                        }
+                    }));
+            }
+            else
+            {
+                // Fallback: one-time bind from ViewModel
+                DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
+            }
         }
         else
         {
-            // Fallback: one-time bind
             DataBind(ViewModel.Value, x => x.RawContent, defaultValue: "");
         }
 
@@ -152,7 +174,9 @@ public partial class CollaborativeMarkdownView
             })
             .Subscribe(list =>
             {
-                var withMarker = list.Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId));
+                var withMarker = list
+                    .Where(n => n.Content is Comment c && !string.IsNullOrEmpty(c.MarkerId))
+                    .DistinctBy(n => ((Comment)n.Content!).MarkerId!);
                 commentNodes = withMarker.ToDictionary(
                     n => ((Comment)n.Content!).MarkerId!,
                     n => (Comment)n.Content!);
@@ -181,15 +205,9 @@ public partial class CollaborativeMarkdownView
             await jsModule.InvokeVoidAsync("positionCards");
         }
 
-        if (jsModule != null && !string.IsNullOrEmpty(RenderedHtml))
-        {
-            await jsModule.InvokeVoidAsync("highlightCodeBlocks", contentRef);
-            await jsModule.InvokeVoidAsync("renderMermaidDiagrams", contentRef);
-            await jsModule.InvokeVoidAsync("renderMathBlocks", contentRef);
-        }
-
-        // Enable comment-from-selection when user has comment permission
-        if (jsModule != null && BoundCanComment && !commentSelectionInitialized)
+        // Enable comment-from-selection — always initialize so the floating button appears.
+        // Permissions are checked server-side when actually creating the comment.
+        if (jsModule != null && !commentSelectionInitialized)
         {
             commentSelectionInitialized = true;
             dotNetRef = DotNetObjectReference.Create(this);
@@ -201,7 +219,7 @@ public partial class CollaborativeMarkdownView
     {
         if (string.IsNullOrEmpty(RawContent))
         {
-            RenderedHtml = "";
+            _processedHtml = "";
             Annotations = new();
             return;
         }
@@ -218,10 +236,25 @@ public partial class CollaborativeMarkdownView
         };
 
         // Render markdown to HTML with annotation spans
-        RenderedHtml = RenderMarkdown(content);
+        _processedHtml = RenderMarkdown(content);
     }
 
-    private static string RenderMarkdown(string content)
+    /// <summary>
+    /// Renders the processed HTML using the shared MarkdownHtmlRenderer,
+    /// which dispatches to Blazor components for UCR links, layout areas,
+    /// code blocks, mermaid diagrams, math blocks, and SVG.
+    /// </summary>
+    private void RenderContentHtml(RenderTreeBuilder builder)
+    {
+        if (string.IsNullOrEmpty(_processedHtml))
+            return;
+
+        var renderer = new MarkdownHtmlRenderer(Mode, Stream);
+        renderer.ShowReferencesSection = true;
+        renderer.RenderHtml(builder, _processedHtml);
+    }
+
+    private string RenderMarkdown(string content)
     {
         if (string.IsNullOrWhiteSpace(content))
             return "";
@@ -229,9 +262,10 @@ public partial class CollaborativeMarkdownView
         // Transform annotation markers to HTML spans before markdown rendering
         var transformed = AnnotationMarkdownExtension.TransformAnnotations(content);
 
-        // Use the standard pipeline that includes LayoutAreaMarkdownExtension for @@ syntax
-        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null);
-        return Markdig.Markdown.ToHtml(transformed, pipeline);
+        // Render with source position data attributes (data-start/data-end)
+        // so JS can map text selections back to markdown source positions.
+        var pipeline = MeshWeaver.Markdown.MarkdownExtensions.CreateMarkdownPipeline(null, BoundNodePath);
+        return SourceMapHtmlRenderer.RenderWithSourceMap(transformed, pipeline);
     }
 
     // View mode
@@ -304,7 +338,14 @@ public partial class CollaborativeMarkdownView
         if (string.IsNullOrEmpty(BoundHubAddress))
             return false;
 
-        var nodeUpdate = new MeshNode(BoundNodePath ?? "")
+        // Split path into Id + Namespace so the workspace matches the existing node by key (Id).
+        var path = BoundNodePath ?? "";
+        var lastSlash = path.LastIndexOf('/');
+        var (id, ns) = lastSlash > 0
+            ? (path[(lastSlash + 1)..], path[..lastSlash])
+            : (path, (string?)null);
+
+        var nodeUpdate = new MeshNode(id, ns)
         {
             NodeType = "Markdown",
             Content = new MarkdownContent { Content = newContent }
@@ -346,73 +387,119 @@ public partial class CollaborativeMarkdownView
 
     /// <summary>
     /// Called from JS when user selects text and clicks the "Comment" button.
-    /// Finds the selected text in the raw content and inserts comment markers.
+    /// Shows the comment input form instead of creating immediately.
     /// </summary>
+    private string _pendingStartFragment = "";
+    private string _pendingEndFragment = "";
+
     [JSInvokable]
-    public async Task OnCommentFromSelection(string selectedText)
+    public Task OnCommentFromSelection(string selectedText, string startFragment, string endFragment)
     {
         if (string.IsNullOrWhiteSpace(selectedText) || string.IsNullOrEmpty(RawContent))
-            return;
+            return Task.CompletedTask;
 
-        // Strip annotation markers to get clean markdown, then search for the selected text
-        var cleanContent = MarkdownAnnotationParser.StripAllMarkers(RawContent);
-        var idx = cleanContent.IndexOf(selectedText, StringComparison.Ordinal);
-        if (idx < 0)
-        {
-            // Try case-insensitive search as fallback
-            idx = cleanContent.IndexOf(selectedText, StringComparison.OrdinalIgnoreCase);
-        }
-
-        if (idx < 0)
-            return; // Could not locate the selected text in the markdown
-
-        // Map clean-content offsets to annotated-content positions
-        var map = BuildCleanToAnnotatedMap();
-        var aStart = idx < map.Length ? map[idx] : RawContent.Length;
-        var aEnd = (idx + selectedText.Length) < map.Length
-            ? map[idx + selectedText.Length]
-            : RawContent.Length;
-
-        // Build comment markers with author and date
-        var markerId = Guid.NewGuid().ToString("N")[..8];
-        var date = DateTime.Now.ToString("MMM d");
-        var meta = !string.IsNullOrEmpty(CurrentAuthor) ? $":{CurrentAuthor}:{date}" : "";
-        var openTag = $"<!--comment:{markerId}{meta}-->";
-        var closeTag = $"<!--/comment:{markerId}-->";
-
-        var newContent = RawContent.Insert(aEnd, closeTag).Insert(aStart, openTag);
-        var previousContent = RawContent;
-        UpdateContentLocally(newContent);
-        if (!await PostContentUpdateAsync(newContent))
-            RevertContent(previousContent);
+        _pendingSelectionText = selectedText;
+        _pendingStartFragment = startFragment ?? "";
+        _pendingEndFragment = endFragment ?? "";
+        _pendingCommentText = "";
+        _showCommentInput = true;
+        InvokeAsync(StateHasChanged);
+        return Task.CompletedTask;
     }
 
-    /// <summary>
-    /// Builds a map from clean (marker-stripped) character index to annotated character index.
-    /// </summary>
-    private int[] BuildCleanToAnnotatedMap()
+    private void CancelSelectionComment()
     {
-        var tagRegex = new Regex(@"<!--/?(comment|insert|delete):[^-]+-->");
-        var tags = tagRegex.Matches(RawContent).Cast<Match>()
-            .OrderBy(m => m.Index).ToList();
-        var map = new List<int>();
-        int tagIdx = 0;
+        _showCommentInput = false;
+        _pendingSelectionText = "";
+        _pendingCommentText = "";
+    }
 
-        for (int i = 0; i < RawContent.Length;)
+    private void SubmitSelectionComment()
+    {
+        if (string.IsNullOrWhiteSpace(_pendingSelectionText) || string.IsNullOrEmpty(BoundHubAddress))
+            return;
+
+        var selectedText = _pendingSelectionText;
+        var commentText = _pendingCommentText;
+        var startFragment = _pendingStartFragment;
+        var endFragment = _pendingEndFragment;
+        _showCommentInput = false;
+        _pendingSelectionText = "";
+        _pendingCommentText = "";
+        _pendingStartFragment = "";
+        _pendingEndFragment = "";
+
+        // Fire-and-forget: Post + RegisterCallback (never await — deadlocks in Orleans)
+        var delivery = Hub.Post(
+            new CreateCommentRequest
+            {
+                DocumentId = BoundNodePath ?? "",
+                SelectedText = selectedText,
+                StartFragment = startFragment,
+                EndFragment = endFragment,
+                CommentText = commentText,
+                Author = CurrentAuthor
+            },
+            o => o.WithTarget(new Address(BoundHubAddress)));
+
+        if (delivery != null)
         {
-            if (tagIdx < tags.Count && i == tags[tagIdx].Index)
+            Hub.RegisterCallback<CreateCommentResponse>(delivery, response =>
             {
-                i += tags[tagIdx].Length;
-                tagIdx++;
-            }
-            else
-            {
-                map.Add(i);
-                i++;
-            }
+                if (!response.Message.Success)
+                {
+                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                    logger?.LogWarning("[SubmitComment] FAILED: {Error}", response.Message.Error);
+                }
+                return response;
+            });
         }
+    }
 
-        return map.ToArray();
+    // Page-level comment (no text selection)
+    private void StartPageComment()
+    {
+        _showPageCommentInput = true;
+        _pageCommentText = "";
+    }
+
+    private void CancelPageComment()
+    {
+        _showPageCommentInput = false;
+        _pageCommentText = "";
+    }
+
+    private void SubmitPageComment()
+    {
+        if (string.IsNullOrWhiteSpace(_pageCommentText) || string.IsNullOrEmpty(BoundHubAddress))
+            return;
+
+        var text = _pageCommentText;
+        _showPageCommentInput = false;
+        _pageCommentText = "";
+
+        // Fire-and-forget: Post + RegisterCallback (never await)
+        var delivery = Hub.Post(
+            new CreateCommentRequest
+            {
+                DocumentId = BoundNodePath ?? "",
+                CommentText = text,
+                Author = CurrentAuthor
+            },
+            o => o.WithTarget(new Address(BoundHubAddress)));
+
+        if (delivery != null)
+        {
+            Hub.RegisterCallback<CreateCommentResponse>(delivery, response =>
+            {
+                if (!response.Message.Success)
+                {
+                    var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Blazor.CollaborativeMarkdownView");
+                    logger?.LogWarning("[SubmitPageComment] FAILED: {Error}", response.Message.Error);
+                }
+                return response;
+            });
+        }
     }
 
     // Comment helpers

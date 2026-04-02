@@ -4,6 +4,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -40,14 +41,25 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
 
         TypeDefinition = workspace.Hub.TypeRegistry.WithKeyFunction(
             TypeDefinition.CollectionName,
-            new KeyFunction(o => ((MeshNode)o).Path, typeof(string)));
+            new KeyFunction(o => ((MeshNode)o).Id, typeof(string)));
 
-        workspace.Hub.RegisterForDisposal(new FlushOnDispose(this));
+        workspace.Hub.RegisterForDisposal((IAsyncDisposable)new FlushOnDispose(this));
     }
 
     protected override InstanceCollection UpdateImpl(InstanceCollection instances)
     {
         instances = MergePartialUpdates(instances);
+
+        // Open MeshNode init gate when node becomes Active or Transient
+        {
+            var ownNode = instances.Instances.Values.OfType<MeshNode>()
+                .FirstOrDefault(n => n.Path == _hubPath);
+            if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
+            {
+                _logger?.LogDebug("MeshNodeTypeSource: Opening gate for {HubPath} — node {State} via update", _hubPath, ownNode.State);
+                _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+            }
+        }
 
         var adds = instances.Instances
             .Where(x => !_lastSaved.Instances.ContainsKey(x.Key))
@@ -89,11 +101,16 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         lock (_timerLock)
         {
             _debounceTimer?.Dispose();
-            _debounceTimer = new Timer(_ => FlushPendingSaves(), null, DebounceInterval, Timeout.InfiniteTimeSpan);
+            _debounceTimer = new Timer(_ =>
+            {
+                // Fire-and-forget for debounce — errors are logged inside FlushPendingSavesAsync.
+                // On disposal, FlushOnDispose awaits properly.
+                _ = FlushPendingSavesAsync();
+            }, null, DebounceInterval, Timeout.InfiniteTimeSpan);
         }
     }
 
-    private void FlushPendingSaves()
+    private async Task FlushPendingSavesAsync()
     {
         var saves = new List<MeshNode>();
         foreach (var key in _pendingSaves.Keys.ToArray())
@@ -109,7 +126,7 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         if (saves.Count == 0 && deletes.Count == 0)
             return;
 
-        _logger?.LogDebug("MeshNodeTypeSource: Flushing {Saves} saves, {Deletes} deletes for {HubPath}",
+        _logger?.LogInformation("MeshNodeTypeSource: Flushing {Saves} saves, {Deletes} deletes for {HubPath}",
             saves.Count, deletes.Count, _hubPath);
 
         var options = _workspace.Hub.JsonSerializerOptions;
@@ -119,11 +136,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             {
                 // Save directly to persistence — do NOT post UpdateNodeRequest
                 // to avoid a feedback loop (handler → workspace → TypeSource → handler)
-                _ = _persistenceCore.SaveNodeAsync(node, options);
+                await _persistenceCore.SaveNodeAsync(node, options);
+                _logger?.LogDebug("MeshNodeTypeSource: Saved {Path} (version={Version})", node.Path, node.Version);
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "MeshNodeTypeSource: Save failed for {Path}", node.Path);
+                // Log at Error with full detail — especially PostgreSQL exceptions
+                _logger?.LogError(ex, "MeshNodeTypeSource: SAVE FAILED for {Path} (version={Version}, hubPath={HubPath}). " +
+                    "This may cause data loss on shutdown!", node.Path, node.Version, _hubPath);
             }
         }
 
@@ -131,11 +151,12 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         {
             try
             {
-                _ = _persistenceCore.DeleteNodeAsync(path);
+                await _persistenceCore.DeleteNodeAsync(path);
+                _logger?.LogDebug("MeshNodeTypeSource: Deleted {Path}", path);
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "MeshNodeTypeSource: Delete failed for {Path}", path);
+                _logger?.LogError(ex, "MeshNodeTypeSource: DELETE FAILED for {Path} (hubPath={HubPath})", path, _hubPath);
             }
         }
     }
@@ -195,11 +216,14 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
             _workspace.Hub.SetInitialVersion(ownNode.Version);
         }
 
+        if (ownNode is { State: MeshNodeState.Active or MeshNodeState.Transient })
+            _workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
+
         var allNodes = new List<MeshNode>();
         if (ownNode != null && !string.IsNullOrEmpty(ownNode.Path))
             allNodes.Add(ownNode);
 
-        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Path);
+        _lastSaved = new InstanceCollection(allNodes, node => ((MeshNode)node).Id);
         return _lastSaved;
     }
 
@@ -246,16 +270,34 @@ public record MeshNodeTypeSource : TypeSourceWithType<MeshNode, MeshNodeTypeSour
         return node;
     }
 
-    private sealed class FlushOnDispose(MeshNodeTypeSource source) : IDisposable
+    private sealed class FlushOnDispose(MeshNodeTypeSource source) : IAsyncDisposable
     {
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
             lock (source._timerLock)
             {
                 source._debounceTimer?.Dispose();
                 source._debounceTimer = null;
             }
-            source.FlushPendingSaves();
+
+            var pendingCount = source._pendingSaves.Count + source._pendingDeletes.Count;
+            if (pendingCount > 0)
+            {
+                source._logger?.LogInformation(
+                    "MeshNodeTypeSource: Disposing with {PendingCount} pending saves for {HubPath} — flushing now",
+                    pendingCount, source._hubPath);
+            }
+
+            try
+            {
+                await source.FlushPendingSavesAsync();
+                source._logger?.LogDebug("MeshNodeTypeSource: Disposal flush completed for {HubPath}", source._hubPath);
+            }
+            catch (Exception ex)
+            {
+                source._logger?.LogError(ex,
+                    "MeshNodeTypeSource: DISPOSAL FLUSH FAILED for {HubPath} — pending saves may be lost!", source._hubPath);
+            }
         }
     }
 }

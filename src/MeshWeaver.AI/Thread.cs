@@ -1,8 +1,36 @@
+﻿using System.Collections.Immutable;
 using System.Text.Json;
-using MeshWeaver.Mesh;
+using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 using MeshWeaver.ShortGuid;
 
 namespace MeshWeaver.AI;
+
+/// <summary>
+/// Tracks execution context for delegation sub-thread creation.
+/// Set by ThreadExecution, consumed by delegation tools.
+/// </summary>
+public record ThreadExecutionContext
+{
+    /// <summary>Thread path where the current execution is running.</summary>
+    public required string ThreadPath { get; init; }
+
+    /// <summary>Response message ID within the thread.</summary>
+    public required string ResponseMessageId { get; init; }
+
+    /// <summary>
+    /// The original content node path (e.g., "PartnerRe/AiConsulting").
+    /// Propagated through all delegation levels so sub-threads always
+    /// know the root context for namespace resolution and agent initialization.
+    /// </summary>
+    public string? ContextPath { get; init; }
+
+    /// <summary>
+    /// The user's AccessContext captured from the original delivery.
+    /// Used to propagate user identity through delegation chains.
+    /// </summary>
+    public AccessContext? UserAccessContext { get; init; }
+}
 
 /// <summary>
 /// Defines the type of a thread message for rendering purposes.
@@ -42,18 +70,9 @@ public record Thread
     public JsonElement? SessionState { get; init; }
 
     /// <summary>
-    /// Legacy: Thread messages stored inline.
-    /// New threads use child MeshNodes instead.
-    /// Kept for backward compatibility with existing threads.
+    /// Child mesh nodes. Thread controls and keeps up to date.
     /// </summary>
-    [Obsolete("Use child MeshNodes with nodeType=ThreadMessage instead. Kept for backward compatibility.")]
-    public List<ThreadMessage>? Messages { get; init; }
-
-    /// <summary>
-    /// The path of the parent node where this thread was created.
-    /// Used for navigation back to context.
-    /// </summary>
-    public string? ParentPath { get; init; }
+    public ImmutableList<string> Messages { get; init; } = [];
 
     /// <summary>
     /// Azure AI Foundry persistent thread ID. When set, conversation history is server-managed.
@@ -73,17 +92,44 @@ public record Thread
     public string? CreatedBy { get; init; }
 
     /// <summary>
-    /// The primary node path — permissions are checked against the parent node.
+    /// Whether any execution is currently active on this thread.
+    /// Set to true when a message is submitted, false when execution completes/cancels/errors.
     /// </summary>
-    public string? PrimaryNodePath => ParentPath;
+    public bool IsExecuting { get; init; }
 
     /// <summary>
-    /// Ordered list of child message node IDs (e.g., "1", "2", "3").
-    /// Updated when messages are created via SubmitMessageRequest.
-    /// The layout area maps these to full paths ({threadPath}/{id}) for LayoutAreaControl cells.
-    /// IDs survive serialization events; full paths are derived at render time.
+    /// Current execution activity description (e.g., "Calling search_nodes...", "Delegating to Navigator...").
+    /// Updated during streaming when tool calls or delegations occur.
     /// </summary>
-    public IReadOnlyList<string> ThreadMessages { get; init; } = [];
+    public string? ExecutionStatus { get; init; }
+
+    /// <summary>
+    /// The ID of the response message currently being generated.
+    /// </summary>
+    public string? ActiveMessageId { get; init; }
+
+    /// <summary>
+    /// Total tokens used in the current execution (input + output).
+    /// </summary>
+    public int TokensUsed { get; init; }
+
+    /// <summary>
+    /// When the current execution started. Used to show elapsed time.
+    /// </summary>
+    public DateTime? ExecutionStartedAt { get; init; }
+
+    /// <summary>
+    /// Streaming text buffer — updated at 2/sec during execution on the Thread node (local workspace).
+    /// Cleared when execution completes (final text is persisted on the response message).
+    /// </summary>
+    public string? StreamingText { get; init; }
+
+    /// <summary>
+    /// Streaming tool calls — updated at 2/sec during execution.
+    /// Cleared when execution completes.
+    /// </summary>
+    public ImmutableList<ToolCallEntry>? StreamingToolCalls { get; init; }
+
 }
 
 /// <summary>
@@ -97,62 +143,13 @@ public static class ThreadMessageExtensions
     public static List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages(this IEnumerable<ThreadMessage> messages)
     {
         return messages
-            .Where(msg => msg.Type != ThreadMessageType.EditingPrompt) // Exclude editing prompts
+            .Where(msg => msg.Type != ThreadMessageType.EditingPrompt)
             .Select(msg => new Microsoft.Extensions.AI.ChatMessage(
                 new Microsoft.Extensions.AI.ChatRole(msg.Role),
                 msg.Text)
             {
                 AuthorName = msg.AuthorName
             }).ToList();
-    }
-
-    /// <summary>
-    /// Creates ThreadMessage records from Microsoft.Extensions.AI.ChatMessage collection.
-    /// </summary>
-    public static List<ThreadMessage> FromChatMessages(
-        IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages,
-        ThreadMessageType defaultType = ThreadMessageType.ExecutedInput)
-    {
-        return messages.Select(msg => new ThreadMessage
-        {
-            Id = Guid.NewGuid().AsString(),
-            Role = msg.Role.Value,
-            AuthorName = msg.AuthorName,
-            Text = msg.Text ?? string.Empty,
-            Timestamp = DateTime.UtcNow,
-            Type = msg.Role.Value.Equals("user", StringComparison.OrdinalIgnoreCase)
-                ? ThreadMessageType.ExecutedInput
-                : ThreadMessageType.AgentResponse
-        }).ToList();
-    }
-
-    /// <summary>
-    /// Converts legacy Thread with inline Messages to ChatMessages.
-    /// </summary>
-#pragma warning disable CS0618 // Type or member is obsolete
-    public static List<Microsoft.Extensions.AI.ChatMessage> ToChatMessages(this Thread thread)
-    {
-        if (thread.Messages == null || thread.Messages.Count == 0)
-            return [];
-
-        return thread.Messages.ToChatMessages();
-    }
-#pragma warning restore CS0618
-
-    /// <summary>
-    /// Creates a legacy Thread from Microsoft.Extensions.AI.ChatMessage collection.
-    /// For backward compatibility only - new code should use child MeshNodes.
-    /// </summary>
-    [Obsolete("Use child MeshNodes with nodeType=ThreadMessage instead.")]
-    public static Thread FromChatMessagesToThread(IEnumerable<Microsoft.Extensions.AI.ChatMessage> messages, string? parentPath = null)
-    {
-#pragma warning disable CS0618 // Type or member is obsolete
-        return new Thread
-        {
-            Messages = FromChatMessages(messages),
-            ParentPath = parentPath
-        };
-#pragma warning restore CS0618
     }
 }
 
@@ -207,4 +204,22 @@ public record ThreadMessage
     /// The model used to generate this response (for AgentResponse messages).
     /// </summary>
     public string? ModelName { get; init; }
+
+    /// <summary>
+    /// The user who created this message. Set from the delivery's AccessContext.
+    /// </summary>
+    public string? CreatedBy { get; init; }
+
+    /// <summary>
+    /// Completed tool calls from this message's execution.
+    /// Populated when execution finishes, used for post-execution inspection.
+    /// </summary>
+    public ImmutableList<ToolCallEntry> ToolCalls { get; init; } = [];
+
+    /// <summary>
+    /// MeshNode changes made during this message's execution.
+    /// Tracks path, operation (Created/Updated/Deleted), and version before/after
+    /// so the version repo can load content at each point.
+    /// </summary>
+    public ImmutableList<NodeChangeEntry> NodeChanges { get; init; } = [];
 }

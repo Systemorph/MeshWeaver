@@ -17,6 +17,12 @@ public record NavigationOptions(string Uri)
     /// If true, replaces the current history entry instead of adding a new one.
     /// </summary>
     public bool Replace { get; init; }
+
+    /// <summary>
+    /// Navigation target. When "SidePanel", the URI is loaded in the side panel
+    /// instead of the main browser location.
+    /// </summary>
+    public string? Target { get; init; }
 }
 
 /// <summary>
@@ -92,9 +98,16 @@ public interface INavigationService : IDisposable
 
     /// <summary>
     /// Navigates using the specified navigation options.
+    /// When Target == "SidePanel", fires SidePanelNavigationRequested instead of browser navigation.
     /// </summary>
     /// <param name="options">The navigation options.</param>
     void NavigateTo(NavigationOptions options);
+
+    /// <summary>
+    /// Raised when a navigation request targets the side panel instead of the main browser.
+    /// Subscribers (e.g., SidePanelStateService) handle by setting content path.
+    /// </summary>
+    event Action<string>? SidePanelNavigationRequested;
 
     /// <summary>
     /// Generates a navigation href from address/area/id combination.

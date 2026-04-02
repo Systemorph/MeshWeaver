@@ -107,6 +107,7 @@
     <Project Path="test/MeshWeaver.Content.Test/MeshWeaver.Content.Test.csproj" />
     <Project Path="test/MeshWeaver.ContentCollections.Test/MeshWeaver.ContentCollections.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.Test/MeshWeaver.Data.Test.csproj" />
+    <Project Path="test/MeshWeaver.Documentation.Test/MeshWeaver.Documentation.Test.csproj" />
     <Project Path="test/MeshWeaver.Data.TestDomain/MeshWeaver.Data.TestDomain.csproj" />
     <Project Path="test/MeshWeaver.DataSetReader.Test/MeshWeaver.DataSetReader.Test.csproj" />
     <Project Path="test/MeshWeaver.Hosting.Monolith.Test/MeshWeaver.Hosting.Monolith.Test.csproj" />
@@ -135,7 +136,6 @@
     <Project Path="test/MeshWeaver.FutuRe.Test/MeshWeaver.FutuRe.Test.csproj" />
     <Project Path="test/MeshWeaver.AccessControl.Test/MeshWeaver.AccessControl.Test.csproj" />
     <Project Path="test/MeshWeaver.Acme.Test/MeshWeaver.Acme.Test.csproj" />
-    <Project Path="test/MeshWeaver.Hierarchies.Test/MeshWeaver.Hierarchies.Test.csproj" />
     <Project Path="test/MeshWeaver.Threading.Test/MeshWeaver.Threading.Test.csproj" />
     <Project Path="test/MeshWeaver.Todo.Test/MeshWeaver.Todo.Test.csproj" />
     <Project Path="test/MeshWeaver.PathResolution.Test/MeshWeaver.PathResolution.Test.csproj" />

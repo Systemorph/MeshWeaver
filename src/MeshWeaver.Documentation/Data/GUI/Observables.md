@@ -189,6 +189,6 @@ Common Rx operators for UI:
 
 # See Also
 
-- [Container Control](Doc/GUI/ContainerControl) - Adding content to containers
-- [Data Binding](Doc/GUI/DataBinding) - How data flows to controls
-- [Editor Control](Doc/GUI/Editor) - Real-world dynamic examples
+- [Container Control](../ContainerControl) - Adding content to containers
+- [Data Binding](../DataBinding) - How data flows to controls
+- [Editor Control](../Editor) - Real-world dynamic examples

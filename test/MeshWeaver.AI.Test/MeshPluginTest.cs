@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using MeshWeaver.AI;
 using MeshWeaver.AI.Persistence;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph;
@@ -54,7 +55,6 @@ public class MeshPluginTest : MonolithMeshTestBase
             .AddFileSystemPersistence(TestDataPath)
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 return services;
             })
             .AddGraph()
@@ -96,8 +96,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         var tools = plugin.CreateAllTools();
 
         tools.Should().NotBeNull();
-        // All tools: Get, Search, NavigateTo, Create, Update, Delete
-        tools.Should().HaveCount(6);
+        // All tools: Get, Search, NavigateTo, Create, Update, Patch, Delete
+        tools.Should().HaveCount(7);
 
         var toolNames = tools.OfType<AIFunction>().Select(t => t.Name).ToList();
         toolNames.Should().Contain("Get");
@@ -105,6 +105,7 @@ public class MeshPluginTest : MonolithMeshTestBase
         toolNames.Should().Contain("NavigateTo");
         toolNames.Should().Contain("Create");
         toolNames.Should().Contain("Update");
+        toolNames.Should().Contain("Patch");
         toolNames.Should().Contain("Delete");
     }
 
@@ -339,7 +340,8 @@ public class MeshPluginTest : MonolithMeshTestBase
                 id = uniqueId,
                 @namespace = "ACME",
                 name = "Updated Name",
-                nodeType = "Markdown"
+                nodeType = "Markdown",
+                content = new { text = "updated" }
             }
         });
 
@@ -468,10 +470,10 @@ public class MeshPluginTest : MonolithMeshTestBase
         };
         var plugin = new MeshPlugin(Mesh, mockChat);
 
-        var result = plugin.NavigateTo("@Agent/Navigator");
+        var result = plugin.NavigateTo("@Agent/Orchestrator");
 
         result.Should().Contain("Navigating to:");
-        result.Should().Contain("Agent/Navigator");
+        result.Should().Contain("Agent/Orchestrator");
         displayedControls.Should().HaveCount(1, "DisplayLayoutArea should have been called once");
     }
 
@@ -523,7 +525,8 @@ public class MeshPluginTest : MonolithMeshTestBase
                 id = uniqueId,
                 @namespace = "ACME",
                 name = "Updated CRUD Test Node",
-                nodeType = "Markdown"
+                nodeType = "Markdown",
+                content = new { text = "updated" }
             }
         });
         var updateResult = await plugin.Update(updateJson);
@@ -547,37 +550,37 @@ public class MeshPluginTest : MonolithMeshTestBase
     #region Write Tool Wiring
 
     [Fact]
-    public async Task WriteToolWiring_ExecutorAgent_GetsWriteTools()
+    public async Task WriteToolWiring_WorkerAgent_GetsWriteTools()
     {
-        // The Executor agent description contains "create, update, and delete"
-        // so it should get CreateAllTools() (6 tools) rather than CreateTools() (3 tools)
+        // The Worker agent uses explicit Plugins (Mesh, WebSearch, etc.)
+        // which gives it all tools including write operations
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
-        var executor = agents.FirstOrDefault(a => a.Name == "Executor");
-        executor.Should().NotBeNull("Executor agent should be loaded from test data");
-        executor!.AgentConfiguration.Should().NotBeNull();
-        executor.AgentConfiguration!.Description.Should().Contain("create",
-            "Executor description should mention create to trigger write tool wiring");
+        var worker = agents.FirstOrDefault(a => a.Name == "Worker");
+        worker.Should().NotBeNull("Worker agent should be loaded from test data");
+        worker!.AgentConfiguration.Should().NotBeNull();
+        worker.AgentConfiguration!.Plugins.Should().NotBeNullOrEmpty(
+            "Worker should have explicit plugins configured for write tool access");
     }
 
     [Fact]
-    public async Task WriteToolWiring_NavigatorAgent_DoesNotGetWriteTools()
+    public async Task WriteToolWiring_OrchestratorAgent_DoesNotGetWriteTools()
     {
         var chatClient = new AgentChatClient(Mesh.ServiceProvider);
         await chatClient.InitializeAsync("ACME/ProductLaunch");
 
         var agents = await chatClient.GetOrderedAgentsAsync();
 
-        var navigator = agents.FirstOrDefault(a => a.Name == "Navigator");
-        navigator.Should().NotBeNull("Navigator agent should be loaded from test data");
-        navigator!.AgentConfiguration.Should().NotBeNull();
-        // Navigator description says "Understands user intent, navigates the mesh, and delegates"
+        var orchestrator = agents.FirstOrDefault(a => a.Name == "Orchestrator");
+        orchestrator.Should().NotBeNull("Orchestrator agent should be loaded from test data");
+        orchestrator!.AgentConfiguration.Should().NotBeNull();
+        // Orchestrator description says "Understands user intent, navigates the mesh, and delegates"
         // which does NOT contain create/update/delete
-        navigator.AgentConfiguration!.Description.Should().NotContain("create");
-        navigator.AgentConfiguration!.Description.Should().NotContain("delete");
+        orchestrator.AgentConfiguration!.Description.Should().NotContain("create");
+        orchestrator.AgentConfiguration!.Description.Should().NotContain("delete");
     }
 
     #endregion
@@ -610,7 +613,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         var files = await collection!.GetFilesAsync("/");
@@ -623,7 +626,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         var folders = await collection!.GetFoldersAsync("/");
@@ -635,7 +638,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         var files = await collection!.GetFilesAsync("/images");
@@ -647,7 +650,7 @@ public class MeshPluginTest : MonolithMeshTestBase
     {
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
-        var collection = await contentService.GetCollectionAsync("test-content");
+        var collection = await contentService.GetCollectionAsync("test-content", TestContext.Current.CancellationToken);
         collection.Should().NotBeNull();
 
         // Upload a new file
@@ -670,11 +673,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
         // Read file content directly via service
-        await using var stream = await contentService.GetContentAsync("test-content", "/readme.md");
+        await using var stream = await contentService.GetContentAsync("test-content", "/readme.md", TestContext.Current.CancellationToken);
         stream.Should().NotBeNull();
 
         using var reader = new StreamReader(stream!);
-        var text = await reader.ReadToEndAsync();
+        var text = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         text.Should().Contain("Hello");
         text.Should().Contain("test file");
     }
@@ -685,11 +688,11 @@ public class MeshPluginTest : MonolithMeshTestBase
         var hub = GetContentHub();
         var contentService = hub.ServiceProvider.GetRequiredService<IContentService>();
 
-        await using var stream = await contentService.GetContentAsync("test-content", "/images/logo.svg");
+        await using var stream = await contentService.GetContentAsync("test-content", "/images/logo.svg", TestContext.Current.CancellationToken);
         stream.Should().NotBeNull();
 
         using var reader = new StreamReader(stream!);
-        var text = await reader.ReadToEndAsync();
+        var text = await reader.ReadToEndAsync(TestContext.Current.CancellationToken);
         text.Should().Contain("svg");
     }
 
@@ -710,5 +713,8 @@ public class MeshPluginTest : MonolithMeshTestBase
         public Task<IReadOnlyList<AgentDisplayInfo>> GetOrderedAgentsAsync()
             => Task.FromResult<IReadOnlyList<AgentDisplayInfo>>(new List<AgentDisplayInfo>());
         public void SetSelectedAgent(string? agentName) { }
+        public ThreadExecutionContext? ExecutionContext => null;
+        public string? LastDelegationPath { get; set; }
+        public Action<string>? UpdateDelegationStatus { get; set; }
     }
 }

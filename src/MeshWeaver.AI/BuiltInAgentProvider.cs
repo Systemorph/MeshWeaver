@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using Markdig;
 using Markdig.Extensions.Yaml;
@@ -48,7 +49,8 @@ public class BuiltInAgentProvider : IStaticNodeProvider
                 Create = false,
                 Update = false,
                 Delete = false,
-                Comment = false
+                Comment = false,
+                Thread = false
             }
         };
 
@@ -58,9 +60,9 @@ public class BuiltInAgentProvider : IStaticNodeProvider
 
     private static MeshNode[] LoadAllNodes()
     {
-        var nodes = new List<MeshNode> { CreateThreadNamerNode() };
-        nodes.AddRange(LoadEmbeddedNodes());
-        return nodes.ToArray();
+        return ImmutableList.Create(CreateThreadNamerNode())
+            .AddRange(LoadEmbeddedNodes())
+            .ToArray();
     }
 
     private static MeshNode CreateThreadNamerNode()
@@ -169,6 +171,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
             }).ToList(),
             Plugins = frontMatter.Plugins?.Select(ParsePluginReference).ToList(),
             PreferredModel = frontMatter.PreferredModel,
+            ModelTier = frontMatter.ModelTier,
             ContextMatchPattern = frontMatter.ContextMatchPattern,
             Order = frontMatter.Order
         };
@@ -266,6 +269,7 @@ public class BuiltInAgentProvider : IStaticNodeProvider
         public bool ExposedInNavigator { get; set; }
         public string? ContextMatchPattern { get; set; }
         public string? PreferredModel { get; set; }
+        public string? ModelTier { get; set; }
         public int Order { get; set; }
         public string? CustomIconSvg { get; set; }
         public List<DelegationEntry>? Delegations { get; set; }

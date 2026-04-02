@@ -14,6 +14,13 @@
     width: 100%;
 }
 
+.mesh-search-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
 .mesh-search-box-input {
     flex: 1;
 }
@@ -246,40 +253,24 @@
     line-height: 1.4;
 }
 
-/* Neutralize FluentGrid background to prevent color mismatch */
-::deep fluent-grid {
-    background: transparent;
-}
 
-/* Ensure grid items stretch to equal height within rows */
-::deep fluent-grid-item {
-    display: flex;
-    align-items: stretch;
-}
-
-/* Ensure cards within grid items fill the height */
-::deep fluent-grid-item > * {
-    width: 100%;
-}
-
-/* CSS grid for LayoutAreaView items — bypasses FluentGrid sizing issues */
+/* CSS grid for all card layouts — container-responsive via auto-fill */
 .mesh-search-area-grid {
     display: grid;
     gap: 8px;
     width: 100%;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
 }
 
-@media (min-width: 600px) {
-    .mesh-search-area-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
+/* Ensure cards stretch to equal height within rows */
+.mesh-search-area-grid > * {
+    display: flex;
+    align-items: stretch;
+    width: 100%;
 }
 
-@media (min-width: 960px) {
-    .mesh-search-area-grid {
-        grid-template-columns: repeat(4, 1fr);
-    }
+.mesh-search-area-grid > * > * {
+    width: 100%;
 }
 
 /* Empty state with create prompt */

@@ -36,7 +36,7 @@ public static class DeleteLayoutArea
     [Browsable(false)]
     public static IObservable<UiControl?> Delete(LayoutAreaHost host, RenderingContext _)
     {
-        var nodePath = host.Hub.Address.ToString();
+        var nodePath = host.Hub.Address.Path;
         var backHref = MeshNodeLayoutAreas.BuildUrl(nodePath, MeshNodeLayoutAreas.OverviewArea);
         var meshQuery = host.Hub.ServiceProvider.GetService<IMeshService>();
 

@@ -82,8 +82,7 @@ public static class MemexConfiguration
         // Configure Radzen
         services.AddRadzenServices();
 
-        // Configure AI services
-        services.AddMemoryChatPersistence();
+        // AI services — thread persistence is handled via MeshNodes
 
         // Configure AI factories (read from appsettings, including Order)
         services.AddAzureFoundryClaude(config =>
@@ -103,6 +102,10 @@ public static class MemexConfiguration
 
         // Register the AI chat services (must be after all factory registrations)
         services.AddAgentChatServices();
+
+        // Register WebSearch plugin (agents declare it in frontmatter; gracefully degrades without Bing API key)
+        services.AddWebSearchPlugin(config =>
+            builder.Configuration.GetSection("WebSearch").Bind(config));
 
         // Configure GoogleMaps
         services.Configure<GoogleMapsConfiguration>(builder.Configuration.GetSection("GoogleMaps"));

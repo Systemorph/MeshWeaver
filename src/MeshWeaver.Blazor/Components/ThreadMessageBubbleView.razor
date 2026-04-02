@@ -3,28 +3,103 @@
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
+    @if (!IsUser && (!string.IsNullOrEmpty(ViewModel.ModelName) || ViewModel.Timestamp.HasValue))
+    {
+        <div class="thread-msg-meta">
+            @if (!string.IsNullOrEmpty(ViewModel.ModelName))
+            {
+                <span>@ViewModel.ModelName</span>
+            }
+            @if (ViewModel.Timestamp.HasValue)
+            {
+                <span>@ViewModel.Timestamp.Value.ToString("HH:mm:ss")</span>
+            }
+        </div>
+    }
+
     <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+
+    @* Tool calls — shown inline, each as a compact entry *@
+    @if (HasToolCalls)
+    {
+        <div class="thread-msg-tool-calls">
+            @foreach (var call in toolCalls!)
+            {
+                var isDelegation = !string.IsNullOrEmpty(call.DelegationPath);
+                var isPending = call.Result == null;
+                var summary = FormatToolCallSummary(call);
+
+                @if (isDelegation)
+                {
+                    <div class="thread-msg-delegation-entry">
+                        <div class="thread-msg-delegation-header">
+                            @if (isPending)
+                            {
+                                <span class="thread-msg-delegation-pulse">&#10041;</span>
+                            }
+                            else
+                            {
+                                <span class="thread-msg-tool-done">@(call.IsSuccess ? "✓" : "✗")</span>
+                            }
+                            <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
+                        </div>
+                        @if (isPending)
+                        {
+                            <div class="thread-msg-delegation-stream">
+                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <details class="thread-msg-tool-entry">
+                        <summary class="thread-msg-tool-entry-name">
+                            @if (isPending)
+                            {
+                                <span class="thread-msg-tool-pending">●</span>
+                            }
+                            else
+                            {
+                                <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                            }
+                            <span>@summary</span>
+                        </summary>
+                        @if (!string.IsNullOrEmpty(call.Arguments))
+                        {
+                            <pre class="thread-msg-tool-args">@call.Arguments</pre>
+                        }
+                        @if (!string.IsNullOrEmpty(call.Result))
+                        {
+                            <pre class="thread-msg-tool-result">@call.Result</pre>
+                        }
+                    </details>
+                }
+            }
+        </div>
+    }
 </div>
 
 <style>
     .thread-msg-bubble {
-        max-width: 80%;
+        max-width: 100%;
         padding: 12px 16px;
         border-radius: 12px;
         color: var(--neutral-foreground-rest);
         margin-bottom: 12px;
+        min-width: 0;
+        overflow: hidden;
+        overflow-wrap: break-word;
+        word-break: break-word;
     }
     .thread-msg-user {
         background: var(--neutral-layer-4);
         border-inline-end: 3px solid var(--accent-fill-rest);
         border-bottom-right-radius: 4px;
-        align-self: flex-end;
-        margin-left: auto;
     }
     .thread-msg-assistant {
         background: var(--neutral-layer-2);
         border-bottom-left-radius: 4px;
-        align-self: flex-start;
     }
     .thread-msg-author {
         font-weight: 600;
@@ -33,5 +108,203 @@
     }
     .thread-msg-author-user {
         color: var(--accent-fill-rest);
+    }
+    .thread-msg-meta {
+        display: flex;
+        gap: 8px;
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        margin-bottom: 4px;
+    }
+
+    .thread-msg-spinner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 0;
+    }
+    .thread-msg-dots {
+        display: inline-flex;
+        gap: 4px;
+    }
+    .thread-msg-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--neutral-foreground-hint);
+        animation: thread-dots-blink 1.4s infinite both;
+    }
+    .thread-msg-status {
+        font-size: 0.85rem;
+        color: var(--neutral-foreground-hint);
+    }
+    .thread-msg-cancel-row {
+        display: flex;
+        justify-content: flex-start;
+        margin-top: 4px;
+    }
+    .thread-msg-cancel-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 12px;
+        border: 1px solid var(--neutral-stroke-rest);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--neutral-foreground-rest);
+        font-size: 0.8rem;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+    }
+    .thread-msg-cancel-btn:hover {
+        background: var(--neutral-layer-3);
+        border-color: var(--neutral-foreground-hint);
+    }
+
+    .thread-msg-executing-indicator {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+        padding-top: 4px;
+        border-top: 1px solid var(--neutral-stroke-rest);
+    }
+    .thread-msg-dots-small {
+        display: inline-flex;
+        gap: 3px;
+    }
+    .thread-msg-dot-small {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--neutral-foreground-hint);
+        animation: thread-dots-blink 1.4s infinite both;
+    }
+    .thread-msg-exec-status {
+        font-size: 0.75rem;
+        color: var(--neutral-foreground-hint);
+        flex: 1;
+    }
+    .thread-msg-cancel-btn-small {
+        padding: 2px 8px;
+        border: 1px solid var(--neutral-stroke-rest);
+        border-radius: 4px;
+        background: transparent;
+        color: var(--neutral-foreground-hint);
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+    .thread-msg-cancel-btn-small:hover {
+        background: var(--neutral-layer-3);
+    }
+
+    /* Hide action row (edit/delete/resubmit) when bubble is executing */
+    fluent-stack-item:has(.thread-msg-is-executing) ~ fluent-stack-item .thread-msg-actions {
+        display: none;
+    }
+
+    /* Tool calls — inline entries */
+    .thread-msg-tool-calls {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid var(--neutral-stroke-rest);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+    .thread-msg-tool-entry {
+        margin-bottom: 0;
+    }
+    .thread-msg-tool-entry-name {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.78rem;
+        color: var(--neutral-foreground-hint);
+        cursor: pointer;
+        padding: 2px 0;
+    }
+    .thread-msg-tool-entry-name:hover {
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-tool-pending {
+        color: var(--accent-fill-rest);
+        animation: thread-dots-blink 1.4s infinite both;
+        font-size: 0.6rem;
+    }
+    .thread-msg-tool-done {
+        font-size: 0.8rem;
+        color: var(--accent-fill-rest);
+    }
+    .thread-msg-tool-error {
+        color: var(--error);
+    }
+    .thread-msg-delegation-entry {
+        border-left: 2px solid var(--accent-fill-rest);
+        padding-left: 8px;
+        margin-left: 4px;
+    }
+    .thread-msg-delegation-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .thread-msg-delegation-pulse {
+        color: var(--accent-fill-rest);
+        animation: thread-dots-blink 1.4s ease-in-out infinite;
+    }
+    .thread-msg-delegation-link {
+        font-size: 0.8rem;
+        font-weight: 600;
+        color: var(--accent-fill-rest);
+        text-decoration: none;
+    }
+    .thread-msg-delegation-stream {
+        margin-top: 4px;
+        max-height: 120px;
+        overflow-y: auto;
+        font-size: 0.78rem;
+        opacity: 0.85;
+    }
+    .thread-msg-delegation-link:hover {
+        text-decoration: underline;
+    }
+    .thread-msg-tool-args,
+    .thread-msg-tool-result {
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        background: var(--neutral-layer-3);
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin: 2px 0;
+        max-height: 120px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+    }
+
+    .thread-msg-status-detail {
+        font-size: 0.72rem;
+        color: var(--neutral-foreground-hint);
+        background: var(--neutral-layer-3);
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin: 4px 0;
+        max-height: 150px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-family: monospace;
+    }
+    .thread-msg-status-detail-small {
+        font-size: 0.68rem;
+        max-height: 80px;
+        margin-top: 4px;
+    }
+
+    @@keyframes thread-dots-blink {
+        0%, 80%, 100% { opacity: 0.3; }
+        40% { opacity: 1; }
     }
 </style>

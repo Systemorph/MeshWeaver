@@ -136,6 +136,6 @@ The `LayoutStackSkin` defines visual properties:
 
 # See Also
 
-- [Container Control](Doc/GUI/ContainerControl) - Overview of all containers
-- [Editor Control](Doc/GUI/Editor) - Form generation
-- [DataGrid Control](Doc/GUI/DataGrid) - Tabular data display
+- [Container Control](../../ContainerControl) - Overview of all containers
+- [Editor Control](../../Editor) - Form generation
+- [DataGrid Control](../../DataGrid) - Tabular data display

@@ -44,7 +44,6 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
             .AddAI()
             .ConfigureServices(services =>
             {
-                services.AddMemoryChatPersistence();
                 services.AddSingleton<IChatClientFactory>(new TestChatClientFactory());
                 return services;
             })
@@ -88,12 +87,12 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
         var ct = new CancellationTokenSource(20.Seconds()).Token;
 
         var response = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = UserPath, UserMessageText = "Test thread" },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Test thread")),
             o => o.WithTarget(new Address(UserPath)), ct);
 
         response.Message.Success.Should().BeTrue(response.Message.Error ?? "CreateThread should succeed for user with Editor role");
-        response.Message.ThreadPath.Should().Contain("_Thread/");
-        Output.WriteLine($"Thread created: {response.Message.ThreadPath}");
+        response.Message.Node?.Path.Should().Contain("_Thread/");
+        Output.WriteLine($"Thread created: {response.Message.Node?.Path}");
     }
 
     [Fact(Timeout = 30000)]
@@ -105,10 +104,10 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
 
         // 1. Create thread
         var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = UserPath, UserMessageText = "Streaming test" },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Streaming test")),
             o => o.WithTarget(new Address(UserPath)), ct);
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
+        var threadPath = createResponse.Message.Node!.Path!;
         Output.WriteLine($"Thread: {threadPath}");
 
         // 2. Submit message — this triggers AI streaming on the _Exec sub-hub
@@ -158,10 +157,10 @@ public class ThreadStreamingIdentityTest(ITestOutputHelper output) : MonolithMes
 
         // Create thread
         var createResponse = await client.AwaitResponse(
-            new CreateThreadRequest { Namespace = UserPath, UserMessageText = "Incremental test" },
+            new CreateNodeRequest(ThreadNodeType.BuildThreadNode(UserPath, "Incremental test")),
             o => o.WithTarget(new Address(UserPath)), ct);
         createResponse.Message.Success.Should().BeTrue(createResponse.Message.Error);
-        var threadPath = createResponse.Message.ThreadPath!;
+        var threadPath = createResponse.Message.Node!.Path!;
 
         // Submit message
         var submitTime = DateTimeOffset.UtcNow;
@@ -217,18 +216,22 @@ internal class TestChatClientFactory : IChatClientFactory
     public IReadOnlyList<string> Models => ["test-model"];
     public int Order => 0;
 
+    public ChatClientAgent CreateAgent(
+        AgentConfiguration config, IAgentChat chat,
+        IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
+        IReadOnlyList<AgentConfiguration> hierarchyAgents,
+        string? modelName = null)
+        => new(chatClient: new TestChatClient(ResponseText),
+            instructions: config.Instructions ?? "Test.",
+            name: config.Id, description: config.Description ?? config.Id,
+            tools: [], loggerFactory: null, services: null);
+
     public Task<ChatClientAgent> CreateAgentAsync(
         AgentConfiguration config, IAgentChat chat,
         IReadOnlyDictionary<string, ChatClientAgent> existingAgents,
         IReadOnlyList<AgentConfiguration> hierarchyAgents,
         string? modelName = null)
-    {
-        return Task.FromResult(new ChatClientAgent(
-            chatClient: new TestChatClient(ResponseText),
-            instructions: config.Instructions ?? "Test.",
-            name: config.Id, description: config.Description ?? config.Id,
-            tools: [], loggerFactory: null, services: null));
-    }
+        => Task.FromResult(CreateAgent(config, chat, existingAgents, hierarchyAgents, modelName));
 }
 
 internal class TestChatClient(string response) : IChatClient

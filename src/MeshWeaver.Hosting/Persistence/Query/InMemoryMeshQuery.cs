@@ -24,7 +24,7 @@ internal class InMemoryMeshQuery(
     MeshConfiguration? meshConfiguration = null,
     IEnumerable<INodeValidator>? nodeValidators = null,
     ILogger<InMemoryMeshQuery>? logger = null)
-    : IMeshQueryProvider
+    : IMeshQueryProvider, IMeshQueryCore
 {
     private readonly QueryParser _parser = new();
     private readonly QueryEvaluator _evaluator = new();
@@ -41,16 +41,29 @@ internal class InMemoryMeshQuery(
     /// </summary>
     private string GetEffectiveUserId(MeshQueryRequest request)
     {
-        // If request has explicit UserId, use it
-        if (!string.IsNullOrEmpty(request.UserId))
-            return request.UserId;
+        // If request has explicit UserId set (including empty for anonymous), use it
+        if (request.UserId != null)
+            return string.IsNullOrEmpty(request.UserId) ? WellKnownUsers.Anonymous : request.UserId;
 
-        // Get from access context, defaulting to Anonymous for unauthenticated users
-        var userId = accessService?.Context?.ObjectId;
+        // Get from access context, falling back to circuit context
+        var userId = accessService?.Context?.ObjectId
+                     ?? accessService?.CircuitContext?.ObjectId;
         return string.IsNullOrEmpty(userId) ? WellKnownUsers.Anonymous : userId;
     }
 
     /// <inheritdoc />
+    /// <summary>
+    /// Core query without access control — for infrastructure use (NodeTypeService, compilation).
+    /// </summary>
+    async IAsyncEnumerable<object> IMeshQueryCore.QueryAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var item in QueryCoreAsync(request, options, ct))
+            yield return item;
+    }
+
     public async IAsyncEnumerable<object> QueryAsync(
         MeshQueryRequest request,
         JsonSerializerOptions options,
@@ -79,24 +92,20 @@ internal class InMemoryMeshQuery(
             {
                 effectivePath = request.DefaultPath;
             }
-            // When no path specified and scope is Exact, default to Children (items in current namespace only)
-            // This ensures queries like "nodeType:Organization" find root-level organizations
-            // Use scope:descendants explicitly for recursive search
             if (parsedQuery.Scope == QueryScope.Exact)
             {
-                effectiveScope = QueryScope.Children;
+                // When the query has conditions (e.g., nodeType:Thread), use Subtree
+                // so satellite nodes nested under _Thread/, _Comment/ etc. are found.
+                // Without conditions, Children is sufficient for general browsing.
+                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
             }
         }
 
         var basePath = NormalizePath(effectivePath);
 
-        // Get the effective user ID for security filtering (from request or access context)
         var userId = GetEffectiveUserId(request);
-
-        // Context-based exclusion
         var context = request.Context ?? parsedQuery.Context;
 
-        // Collect matched + access-filtered results, then sort.
         var matched = new List<object>();
         var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
 
@@ -106,7 +115,7 @@ internal class InMemoryMeshQuery(
             if (!seen.Add(node))
                 continue;
 
-            // Apply access control filtering.
+            // Always apply access control filtering on the public query path.
             if (node is MeshNode meshNode)
             {
                 if (!await ValidateReadAsync(meshNode, userId, ct))
@@ -163,6 +172,85 @@ internal class InMemoryMeshQuery(
                 skipped++;
                 continue;
             }
+
+            yield return parsedQuery.Select != null
+                ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
+                : node;
+
+            yielded++;
+            if (parsedQuery.Limit.HasValue && parsedQuery.Limit.Value > 0
+                && yielded >= parsedQuery.Limit.Value)
+                yield break;
+        }
+    }
+
+    /// <summary>
+    /// Core query without access control — used by IMeshQueryCore for infrastructure.
+    /// Shares parsing/sorting/paging logic with QueryAsync but skips all AC checks.
+    /// </summary>
+    private async IAsyncEnumerable<object> QueryCoreAsync(
+        MeshQueryRequest request,
+        JsonSerializerOptions options,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var parsedQuery = _parser.Parse(request.Query);
+        if (request.Limit.HasValue)
+            parsedQuery = parsedQuery with { Limit = request.Limit };
+        if (parsedQuery.Source is QuerySource.Activity or QuerySource.Accessed)
+            parsedQuery = parsedQuery with { IsMain = true };
+
+        var effectivePath = parsedQuery.Path;
+        var effectiveScope = parsedQuery.Scope;
+        if (string.IsNullOrEmpty(effectivePath))
+        {
+            if (!string.IsNullOrEmpty(request.DefaultPath))
+                effectivePath = request.DefaultPath;
+            if (parsedQuery.Scope == QueryScope.Exact)
+                effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
+        }
+
+        var basePath = NormalizePath(effectivePath);
+        var userId = GetEffectiveUserId(request);
+        var context = request.Context ?? parsedQuery.Context;
+
+        var matched = new List<object>();
+        var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        await foreach (var node in FindMatchingNodesAsync(
+            parsedQuery, effectiveScope, basePath, userId, context, request, options, ct))
+        {
+            if (seen.Add(node))
+                matched.Add(node);
+        }
+
+        if (parsedQuery.Source == QuerySource.Activity && matched.Count > 0)
+        {
+            var activityMainPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            await foreach (var actNode in persistence.GetAllDescendantsAsync(basePath, options)
+                .WithCancellation(ct))
+            {
+                if (actNode.NodeType == ActivityNodeType.NodeType
+                    && !string.IsNullOrEmpty(actNode.MainNode))
+                    activityMainPaths.Add(actNode.MainNode);
+            }
+            matched = matched
+                .Where(n => n is MeshNode mn && activityMainPaths.Contains(mn.Path ?? ""))
+                .ToList();
+        }
+
+        IEnumerable<object> sorted = matched;
+        if (parsedQuery.OrderBy != null)
+        {
+            sorted = parsedQuery.OrderBy.Descending
+                ? matched.OrderByDescending(n => GetSortableValue(n, parsedQuery.OrderBy.Property))
+                : matched.OrderBy(n => GetSortableValue(n, parsedQuery.OrderBy.Property));
+        }
+
+        int skipped = 0, yielded = 0;
+        foreach (var node in sorted)
+        {
+            if (request.Skip.HasValue && request.Skip.Value > 0 && skipped < request.Skip.Value)
+            { skipped++; continue; }
 
             yield return parsedQuery.Select != null
                 ? ParsedQuery.ProjectToSelect(node, parsedQuery.Select)
@@ -242,12 +330,15 @@ internal class InMemoryMeshQuery(
 
         // Descendants scope
         // When the query has conditions (e.g., nodeType:Thread), use GetAllDescendantsAsync
-        // to include satellite nodes. Otherwise use GetDescendantsSecureAsync (excludes satellites).
+        // to include satellite nodes. Also use GetAllDescendantsAsync when the base path
+        // itself is within a satellite partition (e.g., querying subtree of a comment node).
+        // Otherwise use GetDescendantsSecureAsync (excludes satellites from general browsing).
         if (effectiveScope == QueryScope.Descendants
             || effectiveScope == QueryScope.Hierarchy
             || effectiveScope == QueryScope.Subtree)
         {
-            var source = parsedQuery.HasConditions
+            var includeSatellites = parsedQuery.HasConditions || IsSatellitePath(basePath);
+            var source = includeSatellites
                 ? persistence.GetAllDescendantsAsync(basePath, options)
                 : persistence.GetDescendantsSecureAsync(basePath, userId, options);
 
@@ -558,7 +649,7 @@ internal class InMemoryMeshQuery(
                 effectivePath = request.DefaultPath ?? "";
                 if (parsedQuery.Scope == QueryScope.Exact)
                 {
-                    effectiveScope = QueryScope.Children;
+                    effectiveScope = parsedQuery.HasConditions ? QueryScope.Subtree : QueryScope.Children;
                 }
             }
             var normalizedBasePath = NormalizePath(effectivePath);
@@ -790,5 +881,24 @@ internal class InMemoryMeshQuery(
     {
         if (query.IsMain != true) return false;
         return node.MainNode != node.Path;
+    }
+
+    /// <summary>
+    /// Checks if a path is within a satellite partition (contains /_X/ segments
+    /// where X starts with uppercase, e.g., /_Comment/, /_Thread/).
+    /// When the base path is within a satellite partition, descendant queries
+    /// should include satellite nodes (use GetAllDescendantsAsync).
+    /// </summary>
+    private static bool IsSatellitePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        var idx = 0;
+        while ((idx = path.IndexOf("/_", idx, StringComparison.Ordinal)) >= 0)
+        {
+            idx += 2; // skip "/_"
+            if (idx < path.Length && char.IsUpper(path[idx]))
+                return true;
+        }
+        return false;
     }
 }

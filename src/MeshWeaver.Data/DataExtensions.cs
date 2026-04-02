@@ -488,18 +488,12 @@ public static class DataExtensions
             return request.Processed();
         }
 
-        // Persist the subscriber's identity on the hub so that sub-hubs (e.g., thread streaming)
-        // and async view execution run under the correct user context.
-        var identity = request.Message.Identity ?? request.AccessContext?.ObjectId;
-        if (!string.IsNullOrEmpty(identity))
-        {
-            var accessService = hub.ServiceProvider.GetService<AccessService>();
-            accessService?.SetCircuitContext(new AccessContext { ObjectId = identity, Name = identity });
-        }
-
+        // Identity flows through message-level AccessContext (stamped by PostPipeline).
+        // No need to set circuitContext on the hub — that would contaminate the shared
+        // AsyncLocal for other operations. Sub-hubs inherit identity from messages.
         hub.GetWorkspace().SubscribeToClient(request.Message with { Subscriber = request.Sender });
-        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}, identity={Identity}",
-            request.Sender, hub.Address, identity);
+        logger?.LogDebug("HandleSubscribeRequest: Subscription created for {Sender} at {Hub}",
+            request.Sender, hub.Address);
         return request.Processed();
     }
 
@@ -519,6 +513,9 @@ public static class DataExtensions
         IMessageDelivery<DataChangeRequest> request, CancellationToken ct)
     {
         var changeRequest = request.Message;
+        var dcLogger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.DataChange");
+        dcLogger?.LogDebug("[DataChange] RECEIVED: {Time:HH:mm:ss.fff} hub={Hub}, updates={Updates}, creates={Creates}, deletes={Deletes}",
+            DateTime.UtcNow, hub.Address, changeRequest.Updates.Count, changeRequest.Creations.Count, changeRequest.Deletions.Count);
 
         // Run validators for each type of operation
         var validationResult = await RunChangeValidatorsAsync(hub, changeRequest, ct);
@@ -556,6 +553,10 @@ public static class DataExtensions
                 o => o.ResponseFor(request));
         else activity.Complete(log =>
         {
+            var logger2 = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.ActivityCompletion");
+            logger2?.LogDebug("DataChangeRequest activity completed: Status={Status}, Messages={MsgCount}, SubActivities={SubCount}, SubStatuses=[{SubStatuses}]",
+                log.Status, log.Messages.Count, log.SubActivities.Count,
+                string.Join(", ", log.SubActivities.Select(s => $"{s.Category}:{s.Status}")));
             hub.Post(new DataChangeResponse(hub.Version, log),
                 o => o.ResponseFor(request));
         });

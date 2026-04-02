@@ -3,8 +3,9 @@ using MeshWeaver.AI;
 using MeshWeaver.Blazor.Components;
 using MeshWeaver.Blazor.Components.Monaco;
 using MeshWeaver.Blazor.Portal.SidePanel;
-using MeshWeaver.ContentCollections;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Completion;
+using MeshWeaver.Graph;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -12,6 +13,7 @@ using MeshWeaver.Messaging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.JSInterop;
 
 namespace MeshWeaver.Blazor.Portal.Chat;
 
@@ -22,10 +24,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     [Inject] private INavigationService NavigationService { get; set; } = null!;
     [Inject] private SidePanelStateService SidePanelState { get; set; } = null!;
     [Inject] private IMeshService MeshQuery { get; set; } = null!;
+    [Inject] private IChatCompletionOrchestrator CompletionOrchestrator { get; set; } = null!;
 
     private bool _isDisposed;
     private IDisposable? agentSubscription;
-    private ISynchronizationStream<JsonElement>? _ownedStream;
     private readonly string _instanceId = Guid.NewGuid().ToString("N")[..8];
 
     // Thread state
@@ -70,10 +72,15 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                     submissionHandler.State != ChatSubmissionHandler.SubmissionState.Idle)
                 {
                     submissionHandler.OnResponseAppeared();
+                    isCancelling = false;
                 }
-                // Force re-render — DataBind's RequestStateChange may not trigger
-                // if the setter is called from a non-UI synchronization context
-                InvokeAsync(StateHasChanged);
+                // Force re-render and auto-scroll to bottom
+                InvokeAsync(async () =>
+                {
+                    StateHasChanged();
+                    await Task.Yield(); // Let render complete
+                    await ScrollToBottomAsync();
+                });
             }
         }
     }
@@ -82,8 +89,11 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     // Input state
     private MonacoEditorView? monacoEditor;
+    private ElementReference messagesContainer;
     private string? MessageText;
     private bool isCreatingThread;
+    private bool isCancelling;
+    private CancellationTokenSource? _submissionCts;
     private readonly ChatSubmissionHandler submissionHandler = new();
 
     // Unified attachments (context + @references)
@@ -94,9 +104,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     private ChatViewMode viewMode = ChatViewMode.Chat;
 
     // Resume threads state
-    private List<MeshNode> recentThreads = new();
-    private string resumeSearchQuery = "";
-    private bool isLoadingRecentThreads;
+    private MeshSearchControl? resumeSearchControl;
 
     // Agent/model selection
     private AgentDisplayInfo? selectedAgentInfo;
@@ -189,12 +197,27 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     {
         try
         {
+            // Strip layout area suffixes (e.g., "/Thread", "/Overview") from the path
+            var cleanPath = path;
+            var lastSlash = cleanPath.LastIndexOf('/');
+            if (lastSlash > 0)
+            {
+                var lastSegment = cleanPath[(lastSlash + 1)..];
+                // Known area names that are not part of the node path
+                if (lastSegment is "Thread" or "Overview" or "History" or "Settings" or "Metadata")
+                    cleanPath = cleanPath[..lastSlash];
+            }
+
             var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
             if (meshQuery == null)
-                return path;
+                return cleanPath;
 
-            var node = await meshQuery.QueryAsync<MeshNode>($"path:{path}").FirstOrDefaultAsync();
-            if (node != null && node.MainNode != node.Path)
+            var node = await meshQuery.QueryAsync<MeshNode>($"path:{cleanPath}").FirstOrDefaultAsync();
+            if (node == null)
+                return cleanPath;
+
+            // For satellite nodes (threads, comments): use MainNode (content entity)
+            if (node.MainNode != node.Path)
                 return node.MainNode;
         }
         catch (Exception ex)
@@ -208,29 +231,9 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
     protected override void BindData()
     {
         base.BindData();
-        Logger.LogDebug("[ThreadChat:{InstanceId}] BindData called, ViewModel.ThreadViewModel={VmType}, Stream={HasStream}",
-            _instanceId, ViewModel.ThreadViewModel?.GetType().Name ?? "null", Stream != null);
         DataBind(ViewModel.ThreadViewModel, x => x.ThreadViewModel, ConvertThreadViewModel);
     }
 
-    /// <summary>
-    /// Establishes a remote stream to the thread hub's layout area when the view
-    /// is used in the side panel (where Stream is null). This enables DataBind
-    /// for cells to work via JsonPointerReference.
-    /// </summary>
-    private void EnsureStreamForThread(string threadPath)
-    {
-        if (Stream != null) return; // Already have a stream (full-screen case)
-        _ownedStream?.Dispose();
-        var workspace = Hub.ServiceProvider.GetService<IWorkspace>();
-        if (workspace == null) return;
-        _ownedStream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
-            new Address(threadPath),
-            new LayoutAreaReference(ThreadNodeType.ThreadArea));
-        Stream = _ownedStream;
-        BindData();
-        StateHasChanged();
-    }
 
     private Task InitializeAgentAndModelSelectionsAsync()
     {
@@ -384,9 +387,10 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!submissionHandler.TryBeginSubmit(userMessageText))
             return;
 
-        // Disable input and clear the editor immediately
+        // Disable input and clear the editor immediately — flush render so spinner shows
         MessageText = null;
         StateHasChanged();
+        await Task.Yield(); // Let Blazor flush the render before continuing
 
         if (monacoEditor != null)
         {
@@ -400,7 +404,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             await UpdateExtractedReferencesAsync();
 
-            // Auto-create thread on first message via server-side CreateThreadRequest
+            // Auto-create thread on first message via CreateNodeRequest
             if (string.IsNullOrEmpty(threadPath))
             {
                 isCreatingThread = true;
@@ -408,36 +412,59 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
                 try
                 {
                     var ns = NavigationService.CurrentNamespace ?? initialContext;
+                    var accessService = Hub.ServiceProvider.GetService<AccessService>();
+                    var createdBy = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
                     if (string.IsNullOrEmpty(ns))
                     {
                         // No context available — use the logged-in user's namespace as default
-                        var accessService = Hub.ServiceProvider.GetService<AccessService>();
-                        var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
-                        ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : "User";
+                        ns = !string.IsNullOrEmpty(createdBy) ? $"User/{createdBy}" : "User";
                     }
-                    var createResponse = await Hub.AwaitResponse(
-                        new CreateThreadRequest
-                        {
-                            Namespace = ns,
-                            UserMessageText = userMessageText!,
-                            InitialContext = initialContext,
-                            ModelName = selectedModelInfo?.Name
-                        },
-                        o => o.WithTarget(new Address(ns)));
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] Creating thread: namespace={Namespace}, text='{Text}'",
+                        _instanceId, ns, userMessageText?[..Math.Min(30, userMessageText?.Length ?? 0)]);
+                    var threadNode = ThreadNodeType.BuildThreadNode(ns, userMessageText!, createdBy: createdBy);
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeRequest: nodeId={NodeId}, nodePath={NodePath}, target={Target}",
+                        _instanceId, threadNode.Id, threadNode.Path, ns);
 
-                    if (!createResponse.Message.Success)
+                    // Use Post + RegisterCallback to avoid blocking the UI thread
+                    var tcs = new TaskCompletionSource<CreateNodeResponse>();
+                    var delivery = Hub.Post(new CreateNodeRequest(threadNode),
+                        o => o.WithTarget(new Address(ns)));
+                    if (delivery != null)
+                    {
+                        _ = Hub.RegisterCallback((IMessageDelivery)delivery, response =>
+                        {
+                            if (response is IMessageDelivery<CreateNodeResponse> cnr)
+                                tcs.TrySetResult(cnr.Message);
+                            else if (response is IMessageDelivery<DeliveryFailure> df)
+                                tcs.TrySetResult(new CreateNodeResponse(null) { Error = $"Delivery failed: {df.Message.Message}" });
+                            else
+                                tcs.TrySetResult(new CreateNodeResponse(null) { Error = $"Unexpected response: {response.Message?.GetType().Name}" });
+                            return response;
+                        });
+                    }
+                    else
+                    {
+                        tcs.SetResult(new CreateNodeResponse(null) { Error = "Failed to post CreateNodeRequest" });
+                    }
+
+                    var createResult = await tcs.Task;
+                    Logger.LogDebug("[ThreadChat:{InstanceId}] CreateNodeResponse: success={Success}, error={Error}, path={Path}",
+                        _instanceId, createResult.Success, createResult.Error ?? "(none)",
+                        createResult.Node?.Path ?? "(null)");
+
+                    if (!createResult.Success)
                     {
                         Logger.LogError("[ThreadChat:{InstanceId}] Failed to create thread: {Error}",
-                            _instanceId, createResponse.Message.Error);
+                            _instanceId, createResult.Error);
                         submissionHandler.ForceRelease();
                         return;
                     }
 
-                    threadPath = createResponse.Message.ThreadPath;
-                    threadName = createResponse.Message.ThreadName;
+                    threadName = createResult.Node?.Name;
+                    threadPath = createResult.Node?.Path;
+                    // Tell side panel to switch to the new thread — it will re-render with LayoutAreaView
                     SidePanelState.SetContentPath(threadPath);
                     UpdateSidePanelTitle();
-                    EnsureStreamForThread(threadPath!);
                 }
                 finally
                 {
@@ -448,8 +475,8 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             // Post execution request to thread hub — hub creates both user and response nodes.
             // Use Post + RegisterCallback (non-blocking) instead of AwaitResponse to avoid
             // blocking the hub execution pipeline.
-            Logger.LogInformation("[ThreadChat:{InstanceId}] Posting SubmitMessageRequest to {ThreadPath}",
-                _instanceId, threadPath);
+            Logger.LogInformation("[ThreadChat:{InstanceId}] Posting SubmitMessageRequest to {ThreadPath}, agent={Agent}, model={Model}, context={Context}",
+                _instanceId, threadPath, selectedAgentInfo?.Name ?? "(default)", selectedModelInfo?.Name ?? "(default)", initialContext);
             var submitDelivery = Hub.Post(new SubmitMessageRequest
             {
                 ThreadPath = threadPath!,
@@ -464,16 +491,29 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             {
                 _ = Hub.RegisterCallback((IMessageDelivery)submitDelivery, response =>
                 {
+                    string? error = null;
                     if (response is IMessageDelivery<SubmitMessageResponse> { Message.Success: false } sr)
+                        error = sr.Message.Error;
+                    else if (response is IMessageDelivery<DeliveryFailure> df)
+                        error = $"Delivery failed: {df.Message.Message}";
+
+                    if (error != null)
                     {
                         Logger.LogError("[ThreadChat:{InstanceId}] SubmitMessageRequest FAILED: {Error}",
-                            _instanceId, sr.Message.Error);
+                            _instanceId, error);
+                        // Restore text so user can retry, release spinner
+                        InvokeAsync(() =>
+                        {
+                            MessageText = userMessageText;
+                            submissionHandler.ForceRelease();
+                            StateHasChanged();
+                        });
                     }
                     return response;
                 });
             }
 
-            // Transition to WaitingForResponse — input stays disabled until new cells appear
+            // Transition to WaitingForResponse — spinner stays until new cells appear
             submissionHandler.OnMessagePosted();
 
             // In compact/dashboard mode: navigate to full-screen thread chat
@@ -489,6 +529,64 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
 
         StateHasChanged();
+    }
+
+    private async Task ScrollToBottomAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("eval",
+                "document.querySelector('.thread-chat-messages')?.scrollTo({top: 999999, behavior: 'smooth'})");
+        }
+        catch (Exception) when (!_isDisposed)
+        {
+            // Ignore JS interop failures
+        }
+    }
+
+    private void CancelSubmission()
+    {
+        if (submissionHandler.IsInputEnabled || isCancelling)
+            return;
+
+        isCancelling = true;
+        StateHasChanged();
+
+        // Cancel any in-flight submission token
+        _submissionCts?.Cancel();
+
+        // Force release the handler — the progress bar stays visible
+        // with "Cancelling..." text until the response appears or times out
+        submissionHandler.ForceRelease();
+        isCancelling = false;
+        StateHasChanged();
+    }
+
+    private void CancelExecution()
+    {
+        if (string.IsNullOrEmpty(threadPath) || isCancelling)
+            return;
+
+        isCancelling = true;
+        StateHasChanged();
+
+        var delivery = Hub.Post(new CancelThreadStreamRequest { ThreadPath = threadPath },
+            o => o.WithTarget(new Address(threadPath)));
+
+        if (delivery != null)
+        {
+            _ = Hub.RegisterCallback(delivery, (response, _) =>
+            {
+                isCancelling = false;
+                InvokeAsync(StateHasChanged);
+                return Task.FromResult(response);
+            }, CancellationToken.None);
+        }
+        else
+        {
+            isCancelling = false;
+            StateHasChanged();
+        }
     }
 
     /// <summary>
@@ -527,6 +625,13 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
             lastContextUrl = currentUrl;
         }
+    }
+
+    private async Task OnMessageTextChanged(string value)
+    {
+        MessageText = value;
+        await UpdateExtractedReferencesAsync();
+        StateHasChanged();
     }
 
     private async Task OnCompletionItemAccepted(string path)
@@ -683,7 +788,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
             switch (action)
             {
                 case "New":
-                    StartNewThread();
+                    SidePanelState.SetContentPath(null);
                     break;
                 case "Resume":
                     _ = SwitchToResumeModeAsync();
@@ -694,29 +799,34 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
 
     // --- Mode switching ---
 
-    private void StartNewThread()
-    {
-        threadPath = null;
-        threadName = null;
-        SidePanelState.SetContentPath(null);
-        UpdateSidePanelTitle();
-        _ownedStream?.Dispose();
-        _ownedStream = null;
-        Stream = null;
-        ThreadViewModel = null;
-        viewMode = ChatViewMode.Chat;
-        StateHasChanged();
-    }
 
-    private async Task SwitchToResumeModeAsync()
+    private Task SwitchToResumeModeAsync()
     {
+        var ns = NavigationService.CurrentNamespace;
+        if (string.IsNullOrEmpty(ns))
+        {
+            var accessService = Hub.ServiceProvider.GetService<AccessService>();
+            var userId = accessService?.Context?.ObjectId ?? accessService?.CircuitContext?.ObjectId;
+            ns = !string.IsNullOrEmpty(userId) ? $"User/{userId}" : null;
+        }
+
+        var hiddenQuery = string.IsNullOrEmpty(ns)
+            ? "nodeType:Thread sort:LastModified-desc"
+            : $"nodeType:Thread namespace:{ns}/_Thread sort:LastModified-desc";
+
+        resumeSearchControl = Controls.MeshSearch
+            .WithHiddenQuery(hiddenQuery)
+            .WithPlaceholder("Search threads...")
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(1)
+            .WithDisableNavigation();
+
         viewMode = ChatViewMode.ResumeThreads;
-        resumeSearchQuery = "";
-        isLoadingRecentThreads = true;
         StateHasChanged();
-
-        await LoadRecentThreadsAsync();
+        return Task.CompletedTask;
     }
+
+    private MeshSearchControl? GetResumeSearchControl() => resumeSearchControl;
 
     private void SwitchToChatMode()
     {
@@ -724,60 +834,16 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         StateHasChanged();
     }
 
-    // --- Resume threads ---
-
-    private async Task LoadRecentThreadsAsync(string? searchText = null)
-    {
-        try
-        {
-            isLoadingRecentThreads = true;
-            StateHasChanged();
-
-            var meshQuery = Hub.ServiceProvider.GetService<IMeshService>();
-            if (meshQuery == null)
-            {
-                recentThreads = [];
-                return;
-            }
-
-            var query = string.IsNullOrWhiteSpace(searchText)
-                ? "nodeType:Thread limit:20 sort:LastModified-desc"
-                : $"nodeType:Thread limit:20 sort:LastModified-desc {searchText}";
-
-            recentThreads = await meshQuery.QueryAsync<MeshNode>(query).ToListAsync();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "[ThreadChat:{InstanceId}] Error loading recent threads", _instanceId);
-            recentThreads = [];
-        }
-        finally
-        {
-            isLoadingRecentThreads = false;
-            StateHasChanged();
-        }
-    }
-
-    private void OnResumeSearchChanged(string query)
-    {
-        resumeSearchQuery = query;
-        _ = LoadRecentThreadsAsync(query);
-    }
-
     private Task OnSelectThread(MeshNode node)
     {
-        threadPath = node.Path;
         threadName = node.Name;
         viewMode = ChatViewMode.Chat;
-        SidePanelState.SetContentPath(threadPath);
+        SidePanelState.SetContentPath(node.Path);
         UpdateSidePanelTitle();
-        if (!string.IsNullOrEmpty(threadPath))
-            EnsureStreamForThread(threadPath);
-        StateHasChanged();
         return Task.CompletedTask;
     }
 
-    // Thread creation is handled server-side via CreateThreadRequest handler.
+    // Thread creation is handled server-side via CreateNodeRequest.
 
     private CompletionProviderConfig GetCompletionConfig()
     {
@@ -788,97 +854,52 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         };
     }
 
-    private static readonly (string Tag, string Description, string Emoji)[] UnifiedPathTags =
-    [
-        ("content:", "Content files (documents, images)", "\U0001F4C4"),
-        ("data:", "Data collections and entities", "\U0001F5C3"),
-        ("schema:", "JSON schemas and type definitions", "\U0001F4CB"),
-        ("collection:", "Collection configuration", "\U0001F4C1"),
-        ("model:", "Data model diagrams", "\U0001F4CA"),
-        ("menu:", "Menu items", "\U0001F4DC"),
-        ("layoutAreas:", "Available layout areas", "\U0001F5BC"),
-    ];
+    private CancellationTokenSource? _completionCts;
 
     /// <summary>
-    /// Main completion handler. Parses the reference after @ and routes to the right handler.
-    /// All results are scoped and filtered — no random/unrelated suggestions.
+    /// Main completion handler — delegates to IChatCompletionOrchestrator.
+    /// Returns the first batch immediately; streams remaining batches in the background
+    /// and pushes progressive updates to the Monaco widget.
     /// </summary>
     private async Task<CompletionItem[]> GetCompletionsAsync(string query)
     {
-        if (string.IsNullOrWhiteSpace(query))
+        if (string.IsNullOrWhiteSpace(query) || !query.StartsWith("@"))
             return [];
+
+        // Cancel any previous streaming request
+        _completionCts?.Cancel();
+        _completionCts = new CancellationTokenSource();
+        var ct = _completionCts.Token;
 
         try
         {
-            if (!query.StartsWith("@"))
-                return [];
-
-            var reference = query[1..]; // strip @
             var currentAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
 
-            // Case 1: Contains colon → tag query (e.g., "Org/Microsoft/content:My")
-            if (reference.Contains(':'))
-                return (await GetContentCompletionsAsync(reference)).ToArray();
+            var allItems = new List<CompletionItem>();
+            var isFirst = true;
 
-            // Parse reference into basePath + filter
-            // e.g. "Org/Microsoft/" → basePath="Org/Microsoft", filter=""
-            // e.g. "Org/Micro"     → basePath="Org", filter="Micro"
-            // e.g. ""               → basePath=currentAddress, filter=""
-            // e.g. "Sys"            → basePath="", filter="Sys"
-            string basePath;
-            string filter;
-
-            if (string.IsNullOrEmpty(reference))
+            await foreach (var batch in CompletionOrchestrator.GetCompletionsAsync(query, currentAddress, ct))
             {
-                // Just "@" — scope to current address
-                basePath = currentAddress;
-                filter = "";
-            }
-            else if (reference.EndsWith("/"))
-            {
-                // Completed path segment — show children
-                basePath = reference.TrimEnd('/');
-                filter = "";
-            }
-            else
-            {
-                var lastSlash = reference.LastIndexOf('/');
-                if (lastSlash >= 0)
+                foreach (var item in batch.Items)
                 {
-                    basePath = reference[..lastSlash];
-                    filter = reference[(lastSlash + 1)..];
+                    allItems.Add(AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority));
                 }
-                else
+
+                if (isFirst)
                 {
-                    // No slash — search from root with this as prefix
-                    basePath = "";
-                    filter = reference;
+                    isFirst = false;
+                    // Return first batch immediately; collect remaining in background
+                    var firstResults = allItems.ToArray();
+                    _ = CollectRemainingBatchesAsync(query, currentAddress, allItems, ct);
+                    return firstResults;
                 }
             }
 
-            var results = new List<CompletionItem>();
-
-            // Get node suggestions from mesh query
-            var suggestions = await MeshQuery.AutocompleteAsync(basePath, filter, 20).ToArrayAsync();
-            results.AddRange(suggestions.Select(s => ToCompletionItem(s, string.IsNullOrEmpty(basePath) ? "Addresses" : "Nearby")));
-
-            // When showing children of an address (basePath is set, filter is empty or partial),
-            // also show unified path tags scoped to this address
-            if (!string.IsNullOrEmpty(basePath))
-                results.AddRange(GetUnifiedPathTagCompletions(basePath, filter));
-
-            // When no basePath and no filter, also show global suggestions + tags for current address
-            if (string.IsNullOrEmpty(basePath) && string.IsNullOrEmpty(filter) && !string.IsNullOrEmpty(currentAddress))
-            {
-                var existingPaths = results.Select(r => r.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                var contextSuggestions = await MeshQuery.AutocompleteAsync(currentAddress, "", 20).ToArrayAsync();
-                results.InsertRange(0, contextSuggestions
-                    .Where(s => !existingPaths.Contains(s.Path))
-                    .Select(s => ToCompletionItem(s, "Nearby")));
-                results.AddRange(GetUnifiedPathTagCompletions(currentAddress, ""));
-            }
-
-            return results.ToArray();
+            return allItems.ToArray();
+        }
+        catch (OperationCanceledException)
+        {
+            return [];
         }
         catch (Exception ex)
         {
@@ -887,224 +908,83 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         }
     }
 
-    private static List<CompletionItem> GetUnifiedPathTagCompletions(string address, string filterText)
-    {
-        var items = new List<CompletionItem>();
-        foreach (var (tag, description, emoji) in UnifiedPathTags)
-        {
-            if (!string.IsNullOrEmpty(filterText) &&
-                !tag.StartsWith(filterText, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var tagPath = string.IsNullOrEmpty(address)
-                ? tag
-                : $"{address}/{tag}";
-
-            items.Add(new CompletionItem
-            {
-                Label = $"{emoji} {tag}",
-                InsertText = $"@{tagPath}",
-                Description = description,
-                Path = tagPath,
-                Category = "Keywords",
-                Kind = CompletionItemKind.Module
-            });
-        }
-        return items;
-    }
-
-    private static CompletionItem ToCompletionItem(QuerySuggestion s, string category)
-    {
-        return new CompletionItem
-        {
-            Label = s.Path,
-            InsertText = $"@{s.Path}",
-            Description = s.NodeType ?? s.Name,
-            Path = s.Path,
-            Category = category,
-            IconUrl = s.Icon
-        };
-    }
-
     /// <summary>
-    /// Queries content collection files and folders and returns matching completion items.
-    /// Uses Unified Path format: {address}/{collectionName}:{filePath}
-    /// Supports browsing into folders when prefix contains collectionName:subpath/
-    /// Gets the content service from the current navigation address hub (not the portal hub).
+    /// Continues collecting batches from the orchestrator after the first batch was returned.
+    /// Pushes progressive updates to the Monaco widget via PushCompletionUpdateAsync.
     /// </summary>
-    private async Task<List<CompletionItem>> GetContentCompletionsAsync(string prefix)
+    private async Task CollectRemainingBatchesAsync(
+        string query,
+        string currentAddress,
+        List<CompletionItem> allItems,
+        CancellationToken ct)
     {
-        var items = new List<CompletionItem>();
-
         try
         {
-            // Use NavigationService to get the current address — content collections
-            // are registered on node hubs, not on the portal hub.
-            var nodeAddress = NavigationService.CurrentNamespace ?? initialContext ?? "";
-
-            IContentService? contentService = null;
-            if (!string.IsNullOrEmpty(nodeAddress))
+            // Start a new streaming call to get all batches (including any we already have).
+            // Deduplication below ensures we only push genuinely new items.
+            await foreach (var batch in CompletionOrchestrator.GetCompletionsAsync(query, currentAddress, ct))
             {
-                var nodeHub = Hub.GetHostedHub(new Address(nodeAddress), HostedHubCreation.Never);
-                contentService = nodeHub?.ServiceProvider.GetService<IContentService>();
-            }
-            // Fallback to portal hub's content service
-            contentService ??= Hub.ServiceProvider.GetService<IContentService>();
-            if (contentService == null)
-                return items;
-            var configs = contentService.GetAllCollectionConfigs();
-
-            // Parse prefix to detect collectionName:subpath pattern
-            var colonIndex = prefix.IndexOf(':');
-            string? targetCollection = null;
-            string browsePath = "/";
-            string filterText = "";
-
-            if (colonIndex >= 0)
-            {
-                // User typed something like "content:subfolder/" or "content:read"
-                // Extract the collection name (may include address prefix)
-                var beforeColon = prefix[..colonIndex];
-                var afterColon = colonIndex < prefix.Length - 1 ? prefix[(colonIndex + 1)..] : "";
-
-                // The collection name is the last segment before the colon
-                var lastSlash = beforeColon.LastIndexOf('/');
-                targetCollection = lastSlash >= 0 ? beforeColon[(lastSlash + 1)..] : beforeColon;
-
-                if (afterColon.EndsWith("/"))
+                var hadNew = false;
+                foreach (var item in batch.Items)
                 {
-                    // Browsing inside a folder: content:images/
-                    browsePath = "/" + afterColon.TrimEnd('/');
-                }
-                else if (afterColon.Contains('/'))
-                {
-                    // Partial path: content:images/log → browse "images", filter "log"
-                    var pathSlash = afterColon.LastIndexOf('/');
-                    browsePath = "/" + afterColon[..pathSlash];
-                    filterText = afterColon[(pathSlash + 1)..];
-                }
-                else
-                {
-                    // Filter at root: content:read → browse "/", filter "read"
-                    filterText = afterColon;
-                }
-            }
-
-            foreach (var config in configs)
-            {
-                // If user typed a collection prefix, only show that collection
-                if (targetCollection != null &&
-                    !config.Name.Equals(targetCollection, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                // If no colon yet, show collection names as suggestions
-                if (colonIndex < 0)
-                {
-                    var collPath = string.IsNullOrEmpty(nodeAddress)
-                        ? $"{config.Name}:"
-                        : $"{nodeAddress}/{config.Name}:";
-
-                    if (!string.IsNullOrEmpty(prefix) &&
-                        !config.Name.Contains(prefix, StringComparison.OrdinalIgnoreCase) &&
-                        !collPath.Contains(prefix, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    items.Add(new CompletionItem
+                    var completionItem = AutocompleteToCompletion(item, batch.Category, batch.CategoryPriority);
+                    // Deduplicate by InsertText
+                    if (!allItems.Any(existing =>
+                        string.Equals(existing.InsertText, completionItem.InsertText, StringComparison.OrdinalIgnoreCase)))
                     {
-                        Label = $"\U0001F4C1 {config.Name}:",
-                        InsertText = $"@{collPath}",
-                        Description = config.DisplayName ?? config.Name,
-                        Path = collPath,
-                        Category = "Content",
-                        Kind = CompletionItemKind.Module
+                        allItems.Add(completionItem);
+                        hadNew = true;
+                    }
+                }
+
+                // Push updated list to Monaco if we got new items
+                if (hadNew && monacoEditor != null)
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        try
+                        {
+                            await monacoEditor.PushCompletionUpdateAsync(allItems.ToArray());
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.LogDebug(ex, "[ThreadChat] Failed to push completion update");
+                        }
                     });
-                    continue;
-                }
-
-                ContentCollection? collection;
-                try
-                {
-                    collection = await contentService.GetCollectionAsync(config.Name);
-                }
-                catch
-                {
-                    continue;
-                }
-
-                if (collection == null)
-                    continue;
-
-                var collectionName = collection.Collection;
-
-                // Add folders
-                try
-                {
-                    var folders = await collection.GetFoldersAsync(browsePath);
-                    foreach (var folder in folders)
-                    {
-                        if (!string.IsNullOrEmpty(filterText) &&
-                            !folder.Name.Contains(filterText, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        var folderSubPath = (browsePath.TrimStart('/') + "/" + folder.Name).TrimStart('/');
-                        var unifiedPath = string.IsNullOrEmpty(nodeAddress)
-                            ? $"{collectionName}:{folderSubPath}/"
-                            : $"{nodeAddress}/{collectionName}:{folderSubPath}/";
-
-                        items.Add(new CompletionItem
-                        {
-                            Label = $"\U0001F4C1 {folder.Name}/",
-                            InsertText = $"@{unifiedPath}",
-                            Description = $"{folder.ItemCount} items",
-                            Path = unifiedPath,
-                            Category = "Content",
-                            Kind = CompletionItemKind.Folder
-                        });
-                    }
-                }
-                catch
-                {
-                    // Skip folders that fail to enumerate
-                }
-
-                // Add files
-                try
-                {
-                    var files = await collection.GetFilesAsync(browsePath);
-                    foreach (var file in files)
-                    {
-                        if (!string.IsNullOrEmpty(filterText) &&
-                            !file.Name.Contains(filterText, StringComparison.OrdinalIgnoreCase))
-                            continue;
-
-                        var filePath = file.Path.TrimStart('/');
-                        var unifiedPath = string.IsNullOrEmpty(nodeAddress)
-                            ? $"{collectionName}:{filePath}"
-                            : $"{nodeAddress}/{collectionName}:{filePath}";
-
-                        items.Add(new CompletionItem
-                        {
-                            Label = $"\U0001F4C4 {file.Name}",
-                            InsertText = $"@{unifiedPath}",
-                            Description = collection.DisplayName,
-                            Path = unifiedPath,
-                            Category = "Content",
-                            Kind = CompletionItemKind.File
-                        });
-                    }
-                }
-                catch
-                {
-                    continue; // Skip collections that fail to enumerate
                 }
             }
         }
+        catch (OperationCanceledException) { /* expected when user types more */ }
         catch (Exception ex)
         {
-            Logger.LogDebug(ex, "Error getting content completions");
+            Logger.LogDebug(ex, "[ThreadChat] Background completion collection failed");
         }
+    }
 
-        return items;
+    private static CompletionItem AutocompleteToCompletion(
+        Data.Completion.AutocompleteItem item, string category, int categoryPriority)
+    {
+        // Build a sort key: lower = shown first. Invert priority so higher priority sorts first.
+        var sortOrder = 9999 - Math.Min(categoryPriority + item.Priority, 9999);
+        var sortKey = $"{sortOrder:D4}_{item.Label?.ToLowerInvariant()}";
+
+        return new CompletionItem
+        {
+            Label = item.Path ?? item.Label!,
+            InsertText = item.InsertText,
+            Description = item.Description ?? category,
+            Path = item.Path ?? item.Label,
+            Category = item.Category ?? category,
+            IconUrl = item.Icon,
+            Kind = item.Kind switch
+            {
+                Data.Completion.AutocompleteKind.File => CompletionItemKind.File,
+                Data.Completion.AutocompleteKind.Agent => CompletionItemKind.Module,
+                Data.Completion.AutocompleteKind.Command => CompletionItemKind.Function,
+                _ => CompletionItemKind.Text
+            },
+            SortKey = sortKey
+        };
     }
 
     /// <summary>
@@ -1132,7 +1012,7 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         => new LayoutAreaControl(
             $"{threadPath}/{msgId}",
             new LayoutAreaReference(ThreadMessageNodeType.OverviewArea))
-            .WithShowProgress(false);
+            .WithSpinnerType(SpinnerType.Skeleton);
 
     private static string TruncateText(string text, int maxLength)
     {
@@ -1146,7 +1026,6 @@ public partial class ThreadChatView : BlazorView<ThreadChatControl, ThreadChatVi
         if (!_isDisposed)
         {
             _isDisposed = true;
-            _ownedStream?.Dispose();
             agentSubscription?.Dispose();
             submissionHandler.Dispose();
             SidePanelState.OnActionRequested -= OnSidePanelAction;

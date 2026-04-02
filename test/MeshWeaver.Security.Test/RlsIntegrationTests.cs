@@ -379,8 +379,8 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         var permissions2 = await securityService.GetEffectivePermissionsAsync(path2, userId, TestTimeout);
 
         // Assert
-        permissions1.Should().Be(Permission.Read | Permission.Execute); // Viewer only
-        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute); // Editor
+        permissions1.Should().Be(Permission.Read | Permission.Execute | Permission.Api); // Viewer only
+        permissions2.Should().Be(Permission.Read | Permission.Create | Permission.Update | Permission.Comment | Permission.Execute | Permission.Thread | Permission.Api | Permission.Export); // Editor
     }
 
     [Fact]
@@ -639,7 +639,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
         // Verify permissions
         var permissions = await securityService.GetEffectivePermissionsAsync(
             parentPath, WellKnownUsers.Anonymous, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Anonymous Viewer should only have Read + Execute");
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Anonymous Viewer should only have Read + Execute + Api");
 
         // Act — anonymous Create (CreatedBy = empty, will resolve to Anonymous user)
         var node = new MeshNode("PublicCreate", parentPath)
@@ -709,7 +709,7 @@ public class RlsIntegrationTests(ITestOutputHelper output) : MonolithMeshTestBas
 
         // Check effective permissions
         var permissions = await securityService.GetEffectivePermissionsAsync(parentPath, viewerId, TestTimeout);
-        permissions.Should().Be(Permission.Read | Permission.Execute, "Viewer should only have Read + Execute permission");
+        permissions.Should().Be(Permission.Read | Permission.Execute | Permission.Api, "Viewer should only have Read + Execute + Api permission");
 
         // Verify cannot create
         var node = new MeshNode("ViewerCreate", parentPath) { Name = "Viewer Create", NodeType = "secure" };

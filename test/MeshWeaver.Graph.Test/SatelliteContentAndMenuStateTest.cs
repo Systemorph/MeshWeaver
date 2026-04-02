@@ -51,20 +51,6 @@ public class SatelliteContentAndMenuStateTest
         comment.PrimaryNodePath.Should().Be("");
     }
 
-    [Fact]
-    public void Thread_PrimaryNodePath_ReturnsParentPath()
-    {
-        var thread = new MeshWeaver.AI.Thread { ParentPath = "org/project/doc" };
-        thread.PrimaryNodePath.Should().Be("org/project/doc");
-    }
-
-    [Fact]
-    public void Thread_PrimaryNodePath_WhenParentPathNull_ReturnsNull()
-    {
-        var thread = new MeshWeaver.AI.Thread { ParentPath = null };
-        thread.PrimaryNodePath.Should().BeNull();
-    }
-
     #endregion
 
     #region MeshNode.GetPrimaryPath Tests

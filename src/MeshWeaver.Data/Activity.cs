@@ -226,7 +226,15 @@ public class Activity : ILogger, IDisposable
     {
         var request = delivery.Message;
         if (request.CompleteAction != null)
+        {
+            // If already completed, invoke callback immediately with the final log
+            if (completionSource.Task.IsCompleted)
+            {
+                request.CompleteAction.Invoke(completionSource.Task.Result);
+                return delivery.Processed();
+            }
             completedActions.Add(request.CompleteAction);
+        }
         RequestChange(log =>
         {
             var ret = ProcessActivityCompletion(log, request.Status);
