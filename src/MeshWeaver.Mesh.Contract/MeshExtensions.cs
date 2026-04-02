@@ -59,7 +59,19 @@ public static class MeshExtensions
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
-            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest);
+            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
+            .WithHandler<HeartBeatEvent>(HandleHeartBeat);
+    }
+
+    /// <summary>
+    /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
+    /// In monolith mode, no GrainKeepAliveCallback is registered → no-op.
+    /// </summary>
+    private static IMessageDelivery HandleHeartBeat(
+        IMessageHub hub, IMessageDelivery<HeartBeatEvent> delivery)
+    {
+        hub.Configuration.Get<GrainKeepAliveCallback>()?.KeepAlive();
+        return delivery.Processed();
     }
 
     private static async Task<IMessageDelivery> HandleCreateNodeRequest(

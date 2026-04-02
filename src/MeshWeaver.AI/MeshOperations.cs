@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Schema;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Domain;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -21,6 +22,12 @@ public class MeshOperations
     private readonly IMessageHub hub;
     private readonly ILogger<MeshOperations> logger;
     private readonly IMeshService mesh;
+
+    /// <summary>
+    /// Callback invoked when a node is created, updated, or patched.
+    /// Provides path and version before/after for tracking document changes per thread message.
+    /// </summary>
+    public Action<NodeChangeEntry>? OnNodeChange { get; set; }
 
     public MeshOperations(IMessageHub hub)
     {
@@ -206,7 +213,19 @@ public class MeshOperations
 
             var tcs = new TaskCompletionSource<string>();
             mesh.CreateNode(meshNode).Subscribe(
-                created => tcs.TrySetResult($"Created: {created.Path}"),
+                created =>
+                {
+                    OnNodeChange?.Invoke(new NodeChangeEntry
+                    {
+                        Path = created.Path,
+                        Operation = "Created",
+                        VersionBefore = null,
+                        VersionAfter = created.Version,
+                        NodeType = created.NodeType,
+                        NodeName = created.Name
+                    });
+                    tcs.TrySetResult($"Created: {created.Path}");
+                },
                 ex => tcs.TrySetResult($"Error creating node: {ex.Message}"));
             return await tcs.Task;
         }
@@ -247,9 +266,22 @@ public class MeshOperations
                     continue;
                 }
 
+                var versionBefore = meshNode.Version;
                 var updateTcs = new TaskCompletionSource<string>();
                 mesh.UpdateNode(meshNode).Subscribe(
-                    updated => updateTcs.TrySetResult($"Updated: {updated.Path}"),
+                    updated =>
+                    {
+                        OnNodeChange?.Invoke(new NodeChangeEntry
+                        {
+                            Path = updated.Path,
+                            Operation = "Updated",
+                            VersionBefore = versionBefore,
+                            VersionAfter = updated.Version,
+                            NodeType = updated.NodeType,
+                            NodeName = updated.Name
+                        });
+                        updateTcs.TrySetResult($"Updated: {updated.Path}");
+                    },
                     ex => updateTcs.TrySetResult($"Error updating {meshNode.Path}: {ex.Message}"));
                 results = results.Add(await updateTcs.Task);
             }
@@ -297,9 +329,22 @@ public class MeshOperations
                 PreRenderedHtml = jsonObj.ContainsKey("preRenderedHtml") ? partial.PreRenderedHtml : existing.PreRenderedHtml,
             };
 
+            var versionBefore = existing.Version;
             var patchTcs = new TaskCompletionSource<string>();
             mesh.UpdateNode(merged).Subscribe(
-                updated => patchTcs.TrySetResult($"Patched: {updated.Path}"),
+                updated =>
+                {
+                    OnNodeChange?.Invoke(new NodeChangeEntry
+                    {
+                        Path = updated.Path,
+                        Operation = "Updated",
+                        VersionBefore = versionBefore,
+                        VersionAfter = updated.Version,
+                        NodeType = updated.NodeType,
+                        NodeName = updated.Name
+                    });
+                    patchTcs.TrySetResult($"Patched: {updated.Path}");
+                },
                 ex => patchTcs.TrySetResult($"Error patching {merged.Path}: {ex.Message}"));
             return await patchTcs.Task;
         }

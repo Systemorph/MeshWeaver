@@ -217,9 +217,9 @@ public record ThreadMessage
     public ImmutableList<ToolCallEntry> ToolCalls { get; init; } = [];
 
     /// <summary>
-    /// MeshNode changes made during this message's execution.
-    /// Tracks path, operation (Created/Updated/Deleted), and version before/after
-    /// so the version repo can load content at each point.
+    /// Nodes created or updated during this message's execution.
+    /// Tracks path and version before/after so the UI can show
+    /// which documents were written and the version delta.
     /// </summary>
-    public ImmutableList<NodeChangeEntry> NodeChanges { get; init; } = [];
+    public ImmutableList<NodeChangeEntry> UpdatedNodes { get; init; } = [];
 }

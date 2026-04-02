@@ -14,7 +14,7 @@ namespace MeshWeaver.AI;
 /// </summary>
 public class MeshPlugin(IMessageHub hub, IAgentChat chat)
 {
-    private readonly MeshOperations ops = new(hub);
+    private readonly MeshOperations ops = new(hub) { OnNodeChange = change => chat.ForwardNodeChange?.Invoke(change) };
     private readonly ILogger<MeshPlugin> logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshPlugin>>();
 
     [Description("Retrieves a node or content from the mesh by path. Paths are relative to current context; use @/ prefix for absolute paths. Supports Unified Path prefixes (schema:, model:, data:, content:, collection:, area:, layoutAreas:).")]

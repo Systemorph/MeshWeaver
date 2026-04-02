@@ -591,10 +591,151 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_access_node_type ON access (node_type);
             CREATE INDEX IF NOT EXISTS idx_access_last_modified ON access (last_modified DESC);
 
-            -- Trigger function: fires on any change to the access satellite table
-            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
+            -- Per-user permission rebuild: concurrent-safe, only touches one user's rows.
+            CREATE OR REPLACE FUNCTION rebuild_user_permissions_for(p_user_id TEXT) RETURNS void AS $$
             BEGIN
-                PERFORM rebuild_user_effective_permissions();
+                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
+                DELETE FROM user_effective_permissions WHERE user_id = p_user_id;
+
+                -- Direct entries from AccessAssignment nodes for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT
+                    p_user_id,
+                    COALESCE(aa.main_node, aa.namespace),
+                    perm.permission,
+                    NOT COALESCE((role_entry->>'denied')::boolean, false)
+                FROM access aa
+                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
+                         WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
+                        CASE role_entry->>'role'
+                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49 ELSE 0
+                        END
+                    ) AS permissions
+                ) r
+                CROSS JOIN LATERAL (
+                    SELECT unnest(
+                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                    ) AS permission
+                ) perm
+                WHERE aa.content->>'accessObject' = p_user_id
+                  AND aa.content->'roles' IS NOT NULL
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
+
+                -- Group expansion for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                WITH RECURSIVE all_members AS (
+                    SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
+                    FROM mesh_nodes gm
+                    CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
+                    WHERE gm.node_type = 'GroupMembership'
+                    UNION
+                    SELECT am.group_path, gm.content->>'member'
+                    FROM all_members am
+                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g WHERE g->>'group' = am.member_id)
+                ),
+                user_groups AS (
+                    SELECT DISTINCT group_path FROM all_members WHERE member_id = p_user_id
+                )
+                SELECT p_user_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
+                       NOT COALESCE((role_entry->>'denied')::boolean, false)
+                FROM access aa
+                JOIN user_groups ug ON aa.content->>'accessObject' = ug.group_path
+                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
+                         WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
+                        CASE role_entry->>'role'
+                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49 ELSE 0
+                        END
+                    ) AS permissions
+                ) r
+                CROSS JOIN LATERAL (
+                    SELECT unnest(
+                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                    ) AS permission
+                ) perm
+                WHERE aa.content->'roles' IS NOT NULL
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
+
+                -- access_control entries for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT subject, node_path, permission, is_allow FROM access_control WHERE subject = p_user_id
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
+
+                -- PartitionAccessPolicy caps for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT DISTINCT p_user_id, policy.namespace, perm.permission, false
+                FROM mesh_nodes policy
+                CROSS JOIN (
+                    SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
+                           unnest(ARRAY['read','create','update','delete','comment']) AS field
+                ) perm
+                WHERE policy.node_type = 'PartitionAccessPolicy' AND policy.id = '_Policy'
+                  AND (policy.content->>perm.field)::boolean = false
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
+
+                -- Sync partition_access for this user
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM user_effective_permissions
+                               WHERE user_id = p_user_id AND permission = 'Read' AND is_allow = true) THEN
+                        INSERT INTO public.partition_access (user_id, partition)
+                        VALUES (p_user_id, '{{schemaName}}') ON CONFLICT DO NOTHING;
+                    ELSE
+                        DELETE FROM public.partition_access
+                        WHERE user_id = p_user_id AND partition = '{{schemaName}}';
+                    END IF;
+                EXCEPTION WHEN undefined_table THEN NULL;
+                END;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            -- Trigger function: per-row, rebuilds only the affected user's permissions.
+            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
+            DECLARE
+                affected_user TEXT;
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    affected_user := OLD.content->>'accessObject';
+                ELSE
+                    affected_user := NEW.content->>'accessObject';
+                END IF;
+
+                IF affected_user IS NOT NULL THEN
+                    PERFORM rebuild_user_permissions_for(affected_user);
+                ELSE
+                    PERFORM rebuild_user_effective_permissions();
+                END IF;
+
+                IF TG_OP = 'UPDATE' AND OLD.content->>'accessObject' IS DISTINCT FROM NEW.content->>'accessObject' THEN
+                    IF OLD.content->>'accessObject' IS NOT NULL THEN
+                        PERFORM rebuild_user_permissions_for(OLD.content->>'accessObject');
+                    END IF;
+                END IF;
+
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
@@ -602,11 +743,11 @@ public static class PostgreSqlSchemaInitializer
             -- Drop old trigger on mesh_nodes if it exists
             DROP TRIGGER IF EXISTS mesh_node_access_changed ON mesh_nodes;
 
-            -- Trigger on access table for access changes
+            -- Trigger on access table (per-row for concurrent safety)
             DROP TRIGGER IF EXISTS access_changed ON access;
             CREATE TRIGGER access_changed
                 AFTER INSERT OR UPDATE OR DELETE ON access
-                FOR EACH STATEMENT EXECUTE FUNCTION trg_access_changed();
+                FOR EACH ROW EXECUTE FUNCTION trg_access_changed();
 
             -- Simple access_control and group_members tables used by convenience methods
             CREATE TABLE IF NOT EXISTS access_control (
@@ -1015,10 +1156,151 @@ public static class PostgreSqlSchemaInitializer
             CREATE INDEX IF NOT EXISTS idx_access_node_type ON access (node_type);
             CREATE INDEX IF NOT EXISTS idx_access_last_modified ON access (last_modified DESC);
 
-            -- Trigger function: fires on any change to the access satellite table
-            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
+            -- Per-user permission rebuild: concurrent-safe, only touches one user's rows.
+            CREATE OR REPLACE FUNCTION rebuild_user_permissions_for(p_user_id TEXT) RETURNS void AS $$
             BEGIN
-                PERFORM rebuild_user_effective_permissions();
+                EXECUTE format('SET LOCAL search_path TO %I, public', '{{schemaName}}');
+                DELETE FROM user_effective_permissions WHERE user_id = p_user_id;
+
+                -- Direct entries from AccessAssignment nodes for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT
+                    p_user_id,
+                    COALESCE(aa.main_node, aa.namespace),
+                    perm.permission,
+                    NOT COALESCE((role_entry->>'denied')::boolean, false)
+                FROM access aa
+                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
+                         WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
+                        CASE role_entry->>'role'
+                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49 ELSE 0
+                        END
+                    ) AS permissions
+                ) r
+                CROSS JOIN LATERAL (
+                    SELECT unnest(
+                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                    ) AS permission
+                ) perm
+                WHERE aa.content->>'accessObject' = p_user_id
+                  AND aa.content->'roles' IS NOT NULL
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
+
+                -- Group expansion for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                WITH RECURSIVE all_members AS (
+                    SELECT group_entry->>'group' AS group_path, gm.content->>'member' AS member_id
+                    FROM mesh_nodes gm
+                    CROSS JOIN LATERAL jsonb_array_elements(gm.content->'groups') AS group_entry
+                    WHERE gm.node_type = 'GroupMembership'
+                    UNION
+                    SELECT am.group_path, gm.content->>'member'
+                    FROM all_members am
+                    JOIN mesh_nodes gm ON gm.node_type = 'GroupMembership'
+                    WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(gm.content->'groups') g WHERE g->>'group' = am.member_id)
+                ),
+                user_groups AS (
+                    SELECT DISTINCT group_path FROM all_members WHERE member_id = p_user_id
+                )
+                SELECT p_user_id, COALESCE(aa.main_node, aa.namespace), perm.permission,
+                       NOT COALESCE((role_entry->>'denied')::boolean, false)
+                FROM access aa
+                JOIN user_groups ug ON aa.content->>'accessObject' = ug.group_path
+                CROSS JOIN LATERAL jsonb_array_elements(aa.content->'roles') AS role_entry
+                CROSS JOIN LATERAL (
+                    SELECT COALESCE(
+                        (SELECT (rn.content->>'permissions')::int FROM mesh_nodes rn
+                         WHERE rn.node_type = 'Role' AND rn.id = role_entry->>'role' LIMIT 1),
+                        CASE role_entry->>'role'
+                            WHEN 'Admin' THEN 127 WHEN 'PlatformAdmin' THEN 127
+                            WHEN 'Editor' THEN 119 WHEN 'Viewer' THEN 33
+                            WHEN 'Commenter' THEN 49 ELSE 0
+                        END
+                    ) AS permissions
+                ) r
+                CROSS JOIN LATERAL (
+                    SELECT unnest(
+                        CASE WHEN (r.permissions & 1) > 0 THEN ARRAY['Read'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 2) > 0 THEN ARRAY['Create'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 4) > 0 THEN ARRAY['Update'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 8) > 0 THEN ARRAY['Delete'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 16) > 0 THEN ARRAY['Comment'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 32) > 0 THEN ARRAY['Execute'] ELSE ARRAY[]::text[] END
+                        || CASE WHEN (r.permissions & 64) > 0 THEN ARRAY['Thread'] ELSE ARRAY[]::text[] END
+                    ) AS permission
+                ) perm
+                WHERE aa.content->'roles' IS NOT NULL
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
+
+                -- access_control entries for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT subject, node_path, permission, is_allow FROM access_control WHERE subject = p_user_id
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE
+                    SET is_allow = CASE WHEN EXCLUDED.is_allow = false THEN false ELSE user_effective_permissions.is_allow END;
+
+                -- PartitionAccessPolicy caps for this user
+                INSERT INTO user_effective_permissions (user_id, node_path_prefix, permission, is_allow)
+                SELECT DISTINCT p_user_id, policy.namespace, perm.permission, false
+                FROM mesh_nodes policy
+                CROSS JOIN (
+                    SELECT unnest(ARRAY['Read','Create','Update','Delete','Comment']) AS permission,
+                           unnest(ARRAY['read','create','update','delete','comment']) AS field
+                ) perm
+                WHERE policy.node_type = 'PartitionAccessPolicy' AND policy.id = '_Policy'
+                  AND (policy.content->>perm.field)::boolean = false
+                ON CONFLICT (user_id, node_path_prefix, permission) DO UPDATE SET is_allow = false;
+
+                -- Sync partition_access for this user
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM user_effective_permissions
+                               WHERE user_id = p_user_id AND permission = 'Read' AND is_allow = true) THEN
+                        INSERT INTO public.partition_access (user_id, partition)
+                        VALUES (p_user_id, '{{schemaName}}') ON CONFLICT DO NOTHING;
+                    ELSE
+                        DELETE FROM public.partition_access
+                        WHERE user_id = p_user_id AND partition = '{{schemaName}}';
+                    END IF;
+                EXCEPTION WHEN undefined_table THEN NULL;
+                END;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            -- Trigger function: per-row, rebuilds only the affected user's permissions.
+            CREATE OR REPLACE FUNCTION trg_access_changed() RETURNS TRIGGER AS $$
+            DECLARE
+                affected_user TEXT;
+            BEGIN
+                IF TG_OP = 'DELETE' THEN
+                    affected_user := OLD.content->>'accessObject';
+                ELSE
+                    affected_user := NEW.content->>'accessObject';
+                END IF;
+
+                IF affected_user IS NOT NULL THEN
+                    PERFORM rebuild_user_permissions_for(affected_user);
+                ELSE
+                    PERFORM rebuild_user_effective_permissions();
+                END IF;
+
+                IF TG_OP = 'UPDATE' AND OLD.content->>'accessObject' IS DISTINCT FROM NEW.content->>'accessObject' THEN
+                    IF OLD.content->>'accessObject' IS NOT NULL THEN
+                        PERFORM rebuild_user_permissions_for(OLD.content->>'accessObject');
+                    END IF;
+                END IF;
+
                 RETURN NULL;
             END;
             $$ LANGUAGE plpgsql;
@@ -1026,11 +1308,11 @@ public static class PostgreSqlSchemaInitializer
             -- Drop old trigger on mesh_nodes if it exists
             DROP TRIGGER IF EXISTS mesh_node_access_changed ON mesh_nodes;
 
-            -- Trigger on access table for access changes
+            -- Trigger on access table (per-row for concurrent safety)
             DROP TRIGGER IF EXISTS access_changed ON access;
             CREATE TRIGGER access_changed
                 AFTER INSERT OR UPDATE OR DELETE ON access
-                FOR EACH STATEMENT EXECUTE FUNCTION trg_access_changed();
+                FOR EACH ROW EXECUTE FUNCTION trg_access_changed();
 
             -- Simple access_control and group_members tables used by convenience methods
             CREATE TABLE IF NOT EXISTS access_control (

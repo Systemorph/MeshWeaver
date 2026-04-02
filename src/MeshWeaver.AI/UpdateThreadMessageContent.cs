@@ -11,6 +11,7 @@ public record UpdateThreadMessageContent
 {
     public string? Text { get; init; }
     public ImmutableList<ToolCallEntry>? ToolCalls { get; init; }
+    public ImmutableList<NodeChangeEntry>? UpdatedNodes { get; init; }
     public string? AgentName { get; init; }
     public string? ModelName { get; init; }
     public string? DelegationPath { get; init; }

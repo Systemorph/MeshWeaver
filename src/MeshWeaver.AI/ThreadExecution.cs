@@ -275,14 +275,16 @@ public static class ThreadExecution
         // Posts UpdateThreadMessageContent which is handled ON the grain —
         // calls workspace.UpdateMeshNode() locally → sync stream → clients.
         void PushToResponseMessage(string text, ImmutableList<ToolCallEntry> toolCalls,
+            ImmutableList<NodeChangeEntry> updatedNodes,
             string? agentName, string? modelName, string? delegationPath = null)
         {
-            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}",
-                responsePath, text.Length, toolCalls.Count);
+            logger.LogInformation("[ThreadExec] PUSH_TO_MSG: responsePath={ResponsePath}, textLen={TextLen}, toolCalls={ToolCalls}, updatedNodes={UpdatedNodes}",
+                responsePath, text.Length, toolCalls.Count, updatedNodes.Count);
             parentHub.Post(new UpdateThreadMessageContent
             {
                 Text = text,
                 ToolCalls = toolCalls,
+                UpdatedNodes = updatedNodes,
                 AgentName = agentName,
                 ModelName = modelName,
                 DelegationPath = delegationPath
@@ -348,6 +350,8 @@ public static class ThreadExecution
                 });
 
                 var toolCallLog = ImmutableList<ToolCallEntry>.Empty;
+                var nodeChangeLog = ImmutableList<NodeChangeEntry>.Empty;
+                client.ForwardNodeChange = entry => { nodeChangeLog = nodeChangeLog.Add(entry); };
                 string? currentStatus = null;
                 client.UpdateDelegationStatus = status =>
                 {
@@ -363,7 +367,7 @@ public static class ThreadExecution
                             e.Name.StartsWith("delegate_to") && e.DelegationPath == null && e.DisplayName == status
                                 ? e with { DelegationPath = delPath }
                                 : e).ToImmutableList();
-                        PushToResponseMessage("", toolCallLog,
+                        PushToResponseMessage("", toolCallLog, nodeChangeLog,
                             request.AgentName, request.ModelName);
                     }
                 };
@@ -385,7 +389,10 @@ public static class ThreadExecution
                     try
                     {
                     logger.LogInformation("[ThreadExec] STREAMING_LOOP_ENTRY: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
+                    // Send initial heartbeat to keep grain alive during first AI call
+                    parentHub.Post(new HeartBeatEvent());
                     var lastUpdate = DateTimeOffset.MinValue;
+                    var lastHeartbeat = DateTimeOffset.UtcNow;
                     var pendingCalls = ImmutableDictionary<string, FunctionCallContent>.Empty;
                     string? lastCallKey = null;
 
@@ -479,9 +486,16 @@ public static class ThreadExecution
                                 : e).ToImmutableList();
                     }
 
-                    PushToResponseMessage(responseText.ToString(), toolCallLog,
+                    PushToResponseMessage(responseText.ToString(), toolCallLog, nodeChangeLog,
                         request.AgentName, request.ModelName);
                     lastUpdate = DateTimeOffset.UtcNow;
+
+                    // Heartbeat: keep grain alive during streaming
+                    if (DateTimeOffset.UtcNow - lastHeartbeat > TimeSpan.FromSeconds(30))
+                    {
+                        parentHub.Post(new HeartBeatEvent());
+                        lastHeartbeat = DateTimeOffset.UtcNow;
+                    }
                 }
             }
 
@@ -489,7 +503,7 @@ public static class ThreadExecution
                     logger.LogInformation("[ThreadExec] EXECUTION_COMPLETE: {Time:HH:mm:ss.fff} threadPath={ThreadPath}, responseLength={Length}, toolCalls={ToolCalls}",
                         DateTime.UtcNow, threadPath, responseText.Length, toolCallLog.Count);
                     var finalText = responseText.ToString();
-                    PushToResponseMessage(finalText, toolCallLog,
+                    PushToResponseMessage(finalText, toolCallLog, nodeChangeLog,
                         request.AgentName, request.ModelName, firstDelegationPath);
                     // Clear streaming state from Thread
                     UpdateThreadExecution(t => t with
@@ -506,7 +520,7 @@ public static class ThreadExecution
                     {
                         logger.LogInformation("[ThreadExec] CANCELLED: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         var cancelText = (responseText.ToString() + "\n\n*Cancelled*").Trim();
-                        PushToResponseMessage(cancelText, toolCallLog, request.AgentName, request.ModelName, firstDelegationPath);
+                        PushToResponseMessage(cancelText, toolCallLog, nodeChangeLog, request.AgentName, request.ModelName, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,
@@ -518,7 +532,7 @@ public static class ThreadExecution
                     {
                         logger.LogError(ex, "[ThreadExec] ERROR: {Time:HH:mm:ss.fff} threadPath={ThreadPath}", DateTime.UtcNow, threadPath);
                         var errorText = (responseText.ToString() + $"\n\n*Error: {ex.Message}*").Trim();
-                        PushToResponseMessage(errorText, toolCallLog, request.AgentName, request.ModelName, firstDelegationPath);
+                        PushToResponseMessage(errorText, toolCallLog, nodeChangeLog, request.AgentName, request.ModelName, firstDelegationPath);
                         UpdateThreadExecution(t => t with
                         {
                             IsExecuting = false, ExecutionStatus = null, ActiveMessageId = null,

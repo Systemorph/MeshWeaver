@@ -100,4 +100,11 @@ public interface IAgentChat
     /// </summary>
     Action<ToolCallEntry>? ForwardToolCall { get => null; set { } }
 
+    /// <summary>
+    /// Callback to forward node change entries from MeshOperations (Create/Update/Patch).
+    /// Set by ThreadExecution, invoked by MeshPlugin when nodes are modified.
+    /// Tracks path + version before/after for document change auditing per thread message.
+    /// </summary>
+    Action<NodeChangeEntry>? ForwardNodeChange { get => null; set { } }
+
 }

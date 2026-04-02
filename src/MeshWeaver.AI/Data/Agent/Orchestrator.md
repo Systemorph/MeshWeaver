@@ -14,7 +14,7 @@ delegations:
   - agentPath: Agent/Researcher
     instructions: "Deep information gathering: web search, mesh exploration, data analysis, documentation lookup"
   - agentPath: Agent/Worker
-    instructions: "Execute actions: create, update, delete nodes. Schema discovery, verification, commenting"
+    instructions: "Execute actions: create, update, delete nodes. Schema discovery, verification, commenting. IMPORTANT: The Worker MUST call Update or Patch to write changes back — if the tool was not called, the change did not happen."
   - agentPath: Agent/Versioning
     instructions: "ONLY when the user explicitly asks to see version history, compare versions, or restore/revert a node. Never delegate here proactively — do not check version history as preparation for updates."
 plugins:

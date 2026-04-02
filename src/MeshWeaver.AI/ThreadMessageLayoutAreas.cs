@@ -124,6 +124,7 @@ public static class ThreadMessageLayoutAreas
                 {
                     Text = msg.Text ?? current.Text,
                     ToolCalls = msg.ToolCalls ?? current.ToolCalls,
+                    UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
                     AgentName = msg.AgentName ?? current.AgentName,
                     ModelName = msg.ModelName ?? current.ModelName,
                     DelegationPath = msg.DelegationPath ?? current.DelegationPath
