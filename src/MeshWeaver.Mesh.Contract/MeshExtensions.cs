@@ -78,6 +78,9 @@ public static class MeshExtensions
             var callback = current.Configuration.Get<GrainKeepAliveCallback>();
             if (callback != null)
             {
+                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
+                logger?.LogInformation("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
+                    hub.Address, current.Address);
                 callback.KeepAlive();
                 break;
             }
