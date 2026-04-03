@@ -375,8 +375,17 @@ public partial class QueryParser
 
                 if (field.Equals("namespace", StringComparison.OrdinalIgnoreCase))
                 {
-                    path = value;
-                    namespaceUsed = true;
+                    if (value.Contains('*'))
+                    {
+                        // Wildcard namespace: add as LIKE filter (e.g., namespace:*/_Thread)
+                        filterTokens.Add(new Token(TokenType.Comparison, null,
+                            new QueryCondition("namespace", QueryOperator.Like, [value.Replace("*", "%")])));
+                    }
+                    else
+                    {
+                        path = value;
+                        namespaceUsed = true;
+                    }
                     continue;
                 }
 
