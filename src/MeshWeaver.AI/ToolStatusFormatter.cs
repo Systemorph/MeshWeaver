@@ -43,12 +43,9 @@ public static class ToolStatusFormatter
     private static string FormatDelegation(IDictionary<string, object?>? args)
     {
         var agent = GetArg(args, "agentName");
-        var task = GetArg(args, "task");
         // Strip "Agent/" prefix for cleaner display
         if (agent != null && agent.Contains('/'))
             agent = agent.Split('/').Last();
-        if (!string.IsNullOrEmpty(task))
-            return $"{agent ?? "Agent"}: {Truncate(task)}";
         return $"Delegating to {agent ?? "Agent"}...";
     }
 

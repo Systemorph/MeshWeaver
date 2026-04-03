@@ -319,6 +319,7 @@ public class AgentChatClient : IAgentChat
         // Load and add attachment content (text + binary)
         var attachmentPaths = currentAttachments;
         var binaryAttachments = ImmutableList<DataContent>.Empty;
+        var attachmentHeaderWritten = false;
         if (attachmentPaths is { Count: > 0 })
         {
             var meshPlugin = new MeshPlugin(hub, this);
@@ -369,6 +370,12 @@ public class AgentChatClient : IAgentChat
                     {
                         if (content.Length > 8000)
                             content = content[..8000] + "\n... (truncated)";
+                        if (!attachmentHeaderWritten)
+                        {
+                            messageText.AppendLine("# Attached Content");
+                            messageText.AppendLine();
+                            attachmentHeaderWritten = true;
+                        }
                         messageText.AppendLine($"## Attachment: {path}");
                         messageText.AppendLine();
                         messageText.AppendLine(content);

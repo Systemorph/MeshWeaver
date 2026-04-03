@@ -145,6 +145,10 @@ public class ContentReferenceIntegrityTest
             if (!icon.Contains('/'))
                 continue;
 
+            // Skip inline SVG icons (valid icon format, not a file path)
+            if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+                continue;
+
             // Relative path — resolve using node namespace (same as GetImageUrlForNode at runtime)
             if (!icon.StartsWith("/static/", StringComparison.OrdinalIgnoreCase))
             {
