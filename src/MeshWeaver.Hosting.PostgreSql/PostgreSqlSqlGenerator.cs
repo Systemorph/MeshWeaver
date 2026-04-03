@@ -293,7 +293,9 @@ public class PostgreSqlSqlGenerator
         if (query.OrderBy != null)
         {
             var direction = query.OrderBy.Descending ? "DESC" : "ASC";
-            sql = $"SELECT * FROM ({sql}) combined ORDER BY {MapOrderBySelector(query.OrderBy.Property)} {direction}";
+            // Strip "n." prefix — the outer query uses alias "combined", not "n"
+            var orderCol = MapOrderBySelector(query.OrderBy.Property).Replace("n.", "");
+            sql = $"SELECT * FROM ({sql}) combined ORDER BY {orderCol} {direction}";
         }
 
         if (query.Limit.HasValue)
