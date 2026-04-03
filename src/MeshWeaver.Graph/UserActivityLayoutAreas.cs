@@ -279,7 +279,7 @@ public static class UserActivityLayoutAreas
     {
         return Controls.MeshSearch
             .WithTitle("Latest Threads")
-            .WithHiddenQuery($"nodeType:Thread sort:LastModified-desc")
+            .WithHiddenQuery($"nodeType:Thread namespace:*/_Thread sort:LastModified-desc")
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithCollapsibleSections(false)
             .WithSectionCounts(false)
