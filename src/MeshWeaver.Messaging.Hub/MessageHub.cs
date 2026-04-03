@@ -556,15 +556,24 @@ public sealed class MessageHub : IMessageHub
     }
 
 
-    private async Task<IMessageDelivery> ExecuteRequest(
+    private Task<IMessageDelivery> ExecuteRequest(
         IMessageDelivery delivery,
         CancellationToken cancellationToken
     )
     {
         if (delivery.Message is not ExecutionRequest er)
-            return delivery;
-        await er.Action.Invoke(cancellationToken);
-        return delivery.Processed();
+            return Task.FromResult(delivery);
+        // Fire and forget — do NOT await. Awaiting blocks the hub's message pipeline,
+        // causing deadlock when the execution needs to receive messages back (e.g.,
+        // delegation completion responses). The hub stays responsive to incoming
+        // messages while the execution runs in the background.
+        _ = er.Action.Invoke(cancellationToken).ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                return er.ExceptionCallback(t.Exception!.InnerException ?? t.Exception);
+            return Task.CompletedTask;
+        }, TaskScheduler.Default);
+        return Task.FromResult(delivery.Processed());
     }
 
     private async Task<IMessageDelivery> HandleCallbacks(

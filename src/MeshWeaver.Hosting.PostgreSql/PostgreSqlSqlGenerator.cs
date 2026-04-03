@@ -262,7 +262,10 @@ public class PostgreSqlSqlGenerator
         string? userId = null,
         string tableName = "mesh_nodes")
     {
-        var (whereClause, parameters) = GenerateWhereClause(query, userId);
+        // Don't pass userId to GenerateWhereClause — access control is handled per-schema
+        // by BuildPerSchemaAccessClause with properly schema-qualified table names.
+        // GenerateWhereClause would add unqualified UEP references that resolve to public schema.
+        var (whereClause, parameters) = GenerateWhereClause(query);
 
         var parts = new List<string>();
         foreach (var schema in schemas)

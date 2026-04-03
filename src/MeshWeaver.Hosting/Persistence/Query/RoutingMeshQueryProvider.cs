@@ -102,26 +102,33 @@ internal class RoutingMeshQueryProvider : IMeshQueryProvider
             fanOutQuery += " is:main";
 
         // Cross-schema query: single UNION ALL across all searchable schemas (PostgreSQL only).
-        // Only for queries on mesh_nodes — satellite queries (source:activity, source:accessed)
-        // and satellite node types (Thread, ThreadMessage) require per-partition fan-out
-        // because the stored proc only searches mesh_nodes.
+        // Works for both mesh_nodes and satellite tables (threads, activities, etc.).
         var satelliteNodeType = parsed.ExtractNodeType() is { } nt
             && PartitionDefinition.NodeTypeToSuffix.ContainsKey(nt);
         var useCrossSchema = _crossSchemaProvider != null
-            && parsed.Source == QuerySource.Default
-            && !satelliteNodeType;
+            && parsed.Source == QuerySource.Default;
         if (useCrossSchema)
         {
             var schemas = await _crossSchemaProvider!.GetSearchableSchemasAsync(ct);
             var crossParsed = _parser.Parse(fanOutQuery);
             var userId = GetEffectiveUserId();
 
-            _logger?.LogDebug("Cross-schema query: {Query}, schemas=[{Schemas}], userId={UserId}",
-                fanOutQuery, string.Join(",", schemas), userId);
+            // Resolve satellite table name if applicable
+            string? satelliteTable = null;
+            if (satelliteNodeType && parsed.ExtractNodeType() is { } nodeType)
+            {
+                var suffix = PartitionDefinition.NodeTypeToSuffix[nodeType];
+                PartitionDefinition.StandardTableMappings.TryGetValue(suffix, out satelliteTable);
+            }
+
+            _logger?.LogDebug("Cross-schema query: {Query}, table={Table}, schemas=[{Schemas}], userId={UserId}",
+                fanOutQuery, satelliteTable ?? "mesh_nodes", string.Join(",", schemas), userId);
 
             var crossResults = new List<object>();
-            await foreach (var node in _crossSchemaProvider.QueryAcrossSchemasAsync(
-                crossParsed, options, schemas, userId, ct))
+            var crossStream = satelliteTable != null
+                ? _crossSchemaProvider.QueryAcrossSchemasAsync(crossParsed, options, schemas, satelliteTable, userId, ct)
+                : _crossSchemaProvider.QueryAcrossSchemasAsync(crossParsed, options, schemas, userId, ct);
+            await foreach (var node in crossStream)
             {
                 crossResults.Add(node);
             }
