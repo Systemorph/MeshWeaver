@@ -129,13 +129,23 @@ public static class UserNodeType
 
         public async Task<bool> HasAccessAsync(NodeValidationContext context, string? userId, CancellationToken ct = default)
         {
-            // Read: NodeType definition ("User") is always readable.
-            // Instance paths delegate to ISecurityService — each user is admin of their own partition.
+            // Read:
+            // - NodeType definition ("User"): always readable
+            // - Direct user nodes ("User/{id}"): publicly readable (any authenticated caller)
+            // - Children (threads, activities, etc.): delegate to ISecurityService
             if (context.Operation == NodeOperation.Read)
             {
                 var nodePath = context.Node.Path;
-                if ("User".Equals(nodePath, StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(nodePath))
+                    return false;
+                // NodeType definition
+                if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
                     return true;
+                // Direct user nodes are publicly readable
+                if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
+                    && !nodePath["User/".Length..].Contains('/'))
+                    return !string.IsNullOrEmpty(userId);
+                // Children: delegate to standard permission checks
                 if (string.IsNullOrEmpty(userId))
                     return false;
                 return await securityService.HasPermissionAsync(nodePath, userId, Permission.Read, ct);
