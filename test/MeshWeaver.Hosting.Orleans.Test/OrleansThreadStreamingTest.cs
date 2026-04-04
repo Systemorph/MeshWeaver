@@ -13,6 +13,7 @@ using FluentAssertions.Extensions;
 using MeshWeaver.AI;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
+using MeshWeaver.Layout;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
@@ -311,27 +312,21 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response message: {responseMsgId}");
 
-        // 4. Poll the response message for tool calls — log every state change
-        Output.WriteLine("4. Polling response message for delegation tool call...");
-        ThreadMessage? msgWithDelegation = null;
-        for (var i = 0; i < 50; i++)
-        {
-            var msg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (msg != null && (i % 3 == 0 || msg.ToolCalls.Count > 0))
+        // 4. Subscribe to response message stream — wait for tool call with DelegationPath
+        Output.WriteLine("4. Subscribing to response message stream for delegation tool call...");
+        var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
+        var msgWithDelegation = await responseStream
+            .Select(nodes =>
             {
-                Output.WriteLine($"  [POLL {i}] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, " +
-                    $"delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
-                foreach (var tc in msg.ToolCalls)
-                    Output.WriteLine($"    - {tc.Name}: result={tc.Result != null}, delegation={tc.DelegationPath ?? "(none)"}");
-            }
-            if (msg?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
-            {
-                msgWithDelegation = msg;
-                break;
-            }
-            await Task.Delay(400, ct);
-        }
-        msgWithDelegation.Should().NotBeNull("response should have a delegation tool call with DelegationPath");
+                var msg = nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage;
+                if (msg != null)
+                    Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
+                return msg;
+            })
+            .Where(m => m?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
+            .Timeout(20.Seconds())
+            .FirstAsync()
+            .ToTask(ct);
 
         var delegation = msgWithDelegation!.ToolCalls.First(c => !string.IsNullOrEmpty(c.DelegationPath));
         Output.WriteLine($"5. DELEGATION APPEARED: {delegation.Name}, path={delegation.DelegationPath}");
@@ -569,11 +564,30 @@ internal class ToolCallingFakeChatClientFactory : IChatClientFactory
             ? new DelegatingFakeChatClient(config.Id)
             : new ToolCallingFakeChatClient();
 
-        return new(chatClient: client,
+        var agent = new ChatClientAgent(chatClient: client,
             instructions: config.Instructions ?? "Test assistant.",
             name: config.Id, description: config.Description ?? config.Id,
             tools: [AIFunctionFactory.Create((string param) => $"Tool executed with {param}", "test_tool", "A test tool")],
             loggerFactory: null, services: null);
+
+        // Wrap with function calling middleware — same as production ChatClientAgentFactory
+        return agent.AsBuilder()
+            .Use((AIAgent _, FunctionInvocationContext ctx,
+                Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
+                CancellationToken ct) =>
+            {
+                chat.ForwardToolCall?.Invoke(new ToolCallEntry
+                {
+                    Name = ctx.Function.Name,
+                    DisplayName = ctx.Function.Name,
+                    Arguments = ctx.Arguments?.Count > 0
+                        ? string.Join(", ", ctx.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                        : null,
+                    Timestamp = DateTime.UtcNow
+                });
+                return next(ctx, ct);
+            })
+            .Build() as ChatClientAgent ?? agent;
     }
 
     public Task<ChatClientAgent> CreateAgentAsync(
