@@ -290,7 +290,6 @@ internal class DelegationTestAgentFactory(IMessageHub hub) : ChatClientAgentFact
 /// </summary>
 internal class DelegatingTestChatClient : IChatClient
 {
-    private int _callCount;
     public ChatClientMetadata Metadata => new("DelegatingTest");
 
     public Task<ChatResponse> GetResponseAsync(
