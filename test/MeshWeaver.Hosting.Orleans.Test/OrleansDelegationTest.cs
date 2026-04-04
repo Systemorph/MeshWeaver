@@ -39,6 +39,11 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// This tests the real delegation flow: agent calls delegate_to_agent →
 /// sub-thread created → sub-agent executes → result propagates back.
 /// </summary>
+/// <summary>
+/// Delegation tests using per-class TestCluster because DelegationTestAgentFactory
+/// extends ChatClientAgentFactory which needs the grain's IMessageHub at construction time.
+/// The SwappableChatClientFactory pattern doesn't work for ChatClientAgentFactory subclasses.
+/// </summary>
 public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
 {
     private TestCluster Cluster { get; set; } = null!;
@@ -48,7 +53,7 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     {
         await base.InitializeAsync();
         var builder = new TestClusterBuilder();
-        builder.AddSiloBuilderConfigurator<DelegationTestSiloConfigurator>();
+        builder.AddSiloBuilderConfigurator<DelegationProductionSiloConfigurator>();
         builder.AddClientBuilderConfigurator<TestClientConfigurator>();
         Cluster = builder.Build();
         await Cluster.DeployAsync();
@@ -61,10 +66,10 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
         await base.DisposeAsync();
     }
 
-    private async Task<IMessageHub> GetClientAsync()
+    private async Task<IMessageHub> GetClientAsync(string id = "delegation")
     {
         var client = ClientMesh.ServiceProvider.CreateMessageHub(
-            new Address("client", "delegation-test"),
+            new Address("client", id),
             config =>
             {
                 config.TypeRegistry.AddAITypes();
@@ -118,7 +123,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     public async Task Delegation_ToolCallsAppear_WithDelegationPath()
     {
         var ct = new CancellationTokenSource(25.Seconds()).Token;
-        var client = await GetClientAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..6];
+        var client = await GetClientAsync($"del-{suffix}");
         var workspace = client.GetWorkspace();
 
         // 1. Create thread
@@ -203,7 +209,8 @@ public class OrleansDelegationTest(ITestOutputHelper output) : TestBase(output)
     public async Task Resubmit_AfterDelegation_DoesNotDeadlock()
     {
         var ct = new CancellationTokenSource(25.Seconds()).Token;
-        var client = await GetClientAsync();
+        var suffix = Guid.NewGuid().ToString("N")[..6];
+        var client = await GetClientAsync($"del-{suffix}");
         var workspace = client.GetWorkspace();
 
         // 1. Create thread and submit
@@ -369,7 +376,11 @@ internal class SimpleTestChatClient(string response) : IChatClient
     public void Dispose() { }
 }
 
-public class DelegationTestSiloConfigurator : ISiloConfigurator, IHostConfigurator
+/// <summary>
+/// Production-like silo with DelegationTestAgentFactory extending ChatClientAgentFactory.
+/// This gives delegation tools, MeshPlugin, and function calling middleware.
+/// </summary>
+public class DelegationProductionSiloConfigurator : ISiloConfigurator, IHostConfigurator
 {
     public void Configure(ISiloBuilder siloBuilder)
     {
@@ -385,7 +396,6 @@ public class DelegationTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
             .AddMeshNodes(
                 new MeshNode("Roland", "User") { Name = "Roland", NodeType = "User" })
             .AddMeshNodes(PublicEditorAccess())
-            // Register factory via DI — ChatClientAgentFactory resolves from hub ServiceProvider
             .ConfigureServices(services =>
                 services.AddSingleton<IChatClientFactory, DelegationTestAgentFactory>())
             .ConfigureDefaultNodeHub(config => config.AddDefaultLayoutAreas());
@@ -411,3 +421,4 @@ public class DelegationTestSiloConfigurator : ISiloConfigurator, IHostConfigurat
         ];
     }
 }
+
