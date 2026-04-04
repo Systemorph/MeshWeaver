@@ -31,6 +31,7 @@ public static class ThreadMessageLayoutAreas
             .AddLayout(layout => layout
                 .WithDefaultArea(ThreadMessageNodeType.OverviewArea)
                 .WithView(ThreadMessageNodeType.OverviewArea, Overview)
+                .WithView("Edit", EditArea)
                 .WithView("Streaming", StreamingCompact)
                 .WithView(MeshNodeLayoutAreas.SettingsArea, SettingsLayoutArea.Settings)
                 .WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)
@@ -117,7 +118,7 @@ public static class ThreadMessageLayoutAreas
             hub.Address, msg.Text?.Length ?? -1, msg.ToolCalls?.Count ?? -1);
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
-            var current = node.Content as ThreadMessage ?? new ThreadMessage { Id = node.Id, Role = "assistant", Text = "" };
+            var current = node.Content as ThreadMessage ?? new ThreadMessage { Role = "assistant", Text = "" };
             return node with
             {
                 Content = current with
@@ -126,8 +127,7 @@ public static class ThreadMessageLayoutAreas
                     ToolCalls = msg.ToolCalls ?? current.ToolCalls,
                     UpdatedNodes = msg.UpdatedNodes ?? current.UpdatedNodes,
                     AgentName = msg.AgentName ?? current.AgentName,
-                    ModelName = msg.ModelName ?? current.ModelName,
-                    DelegationPath = msg.DelegationPath ?? current.DelegationPath
+                    ModelName = msg.ModelName ?? current.ModelName
                 }
             };
         });
@@ -138,6 +138,8 @@ public static class ThreadMessageLayoutAreas
     /// Renders the Overview area for a ThreadMessage node.
     /// Emits control once from first node emission. Text and tool calls are data-bound
     /// via JsonPointerReference — updates flow through host.UpdateData, no control rebuilds.
+    /// Editing is handled purely on the Blazor UI side (ThreadMessageBubbleView toggles
+    /// between readonly and Edit LayoutArea).
     /// </summary>
     public static IObservable<UiControl?> Overview(LayoutAreaHost host, RenderingContext _)
     {
@@ -176,6 +178,78 @@ public static class ThreadMessageLayoutAreas
     }
 
     /// <summary>
+    /// Renders the Edit area for a ThreadMessage node.
+    /// Shows a MarkdownEditorControl with the current text, plus Submit and Cancel buttons.
+    /// Submit posts ResubmitMessageRequest (re-executes with edited text).
+    /// Cancel posts EditMessageRequest (toggles EditingMessageId off).
+    /// </summary>
+    public static IObservable<UiControl?> EditArea(LayoutAreaHost host, RenderingContext _)
+    {
+        var hubPath = host.Hub.Address.ToString();
+        var lastSlash = hubPath.LastIndexOf('/');
+        var threadPath = lastSlash > 0 ? hubPath[..lastSlash] : hubPath;
+        var messageId = lastSlash > 0 ? hubPath[(lastSlash + 1)..] : hubPath;
+
+        var syncStream = host.Workspace.GetStream(new MeshNodeReference());
+
+        return syncStream!
+            .Select(change => change.Value?.Content as ThreadMessage)
+            .Where(m => m != null)
+            .Take(1)
+            .Select(msg =>
+            {
+                const string textDataId = "editText";
+                host.UpdateData(textDataId, msg!.Text ?? "");
+
+                var editor = new MarkdownEditorControl()
+                    { Value = new JsonPointerReference(LayoutAreaReference.GetDataPointer(textDataId)) }
+                    .WithDocumentId($"{threadPath}/{messageId}")
+                    .WithHeight("120px")
+                    .WithMaxHeight("200px")
+                    .WithPlaceholder("Edit your message...");
+
+                var buttonRow = Controls.Stack
+                    .WithOrientation(Orientation.Horizontal)
+                    .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")
+                    .WithView(Controls.Button("Cancel")
+                        .WithAppearance(Appearance.Neutral)
+                        .WithClickAction(_ =>
+                        {
+                            // Toggle EditingMessageId off (same ID → cancel)
+                            host.Hub.Post(new EditMessageRequest
+                            {
+                                ThreadPath = threadPath,
+                                MessageId = messageId,
+                                MessageText = msg.Text ?? ""
+                            }, o => o.WithTarget(new Address(threadPath)));
+                        }))
+                    .WithView(Controls.Button("Submit")
+                        .WithAppearance(Appearance.Accent)
+                        .WithIconStart(FluentIcons.Send(IconSize.Size16))
+                        .WithClickAction(actx =>
+                        {
+                            actx.Host.Stream.GetDataStream<string>(textDataId).Take(1).Subscribe(editedText =>
+                            {
+                                actx.Hub.Post(new ResubmitMessageRequest
+                                {
+                                    ThreadPath = threadPath,
+                                    MessageId = messageId,
+                                    UserMessageText = editedText ?? msg.Text ?? ""
+                                }, o => o.WithTarget(new Address(threadPath)));
+                            });
+                        }));
+
+                return (UiControl?)Controls.Stack
+                    .WithStyle("max-width: 100%; padding: 12px 16px; border-radius: 12px; border-bottom-right-radius: 4px; " +
+                                "background: var(--neutral-layer-4); border-inline-end: 3px solid var(--accent-fill-rest); " +
+                                "margin-bottom: 12px;")
+                    .WithView(Controls.Html("<div style=\"font-weight: 600; font-size: 0.85rem; color: var(--accent-fill-rest); margin-bottom: 8px;\">Edit message</div>"))
+                    .WithView(editor)
+                    .WithView(buttonRow);
+            });
+    }
+
+    /// <summary>
     /// Builds the Overview for messages. Role/author are static from the initial message.
     /// Text and tool calls are data-bound via JsonPointerReference.
     /// </summary>
@@ -206,8 +280,6 @@ public static class ThreadMessageLayoutAreas
 
         if (isUser)
         {
-            // Edit and Resubmit are handled client-side in the Blazor ThreadMessageBubbleView
-            // (MessageId + ThreadPath are set on the bubble control)
             actionRow = actionRow
                 .WithView(Controls.Button("")
                     .WithIconStart(FluentIcons.ArrowSync(IconSize.Size16))
@@ -355,15 +427,17 @@ public static class ThreadMessageLayoutAreas
             .WithView(Controls.Button("Submit")
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.Send(IconSize.Size16))
-                .WithClickAction(async actx =>
+                .WithClickAction(actx =>
                 {
-                    var editedText = await actx.Host.Stream.GetDataStream<string>(textDataId).FirstAsync();
-                    actx.Hub.Post(new ResubmitMessageRequest
+                    actx.Host.Stream.GetDataStream<string>(textDataId).Take(1).Subscribe(editedText =>
                     {
-                        ThreadPath = threadPath,
-                        MessageId = messageId,
-                        UserMessageText = editedText ?? msg.Text ?? ""
-                    }, o => o.WithTarget(new Address(threadPath)));
+                        actx.Hub.Post(new ResubmitMessageRequest
+                        {
+                            ThreadPath = threadPath,
+                            MessageId = messageId,
+                            UserMessageText = editedText ?? msg.Text ?? ""
+                        }, o => o.WithTarget(new Address(threadPath)));
+                    });
                 }));
 
         return Controls.Stack
@@ -448,16 +522,6 @@ public static class ThreadMessageLayoutAreas
             .WithView(BuildReferenceChips(message.Text))
             .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
 
-        // Add delegation link if present
-        if (!string.IsNullOrEmpty(message.DelegationPath))
-        {
-            bubble = bubble.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
-                .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}")));
-        }
-
         return Controls.Stack
             .WithWidth("100%")
             .WithStyle("align-items: flex-end; margin-bottom: 12px;")
@@ -527,16 +591,6 @@ public static class ThreadMessageLayoutAreas
             .WithView(Controls.Html(subtitle))
             .WithView(contentView)
             .WithView(Controls.Html($"<div style=\"font-size: 0.75rem; color: var(--neutral-foreground-hint); margin-top: 4px;\">{message.Timestamp.Humanize()}</div>"));
-
-        // Add delegation link if present
-        if (!string.IsNullOrEmpty(message.DelegationPath))
-        {
-            bubble = bubble.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithStyle("margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--neutral-stroke-rest);")
-                .WithView(Controls.Icon(FluentIcons.ArrowRight(IconSize.Size16)).WithStyle("font-size: 14px;"))
-                .WithView(new NavLinkControl("View delegation", null, $"/{message.DelegationPath}")));
-        }
 
         return Controls.Stack
             .WithWidth("100%")

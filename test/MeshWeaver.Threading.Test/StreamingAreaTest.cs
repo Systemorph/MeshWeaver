@@ -89,7 +89,6 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             MainNode = "User/Roland",
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "Working on it...",
                 Type = ThreadMessageType.AgentResponse,
@@ -144,7 +143,6 @@ public class StreamingAreaTest(ITestOutputHelper output) : MonolithMeshTestBase(
             MainNode = "User/Roland",
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "Done.",
                 Type = ThreadMessageType.AgentResponse

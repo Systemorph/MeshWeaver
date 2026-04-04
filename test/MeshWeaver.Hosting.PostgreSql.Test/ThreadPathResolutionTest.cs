@@ -92,7 +92,7 @@ public class ThreadPathResolutionTest
         await adapter.WriteAsync(new MeshNode("msg1", "TestOrg/_Thread/my-thread")
         {
             Name = "Message 1", NodeType = "ThreadMessage", MainNode = "TestOrg",
-            Content = new MeshWeaver.AI.ThreadMessage { Id = "msg1", Role = "user", Text = "Hello" }
+            Content = new MeshWeaver.AI.ThreadMessage { Role = "user", Text = "Hello" }
         }, _options, ct);
 
         // Verify message is found
@@ -128,7 +128,7 @@ public class ThreadPathResolutionTest
         await adapter.WriteAsync(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
         {
             Name = "Response", NodeType = "ThreadMessage", MainNode = "TestOrg",
-            Content = new MeshWeaver.AI.ThreadMessage { Id = "msg1", Role = "assistant", Text = "..." }
+            Content = new MeshWeaver.AI.ThreadMessage { Role = "assistant", Text = "..." }
         }, _options, ct);
 
         // Sub-thread: 6 segments deep
@@ -172,7 +172,7 @@ public class ThreadPathResolutionTest
         await adapter.WriteAsync(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
         {
             Name = "Response", NodeType = "ThreadMessage", MainNode = "TestOrg",
-            Content = new MeshWeaver.AI.ThreadMessage { Id = "msg1", Role = "assistant", Text = "..." }
+            Content = new MeshWeaver.AI.ThreadMessage { Role = "assistant", Text = "..." }
         }, _options, ct);
 
         await adapter.WriteAsync(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")
@@ -216,7 +216,7 @@ public class ThreadPathResolutionTest
         await adapter.WriteAsync(new MeshNode("msg1", "TestOrg/_Thread/parent-thread")
         {
             Name = "Response", NodeType = "ThreadMessage", MainNode = "TestOrg",
-            Content = new MeshWeaver.AI.ThreadMessage { Id = "msg1", Role = "assistant", Text = "..." }
+            Content = new MeshWeaver.AI.ThreadMessage { Role = "assistant", Text = "..." }
         }, _options, ct);
 
         await adapter.WriteAsync(new MeshNode("sub-thread", "TestOrg/_Thread/parent-thread/msg1")

@@ -76,7 +76,6 @@ public class MeshDataSourceThreadManager : IThreadManager
 
         var threadMessage = new ThreadMessage
         {
-            Id = messageId,
             Role = message.Role.Value,
             AuthorName = message.AuthorName,
             Text = message.Text ?? string.Empty,

@@ -61,7 +61,6 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "Delegating to Worker...",
                 Type = ThreadMessageType.AgentResponse,
@@ -126,7 +125,6 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "Working on it...",
                 Type = ThreadMessageType.AgentResponse,
@@ -159,7 +157,6 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
             {
-                Id = inputId,
                 Role = "user",
                 Text = "Research the topic of reinsurance pricing",
                 Type = ThreadMessageType.ExecutedInput
@@ -172,7 +169,6 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
             {
-                Id = outputId,
                 Role = "assistant",
                 Text = "Found 3 relevant documents about reinsurance pricing.",
                 Type = ThreadMessageType.AgentResponse,
@@ -334,12 +330,10 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             NodeType = ThreadMessageNodeType.NodeType,
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "Here's the plan. Delegating research...",
                 Type = ThreadMessageType.AgentResponse,
-                AgentName = "Orchestrator",
-                DelegationPath = $"{threadPath}/{responseMsgId}/research-task-xyz1"
+                AgentName = "Orchestrator"
             }
         }, ct);
 
@@ -363,10 +357,8 @@ public class DelegationSubThreadTest(ITestOutputHelper output) : MonolithMeshTes
             .ToListAsync(ct);
         subThreads.Should().ContainSingle();
 
-        // Verify: Response message has DelegationPath pointing to sub-thread
+        // Verify: Sub-thread is accessible under response message namespace
         var respNode = await MeshQuery.QueryAsync<MeshNode>($"path:{threadPath}/{responseMsgId}").FirstOrDefaultAsync(ct);
-        var respMsg = respNode?.Content as ThreadMessage;
-        respMsg.Should().NotBeNull();
-        respMsg!.DelegationPath.Should().Contain("research-task-xyz1");
+        respNode.Should().NotBeNull();
     }
 }

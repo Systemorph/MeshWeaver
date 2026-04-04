@@ -160,11 +160,6 @@ public static class ThreadMessageExtensions
 public record ThreadMessage
 {
     /// <summary>
-    /// Unique identifier for this message.
-    /// </summary>
-    public required string Id { get; init; }
-
-    /// <summary>
     /// The role of the message sender: "user", "assistant", or "system".
     /// </summary>
     public required string Role { get; init; }
@@ -183,11 +178,6 @@ public record ThreadMessage
     /// When the message was created.
     /// </summary>
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
-
-    /// <summary>
-    /// If this message triggered a delegation, path to the sub-thread node.
-    /// </summary>
-    public string? DelegationPath { get; init; }
 
     /// <summary>
     /// The type of this message for rendering purposes.

@@ -20,10 +20,9 @@
 
     @if (isEditing)
     {
-        <textarea @bind="editText" class="thread-msg-edit-textarea" rows="6"></textarea>
+        <LayoutAreaView ViewModel="@(new LayoutAreaControl($"{ViewModel.ThreadPath}/{ViewModel.MessageId}", new LayoutAreaReference("Edit")))" Stream="@Stream" Area="@($"{Area}/edit")" />
         <div class="thread-msg-edit-actions">
-            <button class="thread-msg-edit-cancel" @onclick="CancelEdit">Cancel</button>
-            <button class="thread-msg-edit-submit" @onclick="SubmitEdit">Submit</button>
+            <button class="thread-msg-edit-cancel" @onclick="CancelEdit">Done</button>
         </div>
     }
     else
@@ -318,49 +317,19 @@
         40% { opacity: 1; }
     }
 
-    .thread-msg-edit-textarea {
-        width: 100%;
-        min-height: 100px;
-        padding: 8px 12px;
-        border: 1px solid var(--accent-fill-rest);
-        border-radius: 6px;
-        background: var(--neutral-layer-1);
-        color: var(--neutral-foreground-rest);
-        font-family: inherit;
-        font-size: 0.9rem;
-        resize: vertical;
-        outline: none;
-    }
-    .thread-msg-edit-textarea:focus {
-        border-color: var(--accent-fill-hover);
-        box-shadow: 0 0 0 1px var(--accent-fill-hover);
-    }
     .thread-msg-edit-actions {
         display: flex;
-        gap: 8px;
         justify-content: flex-end;
         margin-top: 8px;
     }
-    .thread-msg-edit-cancel,
-    .thread-msg-edit-submit {
+    .thread-msg-edit-cancel {
         padding: 6px 20px;
         border-radius: 6px;
         cursor: pointer;
         font-size: 0.85rem;
-    }
-    .thread-msg-edit-cancel {
         border: 1px solid var(--neutral-stroke-rest);
         background: transparent;
         color: var(--neutral-foreground-rest);
-    }
-    .thread-msg-edit-submit {
-        border: none;
-        background: var(--accent-fill-rest);
-        color: white;
-        font-weight: 600;
-    }
-    .thread-msg-edit-submit:hover {
-        background: var(--accent-fill-hover);
     }
     .thread-msg-inline-actions {
         display: flex;

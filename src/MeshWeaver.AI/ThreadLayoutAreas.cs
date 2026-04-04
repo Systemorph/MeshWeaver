@@ -459,41 +459,32 @@ public static class ThreadLayoutAreas
 
     /// <summary>
     /// Handles DeleteFromMessageRequest — truncates Messages from the given message onwards.
+    /// Uses workspace.UpdateMeshNode (non-blocking, no stream subscription).
     /// </summary>
     private static IMessageDelivery HandleDeleteFromMessage(
         IMessageHub hub,
         IMessageDelivery<DeleteFromMessageRequest> delivery)
     {
         var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("HandleDeleteFromMessage: threadPath={ThreadPath}, messageId={MessageId}",
-            request.ThreadPath, request.MessageId);
-
-        hub.InvokeAsync(() =>
+        // Safe: handler runs on grain scheduler, workspace.UpdateMeshNode is inline.
+        hub.GetWorkspace().UpdateMeshNode(node =>
         {
-            hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+            var thread = node.Content as MeshThread ?? new MeshThread();
+            var msgIndex = thread.Messages.IndexOf(request.MessageId);
+            if (msgIndex < 0) return node;
+            return node with
             {
-                var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-                var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-
-                var msgList = currentContent.Messages.ToList();
-                var msgIndex = msgList.IndexOf(request.MessageId);
-                if (msgIndex < 0) return;
-
-                var updatedMsgList = msgList.Take(msgIndex).ToImmutableList();
-                var newContent = currentContent with { Messages = updatedMsgList };
-                var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
-                hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-            });
+                Content = thread with { Messages = thread.Messages.Take(msgIndex).ToImmutableList() }
+            };
         });
-
         return delivery.Processed();
     }
 
     /// <summary>
     /// Handles ResubmitMessageRequest — keeps the user message, removes the response
     /// (and anything after it), then creates only a new output cell and starts execution.
+    /// Uses meshService.CreateNode (observable) + workspace.UpdateMeshNode (non-blocking).
+    /// No stream subscription — avoids hub scheduler deadlock.
     /// </summary>
     private static IMessageDelivery HandleResubmitMessage(
         IMessageHub hub,
@@ -501,138 +492,78 @@ public static class ThreadLayoutAreas
     {
         var request = delivery.Message;
         var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("HandleResubmitMessage: threadPath={ThreadPath}, messageId={MessageId}",
-            request.ThreadPath, request.MessageId);
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
 
-        var workspace = hub.GetWorkspace();
-        workspace.GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
+        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
+        var responsePath = $"{request.ThreadPath}/{responseMsgId}";
+
+        // Update user message text if changed (Post to the message hub — non-blocking)
+        hub.Post(new UpdateThreadMessageContent { Text = request.UserMessageText },
+            o => o.WithTarget(new Address($"{request.ThreadPath}/{request.MessageId}")));
+
+        // Create response cell — fire and forget (no callback needed)
+        meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
         {
-            var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-            var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-
-            var msgIndex = currentContent.Messages.IndexOf(request.MessageId);
-            if (msgIndex < 0) return;
-
-            // Keep the user message (msgIndex), remove everything after it
-            var updatedMsgList = currentContent.Messages.Take(msgIndex + 1).ToImmutableList();
-
-            // Create new response cell only
-            var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-            var responsePath = $"{request.ThreadPath}/{responseMsgId}";
-            var mainEntity = threadNode?.MainNode ?? request.ThreadPath;
-            var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-            meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
+            NodeType = ThreadMessageNodeType.NodeType,
+            Content = new ThreadMessage
             {
-                NodeType = ThreadMessageNodeType.NodeType,
-                MainNode = mainEntity,
-                Content = new ThreadMessage
+                Role = "assistant",
+                Text = "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse
+            }
+        }).Subscribe(
+            _ => { },
+            ex => logger.LogError(ex, "HandleResubmitMessage: CreateNode failed for {ThreadPath}", request.ThreadPath));
+
+        // Update thread state — runs on grain scheduler (handler body), safe.
+        // Don't wait for CreateNode: execution will find the node by the time it streams.
+        hub.GetWorkspace().UpdateMeshNode(node =>
+        {
+            var thread = node.Content as MeshThread ?? new MeshThread();
+            var msgIndex = thread.Messages.IndexOf(request.MessageId);
+            if (msgIndex < 0) return node;
+
+            return node with
+            {
+                Content = thread with
                 {
-                    Id = responseMsgId,
-                    Role = "assistant",
-                    Text = "",
-                    Timestamp = DateTime.UtcNow,
-                    Type = ThreadMessageType.AgentResponse
+                    Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList().Add(responseMsgId),
+                    IsExecuting = true,
+                    ActiveMessageId = responseMsgId,
+                    ExecutionStatus = null,
+                    TokensUsed = 0,
+                    ExecutionStartedAt = DateTime.UtcNow,
+                    StreamingText = null,
+                    StreamingToolCalls = null
                 }
-            }).Subscribe(_ =>
-            {
-                // Update thread: keep user msg, add new response, start execution
-                workspace.UpdateMeshNode(node =>
-                {
-                    var thread = node.Content as MeshThread ?? new MeshThread();
-                    return node with
-                    {
-                        Content = thread with
-                        {
-                            Messages = updatedMsgList.Add(responseMsgId),
-                            IsExecuting = true,
-                            ActiveMessageId = responseMsgId,
-                            ExecutionStatus = null,
-                            TokensUsed = 0,
-                            ExecutionStartedAt = DateTime.UtcNow,
-                            StreamingText = null,
-                            StreamingToolCalls = null
-                        }
-                    };
-                });
-
-                // Start execution on hosted hub
-                var executionHub = hub.GetHostedHub(
-                    new Address($"{hub.Address}/_Exec"),
-                    config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-                    HostedHubCreation.Always);
-
-                executionHub!.Post(new SubmitMessageRequest
-                {
-                    ThreadPath = request.ThreadPath,
-                    UserMessageText = request.UserMessageText,
-                    ResponsePath = responsePath,
-                    ContextPath = mainEntity
-                }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
-            },
-            ex => logger.LogError(ex, "HandleResubmitMessage: failed to create response cell for {ThreadPath}", request.ThreadPath));
+            };
         });
+
+        // Start execution on hosted hub
+        var executionHub = hub.GetHostedHub(
+            new Address($"{hub.Address}/_Exec"),
+            config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
+            HostedHubCreation.Always);
+
+        executionHub!.Post(new SubmitMessageRequest
+        {
+            ThreadPath = request.ThreadPath,
+            UserMessageText = request.UserMessageText,
+            ResponsePath = responsePath,
+            ContextPath = request.ThreadPath
+        }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
 
         return delivery.Processed();
     }
 
     /// <summary>
-    /// Handles EditMessageRequest — truncates Messages from the given message onwards,
-    /// creates a new EditingPrompt message node, and appends it to Messages.
+    /// Handles EditMessageRequest — no-op on the server side.
+    /// Editing is handled purely in the UI: the Overview layout area toggles between
+    /// message view and editor view via a data section flag.
     /// </summary>
     private static IMessageDelivery HandleEditMessage(
         IMessageHub hub,
         IMessageDelivery<EditMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        logger.LogInformation("HandleEditMessage: threadPath={ThreadPath}, messageId={MessageId}",
-            request.ThreadPath, request.MessageId);
-
-        var editMsgId = Guid.NewGuid().ToString("N")[..8];
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        // Create editing prompt node first
-        meshService.CreateNodeAsync(new MeshNode(editMsgId, request.ThreadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Id = editMsgId,
-                Role = "user",
-                Text = request.MessageText,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.EditingPrompt
-            }
-        }).ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-            {
-                logger.LogError(t.Exception, "HandleEditMessage: node creation FAILED for {ThreadPath}", request.ThreadPath);
-                return;
-            }
-
-            // Update Messages: truncate from the clicked message, append editing prompt
-            hub.InvokeAsync(() =>
-            {
-                hub.ServiceProvider.GetRequiredService<IWorkspace>()
-                    .GetStream<MeshNode>()?.Take(1).Subscribe(nodes =>
-                {
-                    var threadNode = nodes?.FirstOrDefault(n => n.Path == request.ThreadPath);
-                    var currentContent = threadNode?.Content as MeshThread ?? new MeshThread();
-
-                    var msgList = currentContent.Messages.ToList();
-                    var msgIndex = msgList.IndexOf(request.MessageId);
-                    if (msgIndex < 0) return;
-
-                    var updatedMsgList = msgList.Take(msgIndex).Concat([editMsgId]).ToImmutableList();
-                    var newContent = currentContent with { Messages = updatedMsgList };
-                    var updatedNode = (threadNode ?? new MeshNode(request.ThreadPath)) with { Content = newContent };
-                    hub.Post(new DataChangeRequest { Updates = [updatedNode] });
-                });
-            });
-        });
-
-        return delivery.Processed();
-    }
+        => delivery.Processed();
 }

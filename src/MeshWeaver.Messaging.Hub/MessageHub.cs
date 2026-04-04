@@ -562,7 +562,7 @@ public sealed class MessageHub : IMessageHub
     )
     {
         if (delivery.Message is not ExecutionRequest er)
-            return Task.FromResult(delivery);
+            return delivery;
         await er.Action.Invoke(cancellationToken);
         return delivery.Processed();
     }

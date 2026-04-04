@@ -21,7 +21,6 @@ public class StreamingRecursionTest
         // A ThreadMessage with delegation tool calls (simulates streaming state)
         var msg = new ThreadMessage
         {
-            Id = "resp1",
             Role = "assistant",
             Text = "Delegating...",
             ToolCalls =
@@ -74,7 +73,6 @@ public class StreamingRecursionTest
         // Verify tool calls use ImmutableList (no mutable collections)
         var msg = new ThreadMessage
         {
-            Id = "test",
             Role = "assistant",
             Text = "",
             ToolCalls = ImmutableList<ToolCallEntry>.Empty

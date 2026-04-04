@@ -14,35 +14,15 @@ public partial class ThreadMessageBubbleView : BlazorView<ThreadMessageBubbleCon
     private string? messageText;
     private IReadOnlyList<ToolCallEntry>? toolCalls;
     private bool isEditing;
-    private string? editText;
 
     private bool HasToolCalls => toolCalls is { Count: > 0 };
 
     private MarkdownControl MarkdownVm => new MarkdownControl(messageText ?? "")
         .WithStyle("background: transparent;");
 
-    private void StartEdit()
-    {
-        editText = messageText;
-        isEditing = true;
-    }
+    private void StartEdit() => isEditing = true;
 
-    private void CancelEdit()
-    {
-        isEditing = false;
-    }
-
-    private void SubmitEdit()
-    {
-        if (!CanEdit) return;
-        isEditing = false;
-        Hub.Post(new ResubmitMessageRequest
-        {
-            ThreadPath = ViewModel.ThreadPath!,
-            MessageId = ViewModel.MessageId!,
-            UserMessageText = editText ?? messageText ?? ""
-        }, o => o.WithTarget(new Address(ViewModel.ThreadPath!)));
-    }
+    private void CancelEdit() => isEditing = false;
 
     protected override void BindData()
     {

@@ -377,7 +377,13 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                                         }
                                         else
                                         {
-                                            // ExecutionCompleted/Failed/Cancelled — resolve delegation
+                                            // ExecutionCompleted/Failed/Cancelled — resolve delegation.
+                                            // Forward sub-thread's node changes to parent for aggregation.
+                                            if (msg.UpdatedNodes is { Count: > 0 })
+                                            {
+                                                foreach (var entry in msg.UpdatedNodes)
+                                                    chat.ForwardNodeChange?.Invoke(entry);
+                                            }
                                             tcs.TrySetResult(new DelegationResult
                                             {
                                                 AgentName = targetId, Task = task,

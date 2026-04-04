@@ -14,5 +14,4 @@ public record UpdateThreadMessageContent
     public ImmutableList<NodeChangeEntry>? UpdatedNodes { get; init; }
     public string? AgentName { get; init; }
     public string? ModelName { get; init; }
-    public string? DelegationPath { get; init; }
 }
