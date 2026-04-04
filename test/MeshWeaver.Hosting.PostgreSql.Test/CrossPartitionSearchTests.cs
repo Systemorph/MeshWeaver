@@ -19,10 +19,10 @@ namespace MeshWeaver.Hosting.PostgreSql.Test;
 
 /// <summary>
 /// Tests cross-partition search with multiple organizations on PostgreSQL.
-/// Sets up 3 orgs (ACME, PartnerRe, Contoso) each in their own schema,
+/// Sets up 3 orgs (ACME, FutuRe, Contoso) each in their own schema,
 /// with threads and activity, then verifies global queries find them all.
 ///
-/// This reproduces the production scenario where PartnerRe wasn't
+/// This reproduces the production scenario where FutuRe wasn't
 /// visible in global search.
 /// </summary>
 [Collection("PostgreSql")]
@@ -56,7 +56,7 @@ public class CrossPartitionSearchTests
         var adminAdapter = _fixture.StorageAdapter;
 
         // Create 3 org schemas
-        var orgNames = new[] { "ACME", "PartnerRe", "Contoso" };
+        var orgNames = new[] { "ACME", "FutuRe", "Contoso" };
         var partitions = new Dictionary<string, (NpgsqlDataSource Ds, PostgreSqlStorageAdapter Adapter)>();
 
         foreach (var org in orgNames)
@@ -245,7 +245,7 @@ public class CrossPartitionSearchTests
         // All 3 orgs should have a matching "Annual Report"
         allMatches.Should().HaveCount(3, "each org has an 'Annual Report' document");
         allMatches.Select(n => n.Name).Should().Contain("ACME Annual Report");
-        allMatches.Select(n => n.Name).Should().Contain("PartnerRe Annual Report");
+        allMatches.Select(n => n.Name).Should().Contain("FutuRe Annual Report");
         allMatches.Select(n => n.Name).Should().Contain("Contoso Annual Report");
     }
 
@@ -295,7 +295,7 @@ public class CrossPartitionSearchTests
 
         results.Should().NotBeEmpty("stored proc should return nodes from all schemas");
         results.Select(n => n.Id).Should().Contain("ACME");
-        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Select(n => n.Id).Should().Contain("FutuRe");
         results.Select(n => n.Id).Should().Contain("Contoso");
     }
 
@@ -308,13 +308,13 @@ public class CrossPartitionSearchTests
         var schemas = partitions.Keys.Select(k => k.ToLowerInvariant()).ToList();
         await PopulateSearchableSchemasAsync(schemas, ct);
 
-        // Text search for "Partner"
-        var textFilter = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'') ILIKE '%partner%'";
+        // Text search for "FutuRe"
+        var textFilter = "COALESCE(n.name,'') || ' ' || COALESCE(n.namespace || '/' || n.id,'') || ' ' || COALESCE(n.node_type,'') ILIKE '%future%'";
         var results = await CallSearchAcrossSchemasAsync(textFilter, null, "last_modified DESC", 50, ct);
 
-        results.Should().NotBeEmpty("should find PartnerRe by text search");
-        results.Select(n => n.Id).Should().Contain("PartnerRe");
-        results.Should().NotContain(n => n.Id == "ACME", "ACME doesn't match 'partner'");
+        results.Should().NotBeEmpty("should find FutuRe by text search");
+        results.Select(n => n.Id).Should().Contain("FutuRe");
+        results.Should().NotContain(n => n.Id == "ACME", "ACME doesn't match 'future'");
     }
 
     [Fact(Timeout = 60000)]
@@ -337,13 +337,13 @@ public class CrossPartitionSearchTests
         var ct = TestContext.Current.CancellationToken;
         var (adminAdapter, partitions) = await SetupMultiOrgEnvironmentAsync(ct);
 
-        // Only include ACME and PartnerRe (exclude Contoso)
-        await PopulateSearchableSchemasAsync(["acme", "partnerre"], ct);
+        // Only include ACME and FutuRe (exclude Contoso)
+        await PopulateSearchableSchemasAsync(["acme", "future"], ct);
 
         var results = await CallSearchAcrossSchemasAsync("", null, "last_modified DESC", 50, ct);
 
         results.Select(n => n.Id).Should().Contain("ACME");
-        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Select(n => n.Id).Should().Contain("FutuRe");
         results.Should().NotContain(n => n.Id == "Contoso",
             "Contoso is not in searchable_schemas");
     }
@@ -379,10 +379,21 @@ public class CrossPartitionSearchTests
 
         var results = await CallSearchAcrossSchemasAsync("", "testuser", "last_modified DESC", 50, ct);
 
-        // testuser should see public_read nodes from all schemas + ACME-specific nodes
+        // testuser has partition_access only to ACME — should only see ACME nodes
         results.Should().NotBeEmpty();
-        // ACME nodes should be visible (partition_access + effective permissions)
         results.Select(n => n.Id).Should().Contain("ACME");
+
+        // CRITICAL: public_read must NOT bypass partition_access.
+        // testuser has NO partition_access to FutuRe or Contoso,
+        // so those nodes must NOT appear even though Markdown is public_read.
+        results.Should().NotContain(n => n.Id == "FutuRe",
+            "testuser has no partition_access to FutuRe — public_read must not bypass partition check");
+        results.Should().NotContain(n => n.Id == "Contoso",
+            "testuser has no partition_access to Contoso — public_read must not bypass partition check");
+        results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "FutuRe",
+            "FutuRe child nodes must also be hidden");
+        results.Should().NotContain(n => n.Id == "Report" && n.Namespace == "Contoso",
+            "Contoso child nodes must also be hidden");
     }
 
     [Fact(Timeout = 60000)]
@@ -420,7 +431,7 @@ public class CrossPartitionSearchTests
 
         results.Should().NotBeEmpty("cross-schema query should return nodes");
         results.Select(n => n.Id).Should().Contain("ACME");
-        results.Select(n => n.Id).Should().Contain("PartnerRe");
+        results.Select(n => n.Id).Should().Contain("FutuRe");
         results.Select(n => n.Id).Should().Contain("Contoso");
     }
 

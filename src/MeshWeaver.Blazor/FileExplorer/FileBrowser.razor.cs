@@ -183,7 +183,10 @@ public partial class FileBrowser
         var extension = Path.GetExtension(fileName).ToLowerInvariant();
         return extension switch
         {
-            ".xlsx" or ".xls" or ".docx" or ".doc" or ".pptx" or ".ppt" or ".zip" => true,
+            // Documents with converter support are previewed, not downloaded
+            ".docx" => false,
+            // Other binary formats remain download-only
+            ".xlsx" or ".xls" or ".doc" or ".pptx" or ".ppt" or ".zip" => true,
             _ => false
         };
     }

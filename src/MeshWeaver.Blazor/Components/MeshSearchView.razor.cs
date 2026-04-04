@@ -9,6 +9,8 @@ using MeshWeaver.Layout;
 using MeshWeaver.Layout.Catalog;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 
 namespace MeshWeaver.Blazor.Components;
@@ -321,8 +323,11 @@ public partial class MeshSearchView : IDisposable
                 InitializeCollapsedState(_computedGroups);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            var logger = Hub.ServiceProvider.GetService<ILoggerFactory>()
+                ?.CreateLogger("MeshWeaver.MeshSearchView");
+            logger?.LogWarning(ex, "MeshSearchView query failed: {Query}", BuildFullQuery());
             _nodes = new List<MeshNode>();
             _computedGroups = null;
         }

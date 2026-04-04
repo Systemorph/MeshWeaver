@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -12,13 +11,12 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
+using MeshWeaver.Layout;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Persistence;
-using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -262,6 +260,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
         finalResponse.Should().NotBeNull("response message should have text after tool execution completes");
         finalResponse!.Text.Should().NotBeNullOrEmpty();
+        finalResponse.ToolCalls.Should().NotBeEmpty("response should have tool calls tracked via middleware");
         Output.WriteLine("8. Test PASSED");
     }
 
@@ -271,10 +270,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     /// (without page reload). Then sub-thread streams text that appears on the
     /// sub-thread's response message. Tests the FULL real-world path.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 30000)]
     public async Task Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        var ct = new CancellationTokenSource(25.Seconds()).Token;
         var client = await GetClientAsync();
         var workspace = client.GetWorkspace();
 
@@ -313,15 +312,19 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response message: {responseMsgId}");
 
-        // 4. Subscribe to the response message node — watch for tool calls appearing
+        // 4. Subscribe to response message stream — wait for tool call with DelegationPath
+        Output.WriteLine("4. Subscribing to response message stream for delegation tool call...");
         var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
-
-        // 4. Wait for delegation tool call with DelegationPath on the response stream
-        Output.WriteLine("4. Waiting for delegation tool call with DelegationPath...");
         var msgWithDelegation = await responseStream
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
+            .Select(nodes =>
+            {
+                var msg = nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage;
+                if (msg != null)
+                    Output.WriteLine($"  [STREAM] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
+                return msg;
+            })
             .Where(m => m?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
-            .Timeout(60.Seconds())
+            .Timeout(20.Seconds())
             .FirstAsync()
             .ToTask(ct);
 
@@ -331,12 +334,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
         // 5. Wait for parent execution to complete (text appears)
         Output.WriteLine("6. Waiting for parent to complete...");
-        var completed = await responseStream
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
-            .Where(m => !string.IsNullOrEmpty(m?.Text))
-            .Timeout(60.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        ThreadMessage? completed = null;
+        for (var j = 0; j < 30; j++)
+        {
+            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            if (!string.IsNullOrEmpty(completed?.Text)) break;
+            await Task.Delay(500, ct);
+        }
 
         completed!.Text.Should().NotBeNullOrEmpty("parent should have text after delegation completes");
         Output.WriteLine($"7. PARENT COMPLETE: text='{completed.Text}', toolCalls={completed.ToolCalls.Count}");
@@ -560,11 +564,30 @@ internal class ToolCallingFakeChatClientFactory : IChatClientFactory
             ? new DelegatingFakeChatClient(config.Id)
             : new ToolCallingFakeChatClient();
 
-        return new(chatClient: client,
+        var agent = new ChatClientAgent(chatClient: client,
             instructions: config.Instructions ?? "Test assistant.",
             name: config.Id, description: config.Description ?? config.Id,
             tools: [AIFunctionFactory.Create((string param) => $"Tool executed with {param}", "test_tool", "A test tool")],
             loggerFactory: null, services: null);
+
+        // Wrap with function calling middleware — same as production ChatClientAgentFactory
+        return agent.AsBuilder()
+            .Use((AIAgent _, FunctionInvocationContext ctx,
+                Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
+                CancellationToken ct) =>
+            {
+                chat.ForwardToolCall?.Invoke(new ToolCallEntry
+                {
+                    Name = ctx.Function.Name,
+                    DisplayName = ctx.Function.Name,
+                    Arguments = ctx.Arguments?.Count > 0
+                        ? string.Join(", ", ctx.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                        : null,
+                    Timestamp = DateTime.UtcNow
+                });
+                return next(ctx, ct);
+            })
+            .Build() as ChatClientAgent ?? agent;
     }
 
     public Task<ChatClientAgent> CreateAgentAsync(

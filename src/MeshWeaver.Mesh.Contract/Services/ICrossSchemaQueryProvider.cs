@@ -24,4 +24,16 @@ public interface ICrossSchemaQueryProvider
         IReadOnlyList<string> schemas,
         string? userId = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Queries a satellite table across multiple schemas in a single SQL UNION ALL query.
+    /// Used for satellite node types (Thread, Activity, etc.) that live in dedicated tables.
+    /// </summary>
+    IAsyncEnumerable<MeshNode> QueryAcrossSchemasAsync(
+        ParsedQuery query,
+        JsonSerializerOptions options,
+        IReadOnlyList<string> schemas,
+        string tableName,
+        string? userId = null,
+        CancellationToken ct = default);
 }

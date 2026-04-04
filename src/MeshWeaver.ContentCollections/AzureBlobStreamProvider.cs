@@ -135,6 +135,9 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
             if (blobItem.IsBlob)
             {
                 var fileName = blobItem.Blob.Name.Split('/').Last();
+                // Skip .folder placeholder markers used for empty folder creation
+                if (fileName == ".folder")
+                    continue;
                 files.Add(new FileItem(
                     ToRelativePath(blobItem.Blob.Name),
                     fileName,
@@ -158,10 +161,17 @@ public class AzureBlobStreamProvider(BlobServiceClient blobServiceClient, string
         await blobClient.UploadAsync(content, overwrite: true, cancellationToken: cancellationToken);
     }
 
-    public Task CreateFolderAsync(string folderPath)
+    public async Task CreateFolderAsync(string folderPath)
     {
-        // Azure Blob Storage doesn't require explicit folder creation
-        return Task.CompletedTask;
+        // Azure Blob Storage uses virtual folders — create a zero-byte placeholder
+        // so the folder appears in GetBlobsByHierarchyAsync listings.
+        var containerClient = blobServiceClient.GetBlobContainerClient(containerName);
+        await containerClient.CreateIfNotExistsAsync();
+
+        var prefix = folderPath.TrimStart('/').TrimEnd('/');
+        var markerPath = ToFullPath($"{prefix}/.folder");
+        var blobClient = containerClient.GetBlobClient(markerPath);
+        await blobClient.UploadAsync(new BinaryData(Array.Empty<byte>()), overwrite: true);
     }
 
     public async Task DeleteFolderAsync(string folderPath)

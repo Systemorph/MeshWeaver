@@ -569,6 +569,9 @@ public static class DataExtensions
         var validationResult = await RunReadValidatorsAsync(hub, request.Message.Reference, ct);
         if (!validationResult.IsValid)
         {
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Data.AccessControl");
+            logger?.LogWarning("HandleGetDataRequest: Access denied for {Sender} at {Hub}, ref={Ref}: {Error}",
+                request.Sender, hub.Address, request.Message.Reference, validationResult.ErrorMessage);
             hub.Post(new GetDataResponse(null, 0) { Error = validationResult.ErrorMessage },
                 o => o.ResponseFor(request));
             return request.Processed();
@@ -1727,9 +1730,73 @@ private static async Task<IMessageDelivery> HandleGetDataRequestCore<TReference>
             }
         }
 
+        // Apply relevance filtering: boost items that match the query text,
+        // suppress items with zero priority that don't match
+        var searchText = ExtractAutocompleteSearchText(query);
+        if (!string.IsNullOrEmpty(searchText))
+        {
+            allItems = allItems
+                .Select(item => item.Priority > 0
+                    ? item // Provider already scored this item
+                    : item with { Priority = ScoreAutocompleteItem(item, searchText) })
+                .Where(item => item.Priority > 0)
+                .OrderByDescending(item => item.Priority)
+                .ToList();
+        }
+
         var response = new AutocompleteResponse(allItems);
         hub.Post(response, o => o.ResponseFor(request));
         return request.Processed();
+    }
+
+    /// <summary>
+    /// Extracts the search text from an autocomplete query, stripping @ prefix and path segments.
+    /// </summary>
+    private static string ExtractAutocompleteSearchText(string query)
+    {
+        if (string.IsNullOrEmpty(query))
+            return "";
+        var text = query.TrimStart('@');
+        // For tag queries (content:file), extract part after tag
+        var colonIndex = text.IndexOf(':');
+        if (colonIndex >= 0)
+        {
+            text = text[(colonIndex + 1)..];
+            var lastSlash = text.LastIndexOf('/');
+            if (lastSlash >= 0)
+                text = text[(lastSlash + 1)..];
+        }
+        else
+        {
+            // Plain query — keep last path segment
+            var lastSlash = text.LastIndexOf('/');
+            if (lastSlash >= 0)
+                text = text[(lastSlash + 1)..];
+        }
+        return text.Trim();
+    }
+
+    /// <summary>
+    /// Scores an autocomplete item against search text when the provider didn't set a priority.
+    /// Uses case-insensitive matching against Label and Description.
+    /// </summary>
+    private static int ScoreAutocompleteItem(AutocompleteItem item, string searchText)
+    {
+        var queryLower = searchText.ToLowerInvariant();
+        var labelLower = item.Label?.ToLowerInvariant() ?? "";
+
+        if (labelLower == queryLower)
+            return 3000;
+        if (labelLower.StartsWith(queryLower))
+            return 2800;
+        if (labelLower.Contains(queryLower))
+            return 2000;
+
+        var descLower = item.Description?.ToLowerInvariant() ?? "";
+        if (descLower.Contains(queryLower))
+            return 500;
+
+        return 0; // No match — will be filtered out
     }
 
     #region Data Validators

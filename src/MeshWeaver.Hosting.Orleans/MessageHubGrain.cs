@@ -10,6 +10,7 @@ using Orleans.Streams;
 
 namespace MeshWeaver.Hosting.Orleans;
 
+[global::Orleans.Concurrency.Reentrant]
 public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHub)
     : Grain, IMessageHubGrain
 {
@@ -62,7 +63,57 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         if (node.HubConfiguration is null)
             throw new ArgumentException($"No hub configuration resolved for {node.Path} (NodeType: {node.NodeType}).");
 
-        Hub = meshHub.GetHostedHub(address, node.HubConfiguration)!;
+        // Register a keep-alive timer that renews DelayDeactivation while
+        // long-running operations are active. The timer runs on the grain's scheduler.
+        // Operations increment/decrement the counter; timer only acts when > 0.
+        _keepAliveTimer = this.RegisterGrainTimer(
+            _ =>
+            {
+                if (Volatile.Read(ref _activeOperations) > 0)
+                    DelayDeactivation(TimeSpan.FromMinutes(10));
+                return Task.CompletedTask;
+            },
+            new GrainTimerCreationOptions
+            {
+                DueTime = TimeSpan.FromMinutes(1),
+                Period = TimeSpan.FromMinutes(1),
+                Interleave = true
+            });
+
+        Hub = meshHub.GetHostedHub(address, config =>
+            node.HubConfiguration(config)
+                .Set(new GrainKeepAliveCallback(() => DelayDeactivation(TimeSpan.FromMinutes(10))))
+                .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation)))!;
+    }
+
+    private IGrainTimer? _keepAliveTimer;
+    private int _activeOperations;
+
+    /// <summary>
+    /// Starts a long-running operation scope.
+    /// Increments the active operation counter and calls DelayDeactivation immediately.
+    /// The grain timer periodically renews while counter > 0.
+    /// Thread-safe: can be called from any thread (streaming loop, thread pool).
+    /// </summary>
+    private IDisposable BeginLongRunningOperation()
+    {
+        Interlocked.Increment(ref _activeOperations);
+        // DelayDeactivation is thread-safe in Orleans
+        DelayDeactivation(TimeSpan.FromMinutes(10));
+        logger.LogInformation("Grain {GrainId}: long-running operation started (active={Count})",
+            this.GetPrimaryKeyString(), Volatile.Read(ref _activeOperations));
+
+        return new LongRunningOperationScope(() =>
+        {
+            var remaining = Interlocked.Decrement(ref _activeOperations);
+            logger.LogInformation("Grain {GrainId}: long-running operation completed (active={Count})",
+                this.GetPrimaryKeyString(), remaining);
+        });
+    }
+
+    private sealed class LongRunningOperationScope(Action onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose();
     }
 
 
@@ -120,12 +171,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             try
             {
+                // Cancel any active execution (e.g., AI streaming) — this triggers the
+                // OperationCanceledException path which saves state and notifies the parent.
+                Hub.CancelCurrentExecution();
+
                 Hub.Dispose();
-                // Wait for disposal (includes async flush of pending saves)
+                // Wait for disposal (includes async flush of pending saves and
+                // cancellation of active thread executions via hosted _Exec hubs).
+                // Allow up to 120s for AI streaming to cancel, save state, and flush.
                 var disposalTask = Hub.Disposal!;
-                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(10), cancellationToken));
+                var completed = await Task.WhenAny(disposalTask, Task.Delay(TimeSpan.FromSeconds(120), cancellationToken));
                 if (completed != disposalTask)
-                    logger.LogWarning("Grain {GrainId}: hub disposal timed out after 10s — pending saves may be lost!", grainId);
+                    logger.LogWarning("Grain {GrainId}: hub disposal timed out after 120s — pending saves may be lost!", grainId);
                 else
                     logger.LogInformation("Grain {GrainId}: hub disposal completed", grainId);
             }

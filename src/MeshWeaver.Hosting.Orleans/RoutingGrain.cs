@@ -16,24 +16,38 @@ internal class RoutingGrain(
     public async Task<IMessageDelivery> RouteMessage(IMessageDelivery delivery)
     {
         var address = GetHostAddress(delivery.Target!);
+        var addressPath = address.ToString();
 
+        var resolution = await pathResolver.ResolvePathAsync(addressPath);
+        var grainKey = resolution?.Prefix ?? addressPath;
 
-        var resolution = await pathResolver.ResolvePathAsync(address.ToString());
-        var grainKey = resolution?.Prefix;
+        logger.LogDebug("RouteMessage: {MessageType} → address={Address}, resolved={Prefix}, remainder={Remainder}, grainKey={GrainKey}",
+            delivery.Message.GetType().Name, addressPath, resolution?.Prefix ?? "(null)",
+            resolution?.Remainder ?? "(null)", grainKey);
 
-        var targetKey = grainKey ?? address.ToString();
+        // When resolution splits the path into prefix + remainder, update the delivery
+        // to match the resolved grain address. Without this, the grain receives a delivery
+        // whose Target doesn't match its hub address → routing loop.
+        if (resolution != null && !string.IsNullOrEmpty(resolution.Remainder))
+        {
+            logger.LogInformation("RouteMessage: updating target for {MessageType}: {Original} → prefix={Prefix}, remainder={Remainder}",
+                delivery.Message.GetType().Name, addressPath, resolution.Prefix, resolution.Remainder);
+            var resolvedAddress = new Address(resolution.Prefix.Split('/'));
+            delivery = delivery.WithProperty("UnifiedPath", resolution.Remainder);
+            delivery = delivery.WithTarget(resolvedAddress);
+        }
 
         try
         {
-            var grain = GrainFactory.GetGrain<IMessageHubGrain>(targetKey);
+            var grain = GrainFactory.GetGrain<IMessageHubGrain>(grainKey);
             return await grain.DeliverMessage(delivery);
         }
         catch (Exception ex)
         {
-            logger.LogDebug(ex, "Grain delivery failed for {Address} (key={Key}), falling back to stream",
-                address, targetKey);
+            logger.LogWarning(ex, "Grain delivery failed for {MessageType} to {Address} (key={Key}), falling back to stream",
+                delivery.Message.GetType().Name, address, grainKey);
             var stream = this.GetStreamProvider(StreamProviders.Memory)
-                .GetStream<IMessageDelivery>(address.ToString());
+                .GetStream<IMessageDelivery>(addressPath);
             await stream.OnNextAsync(delivery);
             return delivery.Forwarded(address);
         }

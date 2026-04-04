@@ -89,11 +89,12 @@ public class GlobalAdminOrganizationSearchTests
         var ct = TestContext.Current.CancellationToken;
         var partitions = await SetupOrganizationsAsync(ct);
 
-        // Global Admin: has partition_access to admin + effective permissions at root
+        // Global Admin: has partition_access to ALL org partitions
         const string adminUserId = "globaladmin";
         await using (var cmd = _fixture.DataSource.CreateCommand(
             "DELETE FROM public.partition_access; " +
-            "INSERT INTO public.partition_access (user_id, partition) VALUES ('globaladmin', 'public')"))
+            "INSERT INTO public.partition_access (user_id, partition) VALUES " +
+            "('globaladmin', 'alphaorg'), ('globaladmin', 'betaorg'), ('globaladmin', 'gammaorg')"))
             await cmd.ExecuteNonQueryAsync(ct);
 
         // Query: nodeType:Organization — the fixed query for Organization Search
@@ -109,12 +110,12 @@ public class GlobalAdminOrganizationSearchTests
     }
 
     [Fact(Timeout = 60000)]
-    public async Task OrganizationPublicRead_VisibleToAnyUser()
+    public async Task PublicRead_StillRequiresPartitionAccess()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupOrganizationsAsync(ct);
 
-        // Regular user with no partition_access — should still see Organizations via public_read
+        // Regular user with NO partition_access — even public_read must not bypass partition check
         await using (var cmd = _fixture.DataSource.CreateCommand("DELETE FROM public.partition_access"))
             await cmd.ExecuteNonQueryAsync(ct);
 
@@ -122,29 +123,34 @@ public class GlobalAdminOrganizationSearchTests
         var results = await CallSearchAcrossSchemasAsync(
             nodeTypeFilter, "regularuser", "last_modified DESC", 50, ct);
 
-        results.Should().HaveCount(3,
-            "Organization has PublicRead=true — any authenticated user should see all orgs");
-        results.Select(n => n.Id).Should().Contain("AlphaOrg");
-        results.Select(n => n.Id).Should().Contain("BetaOrg");
-        results.Select(n => n.Id).Should().Contain("GammaOrg");
+        results.Should().BeEmpty(
+            "public_read must NOT bypass partition_access — user without partition access sees nothing");
     }
 
     [Fact(Timeout = 60000)]
-    public async Task NonOrgNodes_NotVisibleWithoutAccess()
+    public async Task PublicRead_SkipsNodeLevelChecks_WithinAccessiblePartition()
     {
         var ct = TestContext.Current.CancellationToken;
         await SetupOrganizationsAsync(ct);
 
-        // Regular user with no partition_access — Markdown nodes are NOT public_read
-        await using (var cmd = _fixture.DataSource.CreateCommand("DELETE FROM public.partition_access"))
+        // Give user partition_access to AlphaOrg only (no node-level permissions)
+        await using (var cmd = _fixture.DataSource.CreateCommand(
+            "DELETE FROM public.partition_access; " +
+            "INSERT INTO public.partition_access (user_id, partition) VALUES ('regularuser', 'alphaorg')"))
             await cmd.ExecuteNonQueryAsync(ct);
 
-        // Search for all nodes (no nodeType filter) — should only get Organization (public_read)
+        // Search for all nodes — public_read types visible without node-level perms, but only in alphaorg
         var results = await CallSearchAcrossSchemasAsync(
             "", "regularuser", "last_modified DESC", 50, ct);
 
-        results.Should().OnlyContain(n => n.NodeType == OrganizationNodeType.NodeType,
-            "Only Organization nodes should be visible without partition access (they're PublicRead)");
+        // Should see Organization nodes from AlphaOrg (public_read + partition_access)
+        results.Should().Contain(n => n.Id == "AlphaOrg",
+            "AlphaOrg Organization should be visible (public_read + partition_access)");
+        // Should NOT see BetaOrg or GammaOrg (no partition_access)
+        results.Should().NotContain(n => n.Id == "BetaOrg",
+            "BetaOrg should be hidden — no partition_access");
+        results.Should().NotContain(n => n.Id == "GammaOrg",
+            "GammaOrg should be hidden — no partition_access");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

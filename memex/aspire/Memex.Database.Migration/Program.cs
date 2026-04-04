@@ -433,6 +433,67 @@ if (currentVersion < 5)
     logger.LogInformation("Repair v5 completed.");
 }
 
+// ── Data repair v6: Fix search_across_schemas to enforce partition_access ──
+// Bug: public_read node types bypassed partition_access entirely, leaking
+// cross-partition data in search (e.g., meshweaver user could see PartnerRe).
+// Fix: partition_access is now always required; public_read only skips
+// node-level permission checks within accessible partitions.
+// The stored proc is re-created by InitializePublicSchemaAsync (idempotent).
+if (currentVersion < 6)
+{
+    logger.LogInformation("Running repair v6: Fix search_across_schemas access control...");
+    // Re-create the stored procedure with fixed access control logic
+    await PostgreSqlSchemaInitializer.InitializePartitionAccessTableAsync(dataSource);
+    currentVersion = 6;
+    logger.LogInformation("Repair v6 completed — search_across_schemas updated.");
+}
+
+// ── Data repair v7: Deploy per-user permission rebuild trigger ──
+// The trigger function trg_access_changed() previously called rebuild_user_effective_permissions()
+// which rebuilds ALL users' permissions — causing deadlocks under concurrent access.
+// New trigger calls rebuild_user_permissions_for(affected_user) — only touches one user's rows.
+// The schema initializer already creates the new functions; we just need to re-run schema init
+// per partition to deploy the updated trigger function.
+if (currentVersion < 7)
+{
+    logger.LogInformation("Running repair v7: Deploy per-user permission rebuild trigger...");
+
+    var schemas = new List<string>();
+    await using (var listCmd = dataSource.CreateCommand("""
+        SELECT schema_name FROM information_schema.schemata s
+        WHERE EXISTS (SELECT 1 FROM information_schema.tables t WHERE t.table_schema = s.schema_name AND t.table_name = 'access')
+        AND s.schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')
+        AND s.schema_name NOT LIKE '%\_versions' ESCAPE '\'
+        ORDER BY s.schema_name
+        """))
+    {
+        await using var rdr = await listCmd.ExecuteReaderAsync();
+        while (await rdr.ReadAsync()) schemas.Add(rdr.GetString(0));
+    }
+
+    foreach (var schema in schemas)
+    {
+        logger.LogInformation("Repair v7: Updating trigger functions for schema {Schema}...", schema);
+        var csb = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = $"{schema},public" };
+        var dsb = new NpgsqlDataSourceBuilder(csb.ConnectionString);
+        dsb.UseVector();
+        await using var schemaDs = dsb.Build();
+
+        var schemaOpts = new PostgreSqlStorageOptions
+        {
+            ConnectionString = csb.ConnectionString,
+            VectorDimensions = options.Value.VectorDimensions,
+            Schema = schema
+        };
+
+        await PostgreSqlSchemaInitializer.InitializeMeshTablesAsync(schemaDs, schemaOpts);
+        logger.LogInformation("Repair v7: Schema {Schema} — trigger updated", schema);
+    }
+
+    currentVersion = 7;
+    logger.LogInformation("Repair v7 completed.");
+}
+
 // ── Always: populate searchable_schemas from remaining content partitions ──
 // This runs every time (not versioned) since it's idempotent and schemas may change.
 {

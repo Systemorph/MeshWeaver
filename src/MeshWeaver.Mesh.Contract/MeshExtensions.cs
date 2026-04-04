@@ -59,7 +59,36 @@ public static class MeshExtensions
             .WithHandler<CreateNodeRequest>(HandleCreateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<UpdateNodeRequest>(HandleUpdateNodeRequest)
-            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest);
+            .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
+            .WithHandler<HeartBeatEvent>(HandleHeartBeat);
+    }
+
+    /// <summary>
+    /// Handles HeartBeatEvent: signals the Orleans grain to delay deactivation.
+    /// Walks up the parent hub chain because GrainKeepAliveCallback is set on the
+    /// grain's top-level hub, not on child hubs (threads, messages, _Exec).
+    /// In monolith mode, no GrainKeepAliveCallback is registered → no-op.
+    /// </summary>
+    private static IMessageDelivery HandleHeartBeat(
+        IMessageHub hub, IMessageDelivery<HeartBeatEvent> delivery)
+    {
+        var current = hub;
+        while (current != null)
+        {
+            var callback = current.Configuration.Get<GrainKeepAliveCallback>();
+            if (callback != null)
+            {
+                var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.GrainKeepAlive");
+                logger?.LogInformation("HeartBeat: keeping grain alive for {Hub} (callback on {Parent})",
+                    hub.Address, current.Address);
+                callback.KeepAlive();
+                break;
+            }
+            var parent = current.Configuration.ParentHub;
+            if (parent == current) break;
+            current = parent;
+        }
+        return delivery.Processed();
     }
 
     private static async Task<IMessageDelivery> HandleCreateNodeRequest(

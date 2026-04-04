@@ -277,6 +277,21 @@ public class AzureClaudeChatClient : IChatClient
                             ResultContent = functionResult.Result?.ToString() ?? string.Empty
                         });
                         break;
+
+                    case DataContent dataContent when dataContent.Data.Length > 0:
+                        // Binary content (PDF, images) — sent as base64
+                        var mediaType = dataContent.MediaType ?? "application/octet-stream";
+                        contentBlocks.Add(new ClaudeContentBlock
+                        {
+                            Type = mediaType.StartsWith("image/") ? "image" : "document",
+                            Source = new
+                            {
+                                type = "base64",
+                                media_type = mediaType,
+                                data = Convert.ToBase64String(dataContent.Data.ToArray())
+                            }
+                        });
+                        break;
                 }
             }
 
@@ -498,6 +513,7 @@ public class AzureClaudeChatClient : IChatClient
         public string? ToolUseId { get; set; }
         [JsonPropertyName("content")]
         public string? ResultContent { get; set; }
+        public object? Source { get; set; }
     }
 
     private class ClaudeTool

@@ -2,15 +2,30 @@
 Name: Tools Reference
 Category: Documentation
 Description: Complete tools reference for AI agents
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
 ---
 
 MeshPlugin provides tools for interacting with the mesh data graph. All paths support the `@` prefix shorthand: `@graph/org1` resolves to `graph/org1`.
 
 **IMPORTANT**: Examples below use `Doc/Architecture` as a sample node path. Always use the actual node path from the user's context instead.
 
-**LINKS**: Always output **absolute paths** starting with `@/` followed by the main partition and full path. Never use relative references.
-- Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`, `@/Doc/Architecture`
-- **Wrong**: `my-doc`, `../Projects/my-doc`, `Projects/my-doc`
+## Path Rules
+
+**Tool calls use paths relative to the current context by default.** The "Current Application Context" tells you your current node path.
+
+- **Relative paths** (no leading `/`): resolved against your current context. When the user references a file or node they can see, use a relative path.
+  - `content:report.docx` → file in the current node's content collection
+  - `Get('@content:report.docx')` → get content from current node
+  - `Get('@MyChild/*')` → list children of a child node under current context
+- **Absolute paths** (leading `/`): start from the root, independent of context.
+  - `Get('@/OrgA/Projects/my-doc')` → always resolves to the same node
+  - `Get('@/Doc/Architecture/content:icon.svg')` → file from a specific node
+
+**LINKS in markdown output**: Always use **absolute paths** starting with `@/` so they are clickable regardless of where the message is viewed.
+- Correct: `@/OrgA/Projects/my-doc`, `@/User/rbuergi/my-page`
+- **Wrong**: `my-doc`, `../Projects/my-doc`
+
+**When the user mentions a file or document they see on screen**, they are referring to something in the current context. Use the relative path (e.g., `content:filename.docx`), not a fully qualified absolute path.
 
 ## Get
 
@@ -364,33 +379,39 @@ Use double @@ prefix to embed a layout area inline in markdown responses. Write 
 
 ## Content Collections
 
-Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. The `content:` prefix accesses the default "content" collection. Other collection names use `collection:` for discovery.
+Content collections store files (images, documents, markdown, etc.) associated with mesh nodes. The `content:` prefix accesses the default "content" collection.
 
-### Workflow: Browsing and Downloading Files
+**Document conversion**: `.docx` files are automatically converted to markdown when accessed. The user can reference documents by name and get readable text.
 
-When you need to work with files in a content collection, follow this sequence:
+### Accessing Files (Relative to Current Context)
 
-1. **Discover collections**: `Get('@Doc/Architecture/collection:')` — lists all available collection configs (names, types, editability)
-2. **List files in collection root**: `Get('@Doc/Architecture/content:')` — returns files and folders in the default "content" collection root
-3. **List files in a named collection**: `Get('@Doc/Architecture/content:collectionName')` — returns files and folders in the named collection root
-4. **Browse a subfolder**: `Get('@Doc/Architecture/content:collectionName/subfolder')` — if "subfolder" is a folder, returns its files and folders
-5. **Download a specific file**: `Get('@Doc/Architecture/content:icon.svg')` — downloads the file from the default "content" collection
-6. **Download from a subfolder**: `Get('@Doc/Architecture/content:MeshGraph/overview.svg')` — downloads a file from a subfolder
-
-The system automatically detects whether a path refers to a file or folder. Files are downloaded, folders are listed. Each item in a listing has `name`, `path`, `isFolder`, and `lastModified` (for files).
-
-### Examples
+When the user references a file they see on screen, use the **relative** `content:` path:
 
 ```
-Get('@Doc/Architecture/collection:')                    -- List all collection configs
-Get('@Doc/Architecture/content:')                       -- List files/folders in default "content" collection
-Get('@Doc/Architecture/content:collectionName')         -- List files/folders in a named collection
-Get('@Doc/Architecture/content:collectionName/subfolder') -- List files in a subfolder
-Get('@Doc/Architecture/content:icon.svg')              -- Download icon.svg from default "content" collection
-Get('@Doc/Architecture/content:MeshGraph/overview.svg')  -- Download file from a subfolder
+Get('@content:report.docx')                  -- File from current node's "content" collection
+Get('@content:subfolder/image.png')          -- File from a subfolder
+Get('@content:')                             -- List files in the current node's content root
+Get('@collection:')                          -- List all collection configs
 ```
 
-The format is: `@Doc/Architecture/content:{path}` where the path is automatically resolved as file (download) or folder (list contents).
+### Accessing Files (Absolute Path)
+
+For files on other nodes, use the full path:
+
+```
+Get('@/Doc/Architecture/content:icon.svg')   -- File from a specific node
+Get('@/OrgA/content:report.docx')            -- File from another org's node
+```
+
+### Document Support
+
+| Extension | Behavior |
+|-----------|----------|
+| `.docx` | Automatically converted to markdown |
+| `.md` | Returned as-is |
+| `.pdf`, `.png`, `.jpg` | Returned as binary content |
+
+When the user asks about a document they uploaded or see in the file browser, use `Get('@content:filename.docx')` to read its content as markdown.
 
 ### Embedding Content Files
 
@@ -452,3 +473,34 @@ To browse all available documentation:
 Search('namespace:Doc scope:descendants')
 ```
 Then read any article with `Get('@Doc/...')`.
+
+## Binary Attachments (PDF, Images)
+
+Chat threads support binary file attachments from content collections. When a `content:` path references a binary file, it is sent to the AI model as native binary content (base64).
+
+### Supported Binary Formats
+
+| Extension | MIME Type | Sent As |
+|-----------|-----------|---------|
+| `.pdf` | `application/pdf` | Document block (Claude analyzes text + layout) |
+| `.png` | `image/png` | Image block |
+| `.jpg`/`.jpeg` | `image/jpeg` | Image block |
+| `.gif` | `image/gif` | Image block |
+| `.webp` | `image/webp` | Image block |
+
+### Attachment Path Resolution
+
+- **Relative** (no `/` prefix): `content:report.pdf` → resolved against thread's context path
+- **Absolute** (`/` prefix): `@/OrgA/Doc/content:report.pdf` → explicit path from root
+
+### Delegation
+
+Delegation creates an isolated sub-thread for a target agent. The delegation tool:
+1. Creates a Thread node under the parent message
+2. Posts `SubmitMessageRequest` to the sub-thread
+3. Waits for `ExecutionCompleted` response via callback re-registration
+4. Returns the result to the parent agent
+
+**Depth limit**: Maximum 2 delegation levels to prevent infinite recursion.
+
+**Identity**: All tool calls run with the original user's identity, restored via `AccessContextAIFunction` wrapper.

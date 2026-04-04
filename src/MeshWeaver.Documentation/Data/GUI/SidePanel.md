@@ -2,6 +2,7 @@
 Name: Side Panel & Main Panel
 Category: Documentation
 Description: How the side panel and main panel work together for multitasking, chat, and navigation
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
 ---
 
 The portal uses a split-view layout with a **main panel** and a collapsible **side panel**. The side panel is primarily used for AI chat threads but can display any content. The main panel shows the current page content.

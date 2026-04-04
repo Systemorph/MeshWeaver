@@ -160,7 +160,6 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var messageId = Guid.NewGuid().AsString();
         var userMessage = new ThreadMessage
         {
-            Id = messageId,
             Role = "user",
             Text = "What is the status of the product launch?",
             Timestamp = DateTime.UtcNow,
@@ -217,7 +216,6 @@ public class ThreadAgentIntegrationTest : MonolithMeshTestBase
         var replyId = Guid.NewGuid().AsString();
         var replyMessage = new ThreadMessage
         {
-            Id = replyId,
             Role = "assistant",
             AuthorName = agents[0].Name,
             Text = responseText,

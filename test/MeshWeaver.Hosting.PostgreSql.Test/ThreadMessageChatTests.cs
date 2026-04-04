@@ -131,7 +131,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/alice",
             Content = new ThreadMessage
             {
-                Id = "msg-1",
                 Role = "user",
                 AuthorName = "Alice",
                 Text = "Hello, how are you?",
@@ -149,7 +148,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/alice",
             Content = new ThreadMessage
             {
-                Id = "msg-2",
                 Role = "assistant",
                 Text = "I'm doing well, thanks for asking!",
                 Timestamp = now.AddSeconds(1),
@@ -203,7 +201,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/carol",
             Content = new ThreadMessage
             {
-                Id = "msg-rt",
                 Role = "user",
                 AuthorName = "Carol",
                 Text = "This is a test message",
@@ -238,7 +235,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
                 MainNode = "User/dave",
                 Content = new ThreadMessage
                 {
-                    Id = $"m-{i}",
                     Role = role,
                     Text = $"Message {i} text",
                     Timestamp = now.AddSeconds(i),
@@ -268,7 +264,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/eve",
             Content = new ThreadMessage
             {
-                Id = "del-msg",
                 Role = "user",
                 Text = "Delete me",
             }
@@ -295,7 +290,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Thread 1 msg",
             NodeType = "ThreadMessage",
             MainNode = "User/frank",
-            Content = new ThreadMessage { Id = "msg-t1", Role = "user", Text = "In thread 1" }
+            Content = new ThreadMessage { Role = "user", Text = "In thread 1" }
         }, _options, ct);
 
         // Thread 2 messages
@@ -305,14 +300,14 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Name = "Thread 2 msg A",
             NodeType = "ThreadMessage",
             MainNode = "User/frank",
-            Content = new ThreadMessage { Id = "msg-t2a", Role = "user", Text = "In thread 2 A" }
+            Content = new ThreadMessage { Role = "user", Text = "In thread 2 A" }
         }, _options, ct);
         await _messageAdapter.WriteAsync(new MeshNode("msg-t2b", ns2)
         {
             Name = "Thread 2 msg B",
             NodeType = "ThreadMessage",
             MainNode = "User/frank",
-            Content = new ThreadMessage { Id = "msg-t2b", Role = "assistant", Text = "In thread 2 B" }
+            Content = new ThreadMessage { Role = "assistant", Text = "In thread 2 B" }
         }, _options, ct);
 
         // List thread 1 messages
@@ -338,7 +333,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/grace",
             Content = new ThreadMessage
             {
-                Id = "upd-msg",
                 Role = "user",
                 Text = "Original text"
             }
@@ -352,7 +346,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             MainNode = "User/grace",
             Content = new ThreadMessage
             {
-                Id = "upd-msg",
                 Role = "user",
                 Text = "Updated text"
             }
@@ -491,7 +484,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 1,
             Content = new ThreadMessage
             {
-                Id = "1", Role = "user", Text = "Hello",
+                Role = "user", Text = "Hello",
                 Timestamp = now, Type = ThreadMessageType.ExecutedInput
             }
         }, _options, ct);
@@ -504,7 +497,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 2,
             Content = new ThreadMessage
             {
-                Id = "2", Role = "assistant", Text = "Hi there!",
+                Role = "assistant", Text = "Hi there!",
                 Timestamp = now.AddSeconds(1), Type = ThreadMessageType.AgentResponse
             }
         }, _options, ct);
@@ -720,7 +713,6 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 1,
             Content = new ThreadMessage
             {
-                Id = "r1",
                 Role = "user",
                 Text = "Hello",
                 Timestamp = DateTime.UtcNow,
@@ -784,7 +776,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 1,
             Content = new ThreadMessage
             {
-                Id = userMsgId, Role = "user", Text = "Hello from e2e",
+                Role = "user", Text = "Hello from e2e",
                 Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput
             }
         }, _options, ct);
@@ -798,7 +790,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 2,
             Content = new ThreadMessage
             {
-                Id = responseMsgId, Role = "assistant", Text = "",
+                Role = "assistant", Text = "",
                 Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse
             }
         }, _options, ct);
@@ -824,7 +816,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 2,
             Content = new ThreadMessage
             {
-                Id = responseMsgId, Role = "assistant",
+                Role = "assistant",
                 Text = "This is the streamed response.",
                 Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse
             }
@@ -947,7 +939,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 1,
             Content = new ThreadMessage
             {
-                Id = "m1", Role = "user", Text = "Hello",
+                Role = "user", Text = "Hello",
                 Timestamp = DateTime.UtcNow, Type = ThreadMessageType.ExecutedInput
             }
         }, _options, ct);
@@ -960,7 +952,7 @@ public class ThreadMessageChatTests : IAsyncLifetime
             Order = 2,
             Content = new ThreadMessage
             {
-                Id = "m2", Role = "assistant", Text = "Hi there!",
+                Role = "assistant", Text = "Hi there!",
                 Timestamp = DateTime.UtcNow, Type = ThreadMessageType.AgentResponse
             }
         }, _options, ct);

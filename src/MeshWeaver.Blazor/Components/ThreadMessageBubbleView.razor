@@ -1,5 +1,6 @@
 @inherits BlazorView<ThreadMessageBubbleControl, ThreadMessageBubbleView>
 @using MeshWeaver.Layout
+@using MeshWeaver.Messaging
 
 <div class="thread-msg-bubble @(IsUser ? "thread-msg-user" : "thread-msg-assistant")" style="@Style">
     <div class="thread-msg-author @(IsUser ? "thread-msg-author-user" : "")">@ViewModel.AuthorName</div>
@@ -17,7 +18,23 @@
         </div>
     }
 
-    <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+    @if (isEditing)
+    {
+        <LayoutAreaView ViewModel="@(new LayoutAreaControl($"{ViewModel.ThreadPath}/{ViewModel.MessageId}", new LayoutAreaReference("Edit")))" Stream="@Stream" Area="@($"{Area}/edit")" />
+        <div class="thread-msg-edit-actions">
+            <button class="thread-msg-edit-cancel" @onclick="CancelEdit">Done</button>
+        </div>
+    }
+    else
+    {
+        <MarkdownView ViewModel="@MarkdownVm" Stream="@Stream" Area="@($"{Area}/text")" />
+        @if (IsUser && CanEdit)
+        {
+            <div class="thread-msg-inline-actions">
+                <button class="thread-msg-action-btn" @onclick="StartEdit" title="Edit">&#9998;</button>
+            </div>
+        }
+    }
 
     @* Tool calls — shown inline, each as a compact entry *@
     @if (HasToolCalls)
@@ -29,41 +46,33 @@
                 var isPending = call.Result == null;
                 var summary = FormatToolCallSummary(call);
 
-                @if (isDelegation)
+                @if (isDelegation && isPending)
                 {
+                    @* Executing delegation: embed the sub-thread's Streaming area *@
                     <div class="thread-msg-delegation-entry">
                         <div class="thread-msg-delegation-header">
-                            @if (isPending)
-                            {
-                                <span class="thread-msg-delegation-pulse">&#10041;</span>
-                            }
-                            else
-                            {
-                                <span class="thread-msg-tool-done">@(call.IsSuccess ? "✓" : "✗")</span>
-                            }
+                            <span class="thread-msg-delegation-pulse">✹</span>
                             <a href="/@call.DelegationPath" class="thread-msg-delegation-link">@summary</a>
                         </div>
-                        @if (isPending)
-                        {
-                            <div class="thread-msg-delegation-stream">
-                                <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
-                            </div>
-                        }
+                        <div class="thread-msg-delegation-stream">
+                            <LayoutAreaView ViewModel="@(new LayoutAreaControl(call.DelegationPath!, new LayoutAreaReference("Streaming")).WithSpinnerType(SpinnerType.None))" Stream="@Stream" Area="@($"{Area}/del-{call.DelegationPath}")" />
+                        </div>
                     </div>
                 }
                 else
                 {
-                    <details class="thread-msg-tool-entry">
+                    @* Completed delegation or regular tool call: expandable details *@
+                    <details class="thread-msg-tool-entry @(isDelegation ? "thread-msg-delegation-entry" : "")">
                         <summary class="thread-msg-tool-entry-name">
-                            @if (isPending)
+                            <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                            @if (isDelegation)
                             {
-                                <span class="thread-msg-tool-pending">●</span>
+                                <a href="/@call.DelegationPath" class="thread-msg-delegation-link" @onclick:stopPropagation>@summary</a>
                             }
                             else
                             {
-                                <span class="thread-msg-tool-done @(call.IsSuccess ? "" : "thread-msg-tool-error")">@(call.IsSuccess ? "✓" : "✗")</span>
+                                <span>@summary</span>
                             }
-                            <span>@summary</span>
                         </summary>
                         @if (!string.IsNullOrEmpty(call.Arguments))
                         {
@@ -306,5 +315,43 @@
     @@keyframes thread-dots-blink {
         0%, 80%, 100% { opacity: 0.3; }
         40% { opacity: 1; }
+    }
+
+    .thread-msg-edit-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 8px;
+    }
+    .thread-msg-edit-cancel {
+        padding: 6px 20px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.85rem;
+        border: 1px solid var(--neutral-stroke-rest);
+        background: transparent;
+        color: var(--neutral-foreground-rest);
+    }
+    .thread-msg-inline-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 4px;
+        opacity: 0.4;
+        transition: opacity 0.15s;
+    }
+    .thread-msg-bubble:hover .thread-msg-inline-actions {
+        opacity: 1;
+    }
+    .thread-msg-action-btn {
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        font-size: 0.85rem;
+        color: var(--neutral-foreground-hint);
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+    .thread-msg-action-btn:hover {
+        background: var(--neutral-layer-3);
+        color: var(--accent-fill-rest);
     }
 </style>

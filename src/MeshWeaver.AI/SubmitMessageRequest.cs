@@ -26,6 +26,7 @@ public record SubmitMessageRequest : IRequest<SubmitMessageResponse>
     /// The execution hub uses this to post streaming progress updates.
     /// </summary>
     public string? ResponsePath { get; init; }
+
 }
 
 /// <summary>
@@ -51,6 +52,12 @@ public record SubmitMessageResponse
     public string? Error { get; init; }
     public SubmitMessageStatus Status { get; init; } = SubmitMessageStatus.CellsCreated;
     public string? ResponseText { get; init; }
+
+    /// <summary>
+    /// Node changes made during this thread's execution.
+    /// Propagated upward so parent threads can aggregate changes from delegations.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableList<MeshWeaver.Layout.NodeChangeEntry>? UpdatedNodes { get; init; }
 }
 
 public enum SubmitMessageStatus

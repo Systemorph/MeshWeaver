@@ -77,8 +77,16 @@ public interface IAgentChat
     /// <summary>
     /// Path of the last delegation sub-thread created. Consumed by ThreadExecution
     /// after each delegation tool call completes.
+    /// Deprecated: use DelegationPaths dictionary for parallel-safe delegation tracking.
     /// </summary>
     string? LastDelegationPath { get => null; set { } }
+
+    /// <summary>
+    /// Thread-safe mapping of delegation display name to sub-thread path.
+    /// Supports parallel delegations without race conditions.
+    /// </summary>
+    System.Collections.Concurrent.ConcurrentDictionary<string, string> DelegationPaths
+        => new();
 
     /// <summary>
     /// Callback to update delegation status on the parent execution context.
@@ -91,5 +99,12 @@ public interface IAgentChat
     /// Called during delegation polling when new tool calls are detected on sub-threads.
     /// </summary>
     Action<ToolCallEntry>? ForwardToolCall { get => null; set { } }
+
+    /// <summary>
+    /// Callback to forward node change entries from MeshOperations (Create/Update/Patch).
+    /// Set by ThreadExecution, invoked by MeshPlugin when nodes are modified.
+    /// Tracks path + version before/after for document change auditing per thread message.
+    /// </summary>
+    Action<NodeChangeEntry>? ForwardNodeChange { get => null; set { } }
 
 }

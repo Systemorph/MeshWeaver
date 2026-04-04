@@ -72,7 +72,6 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "Working on it...",
                 Type = ThreadMessageType.AgentResponse,
@@ -134,7 +133,6 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "",
                 Type = ThreadMessageType.AgentResponse,
@@ -186,7 +184,6 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 Content = new ThreadMessage
                 {
-                    Id = responseMsgId,
                     Role = "assistant",
                     Text = "",
                     Type = ThreadMessageType.AgentResponse,
@@ -237,7 +234,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new ThreadMessage
             {
-                Id = responseMsgId, Role = "assistant", Text = "",
+                Role = "assistant", Text = "",
                 Type = ThreadMessageType.AgentResponse, AgentName = "Orchestrator"
             }
         }, ct);
@@ -278,7 +275,7 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 Content = new ThreadMessage
                 {
-                    Id = responseMsgId, Role = "assistant", Text = "",
+                    Role = "assistant", Text = "",
                     Type = ThreadMessageType.AgentResponse, AgentName = "Orchestrator",
                     ToolCalls = ImmutableList.Create(new ToolCallEntry
                     {
@@ -340,7 +337,6 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             MainNode = "User/Roland",
             Content = new ThreadMessage
             {
-                Id = responseMsgId,
                 Role = "assistant",
                 Text = "",
                 Type = ThreadMessageType.AgentResponse,
@@ -394,7 +390,6 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 Content = new ThreadMessage
                 {
-                    Id = responseMsgId,
                     Role = "assistant",
                     Text = "",
                     Type = ThreadMessageType.AgentResponse,
@@ -436,7 +431,6 @@ public class ToolCallsVisibilityTest(ITestOutputHelper output) : MonolithMeshTes
             {
                 Content = new ThreadMessage
                 {
-                    Id = responseMsgId,
                     Role = "assistant",
                     Text = "Done.",
                     Type = ThreadMessageType.AgentResponse,
