@@ -315,10 +315,11 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                     chat.LastDelegationPath = subThreadPath; // backward compat
                     chat.UpdateDelegationStatus?.Invoke(delegationDisplayName);
 
+                    Logger.LogInformation("[Delegation] Creating sub-thread at {Path}, Hub={Hub}", subThreadPath, Hub.Address);
                     meshService.CreateNode(subThreadNode).Subscribe(
                         _ =>
                         {
-                            Logger.LogInformation("[Delegation] Created sub-thread at {Path}", subThreadPath);
+                            Logger.LogInformation("[Delegation] Created sub-thread at {Path}, posting SubmitMessage via Hub={Hub}", subThreadPath, Hub.Address);
 
                             // 2. Completion is notified via a second SubmitMessageResponse
                             // with Status=ExecutionCompleted, posted by ThreadExecution when done.
@@ -400,7 +401,7 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
                         },
                         error =>
                         {
-                            Logger.LogWarning(error, "[Delegation] Failed to create sub-thread for {Target}", targetId);
+                            Logger.LogWarning(error, "[Delegation] Failed to create sub-thread at {Path} for {Target}, Hub={Hub}", subThreadPath, targetId, Hub.Address);
                             tcs.TrySetResult(new DelegationResult
                             {
                                 AgentName = targetId, Task = task,

@@ -330,6 +330,8 @@ public static class ThreadExecution
                 client.UpdateDelegationStatus = status =>
                 {
                     currentStatus = status;
+                    logger.LogInformation("[ThreadExec] DELEGATION_STATUS: threadPath={ThreadPath}, status={Status}, delegationPaths=[{Paths}]",
+                        threadPath, status, string.Join(",", chatClient.DelegationPaths.Select(kv => $"{kv.Key}={kv.Value}")));
                     // Push immediately when delegation path becomes available —
                     // the streaming loop is blocked during tool execution so the
                     // throttle block never runs. This ensures the parent message
@@ -361,8 +363,14 @@ public static class ThreadExecution
                 logger.LogInformation("[ThreadExec] Sending to agent: threadPath={ThreadPath}, agent={Agent}, model={Model}, msgLength={Length}",
                     threadPath, request.AgentName ?? "(default)", request.ModelName ?? "(default)", request.UserMessageText?.Length ?? 0);
 
-                logger.LogInformation("[ThreadExec] INVOKE_ASYNC_START: threadPath={ThreadPath}, responsePath={ResponsePath}",
+                logger.LogInformation("[ThreadExec] STREAMING_START: threadPath={ThreadPath}, responsePath={ResponsePath}",
                     threadPath, responsePath);
+                // Streaming runs via InvokeAsync on the grain's scheduler.
+                // The grain MUST be reentrant ([Reentrant] on the Orleans grain class)
+                // so that while the streaming loop awaits (AI API, delegation TCS),
+                // other messages (callbacks, workspace sync, Posts) can interleave.
+                // Without reentrancy, delegation deadlocks: the callback can't fire
+                // because the scheduler is occupied by the streaming await.
                 hub.InvokeAsync(async ct =>
                 {
                     var responseText = new StringBuilder();

@@ -317,7 +317,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         for (var i = 0; i < 50; i++)
         {
             var msg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
-            if (msg != null && (i % 5 == 0 || msg.ToolCalls.Count > 0))
+            if (msg != null && (i % 3 == 0 || msg.ToolCalls.Count > 0))
             {
                 Output.WriteLine($"  [POLL {i}] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, " +
                     $"delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
@@ -339,12 +339,13 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
         // 5. Wait for parent execution to complete (text appears)
         Output.WriteLine("6. Waiting for parent to complete...");
-        var completed = await responseStream
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
-            .Where(m => !string.IsNullOrEmpty(m?.Text))
-            .Timeout(60.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        ThreadMessage? completed = null;
+        for (var j = 0; j < 30; j++)
+        {
+            completed = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            if (!string.IsNullOrEmpty(completed?.Text)) break;
+            await Task.Delay(500, ct);
+        }
 
         completed!.Text.Should().NotBeNullOrEmpty("parent should have text after delegation completes");
         Output.WriteLine($"7. PARENT COMPLETE: text='{completed.Text}', toolCalls={completed.ToolCalls.Count}");
