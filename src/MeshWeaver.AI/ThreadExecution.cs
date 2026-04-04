@@ -438,7 +438,10 @@ public static class ThreadExecution
                                 delegationPath = ExtractDelegationPath(functionResult.Result?.ToString());
                             }
 
-                            // Replace pending entry with final (has Result + DelegationPath)
+                            // Replace pending entry with final (has Result + DelegationPath).
+                            // Preserve DelegationPath if already stamped by UpdateDelegationStatus.
+                            var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
+                            var existingDelegationPath = idx >= 0 ? toolCallLog[idx].DelegationPath : null;
                             var finalEntry = new ToolCallEntry
                             {
                                 Name = originalCall.Name,
@@ -446,10 +449,9 @@ public static class ThreadExecution
                                 Arguments = SerializeArgs(originalCall.Arguments),
                                 Result = Truncate(functionResult.Result?.ToString()),
                                 IsSuccess = functionResult.Result?.ToString()?.StartsWith("Error") != true,
-                                DelegationPath = delegationPath,
+                                DelegationPath = delegationPath ?? existingDelegationPath,
                                 Timestamp = DateTime.UtcNow
                             };
-                            var idx = toolCallLog.FindIndex(e => e.Name == originalCall.Name && e.Result == null);
                             toolCallLog = idx >= 0 ? toolCallLog.SetItem(idx, finalEntry) : toolCallLog.Add(finalEntry);
                             logger.LogDebug("[ThreadExec] TOOL_DONE: {Time:HH:mm:ss.fff} {Name} callId={CallId} delegation={Delegation} resultLen={ResultLen}",
                                 DateTime.UtcNow, originalCall.Name, originalCall.CallId, delegationPath,
