@@ -261,9 +261,7 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
 
         finalResponse.Should().NotBeNull("response message should have text after tool execution completes");
         finalResponse!.Text.Should().NotBeNullOrEmpty();
-        // TODO: tool calls don't propagate to response grain in Orleans — PushToResponseMessage
-        // sends UpdateThreadMessageContent but ToolCalls arrives empty. Needs investigation.
-        // finalResponse.ToolCalls.Should().NotBeEmpty("response should have tool calls tracked via middleware");
+        finalResponse.ToolCalls.Should().NotBeEmpty("response should have tool calls tracked via middleware");
         Output.WriteLine("8. Test PASSED");
     }
 
