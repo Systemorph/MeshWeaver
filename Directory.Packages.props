@@ -122,13 +122,13 @@
     <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.4" />
     <PackageVersion Include="Microsoft.Extensions.Caching.Memory" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.4" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.2" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.2" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.3" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.4" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.3" />
     <PackageVersion Include="Microsoft.Extensions.ServiceDiscovery" Version="10.2.0" />
     <PackageVersion Include="Microsoft.Orleans.Core" Version="10.0.0" />
     <PackageVersion Include="Microsoft.Orleans.Sdk" Version="10.0.0" />

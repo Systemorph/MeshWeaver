@@ -97,7 +97,6 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 NodeType = ThreadMessageNodeType.NodeType,
                 Content = new ThreadMessage
                 {
-                    Id = msgId,
                     Role = "user",
                     Text = "Hello!",
                     Type = ThreadMessageType.ExecutedInput
@@ -172,7 +171,6 @@ public class ThreadAccessTest(ITestOutputHelper output) : MonolithMeshTestBase(o
                 NodeType = ThreadMessageNodeType.NodeType,
                 Content = new ThreadMessage
                 {
-                    Id = "attack-msg",
                     Role = "user",
                     Text = "Injected message",
                     Type = ThreadMessageType.ExecutedInput
