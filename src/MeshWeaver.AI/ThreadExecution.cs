@@ -136,43 +136,7 @@ public static class ThreadExecution
 
         var mainEntity = request.ContextPath ?? threadPath;
 
-        // 1) Create both cells — fire and forget (no callback).
-        //    Node grains activate immediately; content will be available by the time execution streams.
-        meshService.CreateNode(new MeshNode(userMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntity,
-            Content = new ThreadMessage
-            {
-                Role = "user",
-                Text = request.UserMessageText,
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.ExecutedInput,
-                CreatedBy = delivery.AccessContext?.ObjectId
-            }
-        }).Subscribe(
-            _ => logger?.LogInformation("HandleSubmitMessage: user cell created for {ThreadPath}", threadPath),
-            ex => logger?.LogError(ex, "HandleSubmitMessage: user cell creation failed for {ThreadPath}", threadPath));
-
-        meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            MainNode = mainEntity,
-            Content = new ThreadMessage
-            {
-                Role = "assistant",
-                Text = "",
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse,
-                AgentName = request.AgentName,
-                ModelName = request.ModelName
-            }
-        }).Subscribe(
-            _ => logger?.LogInformation("HandleSubmitMessage: response cell created for {ThreadPath}", threadPath),
-            ex => logger?.LogError(ex, "HandleSubmitMessage: response cell creation failed for {ThreadPath}", threadPath));
-
-        // 2) Update Thread on the thread hub — runs on grain scheduler, safe.
-        //    Don't wait for CreateNode: grains activate on first message.
+        // 1) Update Thread state immediately on the grain scheduler (safe).
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
             var thread = node.Content as MeshThread ?? new MeshThread();
@@ -190,7 +154,7 @@ public static class ThreadExecution
             };
         });
 
-        // 3) Register completion callback so _Exec can notify original client
+        // 2) Register completion callback so _Exec can notify original client
         CompletionCallbacks[threadPath] = completionResponse =>
         {
             logger?.LogInformation("[ThreadExec] Forwarding {Status} to client for {ThreadPath}",
@@ -199,17 +163,60 @@ public static class ThreadExecution
             CompletionCallbacks.TryRemove(threadPath, out _);
         };
 
-        // 4) Start execution on hosted hub — forward user's AccessContext
-        var executionHub = hub.GetHostedHub(
-            new Address($"{hub.Address}/_Exec"),
-            config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
-            HostedHubCreation.Always);
+        // 3) Create both cells concurrently. When BOTH are ready, start execution.
+        //    Subscribe callback only does hub.Post (safe from any thread — no workspace access).
+        var inputObs = meshService.CreateNode(new MeshNode(userMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntity,
+            Content = new ThreadMessage
+            {
+                Role = "user",
+                Text = request.UserMessageText,
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.ExecutedInput,
+                CreatedBy = delivery.AccessContext?.ObjectId
+            }
+        });
 
-        executionHub!.Post(request with { ResponsePath = responsePath },
-            o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
+        var outputObs = meshService.CreateNode(new MeshNode(responseMsgId, threadPath)
+        {
+            NodeType = ThreadMessageNodeType.NodeType,
+            MainNode = mainEntity,
+            Content = new ThreadMessage
+            {
+                Role = "assistant",
+                Text = "",
+                Timestamp = DateTime.UtcNow,
+                Type = ThreadMessageType.AgentResponse,
+                AgentName = request.AgentName,
+                ModelName = request.ModelName
+            }
+        });
 
-        // 5) Response — cells creation initiated
-        hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+        inputObs.Zip(outputObs).Subscribe(
+            _ =>
+            {
+                logger?.LogInformation("HandleSubmitMessage: cells created for {ThreadPath}", threadPath);
+
+                // Start execution on hosted hub — only hub.Post, no workspace access
+                var executionHub = hub.GetHostedHub(
+                    new Address($"{hub.Address}/_Exec"),
+                    config => config.WithHandler<SubmitMessageRequest>(ExecuteMessageAsync),
+                    HostedHubCreation.Always);
+
+                executionHub!.Post(request with { ResponsePath = responsePath },
+                    o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
+
+                // Response — cells created
+                hub.Post(new SubmitMessageResponse { Success = true }, o => o.ResponseFor(delivery));
+            },
+            error =>
+            {
+                logger?.LogError(error, "HandleSubmitMessage: cell creation failed for {ThreadPath}", threadPath);
+                hub.Post(new SubmitMessageResponse { Success = false, Error = error.Message },
+                    o => o.ResponseFor(delivery));
+            });
 
         return delivery.Processed();
     }
