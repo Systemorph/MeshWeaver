@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using MeshWeaver.AI.Plugins;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
 using MeshWeaver.Graph;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -154,7 +155,28 @@ public abstract class ChatClientAgentFactory : IChatClientFactory
         if (functionInvoker != null)
             functionInvoker.AllowConcurrentInvocation = true;
 
-        return agent;
+        // Wrap with function calling middleware — gives the streaming loop
+        // real-time visibility into tool calls. FunctionInvokingChatClient
+        // consumes FunctionCallContent internally; without this middleware,
+        // the outer stream never sees tool invocations.
+        return agent.AsBuilder()
+            .Use((AIAgent _, FunctionInvocationContext ctx, Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next, CancellationToken ct) =>
+            {
+                Logger.LogInformation("[Middleware] Tool call: {Name}, ForwardToolCall={HasCallback}",
+                    ctx.Function.Name, chat.ForwardToolCall != null);
+                var toolEntry = new ToolCallEntry
+                {
+                    Name = ctx.Function.Name,
+                    DisplayName = ctx.Function.Name,
+                    Arguments = ctx.Arguments?.Count > 0
+                        ? string.Join(", ", ctx.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                        : null,
+                    Timestamp = DateTime.UtcNow
+                };
+                chat.ForwardToolCall?.Invoke(toolEntry);
+                return next(ctx, ct);
+            })
+            .Build() as ChatClientAgent ?? agent;
     }
 
     /// <summary>
