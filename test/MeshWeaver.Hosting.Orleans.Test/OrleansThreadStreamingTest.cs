@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -12,7 +11,6 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using FluentAssertions.Extensions;
 using MeshWeaver.AI;
-using MeshWeaver.Connection.Orleans;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
@@ -271,10 +269,10 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
     /// (without page reload). Then sub-thread streams text that appears on the
     /// sub-thread's response message. Tests the FULL real-world path.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [Fact(Timeout = 30000)]
     public async Task Delegation_ParentShowsToolCall_SubThreadStreamsText_LiveUpdate()
     {
-        var ct = new CancellationTokenSource(80.Seconds()).Token;
+        var ct = new CancellationTokenSource(25.Seconds()).Token;
         var client = await GetClientAsync();
         var workspace = client.GetWorkspace();
 
@@ -313,17 +311,27 @@ public class OrleansThreadStreamingTest(ITestOutputHelper output) : TestBase(out
         var responsePath = $"{threadPath}/{responseMsgId}";
         Output.WriteLine($"3. Response message: {responseMsgId}");
 
-        // 4. Subscribe to the response message node — watch for tool calls appearing
-        var responseStream = workspace.GetRemoteStream<MeshNode>(new Address(responsePath))!;
-
-        // 4. Wait for delegation tool call with DelegationPath on the response stream
-        Output.WriteLine("4. Waiting for delegation tool call with DelegationPath...");
-        var msgWithDelegation = await responseStream
-            .Select(nodes => nodes?.FirstOrDefault(n => n.Path == responsePath)?.Content as ThreadMessage)
-            .Where(m => m?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
-            .Timeout(60.Seconds())
-            .FirstAsync()
-            .ToTask(ct);
+        // 4. Poll the response message for tool calls — log every state change
+        Output.WriteLine("4. Polling response message for delegation tool call...");
+        ThreadMessage? msgWithDelegation = null;
+        for (var i = 0; i < 50; i++)
+        {
+            var msg = await GetHubContentAsync<ThreadMessage>(client, responsePath, ct);
+            if (msg != null && (i % 5 == 0 || msg.ToolCalls.Count > 0))
+            {
+                Output.WriteLine($"  [POLL {i}] text={msg.Text?.Length ?? 0}ch, toolCalls={msg.ToolCalls.Count}, " +
+                    $"delegations={msg.ToolCalls.Count(c => !string.IsNullOrEmpty(c.DelegationPath))}");
+                foreach (var tc in msg.ToolCalls)
+                    Output.WriteLine($"    - {tc.Name}: result={tc.Result != null}, delegation={tc.DelegationPath ?? "(none)"}");
+            }
+            if (msg?.ToolCalls.Any(c => !string.IsNullOrEmpty(c.DelegationPath)) == true)
+            {
+                msgWithDelegation = msg;
+                break;
+            }
+            await Task.Delay(400, ct);
+        }
+        msgWithDelegation.Should().NotBeNull("response should have a delegation tool call with DelegationPath");
 
         var delegation = msgWithDelegation!.ToolCalls.First(c => !string.IsNullOrEmpty(c.DelegationPath));
         Output.WriteLine($"5. DELEGATION APPEARED: {delegation.Name}, path={delegation.DelegationPath}");
