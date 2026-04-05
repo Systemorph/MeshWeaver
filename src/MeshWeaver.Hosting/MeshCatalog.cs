@@ -27,13 +27,33 @@ internal sealed class MeshCatalog(
     IMeshStorage persistenceService,
     IEnumerable<IMeshQueryProvider> queryProviders,
     IEnumerable<IStaticNodeProvider> staticNodeProviders,
+    IDataChangeNotifier? changeNotifier = null,
     ILogger<MeshCatalog>? logger = null)
     : IMeshCatalog
 {
     public MeshConfiguration Configuration { get; } = configuration;
     internal IMeshStorage Persistence { get; } = persistenceService;
     internal Address MeshAddress => hub.Address;
-    private readonly IMemoryCache cache = new MemoryCache(new MemoryCacheOptions());
+    private readonly IMemoryCache cache = CreateCacheWithChangeSubscription(changeNotifier, logger);
+
+    private static IMemoryCache CreateCacheWithChangeSubscription(
+        IDataChangeNotifier? notifier, ILogger? logger)
+    {
+        var memoryCache = new MemoryCache(new MemoryCacheOptions());
+        notifier?.Subscribe(notification =>
+        {
+            if (notification.Kind is DataChangeKind.Created or DataChangeKind.Deleted)
+            {
+                var path = notification.Path.TrimStart('/');
+                logger?.LogDebug("Path cache invalidation: {Op} {Path}", notification.Kind, path);
+                memoryCache.Remove($"resolve:{path}");
+                var segments = path.Split('/');
+                for (var i = segments.Length - 1; i >= 1; i--)
+                    memoryCache.Remove($"resolve:{string.Join("/", segments.Take(i))}");
+            }
+        });
+        return memoryCache;
+    }
     private readonly MemoryCacheEntryOptions cacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(15) };
     private readonly Lazy<IMessageHub> _persistenceHub = new(() => hub.GetHostedHub(AddressExtensions.CreatePersistenceAddress())!);
     private IMessageHub PersistenceHub => _persistenceHub.Value;
@@ -243,6 +263,29 @@ internal sealed class MeshCatalog(
 
     private static readonly MemoryCacheEntryOptions ResolveCacheOptions = new() { SlidingExpiration = TimeSpan.FromMinutes(5) };
 
+    /// <summary>
+    /// Invalidates path resolution cache entries affected by a node change.
+    /// Called after node create/delete to ensure routing uses fresh data.
+    /// Invalidates the exact path AND all ancestor paths (which may have
+    /// cached partial matches with remainder pointing to the changed node).
+    /// </summary>
+    public void InvalidatePathCache(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        path = path.TrimStart('/');
+
+        // Invalidate exact path
+        cache.Remove($"resolve:{path}");
+
+        // Invalidate all ancestor paths — they may have cached partial matches
+        var segments = path.Split('/');
+        for (var i = segments.Length - 1; i >= 1; i--)
+        {
+            var ancestorPath = string.Join("/", segments.Take(i));
+            cache.Remove($"resolve:{ancestorPath}");
+        }
+    }
+
     /// <inheritdoc />
     public async Task<AddressResolution?> ResolvePathAsync(string path)
     {
@@ -261,10 +304,9 @@ internal sealed class MeshCatalog(
 
         var resolution = await ResolvePathCoreAsync(path);
 
-        // Cache only exact matches (no remainder). Partial matches become stale
-        // when child nodes are created — e.g., CreateNodeRequest resolves to parent
-        // before the child exists, then SubmitMessageRequest hits the stale cache.
-        if (resolution is { Remainder: null or "" })
+        // Cache the result. IDataChangeNotifier subscription invalidates entries
+        // when nodes are created/deleted in the DB.
+        if (resolution != null)
             cache.Set(cacheKey, resolution, ResolveCacheOptions);
 
         return resolution;

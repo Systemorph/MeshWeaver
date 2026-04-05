@@ -229,11 +229,12 @@ public static class MeshExtensions
                 newNode = await nodeTypeService.EnrichWithNodeTypeAsync(newNode, ct);
             }
 
-            // 6. Save to persistence
+            // 6. Save to persistence and invalidate path resolver cache
             if (persistence != null)
             {
                 newNode = await persistence.SaveNodeAsync(newNode, ct);
             }
+
 
             // 7. Write version history snapshot (non-critical, skip satellite types like threads/comments)
             if (!catalog.Configuration.IsSatelliteNodeType(newNode.NodeType))
