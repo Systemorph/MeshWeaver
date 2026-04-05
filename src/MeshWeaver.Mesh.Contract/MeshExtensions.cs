@@ -248,16 +248,10 @@ public static class MeshExtensions
 
             logger.LogInformation("Node created at {Path} by {CreatedBy}", newNode.Path, createRequest.CreatedBy ?? "system");
 
-            // 8. Activate the node's grain by sending CreateNodeRequest to it.
-            //    The init gate allows CreateNodeRequest through, so the grain initializes
-            //    with the correct NodeType before any other messages arrive.
-            //    The handler will see "node already exists" and return a no-op response.
-            hub.Post(new CreateNodeRequest(newNode), o => o.WithTarget(new Address(newNode.Path)));
-
-            // 9. Run post-creation handlers (e.g. grant creator Admin role)
+            // 8. Run post-creation handlers (e.g. grant creator Admin role)
             await RunPostCreationHandlersAsync(hub, newNode, createRequest.CreatedBy, logger, ct);
 
-            // 10. Return success response
+            // 9. Return success response
             hub.Post(CreateNodeResponse.Ok(newNode), o => o.ResponseFor(request));
 
             return request.Processed();
