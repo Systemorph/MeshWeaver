@@ -55,22 +55,7 @@ public static class ThreadMessageHandlers
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{request.ThreadPath}/{responseMsgId}";
 
-        // 1) Set IsExecuting immediately for visual feedback (spinner shows)
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            return node with
-            {
-                Content = thread with
-                {
-                    IsExecuting = true,
-                    ExecutionStatus = "Preparing...",
-                    ExecutionStartedAt = DateTime.UtcNow
-                }
-            };
-        });
-
-        // 2) Create new output cell
+        // 1) Create new output cell
         meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
@@ -84,7 +69,7 @@ public static class ThreadMessageHandlers
         }).Subscribe(
             _ =>
             {
-                // 2) Cell exists — now do everything in ONE UpdateMeshNode:
+                // 2) Cell exists — ONE UpdateMeshNode does everything:
                 //    read context, delete old cells, link new cell, start execution
                 string? contextPath = null;
                 hub.GetWorkspace().UpdateMeshNode(node =>
