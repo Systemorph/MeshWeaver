@@ -33,9 +33,8 @@ public static class ThreadLayoutAreas
     /// </summary>
     public static MessageHubConfiguration AddThreadLayoutAreas(this MessageHubConfiguration configuration)
         => configuration
-            .WithHandler<ResubmitMessageRequest>(HandleResubmitMessage)
-            .WithHandler<DeleteFromMessageRequest>(HandleDeleteFromMessage)
-            .WithHandler<EditMessageRequest>(HandleEditMessage)
+            .WithHandler<ResubmitMessageRequest>(ThreadMessageHandlers.HandleResubmitMessage)
+            .WithHandler<DeleteFromMessageRequest>(ThreadMessageHandlers.HandleDeleteFromMessage)
             .AddDefaultMeshMenu()
             .AddNodeMenuItems("SidePanel", SidePanelMenuProvider)
             .AddNodeMenuItems(DelegationsMenuProvider)
@@ -458,112 +457,27 @@ public static class ThreadLayoutAreas
         => !string.IsNullOrEmpty(node?.Name) ? node.Name : "Thread";
 
     /// <summary>
-    /// Handles DeleteFromMessageRequest — truncates Messages from the given message onwards.
-    /// Uses workspace.UpdateMeshNode (non-blocking, no stream subscription).
+    /// Adds the Threads view to the layout — shows node-scoped thread history.
     /// </summary>
-    private static IMessageDelivery HandleDeleteFromMessage(
-        IMessageHub hub,
-        IMessageDelivery<DeleteFromMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        // Safe: handler runs on grain scheduler, workspace.UpdateMeshNode is inline.
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            var msgIndex = thread.Messages.IndexOf(request.MessageId);
-            if (msgIndex < 0) return node;
-            return node with
-            {
-                Content = thread with { Messages = thread.Messages.Take(msgIndex).ToImmutableList() }
-            };
-        });
-        return delivery.Processed();
-    }
+    public static LayoutDefinition AddThreadsLayoutArea(this LayoutDefinition layout)
+        => layout.WithView("Threads", ThreadsView);
 
     /// <summary>
-    /// Handles ResubmitMessageRequest — keeps the user message, removes the response
-    /// (and anything after it), then creates only a new output cell and starts execution.
-    /// Uses meshService.CreateNode (observable) + workspace.UpdateMeshNode (non-blocking).
-    /// No stream subscription — avoids hub scheduler deadlock.
+    /// Adds the Threads view to the hub's layout configuration.
     /// </summary>
-    private static IMessageDelivery HandleResubmitMessage(
-        IMessageHub hub,
-        IMessageDelivery<ResubmitMessageRequest> delivery)
-    {
-        var request = delivery.Message;
-        var logger = hub.ServiceProvider.GetRequiredService<ILogger<AgentChatClient>>();
-        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
-
-        var responseMsgId = Guid.NewGuid().ToString("N")[..8];
-        var responsePath = $"{request.ThreadPath}/{responseMsgId}";
-
-        // Update user message text if changed (Post to the message hub — non-blocking)
-        hub.Post(new UpdateThreadMessageContent { Text = request.UserMessageText },
-            o => o.WithTarget(new Address($"{request.ThreadPath}/{request.MessageId}")));
-
-        // Create response cell — fire and forget (no callback needed)
-        meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
-        {
-            NodeType = ThreadMessageNodeType.NodeType,
-            Content = new ThreadMessage
-            {
-                Role = "assistant",
-                Text = "",
-                Timestamp = DateTime.UtcNow,
-                Type = ThreadMessageType.AgentResponse
-            }
-        }).Subscribe(
-            _ => { },
-            ex => logger.LogError(ex, "HandleResubmitMessage: CreateNode failed for {ThreadPath}", request.ThreadPath));
-
-        // Update thread state — runs on grain scheduler (handler body), safe.
-        // Don't wait for CreateNode: execution will find the node by the time it streams.
-        hub.GetWorkspace().UpdateMeshNode(node =>
-        {
-            var thread = node.Content as MeshThread ?? new MeshThread();
-            var msgIndex = thread.Messages.IndexOf(request.MessageId);
-            if (msgIndex < 0) return node;
-
-            return node with
-            {
-                Content = thread with
-                {
-                    Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList().Add(responseMsgId),
-                    IsExecuting = true,
-                    ActiveMessageId = responseMsgId,
-                    ExecutionStatus = null,
-                    TokensUsed = 0,
-                    ExecutionStartedAt = DateTime.UtcNow,
-                    StreamingText = null,
-                    StreamingToolCalls = null
-                }
-            };
-        });
-
-        // Start execution on hosted hub
-        var executionHub = hub.GetHostedHub(
-            new Address($"{hub.Address}/_Exec"),
-            config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
-            HostedHubCreation.Always);
-
-        executionHub!.Post(new SubmitMessageRequest
-        {
-            ThreadPath = request.ThreadPath,
-            UserMessageText = request.UserMessageText,
-            ResponsePath = responsePath,
-            ContextPath = request.ThreadPath
-        }, o => delivery.AccessContext != null ? o.WithAccessContext(delivery.AccessContext) : o);
-
-        return delivery.Processed();
-    }
+    public static MessageHubConfiguration AddThreadsLayoutArea(this MessageHubConfiguration configuration)
+        => configuration.AddLayout(layout => layout.AddThreadsLayoutArea());
 
     /// <summary>
-    /// Handles EditMessageRequest — no-op on the server side.
-    /// Editing is handled purely in the UI: the Overview layout area toggles between
-    /// message view and editor view via a data section flag.
+    /// Renders the Threads area showing node-scoped thread history.
     /// </summary>
-    private static IMessageDelivery HandleEditMessage(
-        IMessageHub hub,
-        IMessageDelivery<EditMessageRequest> delivery)
-        => delivery.Processed();
+    private static UiControl ThreadsView(LayoutAreaHost host, RenderingContext _)
+    {
+        var nodePath = host.Hub.Address.ToString();
+        return Controls.MeshSearch
+            .WithHiddenQuery($"nodeType:Thread namespace:{nodePath}/{ThreadNodeType.ThreadPartition}")
+            .WithNamespace(nodePath)
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithCreateNodeType("Thread");
+    }
 }

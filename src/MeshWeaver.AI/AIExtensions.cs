@@ -74,7 +74,6 @@ public static class AIExtensions
 .WithType(typeof(CancelThreadStreamRequest), nameof(CancelThreadStreamRequest))
             .WithType(typeof(ResubmitMessageRequest), nameof(ResubmitMessageRequest))
             .WithType(typeof(DeleteFromMessageRequest), nameof(DeleteFromMessageRequest))
-            .WithType(typeof(EditMessageRequest), nameof(EditMessageRequest))
             .WithType(typeof(ToolCallEntry), nameof(ToolCallEntry))
             .WithType(typeof(UpdateThreadMessageContent), nameof(UpdateThreadMessageContent))
             .WithType(typeof(DelegationCompletedEvent), nameof(DelegationCompletedEvent))

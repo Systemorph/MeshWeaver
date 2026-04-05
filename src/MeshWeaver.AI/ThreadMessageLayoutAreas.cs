@@ -179,9 +179,9 @@ public static class ThreadMessageLayoutAreas
 
     /// <summary>
     /// Renders the Edit area for a ThreadMessage node.
-    /// Shows a MarkdownEditorControl with the current text, plus Submit and Cancel buttons.
+    /// Shows a MarkdownEditorControl with the current text and a Submit button.
     /// Submit posts ResubmitMessageRequest (re-executes with edited text).
-    /// Cancel posts EditMessageRequest (toggles EditingMessageId off).
+    /// Cancel/Done is handled by the Blazor bubble (local isEditing toggle).
     /// </summary>
     public static IObservable<UiControl?> EditArea(LayoutAreaHost host, RenderingContext _)
     {
@@ -211,18 +211,6 @@ public static class ThreadMessageLayoutAreas
                 var buttonRow = Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("gap: 8px; justify-content: flex-end; margin-top: 8px;")
-                    .WithView(Controls.Button("Cancel")
-                        .WithAppearance(Appearance.Neutral)
-                        .WithClickAction(_ =>
-                        {
-                            // Toggle EditingMessageId off (same ID → cancel)
-                            host.Hub.Post(new EditMessageRequest
-                            {
-                                ThreadPath = threadPath,
-                                MessageId = messageId,
-                                MessageText = msg.Text ?? ""
-                            }, o => o.WithTarget(new Address(threadPath)));
-                        }))
                     .WithView(Controls.Button("Submit")
                         .WithAppearance(Appearance.Accent)
                         .WithIconStart(FluentIcons.Send(IconSize.Size16))

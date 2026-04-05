@@ -330,9 +330,18 @@ public static class LayoutClientExtensions
     {
         if (value == null)
             return default;
-        if (conversion != null)
-            return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions), defaultValue);
-        return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), hub.JsonSerializerOptions);
+        try
+        {
+            if (conversion != null)
+                return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions), defaultValue);
+            return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), hub.JsonSerializerOptions);
+        }
+        catch (JsonException)
+        {
+            // Type mismatch (e.g., array bound to string) — return default silently.
+            // This can happen transiently during node creation/deletion.
+            return defaultValue;
+        }
     }
     private static T? ConvertJson<T>(this IMessageHub hub, JsonObject? value, Func<object?, T?, T?>? conversion,
         T? defaultValue)
