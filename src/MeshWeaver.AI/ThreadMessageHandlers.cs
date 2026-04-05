@@ -55,6 +55,15 @@ public static class ThreadMessageHandlers
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{request.ThreadPath}/{responseMsgId}";
 
+        // Immediate visual feedback — UI shows spinner before CreateNode completes
+        hub.GetWorkspace().UpdateMeshNode(node => node with
+        {
+            Content = (node.Content as MeshThread ?? new MeshThread()) with
+            {
+                IsExecuting = true, ExecutionStatus = "Preparing..."
+            }
+        });
+
         // 1) Create new output cell
         meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
         {
