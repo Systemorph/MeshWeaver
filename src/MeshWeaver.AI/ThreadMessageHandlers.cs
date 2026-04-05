@@ -55,41 +55,22 @@ public static class ThreadMessageHandlers
         var responseMsgId = Guid.NewGuid().ToString("N")[..8];
         var responsePath = $"{request.ThreadPath}/{responseMsgId}";
 
-        // 1) Single UpdateMeshNode: read context, collect cells to delete, truncate, set executing
-        string? contextPath = null;
-        ImmutableList<string> cellsToDelete = ImmutableList<string>.Empty;
+        // 1) Set IsExecuting immediately for visual feedback (spinner shows)
         hub.GetWorkspace().UpdateMeshNode(node =>
         {
-            contextPath = node.MainNode != node.Path ? node.MainNode : null;
             var thread = node.Content as MeshThread ?? new MeshThread();
-            var msgIndex = thread.Messages.IndexOf(request.MessageId);
-            if (msgIndex < 0) return node;
-
-            // All cells after the user message must be deleted
-            cellsToDelete = thread.Messages.Skip(msgIndex + 1).ToImmutableList();
-
             return node with
             {
                 Content = thread with
                 {
-                    Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList(),
                     IsExecuting = true,
-                    ActiveMessageId = responseMsgId,
-                    ExecutionStatus = null,
-                    TokensUsed = 0,
-                    ExecutionStartedAt = DateTime.UtcNow,
-                    StreamingText = null,
-                    StreamingToolCalls = null
+                    ExecutionStatus = "Preparing...",
+                    ExecutionStartedAt = DateTime.UtcNow
                 }
             };
         });
 
-        // 2) Delete ALL old cells after the user message
-        foreach (var oldId in cellsToDelete)
-            hub.Post(new DeleteNodeRequest($"{request.ThreadPath}/{oldId}"),
-                o => o.WithTarget(new Address(request.ThreadPath)));
-
-        // 3) Create new output cell
+        // 2) Create new output cell
         meshService.CreateNode(new MeshNode(responseMsgId, request.ThreadPath)
         {
             NodeType = ThreadMessageNodeType.NodeType,
@@ -103,16 +84,39 @@ public static class ThreadMessageHandlers
         }).Subscribe(
             _ =>
             {
-                // 4) Link as new last cell + start execution
+                // 2) Cell exists — now do everything in ONE UpdateMeshNode:
+                //    read context, delete old cells, link new cell, start execution
+                string? contextPath = null;
                 hub.GetWorkspace().UpdateMeshNode(node =>
                 {
+                    contextPath = node.MainNode != node.Path ? node.MainNode : null;
                     var thread = node.Content as MeshThread ?? new MeshThread();
+                    var msgIndex = thread.Messages.IndexOf(request.MessageId);
+                    if (msgIndex < 0) return node;
+
+                    // Delete old cells after the user message (fire-and-forget)
+                    foreach (var oldId in thread.Messages.Skip(msgIndex + 1))
+                        hub.Post(new DeleteNodeRequest($"{request.ThreadPath}/{oldId}"),
+                            o => o.WithTarget(new Address(request.ThreadPath)));
+
                     return node with
                     {
-                        Content = thread with { Messages = thread.Messages.Add(responseMsgId) }
+                        Content = thread with
+                        {
+                            // Truncate + append new cell in one shot
+                            Messages = thread.Messages.Take(msgIndex + 1).ToImmutableList().Add(responseMsgId),
+                            IsExecuting = true,
+                            ActiveMessageId = responseMsgId,
+                            ExecutionStatus = null,
+                            TokensUsed = 0,
+                            ExecutionStartedAt = DateTime.UtcNow,
+                            StreamingText = null,
+                            StreamingToolCalls = null
+                        }
                     };
                 });
 
+                // 3) Start execution
                 var executionHub = hub.GetHostedHub(
                     new Address($"{hub.Address}/_Exec"),
                     config => config.WithHandler<SubmitMessageRequest>(ThreadExecution.ExecuteMessageAsync),
