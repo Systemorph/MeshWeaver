@@ -336,10 +336,11 @@ public static class LayoutClientExtensions
                 return conversion(JsonSerializer.Deserialize<object>(value.Value.GetRawText(), hub.JsonSerializerOptions), defaultValue);
             return JsonSerializer.Deserialize<T>(value.Value.GetRawText(), hub.JsonSerializerOptions);
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Type mismatch (e.g., array bound to string) — return default silently.
-            // This can happen transiently during node creation/deletion.
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Layout.ConvertJson")
+                .LogError(ex, "ConvertJson<{Type}> failed for JsonElement {ValueKind}: {Raw}",
+                    typeof(T).Name, value.Value.ValueKind, value.Value.GetRawText()[..Math.Min(100, value.Value.GetRawText().Length)]);
             return defaultValue;
         }
     }
@@ -348,9 +349,18 @@ public static class LayoutClientExtensions
     {
         if (value == null)
             return default;
-        if (conversion != null)
-            return conversion(value.Deserialize<object>(hub.JsonSerializerOptions), defaultValue);
-        return value.Deserialize<T>(hub.JsonSerializerOptions);
+        try
+        {
+            if (conversion != null)
+                return conversion(value.Deserialize<object>(hub.JsonSerializerOptions), defaultValue);
+            return value.Deserialize<T>(hub.JsonSerializerOptions);
+        }
+        catch (JsonException ex)
+        {
+            hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Layout.ConvertJson")
+                .LogError(ex, "ConvertJson<{Type}> failed for JsonObject", typeof(T).Name);
+            return defaultValue;
+        }
     }
     public static async Task<ActivityLog> SubmitModel(this ISynchronizationStream stream, ModelParameter<JsonElement> data)
     {

@@ -26,30 +26,38 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var address = meshHub.GetAddress(streamId);
         var addressPath = address.ToString();
 
-        // Use unprotected read — the grain needs its own node to activate,
-        // and it's not the correct hub identity for security checks.
-        var node = await persistence.GetNodeAsync(addressPath, cancellationToken);
-
-        // Fallback to MeshConfiguration.Nodes (in-memory registered nodes)
-        if (node is null)
+        // Resolve node from persistence, config, or static providers.
+        // Retry with backoff: the node may have just been created and persistence
+        // (debounce flush, cross-silo replication) may not have it yet.
+        MeshNode? node = null;
+        for (var attempt = 0; attempt < 5; attempt++)
         {
-            var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
-            meshConfig?.Nodes.TryGetValue(addressPath, out node);
+            node = await persistence.GetNodeAsync(addressPath, cancellationToken);
+
+            if (node is null)
+            {
+                var meshConfig = meshHub.ServiceProvider.GetService<MeshConfiguration>();
+                meshConfig?.Nodes.TryGetValue(addressPath, out node);
+            }
+
+            node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
+                .SelectMany(p => p.GetStaticNodes())
+                .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
+
+            if (node is not null) break;
+
+            if (attempt < 4)
+            {
+                logger.LogDebug("Grain {StreamId}: node not found at {Path}, retry {Attempt}/4",
+                    streamId, addressPath, attempt + 1);
+                await Task.Delay(200 * (attempt + 1), cancellationToken);
+            }
         }
 
-        // Fallback to static node providers (e.g., DocumentationNodeProvider)
-        // for nodes that are never persisted but served as embedded resources.
-        node ??= meshHub.ServiceProvider.GetServices<IStaticNodeProvider>()
-            .SelectMany(p => p.GetStaticNodes())
-            .FirstOrDefault(n => string.Equals(n.Path, addressPath, StringComparison.OrdinalIgnoreCase));
-
         if (node is null)
         {
-            // Throw so Orleans immediately rejects the message without forwarding attempts.
-            // Using DeactivateOnIdle() here would leave a zombie activation that triggers
-            // forwarding loops (ForwardCount=2 → OrleansMessageRejectionException).
             throw new InvalidOperationException(
-                $"Cannot activate grain {streamId}: node not found at {addressPath}.");
+                $"Cannot activate grain {streamId}: node not found at {addressPath} after 5 attempts.");
         }
 
         // Resolve hub configuration (triggers compilation if needed, composes with default config)
@@ -157,7 +165,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 this.GetPrimaryKeyString(), msgType, userId ?? "(null)", deliveryUser ?? "(null)",
                 delivery.AccessContext?.ObjectId ?? "(null)");
 
+        logger.LogInformation("GrainDeliver: IN  grain={Grain}, message={MessageType}, target={Target}, id={Id}",
+            this.GetPrimaryKeyString(), msgType, delivery.Target?.ToString() ?? "(self)", delivery.Id);
         var ret = Hub!.DeliverMessage(delivery);
+        logger.LogInformation("GrainDeliver: OUT grain={Grain}, message={MessageType}, state={State}, id={Id}",
+            this.GetPrimaryKeyString(), msgType, ret.State, delivery.Id);
         return Task.FromResult(ret);
     }
 
