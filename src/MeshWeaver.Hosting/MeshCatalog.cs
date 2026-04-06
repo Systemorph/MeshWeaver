@@ -304,9 +304,12 @@ internal sealed class MeshCatalog(
 
         var resolution = await ResolvePathCoreAsync(path);
 
-        // Cache the result. IDataChangeNotifier subscription invalidates entries
-        // when nodes are created/deleted in the DB.
-        if (resolution != null)
+        // Only cache exact matches (no remainder). Partial matches are inherently
+        // unstable — they resolve to a parent when a child doesn't exist YET.
+        // CreateNodeRequest triggers path resolution before the node is persisted,
+        // so partial matches would cache stale results. NotifyChange invalidation
+        // provides a safety net for exact matches.
+        if (resolution is { Remainder: null or "" })
             cache.Set(cacheKey, resolution, ResolveCacheOptions);
 
         return resolution;
